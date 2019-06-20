@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Using High-Performance Techniques to Base64 Encode a GUID -
+linksfor.dev(s)
+    </title>
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Using High-Performance Techniques to Base64 Encode a GUID</h1>
+    <div class="entry-content"> <p>It&#x2019;s been a little while since my <a href="https://www.stevejgordon.co.uk/analysing-the-large-object-heap-in-jetbrains-dotmemory">last high-performance post</a>, but my use of the techniques and features continues! In this post, I want to present a more practical example which I hope will help to illustrate a real-world use case for some of the new .NET Core performance focused API changes.</p>
+<h2>Scenario</h2>
+<p>For a service that I&#x2019;m currently working on, in a few places we need to generate unique identifiers which are included on some documents we index to Elasticsearch. We&#x2019;re doing this at scale for about 18 million new documents every day. A recent new requirement is to generate and store four additional identifiers. A design goal here was to limit the increase of the document storage size by reducing the length of the unique identifier strings that will be included in the document.</p>
+<h2>Benchmarking the Original Code&#xA0;</h2>
+<p>During the initial proof of concept stage, I&#x2019;d used some quick and dirty code to get the base64 encoded string&#x2026;</p>
+<pre>Convert.ToBase64String(_guid.ToByteArray()).Replace(&quot;/&quot;, &quot;-&quot;).Replace(&quot;+&quot;, &quot;_&quot;).Replace(&quot;=&quot;, &quot;&quot;)</pre>
+<p>This code is borrowed from <a href="https://stackoverflow.com/questions/1032376/guid-to-base64-for-url">this example posted in a popular StackOverflow question</a> about base64 encoding GUIDs.&#xA0;</p>
+<p>This code first gets a byte array from the GUID. This array is passed to the&#xA0;<strong>Convert.ToBase64String</strong> method which returns an encoded string. Since we need our identifiers to be safe for use in URL query strings, this code also replaces any unsafe characters using the <strong>Replace</strong> method. Finally, it removes any trailing padding characters. When based64 encoding a GUID, we&#x2019;re guaranteed to get two padding characters &#x2018;==&#x2019; at the end of the string.</p>
+<p>This code works and it does the job, but it allocates a fair amount in the process. There&#x2019;s the creation of a byte array and the calls to Replace that we should be wary of. Replace, for example, causes a new string to be allocated when replacing characters because strings are immutable.&#xA0;For general cases, this might be okay, but as we take our service from a proof of concept stage to an alpha/beta state, we know the request volumes will increase. This service needs to handle 100&#x2019;s of requests per second if we&#x2019;re to avoid heavy scaling.</p>
+<p>Therefore, I set about writing a new approach to base64 encode GUIDs, which should hopefully be faster, but most importantly reduce the number of bytes allocated.</p>
+<p>Before starting work, I took the first important step, which was to benchmark the existing code. If you want to learn more about benchmarking, you can read my previous <a href="https://www.stevejgordon.co.uk/introduction-to-benchmarking-csharp-code-with-benchmark-dot-net">benchmarking blog post</a>.</p>
+<p>Here&#x2019;s the benchmark code:</p> <p>In this case, I directly exercise the original code as a baseline benchmark.</p>
+<p>After running the benchmark, the summary results are as follows:</p> <p>With the benchmark results in hand, my goal was to improve upon the 192 bytes allocated per iteration.</p>
+<p>As an aside: I ran the benchmark a few times. Curiously, on some occasions, I was getting different allocation counts.</p> <p>This initially looked like a problem with how I was exercising the code or running my benchmark. My first conclusion when anything unexpected occurs is that I&#x2019;ve screed up somewhere! In this case, I realised that it might perhaps be the behaviour of the Replace method. There&#x2019;s no guarantee that I&#x2019;ll always have unsafe characters to replace in the base64 encoded string. Looking at the <a href="https://github.com/dotnet/corefx/blob/master/src/Common/src/CoreLib/System/String.Manipulation.cs#L997">corefx source code on GitHub</a> for the Replace method, I noticed that indeed, if the character being replaced is not found in the string, then the original string is returned, unchanged. This is an optimisation which avoids new string allocations unless there&#x2019;s a need for them. Mystery solved! 192 B seemed to be the smallest allocation size I noted during my benchmarking, with the worst case being 352 B.</p>
+<h2>Optimising the Code</h2>
+<p>Let&#x2019;s take a look at the final version of the code that I ended up with (at least for now). Spoiler alert, this has fewer allocations! We&#x2019;ll see the results soon. This is the complete code, don&#x2019;t worry, we&#x2019;ll step through it line-by-line to understand what it does.</p> <p>This method is defined as an extension method on the GUID type for ease of use.</p>
+<p>The first thing this code does is to stack allocate two byte arrays. This makes use of the Span&lt;T&gt; feature which allows us to safely reference stack memory. Both of my arrays are very small and can safely be stored on the stack. The advantage of this is that there&#x2019;s no object creation on the heap.</p>
+<p>This is not only fast, but it also avoids the need for garbage collection (GC) to clean up these objects. While they would be short-lived, small arrays on Gen-0, when this method is called 18 million times per day, that&#x2019;s 36 million small objects we can avoid creating!</p>
+<p>The next line is:</p>
+<pre>MemoryMarshal.TryWrite(guidBytes, ref guid);</pre>
+<p>Initially what this achieves is to get the raw bytes of the GUID. MemoryMarshal is a class which provides methods designed to work with the new Span&lt;T&gt; and Memory&lt;T&gt; types (plus their read-only variants). In this case, I&#x2019;m using its TryWrite method. This takes a struct, by reference, and attempts to write its bytes into a provided Span&lt;byte&gt;. A GUID is a 128-bit integer which occupies 16 bytes. That&#x2019;s why I stack allocated a byte array of 16 elements for this method to write those bytes into.</p>
+<p>The next line is:</p>
+<pre>Base64.EncodeToUtf8(guidBytes, encodedBytes, out _, out _);</pre>
+<p>This line allows us to encode the binary bytes for the Guid into UTF-8 encoded text, represented as base 64. The overload I&#x2019;m using works with Spans so I can provide my Span&lt;byte&gt; buffers to it. This is good since it means there&#x2019;s no allocation involved. Typical methods for base 64 encoding data would return the encoded string which creates an allocation. Since I have further processing to do, I want to avoid surfacing an intermediate string at this stage.</p>
+<p>The method first accepts a ReadOnlySpan&lt;byte&gt; which is the input data to be encoded. Here, that is the 16 bytes we wrote out from the value of the GUID. The second argument is a Span&lt;byte&gt; where the encoded bytes will be written. Since I know that a GUID will always be encoded to 24 bytes, I can size my stack allocated byte array to the correct capacity. This method also provides two out parameters indicating the bytes consumed and written. I discard these since I&#x2019;m confident here of the effect of encoding my 16 GUID bytes.</p>
+<p>Since my unique ID may need to be transmitted between services over HTTP, potentially in a query string, I want to ensure that it is URL safe. It&#x2019;s possible that some unsafe characters will appear when base64 encoding a GUID. The next loop in the code is responsible for replacing any unsafe characters.</p> <p>For reasons that we&#x2019;ll come to very soon, I only care about the first 22 bytes of the encoded data. I loop through these and individually check if the byte at the current index contains either a forward slash or a plus. In those cases, I replace them with the bytes of safe alternative characters, a dash or underscore respectively.</p>
+<p>Finally, we create the encoded string:</p>
+<pre>var encodedString = Encoding.UTF8.GetString(encodedBytes.Slice(0, 22));</pre>
+<p>We can use the GetString method on the UTF8 encoding which accepts a ReadOnlySpan&lt;byte&gt; as one of its overloads. The reason I&#x2019;m slicing my Span&lt;byte&gt; to a length of 22 bytes is that base 64 encoding a GUID will always append two padding characters of &#x2018;=&#x2019;. In our case, we can trim these off to save an extra couple of bytes in our stored document. The change that I&#x2019;m making adds four of these new identifiers into each document. Since we store 18 million documents a day, that&#x2019;s an extra 144 Mb per day that we can avoid storing into Elasticsearch. Data storage is cheap, but this has enough value at this scale to be worth the effort.</p>
+<h2>Benchmarking the Improved Code</h2>
+<p>We should never assume that the changes we&#x2019;ve made do what we expect and perform better than the original code, so the final step is to update the benchmarks to compare the original version against this optimised one.</p> <p>Here is the result of running these benchmarks:</p> <p>In this case, the mean execution time of the original code is 202 ns, with 272 bytes allocated. As we saw earlier, the allocations vary&#xA0;between benchmark runs, because some GUIDs may not require as many string replacements as others. The 272 B figure is actually a fair number to compare against as it&#x2019;s the middle value that I saw across all of my benchmarking runs.</p>
+<p>The mean execution time for my optimised code is 86 ns, 2.35x quicker. That&#x2019;s great, although it&#x2019;s not the main number I was looking to improve. My goal was to reduce unnecessary allocations. Here, the new code is now allocating 72 bytes.</p>
+<p>At first glance, that may suggest we have work to do. In reality, we don&#x2019;t, since we require a string as the output of the method. Consumers expect the string value, so we have to allocate that at some point. In this case, on my machine, the base 64 encoded string here is 72 B. That means that this new encoding method has no allocation overhead. If we compare the improvement against the original method, the original code allocates (in this benchmark result) an additional 200 bytes per call. Multiplied by our expected daily call count of 18 million, that&#x2019;s 3.6 GB of allocations per day, per identifier. For all four identifiers, that&#x2019;s 14.4 GB of allocations saved per day!</p>
+<p>Allocations are quick, and the references short-lived, so hopefully they would only require a Gen-0 collection to clean them up. Still, that&#x2019;s pressure on the garbage collector that we can remove and CPU cycles we can use for executing our code rather than performing a collection.</p>
+<h2>Summary</h2>
+<p>I hope that this worked example proves useful. It builds on my <a href="https://www.stevejgordon.co.uk/writing-high-performance-csharp-and-dotnet-code">previous posts</a>, which until now have used more straightforward, trivial examples to illustrate the high-performance features. This is a small, but real-world use case of the optimisation techniques, possible thanks to types like Span&lt;T&gt;. We made use of some other classes and methods which helped avoid allocations as they work with Span&lt;T&gt; instances. What&#x2019;s also clear is that while this code is longer and more verbose than the original code, it&#x2019;s not too complicated. It can be clearly followed and by encapsulating it as an extension method, it is easily consumed.</p>
+<p>Thanks for reading! If you&#x2019;d like to read more about high-performance .NET and C# code, you can see my full blog post series <a href="https://www.stevejgordon.co.uk/writing-high-performance-csharp-and-dotnet-code">here</a>.</p> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
