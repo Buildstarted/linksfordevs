@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Daemonic Dispatches -
+linksfor.dev(s)
+    </title>
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Daemonic Dispatches</h1>
+    <div class="content"> In the world of POSIX, everything is a file. Well, sort of. There&apos;s
+sockets and pipes, which behave rather like files except that you can&apos;t
+seek on them and they have some extra metadata. And there&apos;s devices,
+where sometimes you can only read and write appropriately-sized blocks,
+not individual bytes. And then there&apos;s terminals, which are all sorts of
+weird. But in all these cases, you&apos;ve got a file descriptor, and when
+you&apos;re finished you release the resource by calling the close(2) system
+call.
+<p>
+There&apos;s just one small problem: The way POSIX has defined close(2) is
+completely and utterly broken.
+</p><p>
+A few days ago, Taylor R Campbell &#x2014; the same guy who reported
+Tarsnap&apos;s <a href="2011-01-18-tarsnap-critical-security-bug.html">incredibly
+stupid crypto bug</a> back in January 2011 &#x2014; sent me an email pointing
+out some peculiar language in the standard:
+<blockquote>
+If close() is interrupted by a signal that is to be caught, it shall return -1 with errno set to [EINTR]...
+</blockquote>
+</p><p>
+Now, we&apos;re used to dealing with EINTR: Almost every system call we make
+can be interrupted and return EINTR. No problem: We just reissue the
+system call &#x2014; keep trying until we get through without a signal
+interrupting us. That would be fine, except for these last few words:
+<blockquote>
+... and the state of fildes is unspecified.
+</blockquote>
+</p><p>
+If close(2) returns EINTR and you call it again, you might get an EBADF
+(&quot;this is not an open file descriptor&quot;) error back. Even worse, if you
+are running in a threaded process, a different thread might have opened
+a file <i>and been assigned the same descriptor value</i>, at which
+point your second close(2) call can succeed... at closing the wrong
+file. Throw in another file being opened and you&apos;ve now got silent
+data corruption.
+On the other hand, if close(2) returns EINTR and you <i>don&apos;t</i> call
+it again, you might be leaking an open socket. For a short-lived
+process this might not matter, but it&apos;s certainly not something you
+want to do in a long-lived server.
+</p><p>
+After several days, I see a couple imperfect solutions. The first one
+is a refinement of the standard EINTR loop:
+<blockquote><pre>
+int
+threadunsafe_close(int fd)
+{
+
+	if (close(fd) == 0)
+		return (0);
+	if (errno != EINTR)
+		return (-1);
+	while (close(fd)) {
+		if (errno == EBADF)
+			return (0);
+		if (errno != EINTR)
+			return (-1);
+	}
+	return (0);
+}
+</pre></blockquote>
+</p><p>
+Obviously that first solution, while working fine on single-threaded
+processes, is not safe with multiple threads due to the potential race
+against open(2) or some other system call reallocating the descriptor.
+A second option avoids the problem by preventing EINTR:
+<blockquote><pre>
+int
+blocksignals_close(int fd)
+{
+	sigset_t set;
+	sigset_t oset;
+	int rc;
+	int errno_saved;
+
+	if (sigfillset(&amp;set))
+		return (-1);
+	if (pthread_sigmask(SIG_SETMASK, &amp;set, &amp;oset))
+		return (-1);
+	if ((rc = close(fd)) != 0)
+		errno_saved = errno;
+	if (pthread_sigmask(SIG_SETMASK, &amp;oset, NULL))
+		return (-1);
+	if (rc)
+		errno = errno_saved;
+	return (rc);
+}
+</pre></blockquote>
+</p><p>
+Unfortunately this second solution is also less than ideal: It can fail
+in several different ways (at least theoretically &#x2014; POSIX doesn&apos;t
+define any errors which sigfillset or pthread_sigmask could return here,
+but implementations are allowed to invent other reasons to fail), which
+makes deciphering errno harder if -1 is returned; but more importantly,
+by blocking signals while calling close(2) it stops us from hitting ^C
+to interrupt the process if close(2) blocks for a long time (e.g., if
+it is causing data to be flushed to an NFS-mounted filesystem over a
+failing network).
+</p><p>
+What makes this problem particularly annoying is that there is no need
+for POSIX to have this ambiguity. Many operating systems solve this
+problem by simply not allowing close(2) to return EINTR; this is always
+going to be possible by the simple tactic of having close(2) mark the
+descriptor as deceased and then garbage collecting asynchronously, if
+nothing else. But even if close(2) can fail with EINTR, there&apos;s no
+reason to leave the descriptor state ambiguous: Immediately before
+returning to userland, the kernel simply needs to look at the descriptor
+and ask itself &quot;is this descriptor still open?&quot; &#x2014; and then return
+success or EINTR respectively.
+</p><p>
+I hope that a future revision of the standard fixes this. In the mean
+time, anyone wanting to <i>safely</i> close a file descriptor without
+assuming more than the standard specifies has a lot of work to do. </p><p>
+<div class="trailer"> Posted at 2011-12-17 08:30 | <a href="2011-12-17-POSIX-close-is-broken.html">Permanent link</a> |
+<a href="2011-12-17-POSIX-close-is-broken.html#disqus_thread">Comments</a>
+</div> <a href="http://disqus.com" class="dsq-brlink">blog comments powered by </a>
+</p></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
