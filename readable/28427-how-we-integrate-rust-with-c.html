@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+How we integrate Rust with C# -
+linksfor.dev(s)
+    </title>
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>How we integrate Rust with C#</h1>
+    <section class="post-content"> <p>Seq is a log server that&apos;s built using a few programming languages; we have a storage engine called Flare written in Rust, and a server application written in C#. Our language stack is something <a href="https://blog.getseq.net/rust-at-datalust/">I&apos;ve talked about previously</a>.</p>
+<p>Between Rust and C# we have a foreign function interface (FFI) that lets us call out to Rust code from within the .NET runtime. In this post I&apos;d like to explore our approach to FFI between Seq and its storage engine using the API for reading log events as a reference.</p>
+<p>To give you an idea of what the reader API looks like, here&apos;s an example of how it can be used in C# to enumerate over all events in the storage engine in order:</p>
+<pre><code class="language-csharp">IEnumerable&lt;(Key, byte[])&gt; ReadAllEvents(Store store)
+{
+    var range = new Range(Bound.Unbounded, Bound.Unbounded);
+    var order = Ordering.Ascending;
+
+    // Begin a reader over the entire store
+    // Events will be yielded oldest first
+    // The `BeginRead` method calls Rust code
+    using (var reader = store.BeginRead(range,  ordering))
+    {
+        // Create a buffer to read the event into
+        // This could be leased from a pool instead
+        var readInto = new byte[1024];
+
+        // The `TryReadNext` method calls Rust code
+        ReadResult read;
+        while (!(read = reader.TryReadNext(readInto.AsSpan())).IsDone)
+        {
+            // If the buffer is too small, resize it and read again
+            if (read.IsBufferTooSmall(out var required))
+            {
+                readInto = new byte[required];
+                continue;
+            }
+
+            // Get the contents of the event from the result
+            read.GetData(out var key, out var payload);
+
+            yield return (key, payload.ToArray());
+        }
+    }
+}
+</code></pre>
+<p>In the above example, the <code>store.BeginRead</code> and <code>reader.TryReadNext</code> methods are implemented in Rust. If any of that Rust code panics or returns an error then we capture them within .NET exceptions like this:</p>
+<p><img src="/content/images/2018/09/flare-error.png" alt="Combining a Rust error and .NET Exception"></p>
+<p>The <em>caused by</em> lines are the trace we get from Rust, which tells us that it ran into a data corruption trying to read an event from disk.</p>
+<p>The main components of Seq&apos;s storage engine FFI that we&apos;ll be exploring are:</p>
+<ul>
+<li>The high-level C# class <code>Reader</code>. In the above example, the call to <code>store.BeginRead</code> returns a <code>Reader</code>.</li>
+<li>The handles <code>FlareReaderHandle</code> in Rust and its C# counterpart <code>ReaderHandle</code>. These live a layer below the <code>Reader</code>.</li>
+<li>The binding functions. These perform actions on the handles. There are three involved in reading events:
+<ul>
+<li><code>flare_read_begin</code>: Begin a read transaction, which has a time range to read from and direction to read in.</li>
+<li><code>flare_read_next</code>: Read the next event into a caller-supplied buffer.</li>
+<li><code>flare_read_end</code>: Finish the read transaction and clean up its resources.</li>
+</ul>
+</li>
+<li>The infrastructure for capturing and surfacing Rust errors and panics as .NET exceptions.</li>
+</ul>
+<h2 id="thebenefitsanddrawbacksofffi">The benefits and drawbacks of FFI</h2>
+<p>Building software in multiple languages allows different components to be implemented in particularly idiomatic ways, but integrating those components can be challenging. The challenge comes from Rust and C# both being safe languages, but only being able to talk to each other by pretending to be unsafe C. That means within the FFI itself we can&apos;t just rely on Rust&apos;s ownership system or .NET&apos;s garbage collector to guarantee referenced data is valid without some extra help. Contracts built up in one language aren&apos;t guaranteed to be enforced by the other. Mistakes in this unsafe interface are prime suspects for invoking undefined behavior so we have to design it carefully.</p>
+<p>There are other constraints in the FFI in addition to its unsafe nature. We can only share certain kinds of values across the boundary, like primitive numbers, pointers, and simple datastructures. Specifically on the Rust side, we also have to deal with potentially null values, which aren&apos;t a feature of safe Rust code.</p>
+<p>All things considered though, the surface area of the FFI is small compared to the codebases on either side of it. If we were going to tackle building a storage engine entirely in C# we&apos;d need a liberal sprinkling of <code>unsafe</code> throughout the whole codebase. Having said that, the recent focus on lower-level features in C# 7 is starting to make it feel more idiomatic to write performance-sensitive code in C# without losing all notion of safety. We&apos;ll see some of those features at work in the C# side of our FFI later. All in all, we&apos;re happy to trade some design challenges in the FFI for access to Rust&apos;s safety and performance characteristics and ecosystem within the rest of the storage engine codebase, and to keep our C# app code within Seq itself productive.</p>
+<p>With a little background behind us, let&apos;s dive straight into some code and look at the way state is managed between Rust and C#.</p>
+<h2 id="handles">Handles</h2>
+<p>Rust and C# have different fundamental approaches to managing memory safely. Neither of these are available to us when sharing state between them in the FFI, because Rust doesn&apos;t understand C#&apos;s garbage collector and C# doesn&apos;t understand Rust&apos;s ownership system. So to help us manage shared state safely we wrap raw pointers to its memory in <em>handles</em>. These handles carry additional semantics over the raw pointers to prevent unsafe behaviour at runtime. Each handle has a definition in Rust and a corresponding pair in C#.</p>
+<p>Let&apos;s look at the Rust side first.</p>
+<h2 id="inrust">In Rust</h2>
+<p>The handles in Rust are responsible for allocating and deallocating shared FFI state in Rust&apos;s heap. The handle for a reader looks like this:</p>
+<pre><code class="language-rust">/**
+An opaque handle to a `StoreReader`.
+
+The reader is not safe to send across threads or access concurrently.
+*/
+pub struct FlareReader {
+    inner: StoreReader,
+}
+
+pub type FlareReaderHandle = HandleOwned&lt;FlareReader&gt;;
+</code></pre>
+<p>Where <code>StoreReader</code> is the more idiomatic Rust type for reading from a Flare store that the handle is wrapping. We&apos;ll see it at work later.</p>
+<h3 id="safemutablehandleswithhandleowned">Safe mutable handles with <code>HandleOwned</code></h3>
+<p>There&apos;s not much to see in the <code>FlareReader</code>, because it just wraps <code>StoreReader</code>, and the meat of the <code>FlareReaderHandle</code> itself is in that generic <code>HandleOwned</code> type. So let&apos;s look at <code>HandleOwned</code> in more detail. Don&apos;t worry too much about the <code>Send</code> and <code>UnwindSafe</code> traits yet, I&apos;ll explain what they&apos;re all about in a moment. <code>HandleOwned</code> looks like this:</p>
+<pre><code class="language-rust">/**
+A non-shared handle that cannot be accessed by multiple threads.
+
+The handle is bound to the thread that it was created on.
+The interior value can be treated like `&amp;mut T`.
+*/
+#[repr(transparent)]
+pub struct HandleOwned&lt;T&gt;(*mut ThreadBound&lt;T&gt;) where T: ?Sized;
+
+unsafe_impl!(
+    &quot;The handle is semantically `&amp;mut T`&quot; =&gt;
+    impl&lt;T&gt; Send for HandleOwned&lt;T&gt;
+    where
+        T: ?Sized + Send
+    {
+    }
+);
+
+impl&lt;T&gt; UnwindSafe for HandleOwned&lt;T&gt;
+where
+    T: ?Sized + RefUnwindSafe
+{
+}
+
+impl&lt;T&gt; HandleOwned&lt;T&gt;
+where
+    T: Send + &apos;static
+{
+    fn alloc(value: T) -&gt; Self {
+        let v = Box::new(ThreadBound::new(value));
+
+        HandleOwned(Box::into_raw(v))
+    }
+}
+
+impl&lt;T&gt; HandleOwned&lt;T&gt;
+where
+    T: ?Sized + Send
+{
+    unsafe_fn!(&quot;There are no other live references and the handle won&apos;t be used again&quot; =&gt;
+        fn dealloc&lt;R&gt;(handle: Self, f: impl FnOnce(&amp;mut T) -&gt; R) -&gt; R {
+            let mut v = Box::from_raw(handle.0);
+
+            f(&amp;mut **v)
+        }
+    );
+}
+
+impl&lt;T&gt; Deref for HandleOwned&lt;T&gt;
+where
+    T: ?Sized
+{
+    type Target = T;
+
+    fn deref(&amp;self) -&gt; &amp;T {
+        unsafe_block!(&quot;We own the interior value&quot; =&gt; {
+            &amp;**self.0
+        })
+    }
+}
+
+impl&lt;T&gt; DerefMut for HandleOwned&lt;T&gt;
+where
+    T: ?Sized
+{
+    fn deref_mut(&amp;mut self) -&gt; &amp;mut T {
+        unsafe_block!(&quot;We own the interior value&quot; =&gt; {
+            &amp;mut **self.0
+        })
+    }
+}
+</code></pre>
+<p><code>HandleOwned</code> is an opaque wrapper over a <code>*mut T</code>, which is a raw pointer. <code>HandleOwned</code> is solely responsible for allocating, deallocating, and dereferencing the memory behind that pointer. It&apos;s not accessed in C#. We try to communicate the handle&apos;s safety contract using a few standard Rust traits. This contract is actually lost across the FFI boundary so we need a few safety nets at runtime to catch ourselves if we violate it. It&apos;s still worth having the traits appropriately implemented though even if they alone can&apos;t force the foreign C# code to use the handle correctly. Their presence serves as documentation for the way we expect the handles to be used. Let&apos;s look at these traits in some more detail now.</p>
+<h3 id="maintainingthreadsafety">Maintaining thread safety</h3>
+<p>Thread safety is a property of mutli-threaded code that only accesses shared state in a synchronized way that&apos;s free from potential data races (there are actually some additional requirements around dangling pointers that we&apos;ll deal with later).</p>
+<p>Rust has a pair of traits for communicating thread safety; <a href="https://doc.rust-lang.org/stable/std/marker/trait.Send.html"><code>Send</code></a> and <a href="https://doc.rust-lang.org/stable/std/marker/trait.Sync.html"><code>Sync</code></a>. Together, they form a framework for concurrency that allows Rust code to share state when it&apos;s safe, but prevent it when it&apos;s not. The <code>Send</code> trait tells us whether a value can safely be sent to different threads. The <code>Sync</code> trait tells us whether a value can safely be accessed from different threads.</p>
+<p>The difference between <code>Send</code> and <code>Sync</code> can be a bit subtle. I think a helpful example of how they work together comes from an impl block in the standard library that looks a little like this:</p>
+<pre><code class="language-rust">impl&lt;&apos;a, T&gt; Send for &amp;&apos;a T where T: Sync { }
+</code></pre>
+<p>It tells us that a borrowed reference, <code>&amp;&apos;a T</code>, is safe to send across threads if the data it references, <code>T</code>, is safe to access from different threads.</p>
+<p>Rust will automatically try and implement <code>Send</code> and <code>Sync</code> for a type, so long as its contents are <code>Send</code> and <code>Sync</code>. This is usually achieved through standard library abstractions like <code>Arc</code> for thread-safe reference counting, and <code>Mutex</code> for thread-safe mutability.</p>
+<p>For <code>HandleOwned</code>, we simply don&apos;t want multiple threads to get a hold of the handle because we treat it like a mutable reference, and in Rust having multiple live mutable references to the same data is not allowed. There are a few complications though, <code>Send</code> and <code>Sync</code> are compile-time contracts that only Rust understands. There&apos;s nothing stopping a foreign caller from copying a <code>HandleOwned</code> into multiple threads and attempting to access the contents concurrently. As a safety net, <code>HandleOwned</code> wraps its contents in a <code>ThreadBound</code> type when allocating it. <code>ThreadBound</code> is similar to the <a href="https://docs.rs/fragile"><code>fragile::Fragile</code></a> type in the ecosystem in that it panics if it&apos;s dereferenced from a different thread than the one it was created on. This check effectively also enforces <code>!Sync</code> at runtime by catching cases where the handle has been passed to a different thread.</p>
+<p>There&apos;s an important exception to binding <code>HandleOwned</code> to its initial thread though; in .NET resources aren&apos;t guaranteed to be reclaimed from the same thread that allocated them. That means we need to be able to logically <code>Send</code> the <code>HandleOwned</code> to another thread so the GC can finalize it. So our <code>HandleOwned</code> implements the <code>Send</code> trait so long as its contents do. That way it&apos;s safe to deallocate it from a finalization thread.</p>
+<h3 id="maintainingunwindsafety">Maintaining unwind safety</h3>
+<p>Unwind safety in Rust is like exception safety in C#. It&apos;s a property of code that guarantees that broken invariants aren&apos;t observable if a function panics and breaks normal control flow.</p>
+<p>Rust has a pair of traits (Rust seems to have a lot of systems that are built up from a pair of traits) for communicating unwind safety; <a href="https://doc.rust-lang.org/stable/std/panic/trait.UnwindSafe.html"><code>UnwindSafe</code></a> and <a href="https://doc.rust-lang.org/stable/std/panic/trait.RefUnwindSafe.html"><code>RefUnwindSafe</code></a>. The <code>UnwindSafe</code> trait tells us whether an owned value is unwind safe. The <code>RefUnwindSafe</code> trait tells us whether a borrowed reference to a value is unwind safe.</p>
+<p>To demonstrate the difference between <code>UnwindSafe</code> and <code>RefUnwindSafe</code>, let&apos;s turn to some more impl blocks in the standard library:</p>
+<pre><code class="language-rust">impl&lt;&apos;a, T&gt; UnwindSafe for &amp;&apos;a T where T: RefUnwindSafe { }
+
+impl&lt;T&gt; UnwindSafe for Rc&lt;T&gt; where T: RefUnwindSafe { }
+
+impl&lt;T&gt; UnwindSafe for Arc&lt;T&gt; where T: RefUnwindSafe { }
+</code></pre>
+<p>These blocks tell us that some reference to a type, <code>T</code>, is unwind safe if <code>T</code> is unwind safe while it&apos;s borrowed. <code>RefUnwindSafe</code> lets us be abstract over the kind of reference to <code>T</code> that we&apos;re dealing when, whether it&apos;s <code>&amp;&apos;a T</code>, <code>Rc&lt;T&gt;</code>, <code>Arc&lt;T&gt;</code>, or in our case, <code>HandleOwned&lt;T&gt;</code>.</p>
+<p>Rust considers everything unwind safe by default unless it can be mutated:</p>
+<pre><code class="language-rust">impl&lt;&apos;a, T&gt; !UnwindSafe for &amp;&apos;a mut T { }
+</code></pre>
+<p>Some types guarantee unwind safety by poisoning their state on a panic. The standard library&apos;s <code>Mutex</code> works this way. After being poisoned that state is no longer accessible. It&apos;s a broadly applicable technique for guaranteeing unwind safety regardless of how the state itself is mutated. Many types in the storage engine use poisoning to guarantee unwind safety in case something unexpected happens, like a write to disk fails.</p>
+<h3 id="ensuringreferencesremainvalid">Ensuring references remain valid</h3>
+<p>Rust uses a type system to try and prove a program only accesses its memory in valid ways. These types are called lifetimes (they&apos;re the little <code>&apos;a</code> sigils in the <code>&amp;&apos;a T</code>). When defining FFI handles in Rust we need to be careful with these lifetimes because, following the theme of <code>Send</code> and <code>Sync</code>, they&apos;re a compile-time contract with other Rust code. C# doesn&apos;t understand this contract so for data that&apos;s shared across the FFI boundary we can&apos;t just depend on lifetimes to ensure references to other pieces of state remain valid. Instead we depend on runtime reference counting using <code>Rc&lt;T&gt;</code> or <code>Arc&lt;T&gt;</code>. That&apos;s why <code>HandleOwned</code> has a <code>&apos;static</code> requirement in its definition. <code>&apos;static</code> is a special lifetime for data that <em>can</em> live for as long as the program itself. That means if <code>T: &apos;static</code>, then <code>T</code> is probably an owned value or a reference to static data compiled into the program itself. <code>HandleOwned</code> will only accept data that can live until we&apos;re ready to deallocate it.</p>
+<p>Right now, handles are just wrappers over a raw pointer. This means there&apos;s nothing <em>technically</em> stopping a foreign caller from re-using that handle after it&apos;s been freed. At some point in the future we could turn those raw pointers into entries in some global handle table. That table could then detect attempts to access a handle that&apos;s already been freed.</p> <p>Having <code>HandleOwned</code> bound to a single thread makes it possible for us to ensure there&apos;s only a single live mutable reference to its state. That means thread-safety is achieved by simply forbidding multiple threads from using the handle. That&apos;s nice, but a bit limiting for potentially long-lived handles so we have a complement to <code>HandleOwned</code> called <code>HandleShared</code> that&apos;s safe for concurrent access, so long as its contents are. It looks like this:</p>
+<pre><code class="language-rust">/**
+A shared handle that can be accessed concurrently by multiple threads.
+
+The interior value can be treated like `&amp;T`.
+*/
+#[repr(transparent)]
+pub struct HandleShared&lt;T: ?Sized&gt;(*const T);
+
+unsafe_impl!(
+    &quot;The handle is semantically `&amp;T`&quot; =&gt;
+    impl&lt;T&gt; Send for HandleShared&lt;T&gt;
+        where T: ?Sized + Sync
+    {
+    }
+);
+
+impl&lt;T&gt; UnwindSafe for HandleShared&lt;T&gt;
+where
+    T: ?Sized + RefUnwindSafe
+{
+}
+
+impl&lt;T&gt; HandleShared&lt;T&gt;
+where
+    T: Send + Sync + &apos;static
+{
+    fn alloc(value: T) -&gt; Self {
+        let v = Box::new(value);
+
+        HandleShared(Box::into_raw(v))
+    }
+}
+
+impl&lt;T&gt; HandleShared&lt;T&gt;
+where
+    T: ?Sized + Send + Sync
+{
+    unsafe_fn!(
+        &quot;There are no other live references and the handle won&apos;t be used again&quot; =&gt;
+        fn dealloc&lt;R&gt;(handle: Self, f: impl FnOnce(&amp;mut T) -&gt; R) -&gt; R {
+            let mut v = Box::from_raw(handle.0 as *mut T);
+
+            f(&amp;mut *v)
+        }
+    );
+}
+
+impl&lt;T&gt; Deref for HandleShared&lt;T&gt;
+where
+    T: ?Sized
+{
+    type Target = T;
+
+    fn deref(&amp;self) -&gt; &amp;T {
+        unsafe_block!(&quot;We own the interior value&quot; =&gt; {
+            &amp;*self.0
+        })
+    }
+}
+</code></pre>
+<p>An example of a <code>HandleShared</code> is <code>StoreHandle</code>, which holds most of the state for an instance of the storage engine and is safe for concurrent access:</p>
+<pre><code class="language-rust">/**
+An opaque handle to a `Store`.
+
+The store is safe to send across threads and access concurrently.
+*/
+pub struct FlareStore {
+    inner: Store,
+}
+
+pub type FlareStoreHandle = HandleShared&lt;FlareStore&gt;;
+</code></pre>
+<p>The <code>StoreReader</code> type we saw before borrows a lot of state from the <code>Store</code>.</p>
+<h2 id="inc">In C#</h2>
+<p>Memory in C# is managed by a garbage collector in the .NET runtime. It takes care of keeping objects alive for as long as their accessible, and reclaiming their memory when they&#x2019;re not. Rust doesn&apos;t know about the .NET garbage collector though, so from .NET&apos;s point of view Rust is unmanaged code. There are a lot of subtle design challenges that can lead to nasty memory safety issues when integrating managed and unmanaged code. Fortunately though, this is all very well-trodden territory and we have plenty of tools at our disposal in .NET to manage the complexity of building safe, managed APIs to unmanaged resources. We&apos;ll see some of these tools in action shortly.</p>
+<p>Let&apos;s start by looking at the <code>Reader</code> class, which is the high-level C# API for reading events from the Rust storage engine. It looks like this:</p>
+<pre><code class="language-csharp">public sealed class Reader : IDisposable
+{
+    readonly ReaderHandle _handle;
+    
+    internal Reader(ReaderHandle handle)
+    {
+        _handle = handle;
+    }
+
+    public ReadResult TryReadNext(Span&lt;byte&gt; buffer)
+    {
+        EnsureOpen();
+        
+        unsafe
+        {
+            fixed (byte* bufferPtr = buffer)
+            {
+                var result = Bindings.flare_read_next(
+                    _handle,
+                    out var key,
+                    (IntPtr)bufferPtr,
+                    (UIntPtr)buffer.Length,
+                    out var actualValueLength);
+                    
+                if (result.IsBufferTooSmall())
+                {
+                    return ReadResult.BufferTooSmall((int)actualValueLength);
+                }
+                
+                if (result.IsDone())
+                {
+                    return ReadResult.Done();
+                }
+                
+                result.EnsureSuccess();
+                return ReadResult.Data(key, buffer.Slice(0, (int)actualValueLength));
+            }
+        }
+    }
+    
+    public void Dispose()
+    {
+        _handle.Close();
+    }
+    
+    void EnsureOpen()
+    {
+        // Invalid handles will still be caught by the unmanaged bindings
+        // This method just surfaces a more accurate exception
+        if (_handle.IsClosed)
+            throw new ObjectDisposedException(
+                nameof(Reader),
+                &quot;The reader has been disposed.&quot;
+            );
+    }
+}
+</code></pre>
+<p>The call to <code>Bindings.flare_read_next</code> is executing Rust code on the <code>FlareReaderHandle</code> we saw earlier. We&apos;ll look at the exact definition of <code>flare_read_next</code> a bit later.</p>
+<h3 id="safearbitrarymemorywithoutallocating">Safe arbitrary memory, without allocating</h3>
+<p>The <code>Reader.TryReadNext</code> method returns a type called <code>ReadResult</code> that carries the result of reading the event into a buffer, along with the event&apos;s byte payload. <code>ReadResult</code> is a <code>ref struct</code>, which is a new C# 7 feature to guarantee instances can never be boxed on the heap. That means a <code>ref struct</code> has a well-defined lifetime that&apos;s tied to a specific stack frame. This is what it looks like:</p>
+<pre><code class="language-csharp">public ref struct ReadResult
+{
+    Key _key;
+    Span&lt;byte&gt; _value;
+    int _requiredLength;
+    Result _result;
+
+    enum Result
+    {
+        Ok,
+        Done,
+        BufferTooSmall
+    }
+
+    internal static ReadResult Data(Key key, Span&lt;byte&gt; value)
+    {
+        return new ReadResult
+        {
+            _key = key,
+            _value = value,
+            _result = Result.Ok
+        };
+    }
+
+    internal static ReadResult Done()
+    {
+        return new ReadResult
+        {
+            _result = Result.Done
+        };
+    }
+
+    internal static ReadResult BufferTooSmall(int requiredLength)
+    {
+        return new ReadResult
+        {
+            _requiredLength = requiredLength,
+            _result = Result.BufferTooSmall
+        };
+    }
+
+    public bool IsBufferTooSmall(out int required)
+    {
+        if (_result != Result.BufferTooSmall)
+        {
+            required = 0;
+            return false;
+        }
+        
+        required = _requiredLength;
+        return true;
+    }
+
+    public bool IsDone =&gt; _result == Result.Done;
+
+    public bool HasValue =&gt; _result == Result.Ok;
+
+    public void GetData(out Key key, out Span&lt;byte&gt; value)
+    {
+        if (!HasValue)
+            throw new InvalidOperationException($&quot;`{nameof(ReadResult)}` has no data.&quot;);
+
+        key = _key;
+        value = _value;
+    }
+}
+</code></pre>
+<p>The payload field is a <a href="https://docs.microsoft.com/en-us/dotnet/api/system.span-1?view=netcore-2.1"><code>Span&lt;byte&gt;</code></a> which itself is a <code>ref struct</code> that acts like a potentially GC-aware pointer to arbitrary memory.</p>
+<p>The effort so far in C# 7 to improve the semantics and safety of working with arbitrary memory, and for working with value types in general, makes the .NET side of the FFI easier to build safely with very little overhead.</p>
+<h3 id="managingunmanagedresourceswithsafehandle">Managing unmanaged resources with <code>SafeHandle</code></h3>
+<p>In the Rust FFI handles, we have a fundamental <code>HandleOwned</code> type that encapsulates the memory safety requirements that the consuming Rust code expects to be maintained. We have a similarly fundamental handle type behind <code>Reader</code> in C# called <code>ReaderHandle</code>. It looks like this:</p>
+<pre><code class="language-csharp">class ReaderHandle : SafeHandle
+{
+    public ReaderHandle()
+        : base(IntPtr.Zero, true)
+    {
+    }
+    
+    [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
+    protected override bool ReleaseHandle()
+    {
+        if (handle == IntPtr.Zero) return true;
+        
+        var h = handle;
+        handle = IntPtr.Zero;
+        
+        return Bindings.flare_read_end(h).IsSuccess();
+    }
+    
+    public override bool IsInvalid =&gt; handle == IntPtr.Zero;
+}
+</code></pre>
+<p><code>ReaderHandle</code> is a class that is responsible for integrating with the .NET garbage collector by inheriting from the <a href="https://docs.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.safehandle?view=netcore-2.1"><code>SafeHandle</code></a> class. <code>SafeHandle</code> takes care of a lot of the subtlety of acquiring and releasing unmanaged resources safely. It wraps a raw pointer and ensures the contents of the <code>ReleaseHandle</code> method will get called in a constrained execution region during finalization if the handle isn&apos;t released sooner. That means that one way or another, when the handle is no longer accessible the unmanaged resources it wraps will have a chance to get reclaimed.</p>
+<h2 id="indicatingsuccessorfailure">Indicating success or failure</h2>
+<p>When making FFI calls, we want to be able to capture normal errors in Rust and make them available to the foreign caller. In Seq, we also want to catch any potential panics from the storage engine (even though we don&#x2019;t expect them under normal operation) so we have a chance to log them before either shutting down or attempting to recover. FFI error management is provided by the <code>FlareResult</code> type, which has both a Rust and a C# implementation.</p>
+<h2 id="inrust">In Rust</h2>
+<p><code>FlareResult</code> is an enum for returning a simple status code across an FFI boundary that follows a <a href="https://michael-f-bryan.github.io/rust-ffi-guide/errors/return_types.html#return-types">standard pattern</a> for making more detailed error information available to the foreign caller.</p>
+<p><code>FlareResult</code> looks something like this:</p>
+<pre><code class="language-rust">/** A container for the last result type returned by an FFI call on a given thread. */
+thread_local! {
+    static LAST_RESULT: RefCell&lt;Option&lt;LastResult&gt;&gt; = RefCell::new(None);
+}
+
+struct LastResult {
+    value: FlareResult,
+    err: Option&lt;String&gt;,
+}
+
+/**
+An indicator of success or failure in an FFI call.
+
+If the result is not success, a descriptive error stack can be obtained.
+*/
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlareResult {
+    Ok,
+    Done,
+    BufferTooSmall,
+    ArgumentNull,
+    InternalError,
+    ..
+}
+
+impl FlareResult {
+    /**
+    Attempt to get a human-readable error message for a result.
+    
+    If the result is successful then this method returns `None`.
+    */
+    fn as_err(&amp;self) -&gt; Option&lt;&amp;&apos;static str&gt; {
+        match *self {
+            FlareResult::Ok | FlareResult::Done =&gt; None,
+            FlareResult::ArgumentNull =&gt; Some(&quot;a required argument was null&quot;),
+            FlareResult::BufferTooSmall =&gt; Some(&quot;a supplied buffer was too small&quot;),
+            FlareResult::InternalError =&gt; Some(&quot;an internal error occurred&quot;),
+            ..
+        }
+    }
+
+    /**
+    Call a function that returns a `FlareResult`, setting the thread-local last result.
+    
+    This method will also catch panics, so the function to call must be unwind safe.
+    */
+    pub(super) fn catch(f: impl FnOnce() -&gt; Self + UnwindSafe) -&gt; Self {
+        LAST_RESULT.with(|last_result| {
+            {
+                *last_result.borrow_mut() = None;
+            }
+            
+            match catch_unwind(f) {
+                Ok(flare_result) =&gt; {
+                    let extract_err = || flare_result.as_err().map(Into::into);
+                    
+                    // Always set the last result so it matches what&apos;s returned.
+                    // This `Ok` branch doesn&apos;t necessarily mean the result is ok,
+                    // only that there wasn&apos;t a panic.
+                    last_result
+                        .borrow_mut()
+                        .map_mut(|last_result| {
+                            last_result.value = flare_result;
+                            last_result.err.or_else_mut(extract_err);
+                        })
+                        .get_or_insert_with(|| LastResult {
+                            value: flare_result,
+                            err: extract_err(),
+                        })
+                        .value
+                }
+                Err(e) =&gt; {
+                    let extract_panic =
+                        || error::extract_panic(&amp;e)
+                               .map(|s| format!(&quot;internal panic with &apos;{}&apos;&quot;, s));
+                        
+                    // Set the last error to the panic message if it&apos;s not already set
+                    last_result
+                        .borrow_mut()
+                        .map_mut(|last_result| {
+                            last_result.err.or_else_mut(extract_panic);
+                        })
+                        .get_or_insert_with(|| LastResult {
+                            value: FlareResult::InternalError,
+                            err: extract_panic(),
+                        })
+                        .value
+                }
+            }
+        })
+    }
+    
+    /** Access the last result returned on the calling thread. */
+    fn with_last_result&lt;R&gt;(f: impl Fn(Option&lt;(FlareResult, Option&lt;&amp;str&gt;)&gt;) -&gt; R) -&gt; R {
+        LAST_RESULT.with(|last_result| {
+            let last_result = last_result.borrow();
+            let last_result = last_result.as_ref().map(|last_result| {
+                let msg = last_result.err.as_ref().map(|msg| msg.as_ref());
+                (last_result.value, msg)
+            });
+            
+            f(last_result)
+        })
+    }
+}
+</code></pre>
+<p>The <code>map_mut</code> and <code>or_else_mut</code> methods are defined in an extension trait on <code>Option</code> that I introduced <a href="https://blog.getseq.net/rust-at-datalust-how-we-organize-a-complex-rust-codebase/#findingahomeforcrosscuttingconcerns">in a previous post</a>.</p>
+<p><code>FlareResult</code> also implements the <code>Try</code> trait so FFI functions can use the <code>?</code> operator to early return errors:</p>
+<pre><code class="language-rust">/**
+Map error types that are convertible into the top-level `FlareError` into `FlareResult`s.
+
+This is so we can use `?` on `Result&lt;T, E: Into&lt;error::FlareError&gt;&gt;` in FFI functions.
+The error state will be serialized and stored in a thread-local that can be queried later.
+*/
+impl&lt;E&gt; From&lt;E&gt; for FlareResult
+where
+    E: Into&lt;error::FlareError&gt; + Fail,
+{
+    fn from(e: E) -&gt; Self {
+        // Get a formatted string representing the error
+        // This includes its chain of causes
+        let err = Some(error::format(&amp;e));
+        
+        // Convert the error into a top-level `FlareError`
+        // This can then be converted into an FFI-specific `FlareResult`
+        let flare_result = e.into().into_flare_result();
+        
+        LAST_RESULT.with(|last_result| {
+            *last_result.borrow_mut() = Some(LastResult {
+                value: flare_result,
+                err,
+            });
+        });
+        
+        flare_result
+    }
+}
+
+/** Allow carrying standard `Result`s as `FlareResult`s. */
+impl Try for FlareResult {
+    type Ok = Self;
+    type Error = Self;
+    
+    fn into_result(self) -&gt; Result&lt;Self::Ok, Self::Error&gt; {
+        match self {
+            FlareResult::Ok | FlareResult::Done =&gt; Ok(self),
+            _ =&gt; Err(self),
+        }
+    }
+    
+    fn from_error(result: Self::Error) -&gt; Self {
+        if result.as_err().is_none() {
+            panic!(format!(
+                &quot;attempted to return success code `{:?}` as an error&quot;,
+                result
+            ));
+        }
+        result
+    }
+    
+    fn from_ok(result: Self::Ok) -&gt; Self {
+        if result.as_err().is_some() {
+            panic!(format!(
+                &quot;attempted to return error code `{:?}` as success&quot;,
+                result
+            ));
+        }
+        result
+    }
+}
+</code></pre>
+<p><code>FlareResult</code> makes it much nicer to write FFI functions more idiomatically and have error information captured or consumers across the boundary.</p>
+<h2 id="inc">In C#</h2>
+<p>The C# implementation of <code>FlareResult</code> wraps the error codes internally and exposes a higher-level API that we can use to determine how to proceed after making an FFI call. It looks like this:</p>
+<pre><code class="language-csharp">[StructLayout(LayoutKind.Sequential)]
+public struct FlareResult
+{
+    enum FlareResultValue : uint
+    {
+        Ok,
+        Done,
+        BufferTooSmall,
+        ArgumentNull,
+        InternalError,
+        ..
+    }
+    
+    readonly FlareResultValue _result;
+    
+    public static (FlareResult, string) GetLastResult()
+    {
+        return LastResult.GetLastResult();
+    }
+    
+    // Check the native result for an error
+    // If there is one, we capture it and wrap it in a .NET exception
+    public void EnsureSuccess()
+    {
+        if (IsSuccess()) return;
+        
+        var (lastResult, msg) = GetLastResult();
+        
+        // This isn&apos;t perfect, but avoids some cases where native calls are made
+        // between checking for success.
+        if (lastResult._result == _result)
+        {
+            throw new Exception($&quot;Flare failed with {_result}: {msg?.TrimEnd()}&quot;);
+        }
+        
+        throw new Exception($&quot;Flare failed with {_result}&quot;);
+    }
+    
+    public bool IsSuccess()
+    {
+        return _result == FlareResultValue.Ok || _result == FlareResultValue.Done;
+    }
+    
+    public bool IsDone()
+    {
+        return _result == FlareResultValue.Done;
+    }
+    
+    public bool IsBufferTooSmall()
+    {
+        return _result == FlareResultValue.BufferTooSmall;
+    }
+}
+</code></pre>
+<h2 id="bindings">Bindings</h2>
+<p>The raw bindings are a set of functions with a C calling convention exported by the Rust library, and imported by the .NET runtime.</p>
+<h2 id="inrust">In Rust</h2>
+<p>To simplify safety checks in the FFI binding functions, we use a macro to declare our bindings in Rust called <code>ffi!</code>. Macros are like compile-time functions that operate on fragments of syntax to generate code. The <code>ffi!</code> macro takes care of ensuring arguments aren&apos;t null and capturing panics and other errors so they can be consumed by the foreign caller.</p>
+<p>Before looking at the definition of the macro itself, let&apos;s see how it&apos;s used. This is what our FFI bindings for the read API look like using the <code>ffi!</code> macro:</p>
+<pre><code class="language-rust">ffi! {
+    fn flare_read_begin(
+        store: FlareStoreHandle,
+        range: *const FlareRange,
+        direction: FlareOrdering,
+        reader: Out&lt;FlareReaderHandle&gt;
+    ) -&gt; FlareResult {
+        let range = &amp;*range;
+
+        let index_expr = range.index_expr()?;
+        let direction = match direction {
+            FlareOrdering::Ascending =&gt; Direction::Causal,
+            FlareOrdering::Descending =&gt; Direction::Anticausal,
+        };
+
+        let range = range.range();
+
+        let vread = store.inner.begin_read(range, index_expr, direction)?;
+
+        *reader = FlareReaderHandle::alloc(FlareReader {
+            inner: vread
+        });
+
+        FlareResult::Ok
+    }
+
+    fn flare_read_next(
+        reader: FlareReaderHandle,
+        key: Out&lt;FlareKey&gt;,
+        value_buf: *mut u8,
+        value_buf_len: size_t,
+        actual_value_len: Out&lt;size_t&gt;
+    ) -&gt; FlareResult {
+        fn call_read(
+            vreader: &amp;mut FlareReader,
+            buf: &amp;mut [u8],
+            key: &amp;mut FlareKey,
+            actual_value_len: &amp;mut usize
+        ) -&gt; FlareResult {
+            let reader = &amp;mut vreader.inner;
+
+            // Read the current event into the caller-supplied buffer
+            // We early return from this function if the buffer is too small
+            let read_result = reader.with_current(|current|
+                stream_read::into_fixed_buffer(current, buf, key, actual_value_len))?;
+
+            match read_result {
+                Some(result) =&gt; {
+                    // If the result is ok then we&apos;re done with this event
+                    // Fetch the next one
+                    if let FlareResult::Ok = result {
+                        reader.move_next()?;
+                    }
+
+                    result
+                }
+                // If there is no result then we don&apos;t have an event
+                // Fetch the next event and recurse
+                None =&gt; {
+                    if reader.move_next()? {
+                        call_read(vreader, buf, key, actual_value_len)
+                    } else {
+                        FlareResult::Done
+                    }
+                }
+            }
+        }
+
+        let buf = slice::from_raw_parts_mut(value_buf, value_buf_len);
+        call_read(&amp;mut reader, buf, &amp;mut *key, &amp;mut *actual_value_len)
+    }
+
+    fn flare_read_end(reader: FlareReaderHandle) -&gt; FlareResult {
+        FlareReaderHandle::dealloc(reader, |r| {
+            r.inner.complete()?;
+
+            FlareResult::Ok
+        })
+    }
+}
+</code></pre>
+<p>Most of the work here is in the <code>flare_read_next</code> function, which attempts to read an event into a caller-supplied buffer and return an appropriate error code if it doesn&apos;t fit. The <code>StoreReader</code> type it works with has a similar to API to the <a href="https://docs.rs/streaming-iterator"><code>streaming_iterator::StreamingIterator</code></a> trait. We saw the C# counterpart to the <code>flare_read_next</code> function in the <code>Reader.TryReadNext</code> method.</p>
+<p>The <code>Out</code> type is a simple type alias that makes it clear that we expect the function to assign to that argument:</p>
+<pre><code class="language-rust">type Out&lt;T&gt; = *mut T;
+</code></pre>
+<p>Now let&apos;s take a look at the <code>ffi!</code> macro itself and see what it does.</p>
+<h3 id="usingmacrostobuildsaferbindings">Using macros to build safer bindings</h3>
+<p>The <code>flare_read_begin</code>, <code>flare_read_next</code>, and <code>flare_read_end</code> functions are expanded by the <code>ffi!</code> macro to include boilerplate for ensuring arguments aren&apos;t null and to catch any panics using the <code>FlareResult</code> type we saw earlier.</p>
+<p>The <code>ffi!</code> macro itself looks like this (don&apos;t worry if the syntax looks unfamiliar, Rust macros are a bit different from regular Rust code):</p>
+<pre><code class="language-rust">macro_rules! ffi {
+    ($(fn $name:ident($($arg_ident:ident: $arg_ty:ty),*) -&gt; FlareResult $body:expr)*) =&gt; {
+        $(
+            #[no_mangle]
+            pub unsafe extern &quot;C&quot; fn $name( $($arg_ident : $arg_ty),* ) -&gt; FlareResult {
+                #[allow(unused_mut)]
+                unsafe fn call( $(mut $arg_ident: $arg_ty),* ) -&gt; FlareResult {
+                    if $($arg_ident.is_null()) || * {
+                        return FlareResult::ArgumentNull;
+                    }
+
+                    $body
+                }
+
+                FlareResult::catch(move || call( $($arg_ident),* ))
+            }
+        )*
+    };
+}
+</code></pre>
+<p>Argument null checking is handled by a trait called <code>IsNull</code>. This trait is fairly simple and we only implement it for argument types that are used in the FFI bindings:</p>
+<pre><code class="language-rust">/**
+Whether or not a value passed across an FFI boundary is null.
+*/
+pub(super) trait IsNull {
+    fn is_null(&amp;self) -&gt; bool;
+}
+
+impl&lt;T: ?Sized&gt; IsNull for *const T {
+    fn is_null(&amp;self) -&gt; bool {
+        &lt;*const T&gt;::is_null(*self)
+    }
+}
+
+impl&lt;T: ?Sized&gt; IsNull for *mut T {
+    fn is_null(&amp;self) -&gt; bool {
+        &lt;*mut T&gt;::is_null(*self)
+    }
+}
+
+impl&lt;T: ?Sized&gt; IsNull for super::HandleOwned&lt;T&gt; {
+    fn is_null(&amp;self) -&gt; bool {
+        self.0.is_null()
+    }
+}
+
+impl&lt;T: ?Sized + Sync&gt; IsNull for super::HandleShared&lt;T&gt; {
+    fn is_null(&amp;self) -&gt; bool {
+        self.0.is_null()
+    }
+}
+
+
+macro_rules! never_null {
+    ($($t:ty),*) =&gt; {
+        $(
+            impl IsNull for $t {
+                fn is_null(&amp;self) -&gt; bool { false }
+            }
+        )*
+    }
+}
+
+// Values that aren&apos;t pointers aren&apos;t ever considered null
+never_null!(
+    usize,
+    isize,
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    bool,
+    super::FlareOrdering
+);
+</code></pre>
+<p>The magic is in the <code>ffi!</code> macro, that knows what all the arguments to the function are and can automatically call <code>IsNull::is_null</code> on each of them.</p>
+<h2 id="inc">In C#</h2>
+<p>There&apos;s a standard tool for importing unmanaged function bindings in .NET called P/Invoke. This feature comes with a runtime cost whenever one of the binding functions is invoked, but can be fairly cheap if you amortize the cost by doing as much work as possible in a single call, and are careful about only marshaling blittable types. A type is blittable if its values have the same in-memory representation for both managed and unmanaged code. A few examples of blittable types in .NET are <code>int</code>, <code>IntPtr</code>, and structs with only blittable fields.</p>
+<p>The C# bindings for the three Rust functions needed to read events look like this:</p>
+<pre><code class="language-csharp">static class Bindings
+{
+#if WINDOWS
+    const string NativeLib = &quot;Native/flare&quot;;
+#else
+    const string NativeLib = &quot;Native/libflare&quot;;
+#endif
+
+    [DllImport(NativeLib, EntryPoint = &quot;flare_read_begin&quot;, ExactSpelling = true)]
+    public static extern FlareResult flare_read_begin(
+        StoreHandle store,
+        IntPtr range,
+        Ordering ordering,
+        out ReaderHandle reader);
+        
+    [DllImport(NativeLib, EntryPoint = &quot;flare_read_next&quot;, ExactSpelling = true)]
+    public static extern FlareResult flare_read_next(
+        ReaderHandle reader,
+        out Key key, 
+        IntPtr valueBuf,
+        UIntPtr valueBufLen,
+        out UIntPtr actualValueLen);
+        
+    [DllImport(NativeLib, EntryPoint = &quot;flare_read_end&quot;, ExactSpelling = true)]
+    public static extern FlareResult flare_read_end(IntPtr reader);
+}
+</code></pre>
+<p>The <code>WINDOWS</code> variable is a build-time constant we use for platform-specific code blocks.</p>
+<h2 id="theendresult">The end result</h2>
+<p>That&apos;s been a whirlwind tour of how we do FFI between Rust and C# in Seq! I hope there&apos;s something in there you&apos;ve found interesting. We&apos;ve tried to keep the source on either side of the Rust/C# FFI boundary idiomatic. Macros on the Rust side let us reduce a lot of boilerplate when defining the C ABI. Handles on the C# side take care of the subtleties of holding unmanaged resources alongside GC-managed ones. Using an FFI-specific result type lets us combine Rust errors with .NET exceptions so we have visibility into native code. The end result is an integrated, but independent set of codebases that are idiomatic within their target domains.</p> </section>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
