@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Hidden Treasure: Intrusion Detection with ETW (Part 1) -
+linksfor.dev(s)
+    </title>
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Hidden Treasure: Intrusion Detection with ETW (Part 1)</h1>
+    <article id="post-3095" class="post-3095 post type-post status-publish format-standard hentry category-how-to category-inside-office-365 tag-etw tag-forensic tag-how-to tag-security"> <div class="entry-content single"> <p>Today&#x2019;s defenders face an increasing obstacle with information asymmetry. With the advent of in-memory attacks and targeted malware, defenders cannot simply rely on the default event logs provided by Windows. Attackers may make use of process hollowing to hide their code within a seemingly benign process as well as routing their Command &amp; Control traffic over DNS to remain hidden.</p>
+<p>We began investigating alternate data sources beyond the Windows Security Event Log after exercising our incident response capabilities with the Office 365 red team. We realized that although we saw a suspicious process started, we didn&#x2019;t know which domains the process had queried or how much data it had sent to an endpoint. Additionally, we found that instances of PowerShell.exe were black holes where the adversary could execute any number of unknown commands. We needed more information than what was available through the Security Event Log.</p>
+<p><strong>The Challenge</strong></p>
+<p>Imagine the following scenario &#x2013; in reviewing your event logs, you&#x2019;ve found a Process Start event (4688) for an unknown executable, bad.exe:</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/04/bad.exe_.png"><img src="https://msdnshared.blob.core.windows.net/media/2017/04/bad.exe_.png" alt="bad-exe" width="866" class="alignnone size-full wp-image-3096"></a></p>
+<p>Unfortunately, when you went to investigate the machine with this suspect process start, bad.exe was no longer on disk or anywhere to be found. Using only what&#x2019;s available in the Windows Security Event Log, you&#x2019;re left with very little information besides what is shown above in the 4688 Process Start event.</p>
+<p>Now imagine your forensic wish list. What sort of information about bad.exe would be most useful in detection and threat assessment? Principally, we&#x2019;re interested in three questions:</p>
+<ul>
+<li>Who did it? e.g. username</li>
+<li>What did they do? e.g. process &#x2013; this can be misleading if process hollowing/injection was used</li>
+<li>Where did they send the data? e.g. network destinations and domain names</li>
+</ul>
+<p>With these questions in mind, our forensic wish list might look something like this:</p>
+<ul>
+<li>What DNS lookups did the process perform?</li>
+<li>What IP Addresses did the process connect to?</li>
+<li>How much data was transmitted by the process?</li>
+<li>Is the process &#x201C;beaconing&#x201D;? i.e. Is the process communicating with Command &amp; Control infrastructure?</li>
+<li>What DLLs did the process load?</li>
+<li>Did the process create threads in other processes?</li>
+<li>What WMI operations did the process perform?</li>
+<li>What PowerShell functions did the process call?</li>
+</ul>
+<p>To collect this type of data, you might assume that a kernel driver or some sort of hooking mechanism would be needed. Fortunately for us, Windows provides an existing source of data that can help us answer these questions called ETW or Event Tracing for Windows.</p>
+<p><strong>ETW to the Rescue</strong></p>
+<p><a href="https://msdn.microsoft.com/en-us/library/windows/desktop/bb968803(v=vs.85).aspx">Event Tracing for Windows</a><span> (ETW)</span> is a tracing technology that&#x2019;s been available in Windows since Windows 2000. It was originally designed to help Microsoft engineers debug the operating system &#xA0;&#x2013; for example, performance measurements, and power management tracing. In a previous life, I was an engineer on Windows and used ETW for performance testing and component tracing.</p>
+<p>ETW is not notably different from other tracing technologies you may have encountered. A component (e.g. PowerShell) registers a provider, with which it emits one or more types of events. Each event has a schema describing the type of data contained in the event payload. An event might contain string, integer, float, boolean, or even binary data.</p>
+<p>To consume events from an ETW provider, the consumer needs to first create a trace session. Each trace session can consume one or more providers. After registering a provider with the trace session, the consumer registers a callback which must handle any event from any provider. The consumer is now ready to enable the trace session. It&#x2019;s important to note that by starting the trace session, the consumer donates the calling thread to the ETW subsystem for pumping events.</p>
+<p>The flow of events is best illustrated by this diagram:</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/04/etw-flow.png"><img src="https://msdnshared.blob.core.windows.net/media/2017/04/etw-flow.png" alt="etw-flow" width="875" class="alignnone wp-image-3105"></a></p>
+<p><strong>The Shape of ETW</strong></p>
+<p>To get a better sense of what an ETW event looks like, we&#x2019;ll make use of a tool called <a href="https://blogs.technet.microsoft.com/messageanalyzer/">Microsoft Message Analyzer</a>. This tool allows you to subscribe to ETW traces available on the operating system and inspect the events as they come in.</p>
+<p>Here&#x2019;s the main window of Message Analyzer after having registered for the PowerShell provider:</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/04/ma1.png"><img src="https://msdnshared.blob.core.windows.net/media/2017/04/ma1.png" alt="ma1" width="654" class="alignnone size-full wp-image-3106"></a></p>
+<p>In the center, we see a series of events with a summary blurb:</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/04/ma2.png"><img src="https://msdnshared.blob.core.windows.net/media/2017/04/ma2.png" alt="ma2" width="776" class="alignnone size-full wp-image-3115"></a></p>
+<p>When we select one of those events, like the one highlighted above, we get a detailed view in the bottom half:</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/04/ma3.png"><img src="https://msdnshared.blob.core.windows.net/media/2017/04/ma3.png" alt="ma3" width="868" class="alignnone size-full wp-image-3125"></a></p>
+<p>The first three items labeled &#x201C;ContextInfo&#x201D;, &#x201C;UserData&#x201D;, and &#x201C;Payload&#x201D; are all properties on this event. We can see that the &#x201C;Type&#x201D; column describes all of them being strings. If we select one of these properties, we can see the contents of that property:</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/04/ma4.png"><img src="https://msdnshared.blob.core.windows.net/media/2017/04/ma4.png" alt="ma4" width="434" class="alignnone size-full wp-image-3135"></a></p>
+<p>This is a structured string blob containing the Host Application (&#x201C;powershell.exe&#x201D;), the Command Name (&#x201C;invoke-mimikatz&#x201D;), and the user that invoked it (&#x201C;REDMOND\zbrown&#x201D;).</p>
+<p>Each ETW provider emits events with their own unique schemas. In addition to the unique schema, there are some standard properties to each event &#x2013; EventId, ProcessId, ThreadId, TimeStamp, ProviderId, and more. These properties are common to all ETW events.</p>
+<p>If you&#x2019;d like to learn more about using Message Analyzer to inspect ETW events, please consult <a href="https://github.com/Microsoft/krabsetw/blob/master/docs/UsingMessageAnalyzerToFindETWSources.md">this guide</a>.</p>
+<p><strong>Visibility</strong><strong> with ETW</strong></p>
+<p>ETW provides visibility into most core Windows subsystems, including:</p>
+<ul>
+<li>Network activity</li>
+<li>Process creation/termination</li>
+<li>Thread creation/termination</li>
+<li>Memory allocation</li>
+<li>DLL load/unload</li>
+<li>PowerShell method invocation</li>
+<li>DNS resolutions (cached and hot)</li>
+<li>Firewall activity</li>
+<li>WMI activity</li>
+<li>WinINet request/response headers</li>
+<li>and so much more&#x2026;</li>
+</ul>
+<p>In Windows 10, there&apos;s more than 1000 providers. If you&#x2019;re curious which providers are available on your version of Windows, you can run the following command:</p>
+<pre>        logman query providers &gt; providers.txt</pre>
+<p>With all this data ripe for collection, you might assume we can simply turn these ETW providers on and immediately start benefiting from the increased information at our disposal. However, ETW is still a debug stream and, as such, outputs a truly huge amount of data. It would be like drinking from a fire hose:</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/04/firehost.jpg"><img src="https://msdnshared.blob.core.windows.net/media/2017/04/firehost.jpg" alt="firehost" width="527" class="alignnone wp-image-3145"></a></p>
+<p>Imagine trying to send this data to your SIEM:</p>
+<ul>
+<li>every DLL load in every process</li>
+<li>every thread creation in every process</li>
+<li>every process start on every endpoint</li>
+</ul>
+<p>It would likely be impossible to make effective use of the data if we sent it in raw form. To use of this new data source, we&#x2019;ll need some way to filter and/or aggregate the data.</p>
+<p>In the next blog post on ETW, we&#x2019;ll discuss ways to consume ETW programmatically, filtering inputs, and how we can flesh out answers to the forensic wish list we outlined above.</p> </div> </article>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
