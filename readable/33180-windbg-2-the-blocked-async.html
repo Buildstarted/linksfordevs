@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+WinDbg #2 - The blocked async -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>WinDbg #2 - The blocked async</h1>
+    <article class="post-content"> <p>Today&#x2019;s exercise is not an exercise! The investigation I&#x2019;m about to describe was triggered by a production outage affecting multiple <code class="highlighter-rouge">API</code>s - albeit not at the same time - at a customer. For obvious reasons I&#x2019;ll not be able to share the code and will have to alter / obfuscate some of the commands&#x2019; results. I still think this is a valuable exercise as it is a classic example of an easy to make mistake leading to a catastrophic result.</p> <p>The other interesting point is that I had no idea what the issue was so I&#x2019;ll not be following a script as I did in the first instalment.</p> <h2 id="the-symptoms">The symptoms</h2> <p>A week prior we had another production outage. One of our <code class="highlighter-rouge">API</code> became unresponsive, requests would sit in <code class="highlighter-rouge">Chrome</code> waiting for minutes for the server to reply. Logs did not yield anything interesting and according to <a href="https://newrelic.com/">New Relic</a> we had a quasiperfect <a href="https://docs.newrelic.com/docs/apm/new-relic-apm/apdex/apdex-measuring-user-satisfaction">Apdex</a>.</p> <ul> <li>The working theory was that requests were failing early in the pipeline so that our logging did not pick anything</li> <li>According to <code class="highlighter-rouge">New Relic</code> our traffic plummeted during the outage. So basically, <code class="highlighter-rouge">New Relic</code> was not capturing any of the failing requests and the dashboards were all green!</li>
+</ul> <p>At this stage I recommended to capture a memory dump before restarting the web app. The later happened but the former did not. The app recycled and started to serve production traffic again but we were left with few clues. Afterwards the operation team engaged Microsoft and learned than the thread count spiked during the outage.</p> <p>I then wrote a guide explaining how to write a memory dump and we instructed the operation team to capture a memory dump before recycling the app if the outage were to happen again.</p> <p>We were left with two clues:</p> <ul> <li>Unresponsive web app</li> <li>High thread count</li>
+</ul> <p>We had released a new version of this <code class="highlighter-rouge">API</code> a week before the outage. The release included a fix that I did for an intermittent <code class="highlighter-rouge">500</code> error that our testers and front-end teams experienced. The patch involved modifying the lifetime of some classes involved in the logging system. The Pull Request had been approved after a heated discussion and as soon as news of the outage broke, fingers were pointed at my fix.</p> <h2 id="draw-of-luck">Draw of luck</h2> <p>Come Friday morning, I&#x2019;m sipping my Dirty Chai while absently looking at <code class="highlighter-rouge">Slack</code>. Suddenly a message catches my attention:</p> <p><img src="/assets/windbg-2/unresponsive-again.png" alt="Unresponsive again"></p> <p>This is the same <code class="highlighter-rouge">API</code> that went down last week! My heart beats slightly faster while I fire up the <code class="highlighter-rouge">Azure</code> portal. And sure enough the thread count is far too high for the current dev traffic this API is serving:</p> <p><img src="/assets/windbg-2/oh-my-thread-count.png" alt="Oh my thread count"></p> <p>I write a memory dump, slurp the end of my Dirty Chai and go to work thinking I&#x2019;ll allocate some <code class="highlighter-rouge">WinDbg</code> time during the week-end.</p> <h2 id="were-down-again">We&#x2019;re down again</h2> <p>A few hours later another <code class="highlighter-rouge">API</code> experiences a significant outage. The symptoms are eerily similar. I was waiting for another of my <code class="highlighter-rouge">PR</code> to get approved but the process is being delayed as our build server is <a href="https://githubengineering.com/crypto-deprecation-notice/">down</a>. I don&#x2019;t have access to the memory dump that was written in production during the outage but it&#x2019;s likely the outages have a common cause; hence I decide to take my frustration out on the memory dump I wrote in the morning.</p> <h2 id="investigation">Investigation</h2> <h3 id="threads-all-the-things">Threads all the things</h3> <p>The first question I had was: <strong>why do we have so many threads and what are they doing</strong>?</p> <p>I&#x2019;ll start with the <code class="highlighter-rouge">Threads</code> <a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension#commands">SOS command</a>.</p> <blockquote> <p>Displays all managed threads in the process.</p>
+</blockquote> <p><strong>Note</strong>: The first column is the thread <code class="highlighter-rouge">ID</code>.</p> <figure class="highlight"><pre><code class="language-text">0:000&gt; !threads
+ThreadCount:      145
+UnstartedThread:  0
+BackgroundThread: 133
+PendingThread:    0
+DeadThread:       12
+Hosted Runtime:   no
+                                                                         Lock
+       ID OSID ThreadOBJ    State GC Mode     GC Alloc Context  Domain   Count Apt Exception
+   4    1 4420 05db3d78     28220 Preemptive  00000000:00000000 04e8e548 0     Ukn
+  22    2 c3ac 05dc9200     2b220 Preemptive  00000000:00000000 04e8e548 0     MTA (Finalizer)
+  23    3 108fc 05e0f738   102a220 Preemptive  00000000:00000000 04e8e548 0     MTA (Threadpool Worker)
+  25    4 10ddc 05e1c0f0     21220 Preemptive  00000000:00000000 04e8e548 0     Ukn
+  26    7 9010 05eb8e90   1020220 Preemptive  00000000:00000000 04e8e548 0     Ukn (Threadpool Worker)
+#
+# Abbreviated
+#
+ 144  127 ed88 23f294b0   1029220 Preemptive  0E65ACE0:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 145  141 ba3c 2407e100   3029220 Preemptive  0E61BF28:00000000 20e69ac0 0     MTA (Threadpool Worker)
+ 146  140 9cfc 23f20428   1029220 Preemptive  0A524AFC:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 147  131 194f8 20f753a8   3029220 Preemptive  00000000:00000000 20e69ac0 0     MTA (Threadpool Worker)
+ 148  144 f4a8 23f20970   1029220 Preemptive  064DFA28:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 149  145 9028 20f758f0     20220 Preemptive  06443CB8:00000000 04e8e548 0     Ukn
+ 150  143 16520 23f299f8   1029220 Preemptive  1253C4A8:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 151  146 13db0 23f20eb8     20220 Preemptive  0E61FB98:00000000 04e8e548 0     Ukn</code></pre></figure> <p>I then pick a few threads to see what they&#x2019;re doing. To achieve this I&#x2019;ll combine two different commands:</p> <figure class="highlight"><pre><code class="language-text">~&lt;thread-ID&gt;e &lt;command&gt;</code></pre></figure> <ul> <li><a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension#commands">CLRStack</a>: Provides a stack trace of managed code only</li>
+</ul> <h4 id="thread-143">Thread 143</h4> <figure class="highlight"><pre><code class="language-text">0:000&gt; ~143e !CLRStack
+OS Thread Id: 0xb9ac (143)
+Child SP       IP Call Site
+2a8bd110 7712eb2c [GCFrame: 2a8bd110]
+2a8bd2b8 7712eb2c [GCFrame: 2a8bd2b8]
+2a8bd268 7712eb2c [HelperMethodFrame: 2a8bd268] System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)
+2a8bd2f8 21ab107d Autofac.Core.Lifetime.LifetimeScope.GetOrCreateAndShare(System.Guid, System.Func`1)
+2a8bd344 21ab0f15 Autofac.Core.Resolving.InstanceLookup.Execute()
+2a8bd370 21ab0a16 Autofac.Core.Resolving.ResolveOperation.GetOrCreateInstance(Autofac.Core.ISharingLifetimeScope, Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+2a8bd390 21ab20e1 Autofac.Core.Resolving.InstanceLookup.ResolveComponent(Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+# Abbreviated</code></pre></figure> <p>So thread <code class="highlighter-rouge">143</code> is trying to acquire a lock: <code class="highlighter-rouge">System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)</code>. Let&#x2019;s look at another thread.</p> <h4 id="thread-136">Thread 136</h4> <figure class="highlight"><pre><code class="language-text">0:000&gt; ~136e !CLRStack
+OS Thread Id: 0x17e4 (136)
+Child SP       IP Call Site
+2b07d610 7712eb2c [GCFrame: 2b07d610]
+2b07d7bc 7712eb2c [GCFrame: 2b07d7bc]
+2b07d76c 7712eb2c [HelperMethodFrame: 2b07d76c] System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)
+2b07d7fc 21ab107d Autofac.Core.Lifetime.LifetimeScope.GetOrCreateAndShare(System.Guid, System.Func`1)
+2b07d848 21ab0f15 Autofac.Core.Resolving.InstanceLookup.Execute()
+2b07d874 21ab0a16 Autofac.Core.Resolving.ResolveOperation.GetOrCreateInstance(Autofac.Core.ISharingLifetimeScope, Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+2b07d894 21ab20e1 Autofac.Core.Resolving.InstanceLookup.ResolveComponent(Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+# Abbreviated</code></pre></figure> <p>Thread <code class="highlighter-rouge">136</code> is also trying to acquire a lock.</p> <h4 id="thread-123">Thread 123</h4> <figure class="highlight"><pre><code class="language-text">0:000&gt; ~123e !CLRStack
+OS Thread Id: 0x4ce4 (123)
+Child SP       IP Call Site
+3d14d850 7712eb2c [GCFrame: 3d14d850]
+3d14d9fc 7712eb2c [GCFrame: 3d14d9fc]
+3d14d9ac 7712eb2c [HelperMethodFrame: 3d14d9ac] System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)
+3d14da3c 21ab107d Autofac.Core.Lifetime.LifetimeScope.GetOrCreateAndShare(System.Guid, System.Func`1)
+3d14da88 21ab0f15 Autofac.Core.Resolving.InstanceLookup.Execute()
+3d14dab4 21ab0a16 Autofac.Core.Resolving.ResolveOperation.GetOrCreateInstance(Autofac.Core.ISharingLifetimeScope, Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+3d14dad4 21ab20e1 Autofac.Core.Resolving.InstanceLookup.ResolveComponent(Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+# Abbreviated</code></pre></figure> <p>Thread <code class="highlighter-rouge">123</code> is also trying to acquire a lock. By now <strong>it&#x2019;s safe to assume than many threads are trying to acquire a lock. How many of them exactly? And more importantly: which naughty thread is holding on the lock?</strong></p> <h3 id="who-is-holding-on-the-lock">Who is holding on the lock?</h3> <p>Time to use another <a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension#commands">SOS command</a>: <code class="highlighter-rouge">SyncBlk</code>.</p> <figure class="highlight"><pre><code class="language-text">0:000&gt; !syncblk
+Index         SyncBlock MonitorHeld Recursion Owning Thread Info          SyncBlock Owner
+   52 20ee3118          229         2 20fc6ba0 9628  42   0a13ee8c System.Object
+-----------------------------
+Total           279
+CCW             4
+RCW             3
+ComClassFactory 0
+Free            206</code></pre></figure> <p>Thread <code class="highlighter-rouge">ID</code> <code class="highlighter-rouge">42</code> is holding the lock. The third column (<code class="highlighter-rouge">MonitorHeld</code>) indicates how many threads are trying to acquire the same lock. In this case it is <code class="highlighter-rouge">114</code> (<code class="highlighter-rouge">(229 - 1) / 2</code>). You can read more about how I computed this number in this <a href="https://stackoverflow.com/a/2203085/57369">Stack Overflow answer</a>.</p> <h3 id="what-is-thread-42-doing">What is thread 42 doing?</h3> <figure class="highlight"><pre><code class="language-text">0:000&gt; ~42e !CLRStack
+OS Thread Id: 0x9628 (42)
+Child SP       IP Call Site
+293bd178 7712eb2c [GCFrame: 293bd178]
+293bd228 7712eb2c [HelperMethodFrame_1OBJ: 293bd228] System.Threading.Monitor.ObjWait(Boolean, Int32, System.Object)
+293bd2b4 707bc273 System.Threading.Monitor.Wait(System.Object, Int32, Boolean) [f:\dd\ndp\clr\src\BCL\system\threading\monitor.cs @ 203]
+293bd2c4 7084ca14 System.Threading.Monitor.Wait(System.Object, Int32) [f:\dd\ndp\clr\src\BCL\system\threading\monitor.cs @ 213]
+293bd2c8 707ccb56 System.Threading.ManualResetEventSlim.Wait(Int32, System.Threading.CancellationToken)
+293bd31c 707c785c System.Threading.Tasks.Task.SpinThenBlockingWait(Int32, System.Threading.CancellationToken) [f:\dd\ndp\clr\src\BCL\system\threading\Tasks\Task.cs @ 3320]
+293bd35c 70868aed System.Threading.Tasks.Task.InternalWait(Int32, System.Threading.CancellationToken) [f:\dd\ndp\clr\src\BCL\system\threading\Tasks\Task.cs @ 3259]
+293bd3c0 707c58ca System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(System.Threading.Tasks.Task) [f:\dd\ndp\clr\src\BCL\system\runtime\compilerservices\TaskAwaiter.cs @ 148]
+293bd3cc 1f4e5fd3 Contoso.AzureKeyVaultClient.GetSecretByName(System.String)
+293bd3d8 1f4e5d80 Contoso.SecureAppSettings.GetOrFail(System.String)
+293bd3f0 1f4e5ccb Contoso.CachableSecureAppSettings.GetOrFail(System.String)
+293bd404 218b4f94 Contoso.SomeSecureSettings..ctor(Contoso.ISecureSettings)
+293bd418 20af91eb DynamicClass.lambda_method(System.Runtime.CompilerServices.Closure, System.Object[])
+293bd424 21ab1ef5 Autofac.Core.Activators.Reflection.ConstructorParameterBinding.Instantiate()</code></pre></figure> <p>The last line executed in our code was:</p> <figure class="highlight"><pre><code class="language-csharp"><span class="n">Contoso</span><span class="p">.</span><span class="n">AzureKeyVaultClient</span><span class="p">.</span><span class="nf">GetSecretByName</span><span class="p">(</span><span class="n">System</span><span class="p">.</span><span class="n">String</span><span class="p">)</span></code></pre></figure> <p>Despite its name it seems to be executing <code class="highlighter-rouge">async</code> code and even more troubling it looks like we&#x2019;re blocking. I have enough information to locate the source and find the following method:</p> <figure class="highlight"><pre><code class="language-csharp"><span class="k">public</span> <span class="kt">string</span> <span class="nf">GetSecretByName</span><span class="p">(</span><span class="kt">string</span> <span class="n">secretName</span><span class="p">)</span>
+<span class="p">{</span> <span class="k">return</span> <span class="nf">GetSecretByNameAsync</span><span class="p">(</span><span class="n">secretName</span><span class="p">).</span><span class="nf">GetAwaiter</span><span class="p">().</span><span class="nf">GetResult</span><span class="p">();</span>
+<span class="p">}</span></code></pre></figure> <p>Sure enough we&#x2019;re blocking on an <code class="highlighter-rouge">async</code> method. I&#x2019;ll let Stephen Cleary explains what&#x2019;s wrong but it can be summed up as: <a href="http://blog.stephencleary.com/2012/07/dont-block-on-async-code.html">Don&#x2019;t Block on Async Code</a> (seriously read the blog post).</p> <h2 id="solution">Solution</h2> <p>There are two alternatives:</p> <ul> <li> <p>Resolve the secret on application startup. At this stage we&#x2019;re single threaded and there is no request context so we can block without risking a deadlock. It isn&#x2019;t pretty and will slow down the application startup but it works.</p> </li> <li> <p>A nicer option would be to resolve the secret when needed (lazy initialization). By then we&#x2019;ll be in an <code class="highlighter-rouge">async</code> method and we will be able to call the <code class="highlighter-rouge">Async</code> overload.</p> </li>
+</ul> <h2 id="conclusion">Conclusion</h2> <p>Once again <code class="highlighter-rouge">WinDbg</code> has delivered the goods. I write up my findings and communicate them to my colleagues. It&#x2019;s 4:30 PM and the build server is still not fixed, I decide to call it a day.</p> </article>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
