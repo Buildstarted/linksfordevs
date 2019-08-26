@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Do It Yourself (OpenJDK) Garbage Collector -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Do It Yourself (OpenJDK) Garbage Collector</h1>
+    <div class="sectionbody">
+<div class="paragraph">
+<p>There are many things the implementation can go from here. It would encroach on what existing OpenJDK GCs are already doing (and tested for!) though, so it should be taken as educational exercise only.</p>
+</div> <p class="olist">
+<ol class="arabic">
+<li>
+<p>Implement reference processing. The current implementation ignores the fact soft/weak/phantom references exist. It also ignores the existence of finalizeable objects. This is not ideal from performance standpoint, but it is safe from the correctness POV, because shared code &quot;just&quot; treats all those references as always reachable, so would get moved and updated as any other regular reference. A proper implementation would involve hooking up shared <code>ReferenceProcessor</code> to marking code, and marking/clearing the surviving/dead references after mark is over.</p>
+</li>
+<li>
+<p>Implement class unloading and other VM cleanups. The current implementation never unloads the classes, nor does it clear up internal VM datastructures that hold the objects unreachable from heap, and therefore are likely redundant. Implementing this would require taking care of <em>weak</em> and <em>strong</em> roots, marking only <em>strong</em> roots by default, and then seeing if any of the <em>weak</em> roots are still marked after mark is finished, cleaning up the dead ones.</p>
+</li>
+<li>
+<p>Parallelize it. The simplest way to make the parallel version is to divide the heap into the per-thread regions, and do the same sequential compaction within those regions. This would leave the gaps between the regions, so the allocation path needs to get modified to know there are more than one free region.</p>
+</li>
+<li>
+<p>Implement dense prefix handling. It is usually the case that normal heaps end up with &quot;sediment&quot; layers of always reachable objects, and we can save quite a few cycles if we designate some prefix of the heap as non-moving. Then, we can avoid calculating addresses and moving objects within the dense prefix. With some tricks, we can also avoid adjusting pointers in dense prefix, if we are able to detect interesting objects (those having references outside the prefix) in dense prefix during the mark. We would still need to mark through prefix anyway.</p>
+</li>
+<li>
+<p>Extend dense prefix to full-blown generational. With some GC barrier work, we can tell what parts of dense prefix are interesting to look at <em>before doing the mark</em>, thus saving time marking through it. In the end, it would turn out to be &quot;generational&quot;, which would do &quot;young&quot; collections past the prefix, and sometimes do &quot;full&quot; collections that would compact everything, including the prefix.</p>
+</li>
+<li>
+<p>Take whatever GC algorithm from the GC Handbook, and try to implement it.</p>
+</li>
+</ol>
+</p>
+</div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
