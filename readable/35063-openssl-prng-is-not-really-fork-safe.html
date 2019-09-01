@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+OpenSSL PRNG Is Not (Really) Fork-safe -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>OpenSSL PRNG Is Not (Really) Fork-safe</h1>
+    <div class="entry-content"> <p>When the <a href="http://android-developers.blogspot.de/2013/08/some-securerandom-thoughts.html">patch</a>
+for Android&#x2019;s SecureRandom was released last week, I was a little surprised.
+In addition to fixing the Apache Harmony implementation of SecureRandom, the
+patch also contained</p> <blockquote><p>Applies the fix for OpenSSL PRNG having low entropy. Does nothing if the fix is not needed.</p></blockquote> <p>What was that all about? I understood that the problem with the Harmony
+implementation was a reaction to <a href="http://www.nds.rub.de/media/nds/veroeffentlichungen/2013/03/25/paper_2.pdf">this paper</a>
+published earlier this year and was more or less an implementation issue,
+but what about OpenSSL? Newer versions of Android use a version of <a href="https://android.googlesource.com/platform/external/openssl/+/master">OpenSSL</a>
+internally and there is a <a href="https://android.googlesource.com/platform/libcore/+/master/crypto/src/main/java/org/conscrypt/NativeCrypto.java">Java bridge</a>
+that exposes, among other things, access to OpenSSL&#x2019;s Pseudo-Random Number
+Generator (PRNG). What caught my attention is that the Android patch
+explicitly seeds the OpenSSL PRNG using more or less predictable data
+and then it mixes in additional entropy from /dev/urandom. This seemed
+weird at first, since the OpenSSL PRNG <a href="https://github.com/openssl/openssl/blob/902efde1cca5910703af57cfc9b5e0fb7980f5b6/crypto/rand/md_rand.c#L408-L412">seeds itself</a>
+from /dev/urandom <a href="https://github.com/openssl/openssl/blob/902efde1cca5910703af57cfc9b5e0fb7980f5b6/crypto/rand/rand_unix.c#L153">on systems where it is available</a>
+before it will return any random data. Why would there be the need to
+do that manually then?</p> <h2>Zygote, Ruby and forking OpenSSL</h2> <blockquote><p>UPDATE: Eric has asked me to additionally credit Alexander Dymo for
+<a href="http://bogomips.org/unicorn.git/patch?id=1107ede716461049033d6a5b311e14c742c9363a">bringing up this issue</a>!</p></blockquote> <p>Then I found out about how Android heavily relies on forking processes
+using <a href="https://android.googlesource.com/platform/frameworks/base.git/+/master/core/java/com/android/internal/os/ZygoteInit.java">Zygote</a>
+and I now suspect that this is the reason for patching OpenSSL. I was
+immediately reminded of a problem that was brought up on the Ruby mailing
+list <a href="https://bugs.ruby-lang.org/issues/4579">a while ago</a>. Eric Wong had
+discovered that Ruby&#x2019;s SecureRandom implementation would serve exactly the
+same &#x2018;random&#x2019; byte sequence when forked in a child process as soon as the
+PIDs (process identifiers) start to wrap around. Typically PIDs start with
+0 again after exhausting PID number 32768 - this may vary, to be sure you
+may find out the exact value using</p> <figure class="code"><figcaption><span>Retrieving the maximum possible PID</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+</pre></td><td class="code"><pre><code class="sh"><span class="line"> cat /proc/sys/kernel/pid_max
+</span></code></pre></td></tr></table></div></figure> <p>While this was fixed for SecureRandom (more on that later), you may still
+observe the same behavior with OpenSSL::Random today - as Ruby&#x2019;s OpenSSL
+extension is meant to be a mere wrapper around OpenSSL itself we try to
+avoid adding custom behavior when possible. To try it out, we simply have
+to replace &#x2018;SecureRandom&#x2019; with &#x2018;OpenSSL::Random&#x2019; in Eric&#x2019;s script:</p> <figure class="code"><figcaption><span>Predictable OpenSSL::Random</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+</pre></td><td class="code"><pre><code class="ruby"><span class="line"><span class="nb">require</span> <span class="s2">&quot;openssl&quot;</span>
+</span><span class="line">
+</span><span class="line"><span class="no">OpenSSL</span><span class="o">::</span><span class="no">Random</span><span class="o">.</span><span class="n">random_bytes</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</span><span class="line"><span class="n">pid</span> <span class="o">=</span> <span class="nb">fork</span> <span class="k">do</span>
+</span><span class="line"> <span class="nb">p</span> <span class="o">[</span> <span class="vg">$$</span><span class="p">,</span> <span class="no">OpenSSL</span><span class="o">::</span><span class="no">Random</span><span class="o">.</span><span class="n">random_bytes</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span> <span class="o">]</span>
+</span><span class="line"><span class="k">end</span>
+</span><span class="line"><span class="no">Process</span><span class="o">.</span><span class="n">waitpid2</span><span class="p">(</span><span class="n">pid</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line"><span class="kp">loop</span> <span class="k">do</span>
+</span><span class="line"> <span class="n">xpid</span> <span class="o">=</span> <span class="nb">fork</span> <span class="k">do</span>
+</span><span class="line"> <span class="nb">p</span> <span class="o">[</span> <span class="vg">$$</span><span class="p">,</span> <span class="no">OpenSSL</span><span class="o">::</span><span class="no">Random</span><span class="o">.</span><span class="n">random_bytes</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span> <span class="o">]</span> <span class="k">if</span> <span class="vg">$$</span> <span class="o">==</span> <span class="n">pid</span>
+</span><span class="line"> <span class="k">end</span>
+</span><span class="line"> <span class="no">Process</span><span class="o">.</span><span class="n">waitpid2</span><span class="p">(</span><span class="n">xpid</span><span class="p">)</span>
+</span><span class="line"> <span class="k">break</span> <span class="k">if</span> <span class="n">xpid</span> <span class="o">==</span> <span class="n">pid</span>
+</span><span class="line"><span class="k">end</span>
+</span></code></pre></td></tr></table></div></figure> <p>The script takes a while to run, but it is well worth the surprise. At the
+time, we discussed whether this is an OpenSSL-internal issue or not and Eric
+also posted to the <a href="http://marc.info/?l=openssl-dev&amp;m=130289811108150">OpenSSL mailing list</a>.
+The OpenSSL devs did not want to solve this internally, as they would like
+to stay agnostic to OS specifics as much as possible. The argument that
+&#x2018;fork&#x2019; may not be the only way to perform process bifurcation is certainly
+correct. The recommendation was to mix in something unique every time a
+child process is forked so that the initially equivalent state is sufficiently
+altered. This is also what we did for <a href="https://github.com/ruby/ruby/blob/4c661094c9d2c6800a7f43f41b812fa4aee18634/lib/securerandom.rb#L53-L63">SecureRandom</a>
+eventually.</p> <p>The key of why Eric&#x2019;s script works is that the OpenSSL PRNG must be initialized
+in the parent before we fork the child processes. This way, every child process
+starts out with exactly the same internal PRNG state, and the PID is the only
+thing process-specific that is fed to the PRNG algorithm when requesting
+random bytes. Let&#x2019;s have a look at ssleay_rand_bytes, the function
+responsible for generating pseudo-random bytes:</p> <figure class="code"><figcaption><span>md_rand.c: ssleay_rand_bytes</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+<span class="line-number">53</span>
+<span class="line-number">54</span>
+<span class="line-number">55</span>
+<span class="line-number">56</span>
+<span class="line-number">57</span>
+<span class="line-number">58</span>
+<span class="line-number">59</span>
+<span class="line-number">60</span>
+<span class="line-number">61</span>
+<span class="line-number">62</span>
+<span class="line-number">63</span>
+<span class="line-number">64</span>
+<span class="line-number">65</span>
+<span class="line-number">66</span>
+<span class="line-number">67</span>
+<span class="line-number">68</span>
+<span class="line-number">69</span>
+<span class="line-number">70</span>
+<span class="line-number">71</span>
+<span class="line-number">72</span>
+<span class="line-number">73</span>
+<span class="line-number">74</span>
+<span class="line-number">75</span>
+<span class="line-number">76</span>
+<span class="line-number">77</span>
+<span class="line-number">78</span>
+<span class="line-number">79</span>
+<span class="line-number">80</span>
+<span class="line-number">81</span>
+<span class="line-number">82</span>
+<span class="line-number">83</span>
+<span class="line-number">84</span>
+<span class="line-number">85</span>
+<span class="line-number">86</span>
+<span class="line-number">87</span>
+<span class="line-number">88</span>
+<span class="line-number">89</span>
+<span class="line-number">90</span>
+<span class="line-number">91</span>
+<span class="line-number">92</span>
+<span class="line-number">93</span>
+<span class="line-number">94</span>
+<span class="line-number">95</span>
+<span class="line-number">96</span>
+<span class="line-number">97</span>
+<span class="line-number">98</span>
+<span class="line-number">99</span>
+<span class="line-number">100</span>
+<span class="line-number">101</span>
+<span class="line-number">102</span>
+<span class="line-number">103</span>
+<span class="line-number">104</span>
+<span class="line-number">105</span>
+<span class="line-number">106</span>
+<span class="line-number">107</span>
+<span class="line-number">108</span>
+<span class="line-number">109</span>
+<span class="line-number">110</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="k">static</span> <span class="kt">int</span> <span class="nf">ssleay_rand_bytes</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="n">buf</span><span class="p">,</span> <span class="kt">int</span> <span class="n">num</span><span class="p">,</span> <span class="kt">int</span> <span class="n">pseudo</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> </span><span class="line"> <span class="cm">/* Leaving out some details and adding comments of my own */</span>
+</span><span class="line">
+</span><span class="line"> <span class="p">...</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* Since the PRNG was initialized in the parent process, initialized</span>
+</span><span class="line"><span class="cm"> * will be set to 1 already and this is skipped</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">initialized</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> <span class="n">RAND_poll</span><span class="p">();</span>
+</span><span class="line"> <span class="n">initialized</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* This is also 1 and skipped */</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">stirred_pool</span><span class="p">)</span>
+</span><span class="line"> <span class="n">do_stir_pool</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* We have enough entropy because the PRNG is already initialized */</span>
+</span><span class="line"> <span class="n">ok</span> <span class="o">=</span> <span class="p">(</span><span class="n">entropy</span> <span class="o">&gt;=</span> <span class="n">ENTROPY_NEEDED</span><span class="p">);</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">ok</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> <span class="cm">/* Not executed */</span>
+</span><span class="line"> <span class="p">...</span> </span><span class="line"> <span class="p">}</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">do_stir_pool</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> <span class="cm">/* Not executed */</span>
+</span><span class="line"> <span class="p">...</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line">
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* These are identical for every forked child */</span>
+</span><span class="line"> <span class="n">st_idx</span><span class="o">=</span><span class="n">state_index</span><span class="p">;</span>
+</span><span class="line"> <span class="n">st_num</span><span class="o">=</span><span class="n">state_num</span><span class="p">;</span>
+</span><span class="line"> <span class="n">md_c</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">md_count</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+</span><span class="line"> <span class="n">md_c</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">md_count</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
+</span><span class="line"> <span class="n">memcpy</span><span class="p">(</span><span class="n">local_md</span><span class="p">,</span> <span class="n">md</span><span class="p">,</span> <span class="k">sizeof</span> <span class="n">md</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">state_index</span><span class="o">+=</span><span class="n">num_ceil</span><span class="p">;</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">state_index</span> <span class="o">&gt;</span> <span class="n">state_num</span><span class="p">)</span>
+</span><span class="line"> <span class="n">state_index</span> <span class="o">%=</span> <span class="n">state_num</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">md_count</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">while</span> <span class="p">(</span><span class="n">num</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> <span class="n">j</span><span class="o">=</span><span class="p">(</span><span class="n">num</span> <span class="o">&gt;=</span> <span class="n">MD_DIGEST_LENGTH</span><span class="o">/</span><span class="mi">2</span><span class="p">)</span><span class="o">?</span><span class="n">MD_DIGEST_LENGTH</span><span class="o">/</span><span class="mi">2</span><span class="o">:</span><span class="n">num</span><span class="p">;</span>
+</span><span class="line"> <span class="n">num</span><span class="o">-=</span><span class="n">j</span><span class="p">;</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Init</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* This is actually the only child process-specific value */</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">curr_pid</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Update</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,(</span><span class="kt">unsigned</span> <span class="kt">char</span><span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="n">curr_pid</span><span class="p">,</span><span class="k">sizeof</span> <span class="n">curr_pid</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line"> <span class="n">curr_pid</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Update</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,</span><span class="n">local_md</span><span class="p">,</span><span class="n">MD_DIGEST_LENGTH</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Update</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,(</span><span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="p">(</span><span class="n">md_c</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span><span class="k">sizeof</span><span class="p">(</span><span class="n">md_c</span><span class="p">)))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#ifndef PURIFY</span>
+</span><span class="line"> <span class="cm">/* VERY interesting, more on that in a minute. For now, assume it&apos;s the</span>
+</span><span class="line"><span class="cm"> * same in each child process</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Update</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,</span><span class="n">buf</span><span class="p">,</span><span class="n">j</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line"><span class="cp">#endif</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">k</span><span class="o">=</span><span class="p">(</span><span class="n">st_idx</span><span class="o">+</span><span class="n">MD_DIGEST_LENGTH</span><span class="o">/</span><span class="mi">2</span><span class="p">)</span><span class="o">-</span><span class="n">st_num</span><span class="p">;</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">k</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Update</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,</span><span class="o">&amp;</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="n">st_idx</span><span class="p">]),</span><span class="n">MD_DIGEST_LENGTH</span><span class="o">/</span><span class="mi">2</span><span class="o">-</span><span class="n">k</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Update</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,</span><span class="o">&amp;</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span><span class="n">k</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line"> <span class="k">else</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Update</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,</span><span class="o">&amp;</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="n">st_idx</span><span class="p">]),</span><span class="n">MD_DIGEST_LENGTH</span><span class="o">/</span><span class="mi">2</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">MD_Final</span><span class="p">(</span><span class="o">&amp;</span><span class="n">m</span><span class="p">,</span><span class="n">local_md</span><span class="p">))</span>
+</span><span class="line"> <span class="k">goto</span> <span class="n">err</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">for</span> <span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">MD_DIGEST_LENGTH</span><span class="o">/</span><span class="mi">2</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+</span><span class="line"> <span class="p">{</span>
+</span><span class="line"> <span class="n">state</span><span class="p">[</span><span class="n">st_idx</span><span class="o">++</span><span class="p">]</span><span class="o">^=</span><span class="n">local_md</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">st_idx</span> <span class="o">&gt;=</span> <span class="n">st_num</span><span class="p">)</span>
+</span><span class="line"> <span class="n">st_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">i</span> <span class="o">&lt;</span> <span class="n">j</span><span class="p">)</span>
+</span><span class="line"> <span class="o">*</span><span class="p">(</span><span class="n">buf</span><span class="o">++</span><span class="p">)</span><span class="o">=</span><span class="n">local_md</span><span class="p">[</span><span class="n">i</span><span class="o">+</span><span class="n">MD_DIGEST_LENGTH</span><span class="o">/</span><span class="mi">2</span><span class="p">];</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* This is where the output is generated. Everything that</span>
+</span><span class="line"><span class="cm"> * was fed to local_md is exactly the same for each child</span>
+</span><span class="line"><span class="cm"> * except for the PID.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* The rest is not relevant for our observation */</span>
+</span><span class="line"> <span class="p">...</span>
+</span><span class="line">
+</span><span class="line"> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure> <p>Because the child process PID is the only thing specific to each child process,
+we will eventually see exactly the same random bytes once PID values start to
+recycle. This means that while adding the PID to the message digest makes for
+some fork safety, it is not enough when we consider that PIDs are not
+incremented infinitely but will wrap eventually. I could very well imagine
+that this is somehow related to the Android OpenSSL patch and their extensive
+use of forking&#x2026;</p> <h2>It works in Ruby, so how about C?</h2> <p>Eric Wong did post a C example along with his post to the OpenSSL mailing list,
+which was essentially a C version of the Ruby code that we already saw:</p> <figure class="code"><figcaption><span>C version of Eric Wong&#x2019;s proof of concept</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+<span class="line-number">39</span>
+<span class="line-number">40</span>
+<span class="line-number">41</span>
+<span class="line-number">42</span>
+<span class="line-number">43</span>
+<span class="line-number">44</span>
+<span class="line-number">45</span>
+<span class="line-number">46</span>
+<span class="line-number">47</span>
+<span class="line-number">48</span>
+<span class="line-number">49</span>
+<span class="line-number">50</span>
+<span class="line-number">51</span>
+<span class="line-number">52</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#include &lt;sys/types.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;sys/wait.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;unistd.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;stdio.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;openssl/rand.h&gt;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="kt">void</span> <span class="nf">dump_random</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line"> <span class="kt">int</span> <span class="n">i</span><span class="p">;</span>
+</span><span class="line"> <span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">buf</span><span class="p">[</span><span class="mi">4</span><span class="p">];</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">RAND_bytes</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">buf</span><span class="p">));</span>
+</span><span class="line"> <span class="n">printf</span><span class="p">(</span><span class="s">&quot;pid=%d &quot;</span><span class="p">,</span> <span class="n">getpid</span><span class="p">());</span>
+</span><span class="line"> <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">buf</span><span class="p">);</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">printf</span><span class="p">(</span><span class="s">&quot;</span><span class="se">\\</span><span class="s">x%02x&quot;</span><span class="p">,</span> <span class="n">buf</span><span class="p">[</span><span class="n">i</span><span class="p">]);</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line"> <span class="n">puts</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line"> <span class="n">pid_t</span> <span class="n">pid</span><span class="p">,</span> <span class="n">xpid</span><span class="p">;</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* PRNG needs to be initialized in original process to reproduce */</span>
+</span><span class="line"> <span class="n">RAND_bytes</span><span class="p">((</span><span class="kt">unsigned</span> <span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="n">pid</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">pid</span><span class="p">));</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">pid</span> <span class="o">=</span> <span class="n">fork</span><span class="p">();</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">pid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">dump_random</span><span class="p">();</span>
+</span><span class="line"> <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"> <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">pid</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">wait</span><span class="p">(</span><span class="nb">NULL</span><span class="p">);</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">do</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">xpid</span> <span class="o">=</span> <span class="n">fork</span><span class="p">();</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">xpid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line"> <span class="k">if</span> <span class="p">(</span><span class="n">getpid</span><span class="p">()</span> <span class="o">==</span> <span class="n">pid</span><span class="p">)</span>
+</span><span class="line"> <span class="n">dump_random</span><span class="p">();</span>
+</span><span class="line"> <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"> <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">xpid</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">wait</span><span class="p">(</span><span class="nb">NULL</span><span class="p">);</span>
+</span><span class="line"> <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">perror</span><span class="p">(</span><span class="s">&quot;fork&quot;</span><span class="p">);</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line"> <span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="n">pid</span> <span class="o">!=</span> <span class="n">xpid</span><span class="p">);</span>
+</span><span class="line"> <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">perror</span><span class="p">(</span><span class="s">&quot;fork&quot;</span><span class="p">);</span>
+</span><span class="line"> <span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure> <p>I ran this to see if maybe the problem had been fixed somehow in OpenSSL in the
+meantime. Much to my surprise, I could reproduce the repeated &#x2018;random&#x2019; numbers
+on my laptop (running Linux Mint) but I could not when running it on my desktop
+(running Fedora). What the? I downloaded sources for both distributions and I
+compared them to the official OpenSSL 1.0.1e. Fedora was using the same code as
+in 1.0.1e and consequently I couldn&#x2019;t reproduce the behavior with 1.0.1e either.</p> <h2>It&#x2019;s me again, the Debian OpenSSL bug</h2> <p>So was it fixed there but it somehow wasn&#x2019;t in the Mint version of OpenSSL?! I
+couldn&#x2019;t spot any difference until I finally simply used the diff command. There.
+Just one single difference between Fedora/the official OpenSSL versions and the
+Mint version:</p> <figure class="code"><figcaption><span>The difference in ssleay_rand_bytes</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#ifndef PURIFY </span><span class="cm">/* purify complains */</span><span class="cp"></span>
+</span><span class="line"><span class="cp">#if 0</span><span class="c"></span>
+</span><span class="line"><span class="c"> /* The following line uses the supplied buffer as a small</span>
+</span><span class="line"><span class="c"> * source of entropy: since this buffer is often uninitialised</span>
+</span><span class="line"><span class="c"> * it may cause programs such as purify or valgrind to</span>
+</span><span class="line"><span class="c"> * complain. So for those builds it is not used: the removal</span>
+</span><span class="line"><span class="c"> * of such a small source of entropy has negligible impact on</span>
+</span><span class="line"><span class="c"> * security.</span>
+</span><span class="line"><span class="c"> */</span>
+</span><span class="line"><span class="c"> MD_Update(&amp;m,buf,j);</span>
+</span><span class="line"><span class="cp">#endif</span>
+</span><span class="line"><span class="cp">#endif</span>
+</span></code></pre></td></tr></table></div></figure> <p>There&#x2019;s an &#x2018;#if 0&#x2019; around the line that I marked as &#x2018;interesting&#x2019; before. And then
+it clicked. Mint uses Ubuntu packages which again uses Debian packages. This is
+actually the Debian version of OpenSSL! The &#x2018;#if 0&#x2019; is actually a remainder of the
+famous Debian OpenSSL &#x2018;patch&#x2019; that severely crippled the PRNG&#x2019;s entropy a couple of
+years ago! If you haven&#x2019;t heard about it, here is a mean but precise <a href="http://www.gergely.risko.hu/debian-dsa1571.en.html">article</a>
+describing what went wrong there. While one part of the patch had to be removed,
+this gem was actually sanctioned to stay in there. But how can this have any impact
+when the OpenSSL devs clearly state that it should have little to no impact on the
+overall security? The reason is uninitialized memory. The official version (without
+the &#x2018;#if 0&#x2019;) does something dubious: it adds the user-provided buffer to the hash
+calculation in the hope that most users would not have initialized the buffer at
+this point. If uninitialized, the buffer could(!) contain unpredictable values and
+would contribute a little entropy.</p> <p>This now works with Eric Wong&#x2019;s example code because we do not initialize the buffer
+there, and this is why the final behavior is different when compared to 1.0.1e/Fedora.
+But this can be easily &#x2018;fixed&#x2019; by initializing the buffer - and voil&#xE0;, random bytes
+are repeated again, regardless of the OpenSSL version in use:</p> <figure class="code"><figcaption><span>&#x2018;Fixed&#x2019; version for predictable output regardless of OpenSSL version</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+</pre></td><td class="code"><pre><code class="c"><span class="line"><span class="cp">#include &lt;sys/types.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;sys/wait.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;unistd.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;stdio.h&gt;</span>
+</span><span class="line"><span class="cp">#include &lt;string.h&gt;</span>
+</span><span class="line">
+</span><span class="line"><span class="cp">#include &lt;openssl/rand.h&gt;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">static</span> <span class="kt">void</span> <span class="nf">dump_random</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line"> <span class="kt">int</span> <span class="n">i</span><span class="p">;</span>
+</span><span class="line"> <span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">buf</span><span class="p">[</span><span class="mi">4</span><span class="p">];</span>
+</span><span class="line">
+</span><span class="line"> <span class="cm">/* does the &apos;trick&apos; */</span>
+</span><span class="line"> <span class="n">memset</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">buf</span><span class="p">));</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">RAND_bytes</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">buf</span><span class="p">));</span>
+</span><span class="line"> <span class="n">printf</span><span class="p">(</span><span class="s">&quot;pid=%d &quot;</span><span class="p">,</span> <span class="n">getpid</span><span class="p">());</span>
+</span><span class="line"> <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">buf</span><span class="p">);</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+</span><span class="line"> <span class="n">printf</span><span class="p">(</span><span class="s">&quot;</span><span class="se">\\</span><span class="s">x%02x&quot;</span><span class="p">,</span> <span class="n">buf</span><span class="p">[</span><span class="n">i</span><span class="p">]);</span>
+</span><span class="line"> <span class="p">}</span>
+</span><span class="line"> <span class="n">puts</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">);</span>
+</span><span class="line"><span class="p">}</span>
+</span><span class="line">
+</span><span class="line"><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+</span><span class="line"><span class="p">{</span>
+</span><span class="line"> <span class="cm">/* as before */</span>
+</span><span class="line"><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure> <h2>So is it fixed or not or what?!</h2> <p>Now you may also realize why the Ruby code sample worked regardless of the
+OpenSSL version while in the C example we needed to explicitly initialize
+the memory first: the solution is that the C code behind
+Ruby&#x2019;s OpenSSL::Random actually <a href="https://github.com/ruby/ruby/blob/4c661094c9d2c6800a7f43f41b812fa4aee18634/ext/openssl/ossl_rand.c#L95-107">does initialize</a>
+the buffer first. Considering a user-provided value as your safety net
+is never a good idea, but it&#x2019;s even worse in this case: not only does the
+dubious practice of relying on uninitialized values cause problems with
+tools such as valgrind (which ironically were the reason for the Debian
+disaster) but it also masks the problem at hand while contributing little
+to none to security. This cannot be regarded as the solution to the
+problem, I would be very much in favor of removing this confusing line
+completely.</p> <p>Anyhow, the question seems to be much more if we may consider this &#x2018;PID
+wrapping issue&#x2019; a problem of OpenSSL itself or if this must be marked
+as &#x2018;the developer has to take care of this&#x2019;. Now those who know me also
+know that for me, there can be only one definitive answer to
+this question. Sure, developers could take care of this and handle it
+properly on their own, but we have striking examples now for how often
+this will <em>not</em> happen in reality. The first time I saw this was when Eric
+brought it up on bugs.ruby-lang.org, but it has now most likely bitten the
+Android developers and some research brought up that it has also
+affected <a href="http://www.postgresql.org/message-id/E1UKzBn-0006c2-Cy@gemulon.postgresql.org">Postgres</a>
+developers. Now even if you don&#x2019;t trust us Ruby developers, I&#x2019;m pretty
+sure we can all agree that Android and Postgres developers are fairly good at what
+they&#x2019;re doing. Still they overlooked this. And honestly - who of us would
+have thought about this when forking a process? Funny anecdote: A long time
+ago, this was a valid concern for OpenSSL devs as well- as this
+<a href="https://github.com/openssl/openssl/commit/62ac2938015939e2ef30f12295f0ee59ff79c11b#crypto/rand">ancient commit</a>
+clearly shows.</p> <h2>How to fix this for good?</h2> <p>We cannot keep on adding &#x2018;best practice&#x2019; after &#x2018;best practice&#x2019; to what
+developers need to keep in the back of their heads when writing everyday
+code. This approach must fail eventually and the only reliable solution
+is to fix problems like this at the root - and this is clearly in the
+library providing the functionality itself. A quick fix like already
+proposed on the OpenSSL mailing list might be to mix in the current
+time in addition to the PID. Even if we add a predictable value like that
+an attacker hopefully cannot observe enough of the internal PRNG state
+to make any use of the predictable values to find out more about the
+internal state. To exploit the repeated random numbers we had to rely on
+the internal PRNG state being exactly the same in different child processes
+while nothing was actually revealed about the internal state. Simply changing the
+internal state, even with predictable values, seems to be enough at this point.</p> <p>This is the fix that had been applied to Ruby&#x2019;s SecureRandom, but there
+are several reasons why I&#x2019;m still not too happy with OpenSSL&#x2019;s PRNG. The
+biggest issue for me is that it&#x2019;s more or less an ad-hoc design that
+doesn&#x2019;t follow an official standard or recommendation. There is for example
+<a href="http://en.wikipedia.org/wiki/Fortuna_%28PRNG%29">Fortuna</a> or
+<a href="http://csrc.nist.gov/publications/nistpubs/800-90A/SP800-90A.pdf">NIST SP 800-90A</a>,
+<a href="http://csrc.nist.gov/publications/drafts/800-90/draft-sp800-90b.pdf">B</a>
+and <a href="http://csrc.nist.gov/publications/drafts/800-90/draft-sp800-90c.pdf">C</a>,
+and interestingly enough OpenSSL uses one of the NIST designs for its FIPS
+version. People analyzing the OpenSSL PRNG security have complained many times
+that the source code is complicated and hard to grasp (see the Debian issue),
+and it is therefore so much harder to assess its general security. I would
+appreciate a more standardized design. Markku-Juhani O. Saarinen discovered
+a flaw in the PRNG <a href="http://mjos.fi/doc/secadv_prng.txt">more than a decade ago</a>.
+Because of the ad-hoc design, who is to say that this has been fixed for
+good?</p> <p>The easiest way out is probably to completely rely on /dev/urandom where
+available. Sure it comes with its own <a href="http://eprint.iacr.org/2006/086.pdf">baggage</a>
+and there&#x2019;s the problem with availability and different behavior on different
+platforms, but after all, it has a fairly <a href="http://eprint.iacr.org/2012/251.pdf">good reputation</a>.
+Most of all, it is not affected by any forking issues.</p> <h2>What&#x2019;s the impact of all of this?</h2> <p>To be fair, the issue with forking demonstrated here should have little
+impact in everyday software (other than <em>cough</em>, Android that is). Even
+if you are developing a Rails app using a forking web server like Unicorn
+with Resque background jobs and OpenSSL::Random instead of SecureRandom,
+you should not be affected. Most software that I can think of allocates a
+pool of &#x2018;worker processes&#x2019;, so it is probably unlikely that you would ever
+run into the problem of wrapping PIDs. Still, we consider a cipher broken even
+if the attack is impractical in reality - if only the attack involves less
+work than trying brute force. In this sense, the OpenSSL PRNG is broken in its
+current state because we have found a way to predict its output other
+than by brute force. I hope the OpenSSL team will fix this internally
+and make our lives easier by not having to think about these issues
+when working on our everyday projects.</p> <p>If you are on Ruby and you think that you might be affected you might
+try adding additional entropy to OpenSSL::Random after a fork:</p> <figure class="code"><figcaption><span>Adding entropy to OpenSSL::Random after a fork</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+<span class="line-number">30</span>
+<span class="line-number">31</span>
+<span class="line-number">32</span>
+<span class="line-number">33</span>
+<span class="line-number">34</span>
+<span class="line-number">35</span>
+<span class="line-number">36</span>
+<span class="line-number">37</span>
+<span class="line-number">38</span>
+</pre></td><td class="code"><pre><code class="ruby"><span class="line"><span class="nb">require</span> <span class="s1">&apos;openssl&apos;</span>
+</span><span class="line">
+</span><span class="line"><span class="k">module</span> <span class="nn">OpenSSL::Random</span>
+</span><span class="line"> <span class="k">class</span> <span class="o">&lt;&lt;</span> <span class="nb">self</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">old_rand</span> <span class="o">=</span> <span class="nb">instance_method</span><span class="p">(</span><span class="ss">:random_bytes</span><span class="p">)</span>
+</span><span class="line">
+</span><span class="line"> <span class="n">define_method</span> <span class="ss">:random_bytes</span> <span class="k">do</span> <span class="o">|</span><span class="n">n</span><span class="o">=</span><span class="kp">nil</span><span class="o">|</span>
+</span><span class="line"> <span class="n">n</span> <span class="o">=</span> <span class="n">n</span> <span class="p">?</span> <span class="n">n</span><span class="o">.</span><span class="n">to_int</span> <span class="p">:</span> <span class="mi">16</span>
+</span><span class="line">
+</span><span class="line"> <span class="vi">@pid</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">unless</span> <span class="n">defined?</span><span class="p">(</span><span class="vi">@pid</span><span class="p">)</span>
+</span><span class="line"> <span class="n">pid</span> <span class="o">=</span> <span class="vg">$$</span>
+</span><span class="line"> <span class="k">unless</span> <span class="vi">@pid</span> <span class="o">==</span> <span class="n">pid</span> <span class="c1"># detect a fork and modify PRNG state</span>
+</span><span class="line"> <span class="n">add_predictable</span><span class="p">(</span><span class="n">pid</span><span class="p">)</span>
+</span><span class="line"> <span class="n">add_urandom</span>
+</span><span class="line"> <span class="vi">@pid</span> <span class="o">=</span> <span class="n">pid</span>
+</span><span class="line"> <span class="k">end</span>
+</span><span class="line"> <span class="n">old_rand</span><span class="o">.</span><span class="n">bind</span><span class="p">(</span><span class="nb">self</span><span class="p">)</span><span class="o">.</span><span class="n">call</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+</span><span class="line"> <span class="k">end</span>
+</span><span class="line">
+</span><span class="line"> <span class="kp">private</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">def</span> <span class="nf">add_predictable</span><span class="p">(</span><span class="n">pid</span><span class="p">)</span>
+</span><span class="line"> <span class="n">now</span> <span class="o">=</span> <span class="no">Time</span><span class="o">.</span><span class="n">now</span>
+</span><span class="line"> <span class="n">ary</span> <span class="o">=</span> <span class="o">[</span><span class="n">now</span><span class="o">.</span><span class="n">to_i</span><span class="p">,</span> <span class="n">now</span><span class="o">.</span><span class="n">nsec</span><span class="p">,</span> <span class="vi">@pid</span><span class="p">,</span> <span class="n">pid</span><span class="o">]</span>
+</span><span class="line"> <span class="no">OpenSSL</span><span class="o">::</span><span class="no">Random</span><span class="o">.</span><span class="n">random_add</span><span class="p">(</span><span class="n">ary</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="s1">&apos;&apos;</span><span class="p">)</span><span class="o">.</span><span class="n">to_s</span><span class="p">,</span> <span class="mi">0</span><span class="o">.</span><span class="mi">0</span><span class="p">)</span>
+</span><span class="line"> <span class="k">end</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">def</span> <span class="nf">add_urandom</span>
+</span><span class="line"> <span class="k">begin</span>
+</span><span class="line"> <span class="no">OpenSSL</span><span class="o">::</span><span class="no">Random</span><span class="o">.</span><span class="n">load_random_file</span><span class="p">(</span><span class="s1">&apos;/dev/urandom&apos;</span><span class="p">)</span>
+</span><span class="line"> <span class="k">rescue</span> <span class="no">OpenSSL</span><span class="o">::</span><span class="no">Random</span><span class="o">::</span><span class="no">RandomError</span>
+</span><span class="line"> <span class="c1"># probably not available, reraise if mandatory for you</span>
+</span><span class="line"> <span class="k">end</span>
+</span><span class="line"> <span class="k">end</span>
+</span><span class="line">
+</span><span class="line"> <span class="k">end</span>
+</span><span class="line"><span class="k">end</span>
+</span></code></pre></td></tr></table></div></figure> <p>&#x2018;add_predictable&#x2019; is basically the same as the SecureRandom fix. It&#x2019;s
+enough to make the repeated random numbers go away, but the truly
+paranoid will also want to use &#x2018;add_urandom&#x2019; as it refreshes OpenSSL&#x2019;s
+PRNG internal state using random data gathered from /dev/urandom.
+OpenSSL::Random.load_random_file causes the OpenSSL PRNG to gather
+<a href="https://github.com/openssl/openssl/blob/902efde1cca5910703af57cfc9b5e0fb7980f5b6/crypto/rand/randfile.c#L149">2048</a>
+bytes of entropy that are then mixed in to its internal state.
+Because 2048 is quite a bit larger than the internal state, this ensures
+that every single state byte is updated by the data read from /dev/urandom.
+This reflects the fix proposed in the Android SecureRandom patch.
+The same principle might of course be applied in C code as well.</p> <h2>Lessons learned</h2> <p>Random numbers are absolutely essential for a crypto library, if they
+suck we don&#x2019;t even have to get started with encryption or anything else,
+because it all collapses to something trivially deterministic and
+therefore predictable. I very much like the idea of using /dev/urandom
+as sole Random Number Generator for cryptographic purposes, mostly
+because this would give us a single construct that research could
+focus on and it provides more flexibility to mix in data generated
+by hardware RNGs.</p> <p>Also, this is again a perfect example for how confusing code can cause
+a lot of trouble. There is so much code shared between ssleay_rand_bytes
+and ssleay_rand_add that it&#x2019;s really hard to spot the differences. This
+was probably a major reason for the Debian disaster. A little bit of
+refactoring would do wonders here - move shared parts to separate
+functions and give them expressive meaningful names. Template Method
+Pattern for the win. To be fair, the <a href="https://github.com/torvalds/linux/blob/fd3930f70c8d14008f3377d51ce039806dfc542e/drivers/char/random.c">Kernel code</a>
+implementing /dev/urandom is also no beauty. But if clarity, expressiveness
+and the DRY principle in general are good practice for everyday coding, their
+value is doubled for security-critical code.</p> <p>Thanks to Eric Wong again for all his work, not just on this issue!</p> <p>Source code accompanying this post can be found <a href="https://github.com/emboss/openssl-prng">here</a>.</p>
+</div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
