@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+SQL Server Retries with Dapper and Polly -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>SQL Server Retries with Dapper and Polly</h1>
+    <div><p>If you&#x2019;re just here for the code, you can grab it in <a href="https://gist.github.com/hyrmn/ce124e9b1f50dbf9d241390ebc8f6df3">this Gist</a></p>
+<p><a href="https://twitter.com/kendaleiv">Ken Dale</a> wrote a post on the RIM Dev blog on how to <a href="https://rimdev.io/retry-transient-failures-using-sqlclient-adonet-with-polly/">Retry Transient Failures Using SqlClient / ADO.NET With Polly</a>. Their use case is similar to mine but different enough that I thought it&#x2019;d be worth sharing our implementation.</p>
+<p>Like RIM, our tech stack is on Azure and we heavily rely on SQL Azure. We write to a service bus topic; a service then uses those messages to update a reporting database. If the message cannot be written then it&#x2019;s automatically returned to the queue and retried later. After 5 retries, the service dead-letters the message.</p>
+<p>To accomplish this, our database structure and message handling code is idempotent. Getting, or applying, the same message twice won&#x2019;t cause duplicated data.</p>
+<p>Our first thought that attempting to process the message x times and then deadlettering would be enough. However, at least in the early days (6+ years ago) after launch, we found out that we were mistaken. Sometimes SQL Azure just didn&#x2019;t want to cooperate. it&#x2019;s gotten much better since.</p>
+<p>Enter <a href="https://github.com/App-vNext/Polly/">Polly</a>. Polly allows for all sorts of amazing retry logic. The things you need to care about in any distributed environment. From basic retry logic like I&#x2019;ll show here to circuit breakers (great if you&#x2019;re calling a flaky remote service and you don&#x2019;t want their service degradation to bring your app down).</p>
+<p>The original code, along with <a href="https://github.com/StackExchange/Dapper">Dapper</a>, has been in production for quite a while. I&#x2019;ve since updated to use the <code class="language-text">async</code> methods in Dapper and thought I should share what we use.</p>
+<p>Following is a simplified version of the full code that&#x2019;s available on <a href="https://gist.github.com/hyrmn/ce124e9b1f50dbf9d241390ebc8f6df3">this Gist</a></p>
+<p>At the time of this post, I&#x2019;m using Polly v7.0 and Dapper v2.0</p>
+<div class="gatsby-highlight"><pre class="language-csharp"><code class="language-csharp"><span class="token keyword">var</span> retryPolicy <span class="token operator">=</span> Policy <span class="token punctuation">.</span><span class="token generic-method"><span class="token function">Handle</span><span class="token punctuation">&lt;</span><span class="token class-name">SqlException</span><span class="token punctuation">&gt;</span></span><span class="token punctuation">(</span>SqlServerTransientExceptionDetector<span class="token punctuation">.</span>ShouldRetryOn<span class="token punctuation">)</span> <span class="token punctuation">.</span><span class="token generic-method"><span class="token function">Or</span><span class="token punctuation">&lt;</span><span class="token class-name">TimeoutException</span><span class="token punctuation">&gt;</span></span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">.</span><span class="token generic-method"><span class="token function">OrInner</span><span class="token punctuation">&lt;</span><span class="token class-name">Win32Exception</span><span class="token punctuation">&gt;</span></span><span class="token punctuation">(</span>SqlServerTransientExceptionDetector<span class="token punctuation">.</span>ShouldRetryOn<span class="token punctuation">)</span> <span class="token punctuation">.</span><span class="token function">WaitAndRetryAsync</span><span class="token punctuation">(</span>RetryTimes<span class="token punctuation">)</span><span class="token punctuation">;</span></code></pre></div>
+<div class="gatsby-highlight"><pre class="language-csharp"><code class="language-csharp"><span class="token keyword">public</span> <span class="token keyword">static</span> <span class="token keyword">class</span> <span class="token class-name">SqlServerTransientExceptionDetector</span>
+<span class="token punctuation">{</span> <span class="token keyword">public</span> <span class="token keyword">static</span> <span class="token keyword">bool</span> <span class="token function">ShouldRetryOn</span><span class="token punctuation">(</span><span class="token class-name">SqlException</span> ex<span class="token punctuation">)</span> <span class="token punctuation">{</span> <span class="token punctuation">}</span> <span class="token keyword">public</span> <span class="token keyword">static</span> <span class="token keyword">bool</span> <span class="token function">ShouldRetryOn</span><span class="token punctuation">(</span><span class="token class-name">Win32Exception</span> ex<span class="token punctuation">)</span> <span class="token punctuation">{</span> <span class="token punctuation">}</span>
+<span class="token punctuation">}</span></code></pre></div>
+<p>We&#x2019;re defining an <code class="language-text">AsyncRetryPolicy</code> Polly policy. When an exception is raised in the called code, Polly will look to see if it&#x2019;s an exception we want handled. In this case, we&#x2019;re looking for SqlExceptions, Timeouts, and a wrapped Win32 exception. For SqlExceptions and Win32 exceptions, we&#x2019;re going to further look to see if we can retry it with a call to <code class="language-text">SqlServerTransientExceptionDetector</code>. For timeout exceptions, we&#x2019;ll just retry automatically.</p>
+<p>I&#x2019;ve given Polly a set number of times to retry with a static back-off. If it exhausts the number of retry times then the exception will then be bubbled up to the calling code. Our service then throws the message back on the service bus to try again or deadletters the message to be handled out of band.</p>
+<p>I&#x2019;ve created two Dapper extension methods to wrap up calling Polly.</p>
+<div class="gatsby-highlight"><pre class="language-csharp"><code class="language-csharp"><span class="token keyword">static</span> <span class="token keyword">async</span> Task<span class="token operator">&lt;</span><span class="token keyword">int</span><span class="token operator">&gt;</span> <span class="token function">ExecuteAsyncWithRetry</span><span class="token punctuation">(</span><span class="token keyword">this</span> <span class="token class-name">IDbConnection</span> cnn<span class="token punctuation">,</span> <span class="token keyword">string</span> sql<span class="token punctuation">,</span> <span class="token keyword">object</span> param <span class="token operator">=</span> <span class="token keyword">null</span><span class="token punctuation">)</span> <span class="token operator">=</span><span class="token operator">&gt;</span> <span class="token keyword">await</span> RetryPolicy<span class="token punctuation">.</span><span class="token function">ExecuteAsync</span><span class="token punctuation">(</span><span class="token keyword">async</span> <span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token operator">=</span><span class="token operator">&gt;</span> <span class="token keyword">await</span> cnn<span class="token punctuation">.</span><span class="token function">ExecuteAsync</span><span class="token punctuation">(</span>sql<span class="token punctuation">,</span> param<span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token keyword">static</span> <span class="token keyword">async</span> Task<span class="token operator">&lt;</span>IEnumerable<span class="token operator">&lt;</span>T<span class="token operator">&gt;</span><span class="token operator">&gt;</span> <span class="token generic-method"><span class="token function">QueryAsyncWithRetry</span><span class="token punctuation">&lt;</span><span class="token class-name">T</span><span class="token punctuation">&gt;</span></span><span class="token punctuation">(</span><span class="token keyword">this</span> <span class="token class-name">IDbConnection</span> cnn<span class="token punctuation">,</span> <span class="token keyword">string</span> sql<span class="token punctuation">,</span> <span class="token keyword">object</span> param <span class="token operator">=</span> <span class="token keyword">null</span><span class="token punctuation">)</span> <span class="token operator">=</span><span class="token operator">&gt;</span> <span class="token keyword">await</span> RetryPolicy<span class="token punctuation">.</span><span class="token function">ExecuteAsync</span><span class="token punctuation">(</span><span class="token keyword">async</span> <span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token operator">=</span><span class="token operator">&gt;</span> <span class="token keyword">await</span> cnn<span class="token punctuation">.</span><span class="token generic-method"><span class="token function">QueryAsync</span><span class="token punctuation">&lt;</span><span class="token class-name">T</span><span class="token punctuation">&gt;</span></span><span class="token punctuation">(</span>sql<span class="token punctuation">,</span> param<span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span></code></pre></div>
+<p>The caller might then look like this</p>
+<div class="gatsby-highlight"><pre class="language-csharp"><code class="language-csharp"><span class="token keyword">public</span> <span class="token keyword">async</span> <span class="token class-name">Task</span> <span class="token function">UpsertPerson</span><span class="token punctuation">(</span><span class="token keyword">string</span> firstName<span class="token punctuation">,</span> <span class="token keyword">string</span> lastName<span class="token punctuation">)</span>
+<span class="token punctuation">{</span> <span class="token keyword">await</span> _conn<span class="token punctuation">.</span><span class="token function">ExecuteAsyncWithRetry</span><span class="token punctuation">(</span>_upsertSql<span class="token punctuation">,</span> <span class="token keyword">new</span> <span class="token punctuation">{</span> firstName<span class="token punctuation">,</span> lastName <span class="token punctuation">}</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span></code></pre></div>
+<p>Again, the full code for the above classes can be found on <a href="https://gist.github.com/hyrmn/ce124e9b1f50dbf9d241390ebc8f6df3">this Gist</a>. Any questions or complaints, hit me up on Twitter <a href="https://twitter.com/hyrmn">@hyrmn</a></p></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
