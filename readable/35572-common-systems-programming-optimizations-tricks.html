@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Common Systems Programming Optimizations &amp; Tricks -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <style type="text/css">
+        html {
+            font-family: sans-serif;
+            line-height: 1.15;
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+            height: 100%;
+        }
+
+        *, ::after, ::before {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+            font-size: 1rem;
+            font-weight: 400;
+            line-height: 1.5;
+            color: #60656a;
+            text-align: left;
+            background-color: #323b44;
+        }
+
+        h1 {
+            font-size: 6rem;
+            font-weight: 300;
+            line-height: 1.2;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            margin-bottom: 0.5rem
+        }
+
+        a {
+            color: #007bff;
+            color: #ccc;
+            text-decoration: none;
+            background-color: transparent;
+            word-break: break-all;
+        }
+
+        .unseen a {
+            font-weight: bold;
+        }
+
+        h3 {
+            margin-top: 0;
+            padding-top: 0;
+            font-weight: normal;
+        }
+
+        .grid {
+            -ms-flex-direction: column;
+            flex-direction: column;
+            width: 1024px;
+            margin: 0 auto;
+            flex: 1 0 auto;
+        }
+
+        .row {
+            -ms-flex-direction: row;
+            flex-direction: row;
+            width: 100%;
+            -ms-flex-wrap: wrap;
+            flex-wrap: wrap;
+            display: -ms-flexbox;
+            display: flex;
+        }
+
+        .col {
+            margin: 0 10px 0 10px;
+            box-sizing: border-box;
+            vertical-align: top;
+        }
+
+        .col-3-of-4, .col-6-of-8, .col-9-of-12 {
+            width: calc(75% - 20px);
+        }
+
+        .col-1-of-4, .col-2-of-8, .col-3-of-12 {
+            width: calc(25% - 20px);
+        }
+
+        @media (max-width:1023px) {
+            /* big landscape tablets, laptops, and desktops */
+            body {
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 99%;
+            }
+
+            h1 {
+                font-size: 50px;
+            }
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        footer {
+            left: 0;
+            width: 100%;
+            margin-top: 2em;
+            padding: 50px 0;
+            text-align: center;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            box-sizing: border-box;
+        }
+
+        .readable {
+            color: #949ba2;
+        }
+
+        svg:not(:root).svg-inline--fa {
+            color: #60656a;
+            overflow: visible;
+        }
+
+        .svg-inline--fa.fa-w-12 {
+            width: 0.75em;
+        }
+
+        svg:not(:root) {
+            overflow: hidden;
+        }
+
+        .svg-inline--fa {
+            display: inline-block;
+            font-size: inherit;
+            height: 1em;
+            overflow: visible;
+            vertical-align: -0.125em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .readable h1 {
+            font-size: 2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Common Systems Programming Optimizations &amp; Tricks</h1>
+    <div class="markdown"> <p>Today&#x2019;s blog post is an overview of some common optimization techniques and neat
+tricks for doing &#x201C;systems programming&#x201D; &#x2013; whatever that means today. We&#x2019;ll walk
+through some methods to make your code run faster, be more efficient, and to
+squeeze just a little more juice from whatever you got.</p> <p>All of the examples we&#x2019;ll go over are also on github at
+<a href="https://github.com/paulcavallaro/systems-programming">paulcavallaro/systems-programming</a>.</p> <h2 id="cache-lines-false-sharing">Cache Lines &amp; False Sharing</h2> <p>False sharing is a fairly well-understood problem in optimizing multi-threaded
+code on modern SMP systems. The problem has been
+<a href="https://software.intel.com/en-us/articles/avoiding-and-identifying-false-sharing-among-threads">written</a>
+<a href="https://mechanical-sympathy.blogspot.com/2011/07/false-sharing.html">about</a>
+<a href="https://dzone.com/articles/false-sharing">fairly</a>
+<a href="https://herbsutter.com/2009/05/15/effective-concurrency-eliminate-false-sharing/">extensively</a>,
+but the basic idea is that physical memory on a machine isn&#x2019;t infinitely
+granular, i.e. you can&#x2019;t just read a byte. Instead, when you want to read a
+single byte of memory, the processor will pull in and cache not just that byte,
+but the surrounding data as well, on the assumption that it will likely be used
+too. This unit of data that gets read and cached is called a &#x201C;cache line&#x201D;, and
+is essentially the smallest piece of memory that can be accessed.</p> <p>As of 2019 cache lines are powers of 2, usually in the range of 32 to 256 bytes,
+with 64 bytes being the most common.</p> <p>Now, to support multiple processors on a single machine reading and writing from
+the same memory in a coherent way, only one processor on a machine can have
+exclusive access to a given cache line.</p> <p><em>False sharing</em> is when you accidentally put two unrelated pieces of data in the
+same cache line. Now having two processors update separate chunks of data, say
+counters, will interfere with one another, as each processor attempts to gain
+exclusive access to the cache line that houses both fields.</p> <p>The explanation for the name <em>false sharing</em> is that even though these two
+counters shouldn&#x2019;t be affecting one another from a correctness standpoint, they
+are &#x2013; big air quotes incoming &#x2013; &#x201C;falsely sharing&#x201D; a cache line for no good reason.</p> <p>One solution is to force the data onto separate cache lines, which you can do in
+C/C++ by forcing the alignment of the members of a struct/class. In
+<a href="https://github.com/paulcavallaro/systems-programming/blob/master/examples/cache-lines.cc">examples/cache-lines.cc</a>
+we use absl&#x2019;s
+<a href="https://github.com/abseil/abseil-cpp/blob/fa00c321073c7ea40a4fc3dfc8a06309eae3d025/absl/base/optimization.h#L99-L148"><code>ABSL_CACHELINE_ALIGNED</code></a>
+macro to achieve this.</p> <p>To show the effect in practice, we benchmark two different structs of
+<code>std::atomic&lt;int64&gt;</code> counters, <code>NormalCounters</code> and <code>CacheLineAwareCounters</code>.</p> <div class="highlight"><pre class="chroma"><code class="language-cpp"><span class="c1">// NormalCounters is straight forward naive implementation of a struct of
+</span><span class="c1">// counters.
+</span><span class="c1">// Note: We also use ABSL_CACHELINE_ALIGNED on the NormalCounters struct, but
+</span><span class="c1">// not its members, so that the entire struct will be aligned to a cache line.
+</span><span class="c1">// Otherwise the struct might be placed towards the end of a cache line,
+</span><span class="c1">// accidentally straddling two cache lines, thereby improving its performance.
+</span><span class="c1"></span><span class="k">struct</span> <span class="n">ABSL_CACHELINE_ALIGNED</span> <span class="n">NormalCounters</span> <span class="p">{</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">success</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">failure</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">okay</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">meh</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+<span class="p">};</span> <span class="c1">// CacheLineAwareCounters forces each counter onto a separate cache line to
+</span><span class="c1">// avoid any false sharing between the counters.
+</span><span class="c1">// Note: We must use ABSL_CACHELINE_ALIGNED for each member, since we want to
+</span><span class="c1">// pad every single counter so it will be forced onto its own separate cache
+</span><span class="c1">// line.
+</span><span class="c1"></span><span class="k">struct</span> <span class="n">ABSL_CACHELINE_ALIGNED</span> <span class="n">CacheLineAwareCounters</span> <span class="p">{</span> <span class="n">ABSL_CACHELINE_ALIGNED</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">success</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span> <span class="n">ABSL_CACHELINE_ALIGNED</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">failure</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span> <span class="n">ABSL_CACHELINE_ALIGNED</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">okay</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span> <span class="n">ABSL_CACHELINE_ALIGNED</span> <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="n">int64</span><span class="o">&gt;</span> <span class="n">meh</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+<span class="p">};</span>
+</code></pre></div> <p>The benchmark uses either 1, 2, 3, or 4 threads, each bumping a separate atomic
+counter inside the struct 64K times. Here are the results on a 2013 MacBook Pro
+with a Haswell processor:</p> <div class="highlight"><pre class="chroma"><code class="language-perl"><span class="n">Executing</span> <span class="n">tests</span> <span class="n">from</span> <span class="sr">//</span><span class="n">examples:cache</span><span class="o">-</span><span class="n">lines</span>
+<span class="o">-----------------------------------------------------------------------------</span>
+<span class="n">Cache</span> <span class="n">Line</span> <span class="n">Size:</span> <span class="mi">64</span>
+<span class="n">sizeof</span><span class="p">(</span><span class="n">NormalCounters</span><span class="p">)</span> <span class="o">=</span> <span class="mi">64</span>
+<span class="n">sizeof</span><span class="p">(</span><span class="n">CacheLineAwareCounters</span><span class="p">)</span> <span class="o">=</span> <span class="mi">256</span>
+<span class="mi">2019</span><span class="o">-</span><span class="mi">08</span><span class="o">-</span><span class="mi">13</span> <span class="mo">01</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">18</span>
+<span class="n">Run</span> <span class="n">on</span> <span class="p">(</span><span class="mi">4</span> <span class="n">X</span> <span class="mi">2800</span> <span class="n">MHz</span> <span class="n">CPU</span> <span class="n">s</span><span class="p">)</span>
+<span class="n">CPU</span> <span class="n">Caches:</span> <span class="n">L1</span> <span class="n">Data</span> <span class="mi">32</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L1</span> <span class="n">Instruction</span> <span class="mi">32</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L2</span> <span class="n">Unified</span> <span class="mi">262</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L3</span> <span class="n">Unified</span> <span class="mi">4194</span><span class="n">K</span> <span class="p">(</span><span class="n">x1</span><span class="p">)</span>
+<span class="o">---------------------------------------------------------------------------</span>
+<span class="n">Benchmark</span> <span class="n">Time</span> <span class="n">CPU</span> <span class="n">Iterations</span>
+<span class="o">---------------------------------------------------------------------------</span>
+<span class="n">BM_NormalCounters</span><span class="o">/</span><span class="n">threads:1</span> <span class="mi">389</span> <span class="n">us</span> <span class="mi">387</span> <span class="n">us</span> <span class="mi">1812</span>
+<span class="n">BM_NormalCounters</span><span class="o">/</span><span class="n">threads:2</span> <span class="mi">1264</span> <span class="n">us</span> <span class="mi">2517</span> <span class="n">us</span> <span class="mi">234</span>
+<span class="n">BM_NormalCounters</span><span class="o">/</span><span class="n">threads:3</span> <span class="mi">1286</span> <span class="n">us</span> <span class="mi">3718</span> <span class="n">us</span> <span class="mi">225</span>
+<span class="n">BM_NormalCounters</span><span class="o">/</span><span class="n">threads:4</span> <span class="mi">1073</span> <span class="n">us</span> <span class="mi">3660</span> <span class="n">us</span> <span class="mi">204</span>
+<span class="n">BM_CacheLineAwareCounters</span><span class="o">/</span><span class="n">threads:1</span> <span class="mi">386</span> <span class="n">us</span> <span class="mi">385</span> <span class="n">us</span> <span class="mi">1799</span>
+<span class="n">BM_CacheLineAwareCounters</span><span class="o">/</span><span class="n">threads:2</span> <span class="mi">200</span> <span class="n">us</span> <span class="mi">400</span> <span class="n">us</span> <span class="mi">1658</span>
+<span class="n">BM_CacheLineAwareCounters</span><span class="o">/</span><span class="n">threads:3</span> <span class="mi">208</span> <span class="n">us</span> <span class="mi">581</span> <span class="n">us</span> <span class="mi">1152</span>
+<span class="n">BM_CacheLineAwareCounters</span><span class="o">/</span><span class="n">threads:4</span> <span class="mi">193</span> <span class="n">us</span> <span class="mi">721</span> <span class="n">us</span> <span class="mi">1008</span></code></pre></div> <p>A note on these results: <code>Time</code> measures wall clock time per-thread and <code>CPU</code>
+measures cpu time per-thread.</p> <p>We can see that the sizes of the two structs are different, where
+<code>sizeof(NormalCounters) = 64</code> and <code>sizeof(CacheLineAwareCounters) = 256</code>. This
+is because the alignment constraint we put on the individual fields, such that
+each member is on its own cache line. So instead of an <code>int64</code> taking up 8 bytes
+like usual, it&#x2019;s taking up a full cache line, which is 64 bytes on my machine.</p> <p><img src="/images/sysprog-false-sharing.png"></p> <p>We also see that for the single threaded case, the <code>NormalCounters</code>
+vs. <code>CacheLineAwareCounters</code> perform indistinguishably. But as we add more
+threads, the <code>CacheLineAwareCounters</code> perform much better than the naive normal
+counters that suffer from the false sharing.</p> <p>Interestingly the wall clock time spent for <code>CacheLineAwareCounters</code> is higher
+for one thread than multiple threads, which could point to perhaps some subtle
+benchmarking problem, or maybe a fixed amount of delay that&#x2019;s getting attributed
+across more threads now, and so is smaller per-thread.</p> <h2 id="the-magic-power-of-2-division-is-slowaloo">The Magic Power of 2: Division Is Slowaloo</h2> <p>In current hardware, division is one of the most expensive operations, where
+expensive here means &#x201C;longest
+latency&#x201D;. <a href="https://www.agner.org/optimize/instruction_tables.pdf">Agner Fog&#x2019;s listing of instruction latencies</a>
+lists Intel Skylake&#x2019;s <code>DIV</code> instruction operating on two 64 bit registers having
+a latency of 35-88 cycles, compared to an <code>ADD</code> instruction operating on the
+same two 64 bit registers having a latency of 1 cycle. So it would behoove us to
+avoid division where some other set of operations would work.</p> <p>One place where division is commonly used besides for actually doing division,
+is in the modulo <code>%</code> operator. And a common place for the modulo operator is in
+hash tables: to go from a hash to a bucket we compute <code>HASH %
+TABLE_SIZE</code>. Modulo is used even more heavily in
+<a href="https://en.wikipedia.org/wiki/Open_addressing">open-addressing</a> schemes since
+we&#x2019;re constantly remapping values back into the hash table bucket space.</p> <p>So how do we go from using modulo to something else? Bit twiddling and the Magic
+Power of 2!</p> <p>First, let me give away the answer: We&#x2019;re going to force all of our hash tables
+to be a size that&#x2019;s a power of 2.</p> <p>We&#x2019;ll be able to take advantage of this property for replacing division with
+faster bit twiddling. Also, this property is easy to maintain since we double
+the size of our hash table whenever we grow to amoritize the cost of rehashing,
+so the size will stay a power of 2 as we grow.</p> <p>Now, we were using division &#x2013; or modulo &#x2013; for the purpose of mapping any hash
+value to a bucket index in our hash table. Bucket indices must be strictly less
+than our size, and this mapping should not lose any entropy from the hash value.</p> <p>Instead of using division to do this, we&#x2019;ll use a bitmask that will &#x201C;mask&#x201D; away
+all set bits except those that are strictly less than our power of 2. This way
+we keep all the entropy in the least significant bits, just like modulo, but
+it&#x2019;s much faster &#x2013; Agner Fog lists it at 1 cycle latency on the same Intel
+Skylake architecture.</p> <p>As a quick refresher on bit twiddling and to explain how we&#x2019;ll choose our
+bitmask, let&#x2019;s look at some bit patterns.</p> <p>Since numbers are represented in binary, we know that every power of 2 number
+<code>N</code> only has one bit set. For example:</p> <div class="highlight"><pre class="chroma"><code class="language-c"><span class="n">Decimal</span> <span class="o">|</span> <span class="n">Binary</span> <span class="mi">2</span> <span class="o">|</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mi">10</span> <span class="mi">8</span> <span class="o">|</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mi">10</span> <span class="mo">00</span> <span class="mi">32</span> <span class="o">|</span> <span class="mo">00</span> <span class="mi">10</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mi">128</span> <span class="o">|</span> <span class="mi">10</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mo">00</span></code></pre></div> <p>And that means all <code>N - 1</code>&#x2019;s have every less significant bit than <code>log2(N)</code>
+set. For example:</p> <div class="highlight"><pre class="chroma"><code class="language-c"><span class="n">Decimal</span> <span class="o">|</span> <span class="n">Binary</span> <span class="mi">1</span> <span class="o">|</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mo">01</span> <span class="mi">7</span> <span class="o">|</span> <span class="mo">00</span> <span class="mo">00</span> <span class="mo">01</span> <span class="mi">11</span> <span class="mi">31</span> <span class="o">|</span> <span class="mo">00</span> <span class="mo">01</span> <span class="mi">11</span> <span class="mi">11</span> <span class="mi">127</span> <span class="o">|</span> <span class="mo">01</span> <span class="mi">11</span> <span class="mi">11</span> <span class="mi">11</span></code></pre></div> <p>So in order to replace our modulo operator in the <code>HASH % N</code> calculation, we
+instead calculate <code>HASH &amp; (N - 1)</code> using bitwise AND. This will only keep the
+set bits that are less significant than our <code>log_2(N)</code> bit, mapping any <code>HASH</code>
+value onto a number in the interval
+<code>[0, N)</code>. We can even cache this bitmask if we want so we don&#x2019;t have to
+recompute it in the future.</p> <p>To show how much faster this bitmask trick is than using normal modulo operator,
+I&#x2019;ve written a
+<a href="https://github.com/paulcavallaro/systems-programming/blob/master/examples/power-of-two.cc">small benchmark</a>
+to measure executing 1M modulo operations, versus executing 1M bitmasks.</p> <div class="highlight"><pre class="chroma"><code class="language-perl"><span class="n">Executing</span> <span class="n">tests</span> <span class="n">from</span> <span class="sr">//</span><span class="n">examples:power</span><span class="o">-</span><span class="n">of</span><span class="o">-</span><span class="n">two</span>
+<span class="o">-----------------------------------------------------------------------------</span>
+<span class="mi">2019</span><span class="o">-</span><span class="mi">08</span><span class="o">-</span><span class="mi">13</span> <span class="mo">02</span><span class="p">:</span><span class="mi">24</span><span class="p">:</span><span class="mo">03</span>
+<span class="n">Run</span> <span class="n">on</span> <span class="p">(</span><span class="mi">4</span> <span class="n">X</span> <span class="mi">2800</span> <span class="n">MHz</span> <span class="n">CPU</span> <span class="n">s</span><span class="p">)</span>
+<span class="n">CPU</span> <span class="n">Caches:</span> <span class="n">L1</span> <span class="n">Data</span> <span class="mi">32</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L1</span> <span class="n">Instruction</span> <span class="mi">32</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L2</span> <span class="n">Unified</span> <span class="mi">262</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L3</span> <span class="n">Unified</span> <span class="mi">4194</span><span class="n">K</span> <span class="p">(</span><span class="n">x1</span><span class="p">)</span>
+<span class="o">--------------------------------------------------------</span>
+<span class="n">Benchmark</span> <span class="n">Time</span> <span class="n">CPU</span> <span class="n">Iterations</span>
+<span class="o">--------------------------------------------------------</span>
+<span class="n">BM_Mod</span> <span class="mi">9261</span> <span class="n">us</span> <span class="mi">9234</span> <span class="n">us</span> <span class="mi">75</span>
+<span class="n">BM_BitMask</span> <span class="mi">325</span> <span class="n">us</span> <span class="mi">324</span> <span class="n">us</span> <span class="mi">1984</span></code></pre></div> <p>Here we can see how the <code>DIV</code> instruction used by the modulo operator is on the
+order of 28x slower, near the 35x slow down predicted by Agner Fog&#x2019;s latency
+numbers.</p> <p>Since this trick is easy to do, and provides a nice win, it&#x2019;s used by many
+high-performance hash-tables, like absl&#x2019;s &#x201C;Swiss Tables&#x201D;
+<a href="https://github.com/abseil/abseil-cpp/blob/c6c3c1b498e4ee939b24be59cae29d59c3863be8/absl/container/internal/raw_hash_set.h#L471-L474">flat_hash_set and flat_hash_map</a> and <a href="https://github.com/concurrencykit/ck/blob/master/src/ck_ht.c#L145-L172">ConcurrencyKit&#x2019;s ck_ht_map</a>.</p> <h2 id="repurposing-top-bits">Repurposing Top Bits</h2> <p>Oftentimes you want to store a bit or two of extra information along with a
+pointer &#x2013; in fact it&#x2019;s so common
+<a href="https://en.wikipedia.org/wiki/Tagged_pointer">Wikipedia has an article about it</a>. One
+way to do this is to take advantage that on many 64-bit systems, such as linux,
+virtual memory addresses are only 48 bits wide, even though we use 8 bytes to
+store them.</p> <p>This means, we can just store any old crap we want to in the top 16 bits by just
+masking it out whenever we want to actually dereference it. Here&#x2019;s some
+<a href="https://github.com/paulcavallaro/systems-programming/blob/master/examples/pointer-tagging.cc">example C++ code</a>
+of using the top bit of a pointer to store whether the underlying data is
+&#x201C;dirty&#x201D; or not.</p> <div class="highlight"><pre class="chroma"><code class="language-cpp"><span class="k">constexpr</span> <span class="n">uintptr_t</span> <span class="n">kDirtyBit</span> <span class="o">=</span> <span class="mh">0x8000000000000000</span><span class="p">;</span>
+<span class="k">constexpr</span> <span class="n">uintptr_t</span> <span class="n">kPtrMask</span> <span class="o">=</span> <span class="mh">0x7fffffffffffffff</span><span class="p">;</span>
+<span class="k">static_assert</span><span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="n">uintptr_t</span><span class="p">)</span> <span class="o">==</span> <span class="mi">8</span><span class="p">,</span> <span class="s">&quot;Only works on 64-bit systems&quot;</span><span class="p">);</span> <span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="n">uintptr_t</span> <span class="n">MarkDirty</span><span class="p">(</span><span class="n">T</span><span class="o">*</span> <span class="n">t</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="n">uintptr_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">t</span><span class="p">)</span> <span class="o">|</span> <span class="n">kDirtyBit</span><span class="p">;</span>
+<span class="p">}</span> <span class="k">template</span> <span class="o">&lt;</span><span class="k">typename</span> <span class="n">T</span><span class="o">&gt;</span>
+<span class="n">T</span><span class="o">*</span> <span class="n">GetPointer</span><span class="p">(</span><span class="n">uintptr_t</span> <span class="n">t</span><span class="p">)</span> <span class="p">{</span> <span class="k">return</span> <span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">*&gt;</span><span class="p">(</span><span class="n">t</span> <span class="o">&amp;</span> <span class="n">kPtrMask</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div> <p>Interestingly though, since this is a feature of Linux&#x2019;s memory
+management/virtual address space, it is subject to change &#x2013; and it actually
+has!</p> <p>LWN <a href="https://lwn.net/Articles/717293/">reported on the patchset in 2017</a>
+implementing five-level page tables in order to support larger amounts of
+addressable memory. The change, if enabled, would move Linux from 48-bit virtual
+addresses to 57-bit virtual addresses, increasing virtual address space from 256
+TiB to 128 PiB &#x2013; which ought to be enough for everyone &#x1F600;.</p> <p>Part of why the change couldn&#x2019;t be enabled by default is because various high
+performance programs, notably various JavaScript engines and
+<a href="http://luajit.org/">LuaJIT</a>, use this repurposing trick to pack some extra data
+into pointers.</p> <h2 id="lock-striping">Lock Striping</h2> <p>Locks can be used for mutual exclusion when you want to have multiple threads
+access shared data exclusively. The downside though is if the shared data is
+frequently accessed and the critical section is non-trivial, your threads could
+spend most of their time contending on the lock, instead of actually doing work.</p> <p>One common way of solving this problem, is introducing more locks. Wait &#x2013; what?</p> <p>Well, instead of one lock that guards all of the data, instead you have many
+locks responsible for just a piece of the data. In this way we shard the data
+into separate independent buckets that don&#x2019;t contend with each other. Assuming
+the data access is uniform-ish, increasing sharding of the data reduces the
+number of threads contending on a lock proportionally.</p> <p>Below is a
+<a href="https://github.com/paulcavallaro/systems-programming/blob/master/examples/lock-striping.cc">small C++ example</a>
+of two implementations of thread-safe hash set. The first implementation,
+<code>ThreadSafeHashSet</code>, just uses a single lock to guard a single underlying
+<code>absl::flat_hash_set</code>. The second implementation <code>LockStripedHashSet</code> has <code>N</code>
+separate locks, guarding <code>N</code> separate <code>abs::flat_hash_sets</code>.</p> <div class="highlight"><pre class="chroma"><code class="language-cpp"><span class="c1">// Simple thread-safe single-lock hash set
+</span><span class="c1"></span><span class="k">class</span><span class="err"> </span><span class="nc">ThreadSafeHashSet</span> <span class="p">{</span> <span class="k">public</span><span class="o">:</span> <span class="kt">void</span> <span class="n">Insert</span><span class="p">(</span><span class="n">uint64</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span> <span class="n">absl</span><span class="o">::</span><span class="n">MutexLock</span> <span class="n">lock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">mu_</span><span class="p">);</span> <span class="n">hash_set_</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">i</span><span class="p">);</span> <span class="p">}</span> <span class="kt">bool</span> <span class="n">Contains</span><span class="p">(</span><span class="n">uint64</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span> <span class="n">absl</span><span class="o">::</span><span class="n">MutexLock</span> <span class="n">lock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">mu_</span><span class="p">);</span> <span class="k">return</span> <span class="n">hash_set_</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="n">i</span><span class="p">);</span> <span class="p">}</span> <span class="k">private</span><span class="o">:</span> <span class="n">absl</span><span class="o">::</span><span class="n">Mutex</span> <span class="n">mu_</span><span class="p">;</span> <span class="n">absl</span><span class="o">::</span><span class="n">flat_hash_set</span><span class="o">&lt;</span><span class="n">uint64</span><span class="o">&gt;</span> <span class="n">hash_set_</span><span class="p">;</span>
+<span class="p">};</span> <span class="c1">// Chunk the data into `kNumChunks` separate hash sets, guarded by separate
+</span><span class="c1">// locks.
+</span><span class="c1"></span><span class="k">template</span> <span class="o">&lt;</span><span class="n">size_t</span> <span class="n">kNumChunks</span><span class="o">&gt;</span>
+<span class="k">class</span><span class="err"> </span><span class="nc">LockStripedHashSet</span> <span class="p">{</span> <span class="k">public</span><span class="o">:</span> <span class="kt">void</span> <span class="n">Insert</span><span class="p">(</span><span class="n">uint64</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span> <span class="c1">// Mod the data to calculate which hash_set/lock to use
+</span><span class="c1"></span> <span class="k">const</span> <span class="n">size_t</span> <span class="n">idx</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="n">kNumChunks</span><span class="p">;</span> <span class="n">absl</span><span class="o">::</span><span class="n">MutexLock</span> <span class="n">lock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">mu_</span><span class="p">[</span><span class="n">idx</span><span class="p">]);</span> <span class="n">hash_set_</span><span class="p">[</span><span class="n">idx</span><span class="p">].</span><span class="n">insert</span><span class="p">(</span><span class="n">i</span><span class="p">);</span> <span class="p">}</span> <span class="kt">bool</span> <span class="n">Contains</span><span class="p">(</span><span class="n">uint64</span> <span class="n">i</span><span class="p">)</span> <span class="p">{</span> <span class="k">const</span> <span class="n">size_t</span> <span class="n">idx</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="n">kNumChunks</span><span class="p">;</span> <span class="n">absl</span><span class="o">::</span><span class="n">MutexLock</span> <span class="n">lock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">mu_</span><span class="p">[</span><span class="n">idx</span><span class="p">]);</span> <span class="k">return</span> <span class="n">hash_set_</span><span class="p">[</span><span class="n">idx</span><span class="p">].</span><span class="n">contains</span><span class="p">(</span><span class="n">i</span><span class="p">);</span> <span class="p">}</span> <span class="k">private</span><span class="o">:</span> <span class="n">std</span><span class="o">::</span><span class="n">array</span><span class="o">&lt;</span><span class="n">absl</span><span class="o">::</span><span class="n">Mutex</span><span class="p">,</span> <span class="n">kNumChunks</span><span class="o">&gt;</span> <span class="n">mu_</span><span class="p">;</span> <span class="n">std</span><span class="o">::</span><span class="n">array</span><span class="o">&lt;</span><span class="n">absl</span><span class="o">::</span><span class="n">flat_hash_set</span><span class="o">&lt;</span><span class="n">uint64</span><span class="o">&gt;</span><span class="p">,</span> <span class="n">kNumChunks</span><span class="o">&gt;</span> <span class="n">hash_set_</span><span class="p">;</span>
+<span class="p">};</span>
+</code></pre></div> <p>To illustrate the benefits of lock striping, we benchmark the performance of the
+two thread-safe hash sets in the presence of many threads, each inserting 1M
+items. For the <code>LockStripedHashSet</code> we try with 4 chunks and with 8 chunks. The
+results are below:</p> <div class="highlight"><pre class="chroma"><code class="language-perl"><span class="n">Executing</span> <span class="n">tests</span> <span class="n">from</span> <span class="sr">//</span><span class="n">examples:lock</span><span class="o">-</span><span class="n">striping</span>
+<span class="o">-----------------------------------------------------------------------------</span>
+<span class="mi">2019</span><span class="o">-</span><span class="mi">08</span><span class="o">-</span><span class="mi">24</span> <span class="mi">22</span><span class="p">:</span><span class="mi">24</span><span class="p">:</span><span class="mi">37</span>
+<span class="n">Run</span> <span class="n">on</span> <span class="p">(</span><span class="mi">4</span> <span class="n">X</span> <span class="mi">2800</span> <span class="n">MHz</span> <span class="n">CPU</span> <span class="n">s</span><span class="p">)</span>
+<span class="n">CPU</span> <span class="n">Caches:</span> <span class="n">L1</span> <span class="n">Data</span> <span class="mi">32</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L1</span> <span class="n">Instruction</span> <span class="mi">32</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L2</span> <span class="n">Unified</span> <span class="mi">262</span><span class="n">K</span> <span class="p">(</span><span class="n">x2</span><span class="p">)</span> <span class="n">L3</span> <span class="n">Unified</span> <span class="mi">4194</span><span class="n">K</span> <span class="p">(</span><span class="n">x1</span><span class="p">)</span>
+<span class="o">--------------------------------------------------------------------------</span>
+<span class="n">Benchmark</span> <span class="n">Time</span> <span class="n">CPU</span> <span class="n">Iterations</span>
+<span class="o">--------------------------------------------------------------------------</span>
+<span class="n">BM_SingleLock</span><span class="o">/</span><span class="n">threads:1</span> <span class="mi">65</span> <span class="n">ms</span> <span class="mi">65</span> <span class="n">ms</span> <span class="mi">11</span>
+<span class="n">BM_SingleLock</span><span class="o">/</span><span class="n">threads:2</span> <span class="mi">140</span> <span class="n">ms</span> <span class="mi">254</span> <span class="n">ms</span> <span class="mi">2</span>
+<span class="n">BM_SingleLock</span><span class="o">/</span><span class="n">threads:3</span> <span class="mi">140</span> <span class="n">ms</span> <span class="mi">332</span> <span class="n">ms</span> <span class="mi">3</span>
+<span class="n">BM_SingleLock</span><span class="o">/</span><span class="n">threads:4</span> <span class="mi">142</span> <span class="n">ms</span> <span class="mi">405</span> <span class="n">ms</span> <span class="mi">4</span>
+<span class="n">BM_LockStriping_4_Chunks</span><span class="o">/</span><span class="n">threads:1</span> <span class="mi">71</span> <span class="n">ms</span> <span class="mi">69</span> <span class="n">ms</span> <span class="mi">9</span>
+<span class="n">BM_LockStriping_4_Chunks</span><span class="o">/</span><span class="n">threads:2</span> <span class="mi">90</span> <span class="n">ms</span> <span class="mi">178</span> <span class="n">ms</span> <span class="mi">4</span>
+<span class="n">BM_LockStriping_4_Chunks</span><span class="o">/</span><span class="n">threads:3</span> <span class="mi">89</span> <span class="n">ms</span> <span class="mi">248</span> <span class="n">ms</span> <span class="mi">3</span>
+<span class="n">BM_LockStriping_4_Chunks</span><span class="o">/</span><span class="n">threads:4</span> <span class="mi">82</span> <span class="n">ms</span> <span class="mi">299</span> <span class="n">ms</span> <span class="mi">4</span>
+<span class="n">BM_LockStriping_8_Chunks</span><span class="o">/</span><span class="n">threads:1</span> <span class="mi">70</span> <span class="n">ms</span> <span class="mi">69</span> <span class="n">ms</span> <span class="mi">10</span>
+<span class="n">BM_LockStriping_8_Chunks</span><span class="o">/</span><span class="n">threads:2</span> <span class="mi">74</span> <span class="n">ms</span> <span class="mi">143</span> <span class="n">ms</span> <span class="mi">4</span>
+<span class="n">BM_LockStriping_8_Chunks</span><span class="o">/</span><span class="n">threads:3</span> <span class="mi">71</span> <span class="n">ms</span> <span class="mi">198</span> <span class="n">ms</span> <span class="mi">3</span>
+<span class="n">BM_LockStriping_8_Chunks</span><span class="o">/</span><span class="n">threads:4</span> <span class="mi">60</span> <span class="n">ms</span> <span class="mi">200</span> <span class="n">ms</span> <span class="mi">4</span></code></pre></div> <p>Again, <code>Time</code> measures wall clock time per-thread and <code>CPU</code> measures cpu time
+per-thread. Also note that since my machine only has 4 logical cores, this test
+only goes up to 4 threads, since anything beyond that doesn&#x2019;t actually introduce
+any extra contention.</p> <p><img src="/images/sysprog-lock-striping.png"></p> <p>We can see that in the single-threaded case the <code>LockStripedHashSet</code>, no matter
+the chunking, performs slightly worse on both wall clock and CPU time than the
+simple <code>ThreadSafeHashSet</code>.</p> <p>However, as more threads are added, increasing the contention on the locks, the
+<code>LockStripedHashSet</code> performs much better, and the 8 chunk version outperforms
+the 4 chunk version at higher thread counts.</p> <p>While lock-striping can help alleviate contention on locks, it does have the
+downside of increasing storage overhead for the locks. In our example the
+overhead of 7 extra locks and extra <code>absl::flat_hash_set</code> bookkeeping is
+miniscule for a single instance in our benchmark, but if you replaced all the
+hash sets in an application with an 8-way striped thread-safe hash set, you
+could bloat its memory footprint by a significant amount.</p> <h2 id="conclusion">Conclusion</h2> <p>While this is nowhere near an exhaustive list of the most common systems
+programming tricks, hopefully it whets your appetite to learn more, provides
+some tools for improving performance in your own applications, or at least make
+it easier to understand why performance sensitive code is doing what it&#x2019;s doing.</p> <p><em>Thanks to Mason Simon and Ray Yang for reviewing drafts of this post.</em></p> <br> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+</body>
+</html>
