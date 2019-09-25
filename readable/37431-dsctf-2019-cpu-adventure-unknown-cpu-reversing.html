@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+[DSCTF 2019] CPU Adventure &#x2013; Unknown CPU Reversing -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>[DSCTF 2019] CPU Adventure &#x2013; Unknown CPU Reversing</h1>
+    <main id="site-content" class="site-main"> <p class="site-content-wrapper"> <article id="post-674" class="post-674 post type-post status-publish format-standard has-post-thumbnail hentry category-ctf-writeup category-hacking"> <header class="ilovewp-page-intro ilovewp-page-inner"> </header> <div class="post-single clearfix"> <p><em>or: reverse-engineering a custom, unknown CPU from a single program</em></p><p>tl;dr: We reverse-engineered a program written for a completely custom, unknown CPU architecture, without any documentation for the CPU (no emulator, no ISA reference, nothing) in the span of ten hours. Read on to find out how we did it&#x2026;</p></div></article></p> <span id="more-674"></span> <p>This past weekend, I participated in Dragon Sector&#x2019;s 2019 Teaser CTF with the CMU PPP team, as a way of de-stressing after a manic <a href="https://chi2020.acm.org/">CHI 2020</a> deadline. Dragon Sector is a well-respected Polish team with a history of interesting CTFs, so I wanted to see what they had in store.</p> <p>After solving &#x201C;ummmfpu&#x201D;, a challenge that involved reversing bytecode for the Micromega uM-FPU floating-point unit, I decided to tackle the CPU Adventure challenge, which at that point had not been solved by any teams (we would eventually be the only team to solve that challenge).</p> <p>Here&#x2019;s the description for the CPU Adventure problem:</p> <blockquote class="wp-block-quote"><p>My grandfather used to design computers back in the 60s. While cleaning out his attic, I found a strange machine. Next to the machine, I found a deck of punched cards labeled &#x201C;Dragon Adventure Game&#x201D;. After some time, I managed to hook it up to modern hardware, but the game is too hard and I cannot get to the end without cheating. Can you help me?I&#x2019;m attaching a transcription of the punched cards used by the machine. The machine proudly claims to have 4 general purpose registers, 1kiB of data memory, and 32kiB of instruction memory.To play the game, connect to the server as follows:</p><p><code>socat tcp4-connect:cpuadventure.hackable.software:1234 fd:0,rawer</code></p>Hint: this is a custom CPU, don&#x2019;t bother googling it.<p><a href="https://www.robertxiao.ca/wp-content/uploads/game.bin_.txt">game.bin</a> </p></blockquote> <p>Connecting to the server gives us the following output:</p> <pre class="wp-block-code"><code>THERE IS A TAVERN HERE.  INSIDE THE TAVERN, YOU SEE VALIS.
+
+SELECT AN OPTION:
+
+- GO (N)ORTH
+- GO (E)AST
+- (T)ALK TO VALIS
+- (D)RINK
+- SHOW (I)NVENTORY
+
+YOUR CHOICE: </code></pre> <p>Nice. It&#x2019;s an old-school adventure game. Playing with it for a bit suggests that we can fight enemies and get a flag off this Valis character if we can make him happy:</p> <pre class="wp-block-code"><code>YOUR CHOICE: T
+
+YOU ENTER THE TAVERN AND APPROACH VALIS.
+
+- HEY, I WAS WONDERING IF YOU COULD HELP ME FIND THE FLAG?
+- THE FLAG?  MAYBE, BUT FIRST, I NEED A REDBULL.
+- I... I DON&apos;T HAVE A REDBULL.
+- WELL THEN, MAKE YOURSELF USEFUL AND FIND ONE.
+
+THERE IS A TAVERN HERE.  INSIDE THE TAVERN, YOU SEE VALIS.
+
+SELECT AN OPTION:
+
+- GO (N)ORTH
+- GO (E)AST
+- (T)ALK TO VALIS
+- (D)RINK
+- SHOW (I)NVENTORY
+
+YOUR CHOICE: </code></pre> <h3>First Steps</h3> <p>I didn&#x2019;t play with the game for too long, figuring that reversing the <code>game.bin</code> file was probably more important. I popped it open in a hex editor, expecting binary &#x2013; imagine my surprise when this is what it looked like:</p> <pre class="wp-block-preformatted">110011111101000000111100110010001110000011001101000000000000110010011101010000001101001111100001111111001100111000000011...</pre> <p>It&#x2019;s <em>literally</em> a binary file &#x2013; a text file containing nothing but ASCII 1s and 0s. We know this is probably machine code for their custom CPU &#x2013; but besides the fact that it has 4 registers, 1 KiB of data memory and 32 KiB of program memory, we know literally <em>nothing</em> else about this CPU. So our first big task is to figure out the unit size of this binary file (<em>e.g.</em> is it 8-bit aligned? or maybe it&#x2019;s 12-bit or 18-bit aligned like some <a href="https://www.robertxiao.ca/hacking/defcon2018-assembly-polyglot/">ancient architectures</a>?)</p> <p>To figure out the alignment of an unknown file, I turn to an age-old trick &#x2013; resizing a text window until the line-wrap length matches the file alignment. This works wonders for things like repeating-XOR ciphertext, unknown (uncompressed) file formats, and code from an unknown CPU:</p> <p><img class="wp-image-681" src="https://www.robertxiao.ca/wp-content/uploads/align.mov.gif" alt="Resizing a text window"></p> <p>So, from this quick test I figured out that the unit size of this file must divide 20 (the width of the window at alignment). To nail down the exact unit size, I wrote a quick script to look for long repeated strings (figuring that any code would have repeated stereotypical sequences). The longest repeated string was the following 425-bit block, which appeared at positions 43625 and 44510:</p> <pre class="wp-block-preformatted">10000011111110000001010100011111110100000101100010111000001001000101000100001000100001010001011000101000000001111111111100010000011110010100100001010100111100000110000010100000101000101000011110001111001101111001010100001010000111110100001010000110010011011110011111000000111011101000000001100000110000111101011010111011000100100010100000111000100011100011000000000101010101100010111000001010000001101010010000000011000001100</pre> <p>Since the distance between the repeats was 885, we concluded that the unit size must be 5 bits &#x2013; i.e. the unknown CPU must have 5-bit &#x201C;bytes&#x201D;. Progress!</p> <p>We looked for 5-bit punch card encodings, and quickly settled on the historical <a href="https://en.wikipedia.org/wiki/Baudot_code">Baudot code</a> encoding. Indeed, when we used an online decoder to decode some snippets, we got readable text!</p> <blockquote class="wp-block-quote"><p>&#x21E9;DRAGON&#x21E9;HERE&#x21E7;;&#x21E7;&#x21E7;&#x21E9;SHE&#x21E9;APPEARS&#x21E9;TO&#x21E9;BE&#x21E9;GUARDING&#x21E9;<br>SOME&#x21E9;KIND&#x21E9;OF&#x21E9;A&#x21E9;BOTTLE&#x21E7;;&amp;.&amp;.&#x21E9;&#x2400;THERE&#x21E9;IS&#x21E9;A&#x21E9;B</p><cite>decoding of the 425-bit code above using LSB Baudot ITA 1</cite></blockquote> <p>When we tried to decode the whole file using Baudot code, we got gibberish for the first 20,000 bits or so, after which we got completely readable text. This suggested that the first part of the file corresponded to a &#x201C;code&#x201D; section, which was followed by a &#x201C;data&#x201D; section containing constant strings. We guessed that the machine probably used Baudot code for I/O, which is why it also stored constant strings in memory using Baudot encoding. To make the code segment more readable, I decided to encode it using a base-32 encoding, similar to hexadecimal encoding but extended to the alphabet 0-9a-v. Here&#x2019;s what the game.bin file looks like, with the first part base-32 encoded and the second half Baudot decoded (full file here: <a href="https://gist.github.com/nneonneo/8546fb794ac0b65b5a2c3daa9ad0e079#file-02_game-b32">game.b32</a>):</p> <pre class="wp-block-code"><code>pv83pi70pk00p7a0qfgvpjg3f0kf13f28p5f3pv10pk40pn60f0sf1sf24p5f3r9c11qad0f0sf1df26p5f39c21qad0f05f1ff26p5f39c41qad0f08f1df26p5f39c81qad0f0hf1ef26p5f3r1c00qaq15c20qcl0f01f1of27p5f3p3g3psf35c10qal0f02f1nf27p5f3p3g3psf3rf0hf1nf27p5f3f05f16f27p5f3rf84f95101311fl0f510f84907qa40b518447qa40b514f84f95k9m0k9m0k9m0907qa40b511447qa40b512ruougf10f20g0i9g0i910931b320u2u1u0ro9f0o9f0ojh0o9f0o9f0o9f0olj0o9f0o9f0o9f0o9f0o9f0o9f0o9f0o9k1onp0o9f0o9f0o9f0o9f0onf0ot82odi0o9f0o9f0o9f0o9f0o9f0o9f0o9f0olg0o9f0f0gf1df24p5f3r9c11qa835548755
+[...]
+93e9n59ka8fo87r85g8ui8ml8ed87b9h89u291u82333333333456789abcdb 01234567892)%c3BOTTLE OF SOPLICA PIGWOWA ENEMY HEALTH:  
+ 
+
+ 
+
+YOU ATTACK  
+
+YOU APPROACH REDFORD.
+
+ 
+
+YOU ENTER THE TAVERN AND APPROACH VALIS.
+[...]</code></pre> <p>For simplicity, in the following sections I will refer to the five-bit units as &#x201C;bytes&#x201D;. We internally had a bunch other names for these things &#x2013; I called them kibbles, and Zach called them hecs.</p> <h3>Reversing an Unknown CPU Architecture</h3> <p>Well, now we get to the hard part &#x2013; reversing the 4000 bytes of code which are run on a completely unknown, custom CPU architecture. From the code, it&#x2019;s pretty evident that it must be a <em>variable-length</em> instruction set, because there&#x2019;s no obvious repeating pattern that holds throughout. I spent several hours on this, assisted later by my teammate Zachary Wade (@zwad3). My first order of business was to start looking for repetitive bits of code, under the assumption that they would use a small number of instructions frequently. I started splitting the code up into shorter, repetitive sequences that would be more amenable to analysis. I wish I could say that I had a rigorous process, but it was very much the following fuzzy algorithm:</p> <ul><li>Scan through the code and see if there&#x2019;s something that shows up a lot</li><li>Run a find-replace to stick a newline near that repeat</li><li>Examine the similarities/differences between the resulting split lines</li><li>Repeat this process for about an hour&#x2026;</li></ul> <p>For example, one pattern I found was &#x201C;0f0.f&#x201D; where &#x201C;.&#x201D; represented an unknown character. I split on that to get the following:</p> <pre class="wp-block-code"><code>pv83pi70pk00p7a0qfgvpjg3f0kf13f28p5f3pv10pk40pn60f0sf
+1sf24p5f3r9c11qad0f0sf
+1df26p5f39c21qad0f05f
+1ff26p5f39c41qad0f08f
+1df26p5f39c81qad0f0hf
+1ef26p5f3r1c00qaq15c20qcl0f01f
+1of27p5f3p3g3psf35c10qal0f02f
+</code></pre> <p>This is very useful! From the second and third lines, we can see that we have &#x201C;&#x2026;p5f3r9c&#x2026;&#x201D; and &#x201C;&#x2026;p5f39c&#x2026;&#x201D;, suggesting that &#x201C;r&#x201D; is a one-byte opcode, which means that &#x201C;&#x2026;5f3&#x201D; is the end of one opcode and &#x201C;9c..&#x201D; is the start of another. In the last two lines, we have &#x201C;p5f3r1c&#x2026;&#x201D; which means that &#x201C;1c..&#x201D; is another opcode, and &#x201C;p3&#x2026;&#x201D; is yet another opcode.</p> <p>I kept splitting instructions like this over and over again, using commonalities and differences between similar blocks to identify probable instructions. Eventually, I had something like this:</p> <pre class="wp-block-code"><code>pv83
+pi70
+pk00
+p7a0
+qfgv
+pjg3
+f0k
+f13
+f28
+p5f3
+pv10
+pk40
+pn60
+f0s
+f1s
+f24
+p5f3
+r
+9c11
+qad0
+f0s
+f1d
+f26
+p5f3
+9c21
+qad0
+f05
+f1f</code></pre> <p>I inferred that &#x201C;p&#x201D; and &#x201C;q&#x201D; were instructions with three operand bytes, &#x201C;f0&#x201D;, &#x201C;f1&#x201D; and &#x201C;f2&#x201D; were instructions with one operand, and &#x201C;9c&#x201D; was an instruction with two operands. I didn&#x2019;t know what any of the instructions actually were, though.</p> <p>When I went to catalog all of the &#x201C;p&#x201D; instructions I had extracted, I discovered that by far the most common &#x201C;p&#x201D; instruction was &#x201C;p5f3&#x201D;. Furthermore, upon looking at all the places it appeared, I found that it was always preceded by &#x201C;f0&#x201D;, &#x201C;f1&#x201D; and &#x201C;f2&#x201D; instructions. Looking at all the &#x201C;f0&#x201D;, &#x201C;f1&#x201D; and &#x201C;f2&#x201D; operands, I noticed that the f2 operands were always in the range of 4-8. Remembering that the CPU had 32 KiB of program memory &#x2013; which requires 15 bits to address &#x2013; I made a guess that &#x201C;f0&#x201D;, &#x201C;f1&#x201D; and &#x201C;f2&#x201D; were loading some kind of address, with f2 as the high byte. When I pieced together some of the addresses, I found they pointed exactly at the start of constant strings in the data &#x2013; I had just found the &#x201C;print&#x201D; function!! This immediately implied that &#x201C;p5f3&#x201D; was actually some kind of print string or call instruction; given the three byte operand, a &#x201C;call&#x201D; was most likely. Looking again at all the &#x201C;p&#x201D; instructions, I realized that the three operand bytes represented a program address in <em>little-endian order</em> &#x2013; that is, the last operand byte was the most significant address byte.</p> <p>This was a huge breakthrough! We had figured out our first instruction. Seeing &#x201C;f0&#x201D; and &#x201C;f1&#x201D; used in some other places, I guessed that perhaps they weren&#x2019;t loading addresses &#x2013; instead, maybe they were loading one of the four registers (f0 loading register 0, for example) with 5-bit immediate constants. This would make sense for p5f3 &#x2013; it was loading three register arguments for the function 3f5 (&#x201C;print_string&#x201D;).</p> <p>I started writing a disassembler, which recognized the &#x201C;print&#x201D; idiom (f0x, f1x, f2x, p5f3), placing the printed string inline into the disassembly. Due to the sheer number of strings in the program, this quickly rendered the disassembly very readable, and it was easy to discern where the functional blocks were (full disassembly <a href="https://gist.github.com/nneonneo/fd9465283b7ad698d500bc019a374ec6">here</a>):</p> <pre class="wp-block-code"><code>0: call 38v
+4: call 7i
+8: call k
+c: call a7
+g: q vgf
+
+k: call 3gj
+o: print 83k # &apos;SELECT AN OPTION\x0e:\r\n\r\n\x0f\x00&apos;
+15: call 1v
+19: call 4k
+1d: call 6n
+1h: print 4ss # &apos;\r\nYOUR CHOICE\x0e: \x0f\x00&apos;
+1u: ret
+
+1v: unk 9
+20: unk c
+21: unk 1
+22: unk 1
+23: q 0da
+27: print 6ds # &apos;\x0e- \x0fGO \x0e(\x0fS\x0e)\x0fOUTH\r\n\x00&apos;
+2k: unk 9
+2l: unk c
+2m: unk 2
+2n: unk 1
+2o: q 0da
+2s: print 6f5 # &apos;\x0e- \x0fGO \x0e(\x0fN\x0e)\x0fORTH\r\n\x00&apos;
+39: unk 9
+3a: unk c
+3b: unk 4
+3c: unk 1
+3d: q 0da
+3h: print 6d8 # &apos;\x0e- \x0fGO \x0e(\x0fE\x0e)\x0fAST\r\n\x00&apos;
+3u: unk 9
+3v: unk c
+40: unk 8
+41: unk 1
+42: q 0da
+46: print 6eh # &apos;\x0e- \x0fGO \x0e(\x0fW\x0e)\x0fEST\r\n\x00&apos;
+4j: ret</code></pre> <p>Just from this little snippet of code, I was able to guess a few things: the &#x201C;q0&#x201D; instruction must represent some kind of conditional branch (because it&#x2019;s used to skip printing invalid directions in the 1v function), and the instructions &#x201C;9c11&#x201D;, &#x201C;9c21&#x201D;, &#x201C;9c41&#x201D;, &#x201C;9c81&#x201D; should represent some kind of AND instruction &#x2013; checking bits set to see if those directions are allowed (the use of &#x201C;1&#x201D;, &#x201C;2&#x201D;, &#x201C;4&#x201D; and &#x201C;8&#x201D; in these instructions is quite telling).</p> <p>For the next two hours, me and Zachary Wade (@zwad3) worked through the various instructions, making and refining our guesses as to what the instructions did. The presence of many readable print statements made our job a lot easier. We decided to each write our own disassembler so we could explore instructions at our own pace and just share our findings back and forth.</p> <h3>Reversing the Code</h3> <p>After a few hours, we were starting to make great progress on disassembly. By looking at the code that worked with the user&#x2019;s inventory (specifically, the &#x201C;drink&#x201D; function and every handler associated with it), we found memory store and load instructions (recall that there is 1 KiB of data memory attached to the CPU). We then worked out that certain arithmetic/logic (ALU) instructions took memory operands (e.g. &#x201C;9c41&#x201D; actually meant &#x201C;AND the value at data address 1 with the immediate 4&#x201D;). From there, we could reconstruct the variables that lived in data memory &#x2013; for example, [0] held the ID of the NPC at your current location, and [6,7] contained your current health (low 5 bits in [6], high 5 bits in [7]). At this point, I broke away from reversing instructions to start annotating my disassembly and reverse engineering the program itself. You can see my funny notation for 5-bit values (&#x201C;0y&#x2026;&#x201D;, a play on &#x201C;0x&#x201D;) below:</p> <pre class="wp-block-code"><code>_start:
+    call init
+
+L4:
+    call check_moves
+    call print_menu
+    call handle_command
+    br 4
+
+print_menu:
+    call print_itemname
+    print 83k # &apos;SELECT AN OPTION\x0e:\r\n\r\n\x0f\x00&apos;
+    call print_moves
+    call print_npcmenu
+    call print_itemmenu
+    print 4ss # &apos;\r\nYOUR CHOICE\x0e: \x0f\x00&apos;
+    ret
+
+print_moves:
+    and 0y1, [1]
+    brz 2k
+    print 6ds # &apos;\x0e- \x0fGO \x0e(\x0fS\x0e)\x0fOUTH\r\n\x00&apos;
+2k: and 0y2, [1]
+    brz 39
+    print 6f5 # &apos;\x0e- \x0fGO \x0e(\x0fN\x0e)\x0fORTH\r\n\x00&apos;
+39: and 0y4, [1]
+    brz 3u
+    print 6d8 # &apos;\x0e- \x0fGO \x0e(\x0fE\x0e)\x0fAST\r\n\x00&apos;
+3u: and 0y8, [1]
+    brz 4j
+    print 6eh # &apos;\x0e- \x0fGO \x0e(\x0fW\x0e)\x0fEST\r\n\x00&apos;
+4j: ret
+
+print_npcmenu:
+    add 0y0, [0]
+    brz 6m
+    sub 0y2, [0]
+    br&lt;c&gt; 5p
+    print 7o1 # &apos;\x0e- (\x0fT\x0e)\x0fALK TO \x00&apos;
+    call print_npcname
+    call print_crlf
+5p: sub 0y1, [0]
+    brz 6m
+    print 7n2 # &apos;\x0e- (\x0fF\x0e)\x0fIGHT \x00&apos;
+    call print_npcname
+    call print_crlf
+6m: ret
+
+print_itemmenu:
+    print 7nh # &apos;\x0e- (\x0fD\x0e)\x0fRINK\r\n\x00&apos;
+    print 765 # &apos;\x0e- \x0fSHOW \x0e(\x0fI\x0e)\x0fNVENTORY\r\n\x00&apos;
+    ret</code></pre> <p>There were still lots of unknown opcodes &#x2013; for example, while we figured out that &#x201C;qa&#x201D; was a conditional branch-on-zero (brz), we did not figure out what &#x201C;qc&#x201D; was (represented as br&lt;c&gt; above). But, it was enough to start figuring out the program logic.</p> <p>The game lets you basically walk around an 8&#xD7;8 map, in which NPCs (dragons, &#x201C;red bulls&#x201D; and people) are randomly placed. You can fight any NPC (even Valis, despite the lack of a menu option to do so). During a fight, you can attack your opponent, dealing random amounts of damage or missing, and your opponent then attacks you, again dealing random damage or missing. Alternatively, you can choose to shield, which causes the opponent&#x2019;s attack to either miss or hit your shield and do no damage. Finally, you can cheat, which sets your health to 1000, but also sets a hidden variable (&#x201C;cheated&#x201D;, address 10) to 1. If you successfully kill your opponent, they drop an item &#x2013; usually, a bottle of alcohol of some kind (clearly, not a kid-friendly game).</p> <p>Valis, the main NPC who you have to get a flag from, has a state machine in which he asks you for several items &#x2013; a bunch of red bull drinks (obtained by defeating red bull enemies, obviously), various mixed drinks (e.g. a gin and tonic, obtained by defeating a blue dragon and a gray dragon and mixing their drops), and a power strip, obtained by either defeating or helping the other human NPC in the game (Redford). If you finish his long series of requests, he gives you a flag &#x2013; but <em>only</em> if the &#x201C;cheated&#x201D; variable isn&#x2019;t set. So, our goal is to beat the game without cheating. Since you start with only 100 HP, the same as every enemy, if you play normally it will be impossible to beat every single enemy (you have to beat about 20 to get all items needed). You need to somehow rig the RNG so your opponent always misses.</p> <p>Random number generation is provided by a function which appears to be some kind of PRNG (address 37a), but it uses unique instructions that aren&#x2019;t used anywhere else, so we could not reverse it. However, we noted that it loads its state vector from three memory locations [11], [12] and [13], meaning that its full state is only 15 bits in size. This means that the RNG must have a short period &#x2013; no more than 2^15 = 32768 in length.</p> <p>Jay Bosamiya (@jay_f0xtr0t) and Matthew Savage (@thebluepichu) implemented the exploit while I was still attempting (futilely) to reverse the RNG implementation. By simply sending the command &#x201C;shield&#x201D; 100,000 times in a row, we were able to get a sequence of enemy &#x201C;hits&#x201D; and &#x201C;misses&#x201D; which corresponded to the bits output by the RNG. We confirmed that this sequence repeated with a period of 32767. Thus, we were able to build our master exploit &#x2013; at the first enemy we encountered, we shielded 40 times to recover a sequence of hits and misses, searched for the sequence in the big periodic sequence, and then figured out when to shield and when to attack such that the enemy always missed. We simply then walked around the map in <a href="https://en.wiktionary.org/wiki/murderhobo">murderhobo</a> mode, killing everything and taking their loot. Finally, we returned to Valis and asked nicely for the flag, which we received:</p> <pre class="wp-block-code"><code>DrgnS{m4kin9-v4lis-happy-w1th-n4t1ve-b4ud0t-cpu}</code></pre> <p>Whew! What an adventure, indeed. I still can&#x2019;t quite believe that we went from a binary string and zero documentation on the CPU to two nearly-complete disassemblers and nice, clean disassembly code in less than 10 hours! See GitHub for all the code: <a href="https://gist.github.com/nneonneo/8546fb794ac0b65b5a2c3daa9ad0e079#file-03_disas-py">my disassembler</a>, <a href="https://gist.github.com/zwade/d63141544243eab5372a2d8c3023bd54">Zach&#x2019;s disassembler</a>, <a href="https://gist.github.com/nneonneo/8546fb794ac0b65b5a2c3daa9ad0e079#file-04_disas-txt">my raw disassembly</a>, <a href="https://gist.github.com/nneonneo/8546fb794ac0b65b5a2c3daa9ad0e079#file-05_disas-annotated-txt">my annotated disassembly</a>, <a href="https://gist.github.com/bluepichu/d18065b547eeb106bbefc95b3df0a6b3">Matt&#x2019;s exploit client</a>.</p> </main>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
