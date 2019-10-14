@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Wielding CoreCLR 3.0 Intrinsics to Beat Array.Sort() -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Wielding CoreCLR 3.0 Intrinsics to Beat Array.Sort()</h1>
+    <div class="reveal"> <p class="slides"> <section> <aside class="notes">
+Hi Everyone,
+This is CoreCLR 3.0 Intrinsics
+</aside> </section> <section> <p>When you see the following thingy, you can touch/hover above it to trigger animations that are part of this deck: </p> </section> <section> <section> <aside class="notes">
+<p>So you know those talks where the person on stage has these hopeful messages filled with positivity?
+So I want to do the eastern-european version of my anscestors of that: Where a total stranger walks up
+to you and tells you that everything is horrible and everything is falling apart&#x2026;
+And then offers you a small glimpse of hope.</p>
+</aside> </section> <section> <img width="150%" class="plain" src="single-threaded-perf-computer-arch.svg">
+<p><span>From: &quot;Computer Architecture: A Quantitative Approach, 6<sup>th</sup> Edition</span></p>
+<aside class="notes">
+<p>So: Here is the last 40 years of single threaded performance improvemnets.
+After a first happy couple of decades, at 2003, we&#x2019;re start seeing an ever increasing
+slowdown in this rate, even thogh transistor density has been doubling all the way
+till 2015 until we reach our current time, which is the dark ages at 3.5% per year.</p>
+<p>Now, no one knows for sure what the future holds,
+But I think we can all agree that the present sucks.</p>
+<ul>
+<li>
+<p>Dennard observes that transistor dimensions are scaled by 30% (0.7x) every technology generation, thus reducing their area by 50%. This reduces the delay by 30% (0.7x) and therefore increases operating frequency by about 40% (1.4x). Finally, to keep the electric field constant, voltage is reduced by 30%, reducing energy by 65% and power (at 1.4x frequency) by 50%.[note 1] Therefore, in every technology generation the transistor density doubles, the circuit becomes 40% faster, and power consumption (with twice the number of transistors) stays the same.</p>
+</li>
+<li>
+<p>Amdahl&#x2019;s law can be formulated in the following way:
+${\displaystyle S_{\text{latency}}(s)={\frac {1}{(1-p)+{\frac {p}{s}}}}}$</p>
+<p>where:</p>
+<ul>
+<li>$S_{\text{latency}}$ is the theoretical speedup of the execution of the whole task;</li>
+<li>s is the speedup of the part of the task that benefits from improved system resources;</li>
+<li>p is the proportion of execution time that the part benefiting from improved resources originally occupied.</li>
+</ul>
+</li>
+</ul>
+</aside> </section> <section> <blockquote>
+<span class="fragment fade-down">
+&quot;The reason processor performance is sub-linear with transistor count is <span class="fragment fade-down">[because] it&apos;s limited by <b>unpredictability</b>:</span>
+<span class="fragment fade-in">Branch predictability,</span><span class="fragment fade-in"> Data-predictability,</span> <span class="fragment fade-in"> Instruction predictability.&quot;</span>
+</span>
+</blockquote>
+<p><a href="https://en.wikipedia.org/wiki/Jim_Keller_(engineer)">Jim Keller</a>
+From: <a href="https://youtu.be/oIG9ztQw2Gc?t=1788">Moore&#x2019;s Law is Not Dead</a></p>
+<aside class="notes">
+But I did say I also have some hope to offer you:
+<p>This is a quote by Jim Keller who is a famous CPU architecht,
+Who gave this ironically titled talk: &#x201C;Moore&#x2019;s law is not dead&#x201D;, where he says
+that the reason for this slowdown, is unpredictability:
+branch, data, and instrunction unpredictability.</p>
+<p>So the flip-side of this, is my message of hope to you: that by providing the CPU with predictability
+we can definitely improve our odds at running code faster, and a very effective
+way of doing this is with intrinsics&#x2026;</p>
+</aside> </section> <section> <ul>
+<li>A single core executes hundreds of instructions at any given moment&#x2026;</li>
+<li class="fragment">To do this, the CPU has to guess the target of branches!
+<ul>
+<li class="fragment">It usually does a good job </li>
+</ul>
+</li>
+<li class="fragment">But when it fails we get penalized <ul>
+<li class="fragment">~15 cycles for a single mis-prediction! </li>
+</ul>
+</li>
+</ul>
+<aside class="notes">
+<p>A modern CPU is processing hundreds of instructions in some form or another
+at any given moment.</p>
+<p>To pull this crazy feat, it has to guess the result of the conditions in our code.
+So every if, while etc. has to be predicted, for the CPU not to be out of work.</p>
+<p>Normally, it can do a pretty good job at this.
+But it can&#x2019;t always be successful.
+I magine that we feed it with purely random data.
+It won&#x2019;t do any better than flipping a coin.</p>
+<p>Every time it fails, the penalty is huge: 15 cycles on a modern Intel CPU for example.
+To make it worse, in many cases, the code behind that branch is 1-2 cycles long&#x2026;</p>
+</aside> </section> <section> <p>Now that I&#x2019;ve got you <s>scared</s> motivated enough&#x2026;</p>
+<p>Let&#x2019;s get busy!</p>
+<aside class="notes">
+So now that you&apos;re scared...
+</aside> </section> </section> <section> <section> <p>A way to directly embed <strong>specific</strong> CPU instructions via special, <em>fake</em> method calls that the JIT replaces at code-generation time</p>
+<aside class="notes">
+What are these intrinsics we&apos;re going to fix the world with?
+<p>Simply speaking, intrinsics are fake functions we call in our code, that the JIT
+will replace, for us, with a very specific 1-2 CPU instructions. So you can think of a
+bit like writing assembly code through function calls&#x2026;</p>
+<p>But why do we need it?</p>
+</aside> </section> <section> <p>Used to expose processor functionality that <em>doesn&#x2019;t</em> map well to the language:</p>
+<ul>
+<span class="fragment"><li>Atomic operations</li></span>
+<span class="fragment"><li>System-Programming (e.g. kernel mode)</li></span>
+<span class="fragment"><li>Crypto instructions</li></span>
+<span class="fragment"><li>Niche instructions</li></span>
+<span class="fragment"><span class="fragment highlight-blue"><span class="fragment highlight-green"><span class="fragment highlight-red"><li><b>Vectorization</b></li></span></span></span></span><span class="fragment"> - Instructions that work on vectors</span>
+</ul>
+<aside class="notes">
+Traditionally, CPUs always had lot of functionality that can&apos;t be mapped easily
+into our programming languages, There are about 1,200 intrinsics in Intel CPUs alone, and
+they cover this entire gamut, but if we&apos;re honest, it all comes down to vectorization.
+That&apos;s about 96% of those 1,200 on Intel CPUs!
+</aside> </section> <section> <p class="fragment">Usually 1-3 CPU cycles!</p> </section> </section> <section> <section> <p>I needed to sort numbers, and really fast.</p>
+<p class="fragment zoom">
+&quot;Eh, I&apos;ll rewrite <span class="fragment fade-in">Array.Sort<sup>*</sup>.</span>
+<span class="fragment fade-out">QuickSort.</span>
+<span class="fragment fade-down">With intrinsics...</span>
+<span class="fragment fade-down">How bad could it be?&quot;</span>
+</p>
+<p class="fragment zoom">
+<i>5 months later, and I&apos;m still at it...</i>
+</p>
+<span class="fragment fade-up">
+<b>But,</b>
+</span>
+<aside class="notes">
+Let&apos;s go and sort some numbers!
+<p>So, a while back I decided I&#x2019;d tackle a problem that both close to my heart
+and my line of work&#x2026;</p>
+<p>I thought to my self, &quot;I&#x2019;ll re-write quicksort, or really Array.Sort, because they&#x2019;re
+very close to eachother. With intrinsics! I mean, really, how bad could it be?</p>
+<p>So, that was 5 months ago! And I&#x2019;m still having way too much fun with this&#x2026;</p>
+<p>But, I can share here something with you, thats&#x2026;</p>
+</aside> </section> <section> </section> <section> <aside class="notes">
+6x faster!
+</aside> </section> <section> <img class="plain" src="cats/cat1.gif">
+<img class="plain" src="cats/cat2.gif">
+<img class="plain" src="cats/cat3.gif">
+<img class="plain" src="cats/cat4.gif">
+<img class="plain" src="cats/cat5.gif"> </section> <section> <ul>
+<li class="fragment">Universally known </li>
+<li class="fragment fade-down">Non-trivial use of intrinsics </li>
+<li class="fragment fade-up">Pretty close to <code>Array.Sort</code><sup>*</sup> </li>
+</ul>
+<aside class="notes">
+Now if you think you kind of remember how quicksort works, could you raise your hand and keep it up?
+<p>Great, now those of you who&#x2019;ve implemented it, even if you were drunk and it was 20 years ago, can you keep you hand up?</p>
+<p>OK!</p>
+<p>So, as you can see, it&#x2019;s universally known.</p>
+<p>Also, as we&#x2019;ll see, this will be a non-trivial use of intrinsics.
+It&#x2019;s not one of those &quot;Let&#x2019;s sum all the numbers in a array in 5 lines of code, then pat ourselves on the shoulder to say &#x201C;good job&#x201D; and move on&#x2026;</p>
+<p>And finally, as I&#x2019;ve mentioned, our baseline for comparison isn&#x2019;t something we copy-pasted from stack-overflow, it&#x2019;s the actual
+code we all rely on in the class libraries for .NET</p>
+</aside> </section> <section> <ul>
+<li>QuickSort uses a <em>divide-and-conquer</em> approach </li>
+<li class="fragment fade-down">Has average O(<em>n</em> log <em>n</em>) comparisons for <em>n</em> items </li>
+<li class="fragment fade-up">Performs an in-place sort </li>
+</ul>
+<aside class="notes">
+So, a quick refresher about quicksort:
+<p>It uses a divide an conquer approach. So it&#x2019;s recursive
+Has n*log(n) comparisons to sort N items</p>
+<p>And most importantly, it&#x2019;s an in-place sort, so we don&#x2019;t need to allocate more memory
+to sort numbers.
+This last point, as we&#x2019;ll see, it great for users, but is going to haunt me&#x2026;</p>
+</aside> </section> <section> <ol>
+<li>Pick a <em>pivot</em> value</li>
+<li class="fragment highlight-red">Partition the array around the pivot value</li>
+<li>Recurse on the left side of the pivot</li>
+<li>Recurse on the right side of the pivot</li>
+</ol>
+<aside class="notes">
+So in quicksort we:
+<ol>
+<li>Pick a pivot: which really means pick some number from the array. can really be anything</li>
+<li>Re-arrange the array so that all the numbers on the left are smaller than the pivot,
+Then we have the pivot, in its final resting place, and then all the numbers larger that
+the pivot! This is really the big thing we will be working on, since other than that we simple:</li>
+<li>Recurse on the left hand side of the new pivot position</li>
+<li>And finally recurse on the right hand side.</li>
+</ol>
+<p>It&#x2019;s that simple!</p>
+</aside> </section> <section> <p>To grasp better how/why it works, we&#x2019;ll use visualizations made by @mbostock, where:</p>
+<img class="plain" src="quicksort-mbostock/quicksort-vis-legend.svg">
+<img class="plain" src="quicksort-mbostock/quicksort-vis-sorted.svg">
+<aside class="notes">
+Now, I also wanted to put some visuals for this, so in the next couple of slides, I will use these
+visualizations by michael bostock, where this messy pile of sticks on the top row represents our unsorted array
+where each stick&apos;s angle, from -45 to +45 degrees repesents the number in our array.
+<p>Whenever we select a pivot we&#x2019;ll assign it a red color, and by the next row that pivot will move and the
+array will be partitioned around it!</p>
+</aside> </section> <section> </section> <section> <small>
+<table>
+<thead>
+<tr>
+<th>Stat</th>
+<th>100</th>
+<th>1K</th>
+<th>10K</th>
+<th>100K</th>
+<th><strong>1M</strong></th>
+<th>10M</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Max Depth</td>
+<td>8</td>
+<td>14</td>
+<td>21</td>
+<td>28</td>
+<td><strong>35</strong></td>
+<td>42</td>
+</tr>
+<tr>
+<td># Partitions</td>
+<td>33</td>
+<td>342</td>
+<td>3,428</td>
+<td>34,285</td>
+<td><strong>342,812</strong></td>
+<td>3,428,258</td>
+</tr>
+<tr>
+<td># Comparisons</td>
+<td>422</td>
+<td>6,559</td>
+<td>89,198</td>
+<td>1,128,145</td>
+<td><strong>13,698,171</strong></td>
+<td>155,534,152</td>
+</tr>
+</tbody>
+</table>
+</small>
+<aside class="notes">
+I also collected some stats from running quick-sort,
+And for example, for 1M elements, in this table you can see
+how deep the recursion is, how many calls to the partition function there are
+and how many comparisons are involved, and it&apos;s clear there is a lot of work involved here.
+</aside> </section> <section> <pre><code class="language-csharp">int Partition(int[] array, int pivot, int left, int right)
+{
+    while (left &lt;= right) {
+        while (array[left] &lt; pivot) left++;
+        while (array[right] &gt; pivot) right--;
+
+        if (left &lt;= right) {
+            var t = array[left];
+            array[left++]  = array[right];
+            array[right--] = t;
+        }
+    }
+    return left;
+}
+</code></pre>
+<p><span class="code-presenting-annotation fragment current-only">Branches, Branches Everywhere! </span>
+<span class="code-presenting-annotation fragment current-only">&#x1F44E; Unpredictable &#x1F44E;</span>
+<span class="code-presenting-annotation fragment current-only">&#x1F44D; Predictable &#x1F44D;</span></p>
+<aside class="notes">
+Finally, before moving on to intrinsics: Here&apos;s the code for a pretty standard partition function.
+<p>We can see that it scan the array from left to right, comparing and swapping elements.</p>
+<p>It&#x2019;s easy to see there are 4 branches in this function.
+But&#x2019;s they&#x2019;re not the same.
+These two, are pretty horrible, as we&#x2019;re branching based on actual, unsorted, so called random data
+that we were tasked to sort&#x2026; So these are pretty bad for the CPU to predict, if we remember our observation
+about unpredictability!</p>
+<p>On the other hand, these two branches are rather easy to predict, since they&#x2019;re simply
+true, 99% of the time.</p>
+</aside> </section> </section> <section> <section> <p>Redo <code>Partition</code> with vectorized intrinsics.</p>
+<ul>
+<li>What intrinsics do we use?</li>
+<li>How do they work?</li>
+</ul>
+<aside class="notes">
+So our plan, is obviously to use vectorized or SIMD intrinsics to
+rewrite the partition function we saw before.
+<p>But what are those? How to they work?</p>
+</aside> </section> <section> <p>How can an instruction operate on a vector?</p>
+<p class="fragment fade-down">Does it operate <i>directly</i> on memory?</p>
+<p class="fragment fade-up">Generally: <b>No!</b> </p>
+<aside class="notes">
+What does it really mean vectorized instruction?
+<p>Do these instruction simply take a pointer to memory?</p>
+<p>So, in general: No!</p>
+<p>Instead:</p>
+</aside> </section> <section> <p class="fragment">
+These intruction operate on <i>special</i> vector types that are supported at the CPU level: <span class="fragment">registers</span>
+</p>
+<p class="fragment">
+Vector registers have constant size (in bits).
+</p>
+<aside class="notes">
+All of these instruction accept and/or return special vector types, at the CPU level.
+So really: registers!
+<p>The registers have a constant width in bits, let&#x2019;s look at what&#x2019;s there:</p>
+</aside> </section> <section> <p>C# vectorized intrinsics accept and return these types:</p>
+<ul>
+<li><a href="https://github.com/dotnet/coreclr/blob/master/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/Vector64_1.cs"><code>Vector64&lt;T&gt;</code></a></li>
+<li><a href="https://github.com/dotnet/coreclr/blob/master/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/Vector128_1.cs"><code>Vector128&lt;T&gt;</code></a></li>
+<li><a href="https://github.com/dotnet/coreclr/blob/master/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/Vector256_1.cs"><code>Vector256&lt;T&gt;</code></a></li>
+</ul>
+<p>Where <code>T</code> is some primitive type.</p>
+<aside class="notes">
+So in CoreCLR, we have these 3 vector types: Vector 64, 128, and 256 of T.
+These are special types recognized by the JIT, just like int or double are special.
+</aside> </section> <section> <p><code>Vector256&lt;T&gt;</code> can be:</p>
+<table class="fragment">
+<tr><td><code>byte / sbyte</code></td> <td>&#x2B9A;</td> <td>32 x 8b</td><td> == 256b</td></tr>
+<tr><td><code>short / ushort</code></td><td>&#x2B9A;</td> <td>16 x 16b</td><td> == 256b</td></tr>
+<tr>
+<td><code>int / uint</code></td>
+<td>&#x2B9A;</td> <td>8 x 32b</td>
+<td>== 256b</td></tr> <tr><td><code>long / ulong</code></td> <td>&#x2B9A;</td> <td>4 x 64b</td><td> == 256b</td></tr>
+<tr><td><code>float</code></td> <td>&#x2B9A;</td> <td>8 x 32b</td><td> == 256b</td></tr>
+<tr><td><code>double</code></td> <td>&#x2B9A;</td> <td>4 x 64b</td><td> == 256b</td></tr>
+</table>
+<aside class="notes">
+Let&apos;s take 256 as an example, since we&apos;ll use it for the rest of the talk:
+<p>As you can see, we can use all these various primitive types instead of T, and then we get anywhere
+from 32 down to 4 elements per such vector! But in all cases, we will end up with 256 bits in total
+which is the size of the vector.</p>
+</aside> </section> <section> <p>For this talk we need 7 intrinsics,
+Let&#x2019;s go over them!</p>
+<aside class="notes">
+For the rest of this talk we&apos;ll use these 7 intrinsics.
+<p>Let&#x2019;s get to know our new lego blocks before we build a frankenstein out of them&#x2026;</p>
+</aside> </section> <section> <ul>
+<li>Accepts a single primitive value</li>
+<li>Returns a vector where all elements &#x2B98; value</li>
+<li>Scalar &#x2B9A; Vector</li>
+</ul>
+<aside class="notes">
+First one is the simplest, we take a single value, and &quot;transmit&quot; it to the entire vector
+</aside> </section> <section> <p>C#:</p>
+<pre><code class="language-csharp">Vector256&lt;int&gt; someVector256 = Vector256.Create(0x42);
+</code></pre>
+<p>asm:</p>
+<pre><code class="language-x86asm">vmovd  xmm0, rax          ; 3 cycle latency
+                          ; 1 cycle throughput
+vpbroadcastd ymm0, xmm0   ; 3 cycle latency
+                          ; 1 cycle throughput
+</code></pre> <aside class="notes">
+<ul>
+<li>On the top here, we see how we call it from C#, looks like a innocent function call</li>
+<li>The below it, we see this translates into 2 instructions for this intrinsic.</li>
+<li>And finally below that, I can show you a nifty animation of what happens when we fire this baby.</li>
+</ul>
+</aside> </section> <section> <ul>
+<li>Takes a pointer to an array of primitives</li>
+<li>Load reads a vector with copied data <em>from</em> memory</li>
+<li>Store writes a vector <em>into</em> memory</li>
+</ul>
+<aside class="notes">
+Next are two of the few intrinsics that actually work directly with memory, unsurisingly that&apos;s the load and store
+pair:
+- one reads from memory into the CPU registers or vector types
+- the other writes.
+</aside> </section> <section> <p>C#:</p>
+<pre><code class="language-csharp">int *ptr = ...; // Get some pointer to a big enough array
+Vector256&lt;int&gt; data = Avx2.LoadDquVector256(ptr);
+Avx.Store(ptr, data);
+</code></pre>
+<p>asm:</p>
+<pre><code class="language-x86asm">vlddqu  ymm1,  [rdi] ; 5 cycle latency +
+vmovdqu [r12], ymm1  ; cache/memory
+                     ; 0.5 cycle throughput
+</code></pre> <aside class="notes">
+<ul>
+<li>Again, C# on the top: We provide a pointer and get a Vector back</li>
+<li>Then asm in the middle: vlddqu is for read, vmovdqu for write in this case</li>
+<li>And finally, the animation</li>
+<li>Think about this in terms of in terms of predictability, we providing a lot of work in one instruction!</li>
+</ul>
+</aside> </section> <section> <ul>
+<li>Compares 2 vectors element by element</li>
+<li>Returns a 3<sup>rd</sup> vector where:
+<ul>
+<li><em>Greater than</em> elements are marked with <code>-1</code></li>
+<li><em>Smaller than -or- equal</em> are marked as <code>0</code></li>
+</ul>
+</li>
+</ul>
+<aside class="notes">
+The first two ones were warm up, this is where it&apos;s about to get weird:
+We take two vectors and compare them to each other element by element.
+The result is a 3<sup>rd</sup> vector with either -1 or 0 as the result
+</aside> </section> <section> <p>C#:</p>
+<pre><code class="language-csharp">Vector256&lt;int&gt; data, comparand;
+Vector256&lt;int&gt; result =
+    Avx2.CompareGreaterThan(data, comparand);
+</code></pre>
+<p>asm:</p>
+<pre><code class="language-x86asm">vpcmpgtd ymm2, ymm1, ymm0 ; 1 cycle latency
+                          ; 0.5 cycle throughput
+</code></pre> <aside class="notes">
+- Pretty simple C# call
+- Which translates to one assembly instruction
+- And we can see how this unfolds in the animation...
+- What&apos;s worth while to mention here is that we are compare 8 elements to another 8 - In 1 cycle! - And get 8 results
+- Again think about this in terms of expressin predictability
+</aside> </section> <section> <ul>
+<li>Set each bit of the result based on the MSB of the corresponding 32-bit element</li>
+<li>Reverse of broadcat, for the MSB</li>
+<li>Vector &#x2B9A; Scalar</li>
+</ul>
+<aside class="notes">
+<p>Now we start &#x201C;chaining&#x201D; these intrinsics together.<br>
+With <code>MoveMask</code>, we get to do an interesting vector to scalar operation,
+where we take the MSB from 8 elements, and move them to a scalar value we can use
+in non-vectorized code!</p>
+</aside> </section> <section> <p>C#:</p>
+<pre><code class="language-csharp">Vector256&lt;int&gt; data;
+int result = Avx.MoveMask(data.AsSingle());
+</code></pre>
+<p>asm:</p>
+<pre><code class="language-x86asm">vmovmskps rax, ymm2  ; 5 cycle latency
+                     ; 1 cycle throughput
+</code></pre> <aside class="notes">
+<ul>
+<li>Pretty simple C# call, if you ignore that weird <code>.AsSingle()</code> in there which
+we have to shove there to make the compiler shut up</li>
+<li>Even simpler asm</li>
+<li>And easy to figure animation&#x2026;</li>
+</ul>
+</aside> </section> <section> <ul>
+<li>Counts # of &#x2018;1&#x2019; bits in a 32/64 bit primitive</li>
+</ul>
+<p>C#:</p>
+<pre><code class="language-csharp">
+int result = PopCnt.PopCount(0b0000111100110011);
+// result == 8
+</code></pre>
+<p>asm:</p>
+<pre><code class="language-x86asm">popcnt rax, rdx  ; 3 cycle latency
+                 ; 1 cycle throughput
+</code></pre>
+<aside class="notes">
+<p>Here&#x2019;s a super simple one, that I didn&#x2019;t even bother to animate&#x2026;
+We simply perform a population count, and get the total number of <code>1</code> bits in a 32/64 bit value.</p>
+<p>So pretty easy to see it&#x2019;s 8 in this example.</p>
+</aside> </section> <section> <ul>
+<li>Accepts two vectors: source, permutation</li>
+<li>Permutes the source according to the permutation order</li>
+</ul>
+<aside class="notes">
+<p>Finally, I saved the most trippy instruction for the end: a 8 wau permute, or in other words:
+A single instruction that re-arranges a 8-element Vector256 according to some order we provide it with</p>
+</aside> </section> <section> <p>C#:</p>
+<pre><code class="language-csharp">Vector256&lt;int&gt; data, perm;
+Vector256&lt;int&gt; result = Avx2.PermuteVar8x32(data, perm);
+</code></pre>
+<p>asm:</p>
+<pre><code class="language-x86asm">vpermd ymm1, ymm2, ymm1 ; 3 cycles latency
+                        ; 1 cycles throughput
+</code></pre> <aside class="notes">
+<ul>
+<li>There&#x2019;s little to say here on the C#</li>
+<li>Or the assembly</li>
+<li>But this is a clear &#x201C;one picture is worth 1000 words&#x201D; type of situation.</li>
+</ul>
+</aside> </section> <section> <ul>
+<li>We&apos;re going to partition 8 x <code>int</code>s at a time</li>
+<span class="fragment fade-up"> </span>
+<span class="fragment fade-up"><li>Load <span class="fragment fade-up">&#x2B9A; Compare <span class="fragment fade-up">&#x2B9A; Permute <span class="fragment fade-up">&#x2B9A; Store</span></span></span></li>
+</span></ul> </section> <section> </section> <section> <ul>
+<li><code>mask</code> tells us which element goes where!</li>
+<li class="fragment fade-down">We could loop over the bits in the mask <ul>
+<li class="fragment fade-down">Back to square one: 8-branches </li>
+</ul>
+</li>
+<li class="fragment fade-up">I did not fly all the way to Poland for this!</li>
+</ul> </section> <section> <ul>
+<li>There are 256 possible mask values (2<sup>8</sup>)</li>
+<li class="fragment">We can precompute all permutations in a table </li>
+<li class="fragment">Each permutation entry will provide the correct order
+for a given mask </li>
+<li class="fragment">The table is simply part of the source code </li>
+</ul> </section> <section> <pre><code class="language-csharp">static int[] PermTable =&gt; new[] {
+    0, 1, 2, 3, 4, 5, 6, 7,     // 0   =&gt; 0b00000000
+    // ...
+    3, 4, 5, 6, 7, 0, 1, 2,     // 7   =&gt; 0b00000111
+    // ...
+    0, 2, 4, 6, 1, 3, 5, 7,     // 170 =&gt; 0b10101010
+    // ...
+    0, 1, 2, 3, 4, 5, 6, 7,     // 255 =&gt; 0b11111111
+};
+</code></pre>
+<p><span class="code-presenting-annotation fragment current-only">Everything stays in place</span>
+<span class="code-presenting-annotation fragment current-only">Move 3 from left to right</span>
+<span class="code-presenting-annotation fragment current-only">4/4 split</span></p> </section> <section> </section> <section> <pre><code class="language-csharp">var P = Vector256.Create(pivot);
+...
+var current = Avx2.LoadDquVector256(nextPtr);
+var mask = (uint) Avx.MoveMask(
+    Avx2.CompareGreaterThan(current, P).AsSingle()));
+current = Avx2.PermuteVar8x32(current,
+    LoadDquVector256(PermTablePtr + mask * 8));
+Avx.Store(writeLeft, current);
+Avx.Store(writeRight, current);
+var popCount = PopCnt.PopCount(mask);
+writeRight -= popCount;
+writeLeft  += 8 - popCount;
+</code></pre>
+<p><span class="code-presenting-annotation fragment current-only">We generate a vectorized pivot, once per partition</span>
+<span class="code-presenting-annotation fragment current-only">Load 8 elements from somewhere.</span>
+<span class="code-presenting-annotation fragment current-only">Compare to pivot, cast to <code>Vector256&lt;float&gt;</code> (because <code>&#xAF;\<em>(&#x30C4;)</em>/&#xAF;</code>)</span>
+<span class="code-presenting-annotation fragment current-only">Generate an 8-bit mask from the comparison result</span>
+<span class="code-presenting-annotation fragment current-only">Load permutation vector from table (next slides!)</span>
+<span class="code-presenting-annotation fragment current-only">Permute data (partition)</span>
+<span class="code-presenting-annotation fragment current-only">Store 8 elements to the left.</span>
+<span class="code-presenting-annotation fragment current-only">Store 8 elements to the right.</span>
+<span class="code-presenting-annotation fragment current-only">Count 1 bits &#x2B9A; How many are elemenets are &gt; than pivot.</span>
+<span class="code-presenting-annotation fragment current-only">Advance right by popCount.</span>
+<span class="code-presenting-annotation fragment current-only">Advance left by 8 - popCount.</span>
+<span class="code-presenting-annotation fragment current-only">8.5 cycle throughput</span></p>
+<aside class="notes">
+From the top:
+<ul>
+<li>We start with creating a vectorized pivot value, once per partition call</li>
+<li>Somewhere, insdie a loop body we will shortly discuss, we continue to:
+<ul>
+<li>Load data</li>
+<li>Compare it to the vectorized pivot 8-elements at a time</li>
+<li>Compress the result back to a regular integer</li>
+<li>Use that to load a pre-fabricate permutation entry! (which we will discuss)</li>
+<li>Call the permutation intrinsic with our data and new order</li>
+<li>Store all 8 elements to the left side</li>
+<li>Store them again(!) to the right side</li>
+<li>Call PopCount() to get the number of elements INSIDE our vector that belonged to the right!</li>
+<li>Update the next write pointers using that pop count value!</li>
+</ul>
+</li>
+</ul>
+</aside> </section> <section> <aside class="notes">
+<p>So we finally have enough explosive to blow this joint!</p>
+<p>We are going to read and partition 8 elements, at a time, within a vector256 inside the CPU!</p>
+<p>Load, Compare, Permute, Write</p>
+<p>But once we finish partitioning, we have, in our vector both elements larger and smaller,
+So we write the resulting vector to BOTH sides of our original array!</p>
+<p>We&#x2019;ll see that in a moment, but let&#x2019;s look at the code first</p>
+</aside> </section> <section> <ul>
+<li>The idea is we handle 8 ints every iteration</li>
+<li class="fragment fade-down">Then write 8 <strong>both</strong> to left + right </li>
+<li class="fragment fade-down">How can we keep everything in place? </li>
+<li class="fragment fade-up">Remember allocation is <span>bad</span></li>
+</ul> </section> <section> <ul>
+<li>We &#x201C;cheat&#x201D; just a bit: <code>&#xAF;\<em>(&#x30C4;)</em>/&#xAF;</code></li>
+<li class="fragment"><code>stackalloc Vector256&lt;int&gt;[2]</code> </li>
+<li class="fragment fade-down">Total temp memory: 64 bytes <ul>
+<li class="fragment fade-up">Constant </li>
+<li class="fragment fade-up">No matter how much we sort </li>
+</ul>
+</li>
+</ul> </section> <section> </section> <section> <canvas>
+<p>N,100,1K,10K,100K,1M,10M
+ArraySort, 1 , 1 , 1, 1 , 1 , 1
+AVX2DoublePumpedNaive, 1.149425287,	1.666666667,	1.724137931,	2.564102564,	2.702702703,	2.702702703,</p> </canvas> </section> </section> <section> <p>We can and <em>should</em> re-approach even age old problems to find ways
+to increase the predictablity of our code by using instrinsics!</p>
+<p class="fragment">This is now available to us in C#/.NET as part of CoreCLR 3.0.</p>
+<p class="fragment">Be nice to your CPUs!</p>
+<aside class="notes">
+<p>Also, while I could not possible show it in this talk, there are many more optimizations
+that I ended up , and probably more in the future all had to do with fighting this
+monster that is hiding in plain sight insid our code.</p>
+</aside> </section> <section> </section> </p> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
