@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Building a Custom Router for Blazor -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Building a Custom Router for Blazor</h1>
+    <div class="post-content"> <p>In this post we are going to build a simple custom router component which will replace the default router Blazor ships with. I just want to say from the start that this isn&apos;t meant to be an all singing all dancing replacement for the default router. The default router is quite sophisticated and replicating all that functionality is a bit much for a blog post. Hopefully though, this will give you an idea of what&apos;s possible and maybe provide some inspiration.</p><p>To help guide things a bit, I want to set a few requirement for our new router, they are:</p><ul><li>Convention based routing - no <code>@page</code> directive to be used</li><li>Should be able to handle nested routes e.g. <code>/nested/mycomponent</code></li><li>Parameters to be passed via query string e.g. <code>/counter?startingCount=4</code></li><li>Only support string parameters</li><li>Still allow external links to work</li><li>Re-use code from the default router where possible</li></ul><blockquote>All code from this post is <a href="https://github.com/chrissainty/BuildingACustomRouterForBlazor">available on GitHub</a></blockquote><h2 id="the-plan">The Plan</h2><p>With the requirements set, let&apos;s start by creating a plan for how our new router will work. </p><p>The first requirement is that is should be convention based and not use the <code>@page</code> directive. In order to achieve this we are going to use namespaces to define a page component. Taking the default project as a base, we&apos;ll assume any components in the <code>ProjectName.Pages.*</code> namespace are page components.</p><p>Taking this approach should also allow us to achieve the second requirement, handling nested routes. If a user requests <code>https://coolblazorapp.com/admin/settings</code>, we will look for a component called <code>Settings.razor</code> in the following namespace <code>ProjectName.Pages.Admin</code>.</p><p>As we&apos;ll be passing parameters via the query string and only be supporting strings, we&apos;ll have to deal with type conversions somehow. We can do this by using the getter and setter on the target parameters to convert incoming values to the correct type. Not very pretty, but it should work for our scenario.</p><p>Allowing external links to work should come for free. If you read <a href="https://chrissainty.com/an-in-depth-look-at-routing-in-blazor/">last weeks blog post</a> you&apos;ll know why. Blazor&apos;s JavaScript <code>NavigationManager</code> should handle this requirement for us.</p><p>We shouldn&apos;t have to reinvent the wheel when it comes to rendering page components. Once we have located the correct page component, based on our convention, we should be able to render it using the same <code>Found</code> and <code>NotFound</code> template approach which is used in the default router. We should also be able to use the existing <code>RouteView</code> and <code>LayoutView</code> components as well. That takes care of our final requirement to reuse any existing code, if possible.</p><p>I think that&apos;s everything covered, so lets get into the code.</p><h2 id="creating-the-new-router">Creating The New Router</h2><p>We&apos;re going to start by creating the new router component, named <code>ConventionRouter</code>. This is going to be defined as a C# class, the same as the default router is. Here is the full code.</p><pre><code class="language-csharp">public class ConventionRouter : IComponent, IHandleAfterRender, IDisposable
+{
+    RenderHandle _renderHandle;
+    bool _navigationInterceptionEnabled;
+    string _location;
+
+    [Inject] private NavigationManager NavigationManager { get; set; }
+    [Inject] private INavigationInterception NavigationInterception { get; set; }
+    [Inject] RouteManager RouteManager { get; set; }
+
+    [Parameter] public RenderFragment NotFound { get; set; }
+    [Parameter] public RenderFragment&lt;RouteData&gt; Found { get; set; }
+
+    public void Attach(RenderHandle renderHandle)
+    {
+        _renderHandle = renderHandle;
+        _location = NavigationManager.Uri;
+        NavigationManager.LocationChanged += HandleLocationChanged;
+    }
+
+    public Task SetParametersAsync(ParameterView parameters)
+    {
+        parameters.SetParameterProperties(this);
+
+        if (Found == null)
+        {
+            throw new InvalidOperationException($&quot;The {nameof(ConventionRouter)} component requires a value for the parameter {nameof(Found)}.&quot;);
+        }
+
+        if (NotFound == null)
+        {
+            throw new InvalidOperationException($&quot;The {nameof(ConventionRouter)} component requires a value for the parameter {nameof(NotFound)}.&quot;);
+        }
+
+        RouteManager.Initialise();
+        Refresh();
+
+        return Task.CompletedTask;
+    }
+
+    public Task OnAfterRenderAsync()
+    {
+        if (!_navigationInterceptionEnabled)
+        {
+            _navigationInterceptionEnabled = true;
+            return NavigationInterception.EnableNavigationInterceptionAsync();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= HandleLocationChanged;
+    }
+
+    private void HandleLocationChanged(object sender, LocationChangedEventArgs args)
+    {
+        _location = args.Location;
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        var relativeUri = NavigationManager.ToBaseRelativePath(_location);
+        var parameters = ParseQueryString(relativeUri);
+
+        if (relativeUri.IndexOf(&apos;?&apos;) &gt; -1)
+        {
+            relativeUri = relativeUri.Substring(0, relativeUri.IndexOf(&apos;?&apos;));
+        }
+
+        var segments = relativeUri.Trim().Split(&apos;/&apos;, StringSplitOptions.RemoveEmptyEntries);
+        var matchResult = RouteManager.Match(segments);
+
+        if (matchResult.IsMatch)
+        {
+            var routeData = new RouteData(
+                matchResult.MatchedRoute.Handler,
+                parameters);
+
+            _renderHandle.Render(Found(routeData));
+        }
+        else
+        {
+            _renderHandle.Render(NotFound);
+        }
+    }
+
+    private Dictionary&lt;string, object&gt; ParseQueryString(string uri)
+    {
+        var querystring = new Dictionary&lt;string, object&gt;();
+
+        foreach (string kvp in uri.Substring(uri.IndexOf(&quot;?&quot;) + 1).Split(new[] { &apos;&amp;&apos; }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (kvp != &quot;&quot; &amp;&amp; kvp.Contains(&quot;=&quot;))
+            {
+                var pair = kvp.Split(&apos;=&apos;);
+                querystring.Add(pair[0], pair[1]);
+            }
+        }
+
+        return querystring;
+    }
+}
+</code></pre>
+<p>Let&apos;s work through this see how it works. We won&apos;t cover every single method, as some of it&apos;s self explanatory.</p><pre><code class="language-csharp">RenderHandle _renderHandle;
+bool _navigationInterceptionEnabled;
+string _location;
+
+[Inject] private NavigationManager NavigationManager { get; set; }
+[Inject] private INavigationInterception NavigationInterception { get; set; }
+[Inject] RouteManager RouteManager { get; set; }
+
+[Parameter] public RenderFragment NotFound { get; set; }
+[Parameter] public RenderFragment&lt;RouteData&gt; Found { get; set; }
+</code></pre>
+<p>We start by defining some local members and injecting some services - we&apos;ll talk about these later. We also define two parameters <code>Found</code> and <code>NotFound</code>, these are lifted straight from the default router.</p><pre><code class="language-csharp">public void Attach(RenderHandle renderHandle)
+{
+    _renderHandle = renderHandle;
+    _location = NavigationManager.Uri;
+    NavigationManager.LocationChanged += HandleLocationChanged;
+}
+</code></pre>
+<p>Next we have the <code>Attach</code> method. We have to implement this as we&apos;re implementing the <code>IComponent</code> interface. Normally this is not something which we&apos;d need to care about as it&apos;s dealt with in the <code>ComponentBase</code> class which most components inherit from. </p><p>This is a low level method which attaches the component to a <code>RenderHandle</code>. The <code>RenderHandle</code> provides a link between the component and it&apos;s renderer, allowing the component to be rendered.</p><p>Here we&apos;re saving a reference to the <code>RenderHandle</code> as well as recording the current URI. We&apos;re also registering a handler for the <code>NavigationManager</code>&apos;s <code>LocationChanged</code> event. This handler updates the routers <code>_location</code> field with the new location. Then calls the <code>Refresh</code> method to update the view with the new page, if one is found.</p><pre><code class="language-csharp">public Task OnAfterRenderAsync()
+{
+    if (!_navigationInterceptionEnabled)
+    {
+        _navigationInterceptionEnabled = true;
+        return NavigationInterception.EnableNavigationInterceptionAsync();
+    }
+
+    return Task.CompletedTask;
+}
+</code></pre>
+<p>In the <code>OnAfterRender</code> method, we&apos;re setting up navigation interception. This instructs Blazor to intercept any link click events within the application. If you want to understand how all this works, I suggest <a href="https://chrissainty.com/an-in-depth-look-at-routing-in-blazor/">reading my last post</a> which covered this in detail.</p><pre><code class="language-csharp">public Task SetParametersAsync(ParameterView parameters)
+{
+    parameters.SetParameterProperties(this);
+
+    if (Found == null)
+    {
+        throw new InvalidOperationException($&quot;The {nameof(ConventionRouter)} component requires a value for the parameter {nameof(Found)}.&quot;);
+    }
+
+    if (NotFound == null)
+    {
+        throw new InvalidOperationException($&quot;The {nameof(ConventionRouter)} component requires a value for the parameter {nameof(NotFound)}.&quot;);
+    }
+
+    RouteManager.Initialise();
+    Refresh();
+
+    return Task.CompletedTask;
+}
+</code></pre>
+<p>The <code>SetParametersAsync</code> method is also part of the <code>IComponent</code> interface. We&apos;re doing some basic checks to make sure we have values for the <code>Found</code> and <code>NotFound</code> parameters. </p><p>We then call <code>RouteManager.Initialise</code>. We&apos;ll look at the <code>RouteManager</code> class in detail in the next section but essentially, it&apos;s going to go off and find all of the page components in our project and store them. </p><p>Finally, we call the <code>Refresh</code> method. Let&apos;s check that out now.</p><pre><code class="language-csharp">private void Refresh()
+{
+    var relativeUri = NavigationManager.ToBaseRelativePath(_location);
+    var parameters = ParseQueryString(relativeUri);
+
+    if (relativeUri.IndexOf(&apos;?&apos;) &gt; -1)
+    {
+        relativeUri = relativeUri.Substring(0, relativeUri.IndexOf(&apos;?&apos;));
+    }
+
+    var segments = relativeUri.Trim().Split(&apos;/&apos;, StringSplitOptions.RemoveEmptyEntries);
+    var matchResult = RouteManager.Match(segments);
+
+    if (matchResult.IsMatch)
+    {
+        var routeData = new RouteData(
+            matchResult.MatchedRoute.Handler,
+            parameters);
+
+        _renderHandle.Render(Found(routeData));
+    }
+    else
+    {
+        _renderHandle.Render(NotFound);
+    }
+}
+</code></pre>
+<p>Similar to the <code>Refresh</code> method on the default router, our version is going to look at the current URI and try and load the correct page component for it. If it can&apos;t find a matching page component, then it will render the <code>NotFound</code> template. </p><p>We start by getting the relative URI and extracting any query string parameters. We store these so they can be passed to the matching page component, if one is found. Once this is complete, we remove the query string from the relative URI, if present. Then split the URI into segments removing any empty ones. The array of segments is then passed to the <code>RouteManager</code>&apos;s <code>Match</code> method which will attempt to find a page component for that route. </p><p>A <code>MatchResult</code> is returned which shows if a match was found. If a match was found then the matching <code>Route</code> will be included. The <code>Route</code> and any parameters found in the query string are then used to construct a <code>RouteData</code> object. This is the same <code>RouteData</code> object from the default router implementation. The renderer is then instructed to render the <code>Found</code> template using the <code>RouteData</code> object. This results in the page component being displayed to the user.</p><p>If a match isn&apos;t found then the renderer is instructed to render the <code>NotFound</code> template.</p><h2 id="finding-page-components-with-routemanager">Finding Page Components With RouteManager</h2><p>The <code>RouteManager</code> class is used to find page components when the application first starts up. It is also responsible for finding page components which match the requested route.</p><pre><code class="language-csharp">public class RouteManager
+{
+    public Route[] Routes { get; private set; }
+
+    public void Initialise()
+    {
+        var pageComponentTypes = Assembly.GetExecutingAssembly()
+                                         .ExportedTypes
+                                         .Where(t =&gt; t.IsSubclassOf(typeof(ComponentBase))
+                                                     &amp;&amp; t.Namespace.Contains(&quot;.Pages&quot;));
+
+        var routesList = new List&lt;Route&gt;();
+        foreach (var pageType in pageComponentTypes)
+        {
+            var newRoute = new Route
+            {
+                UriSegments = pageType.FullName.Substring(pageType.FullName.IndexOf(&quot;Pages&quot;) + 6).Split(&apos;.&apos;),
+                Handler = pageType
+            };
+
+            routesList.Add(newRoute);
+        }
+
+        Routes = routesList.ToArray();
+    }
+
+    public MatchResult Match(string[] segments)
+    {
+        if (segments.Length == 0)
+        {
+            var indexRoute = Routes.SingleOrDefault(x =&gt; x.Handler.FullName.ToLower().EndsWith(&quot;index&quot;));
+            return MatchResult.Match(indexRoute);
+        }
+
+        foreach (var route in Routes)
+        {
+            var matchResult = route.Match(segments);
+
+            if (matchResult.IsMatch)
+            {
+                return matchResult;
+            }
+        }
+
+        return MatchResult.NoMatch();
+    }
+}
+</code></pre>
+<p>The <code>Initialise</code> method is called in the router&apos;s <code>SetParametersAsync</code>, we saw that earlier. It uses some reflection to scan the current assembly and find any components with <code>.Pages</code> in their namespace, as per our convention we stated at the start.</p><p>Once we have the page components we create each one as a <code>Route</code>. We break the full name into segments which we will use to compare to the requested route. We also store the handler for the route, which is the type of the component. Once all of the <code>Routes</code> are created they&apos;re stored as an array on the <code>RouteManager</code>.</p><p>The <code>Route</code> class looks like this.</p><pre><code class="language-csharp">public class Route
+{
+    public string[] UriSegments { get; set; }
+    public Type Handler { get; set; }
+
+    public MatchResult Match(string[] segments)
+    {
+        if (segments.Length != UriSegments.Length)
+        {
+            return MatchResult.NoMatch();
+        }
+
+        for (var i = 0; i &lt; UriSegments.Length; i++)
+        {
+            if (string.Compare(segments[i], UriSegments[i], StringComparison.OrdinalIgnoreCase) != 0)
+            {
+                return MatchResult.NoMatch();
+            }
+        }
+
+        return MatchResult.Match(this);
+    }
+}
+</code></pre>
+<p>It&apos;s <code>Match</code> method is the most interesting part. It starts by checking if the number of segments in the requested route matches the number of segments it has. If that&apos;s not the case then a <code>NotMatch</code> result is returned. It then loops over each of it&apos;s segments and compares them to the segments passed in. If they all match then a <code>Match</code> result is returned, if they don&apos;t, then a <code>NoMatch</code> result is returned. </p><p>Back to the <code>RouteManager</code> and it&apos;s <code>Match</code> method.</p><pre><code class="language-csharp">public MatchResult Match(string[] segments)
+{
+    if (segments.Length == 0)
+    {
+        var indexRoute = Routes.SingleOrDefault(x =&gt; x.Handler.FullName.ToLower().EndsWith(&quot;index&quot;));
+        return MatchResult.Match(indexRoute);
+    }
+
+    foreach (var route in Routes)
+    {
+        var matchResult = route.Match(segments);
+
+        if (matchResult.IsMatch)
+        {
+            return matchResult;
+        }
+    }
+
+    return MatchResult.NoMatch();
+}
+</code></pre>
+<p><code>Match</code> is called by the router&apos;s <code>Refresh</code> method. It&apos;s job is to find a page component which matches the requested route. It starts by checking if the <code>segments</code> length is zero. If it is, we&apos;ll assume the request is for the root page, so <code>https://mycoolblazorapp.com/</code> for example. By convention, we&apos;ll look for a page component called <code>Index.razor</code> and return the <code>MatchResult</code>. </p><p>Otherwise, we&apos;ll loop over each route we have stored on the <code>RouteManager</code>, calling it&apos;s <code>Match</code> method. If a match is found, then we&apos;ll return it. If we get through all the routes and a match isn&apos;t found then we return a <code>NoMatch</code> result.</p><p>This is what the <code>MatchResult</code> class looks like.</p><pre><code class="language-csharp">public class MatchResult
+{
+    public bool IsMatch { get; set; }
+    public Route MatchedRoute { get; set; }
+
+    public MatchResult(bool isMatch, Route matchedRoute)
+    {
+        IsMatch = isMatch;
+        MatchedRoute = matchedRoute;
+    }
+
+    public static MatchResult Match(Route matchedRoute)
+    {
+        return new MatchResult(true, matchedRoute);
+    }
+
+    public static MatchResult NoMatch()
+    {
+        return new MatchResult(false, null);
+    }
+}
+</code></pre>
+<p>This is a simple class which gives us a consistent way of returning the result of a route match.</p><p>I think that about wraps things up. We&apos;ve built a new router to replace the existing default router. It works on a convention basis and while it is nowhere near as feature rich and flexible as the default one, we&apos;ve manged to hit all of the requirements set out at the start of the post.</p><p>I think it&apos;s really cool that Blazor has been built in such as way that we can easily replace parts as we choose. If you would like to see another, and far more sophisticated, example of a custom router for Blazor. I would recommend checking out <a href="https://www.oqtane.org/Resources/Blog/PostId/521/custom-routing-in-blazor">this post</a> by Shaun Walker who&apos;s building an open source CMS using Blazor, called <a href="https://www.oqtane.org/">Oqtane</a>.</p> <div class="coffee-button"> <a class="bmc-button" href="https://www.buymeacoffee.com/chrissainty"> <img src="https://bmc-cdn.nyc3.digitaloceanspaces.com/BMC-button-images/BMC-btn-logo.svg" alt="Buy me a coffee"> <span>Buy me a coffee</span> </a> </div> <div class="post-tags"> Tagged in: <a href="/blazor/">Blazor</a> | <a href="/routing/">Routing</a> | <a href="/blazor-client-side/">Blazor (client-side)</a> | <a href="/blazor-server-side/">Blazor (server-side)</a> </div> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
