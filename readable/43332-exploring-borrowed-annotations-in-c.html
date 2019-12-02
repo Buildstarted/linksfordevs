@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Exploring borrowed annotations in C# -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Exploring borrowed annotations in C#</h1>
+    <div class="article_body"> <p>One request I see fairly often for C# is to add the concept of borrowed values. That is values which can be used but
+not stored beyond the invocation of a particular method. This generally comes up in the context of features which require a form of ownership semantics like stack allocation of classes, <code class="language-plaintext highlighter-rouge">using</code> statements, resource management, etc &#x2026;
+Borrowing provides a way to safely use owned values without complicated ownership transfer.</p> <p>This a feature we explored while working on System C# in the <a href="http://joeduffyblog.com/2015/11/03/blogging-about-midori/">Midori Project</a> in the context of having stack like
+allocations. The experiment was successful and brought with it signficant performance wins for the system. But the experience also taught us quite a bit about the difficulties in introducing ownership concepts into languages and frameworks that didn&#x2019;t have them designed in from the start.</p> <p>To help illustrate these difficulties this post is going to focus on what it would look like if borrowing were added
+to C# for reference types. Borrowing, the concept of use but don&#x2019;t store, is a necessary pre-requisite for most forms
+of ownership. Lacking borrowing the more desired features, like stack allocation of classes, wouldn&#x2019;t be possible.</p> <p>In this post borrowed references will be denoted with a <code class="language-plaintext highlighter-rouge">&amp;</code> following the type name. So <code class="language-plaintext highlighter-rouge">Widget</code> is a normal reference while <code class="language-plaintext highlighter-rouge">Widget&amp;</code> is a borrowed reference. There is a subtyping relationship between borrowed and normal references
+meaning a <code class="language-plaintext highlighter-rouge">Widget</code> is convertible to a <code class="language-plaintext highlighter-rouge">Widget&amp;</code> but not the other way around. This annotation can be applied to locals
+and parameters. It cannot be applied to fields, return types, or parameters that are which are not <code class="language-plaintext highlighter-rouge">out</code>, <code class="language-plaintext highlighter-rouge">in</code> or <code class="language-plaintext highlighter-rouge">ref</code>.</p> <div class="language-cs highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">Widget</span> <span class="p">{</span> <span class="n">Widget</span> <span class="n">Field</span><span class="p">;</span> <span class="k">void</span> <span class="nf">Example</span><span class="p">(</span><span class="n">Widget</span> <span class="n">normal</span><span class="p">,</span> <span class="n">Widget</span><span class="p">&amp;</span> <span class="n">borrowed</span><span class="p">)</span> <span class="p">{</span> <span class="n">borrowed</span> <span class="p">=</span> <span class="n">normal</span><span class="p">;</span> <span class="c1">// Okay: converting Widget to Widget&amp;</span> <span class="n">borrowed</span> <span class="p">=</span> <span class="k">this</span><span class="p">;</span> <span class="c1">// Okay: converting Widget to Widget&amp;</span> <span class="n">normal</span> <span class="p">=</span> <span class="n">borrowed</span><span class="p">;</span> <span class="c1">// Error: can&apos;t convert Widget&amp; to Widget</span> <span class="n">Field</span> <span class="p">=</span> <span class="n">normal</span><span class="p">;</span> <span class="c1">// Okay: converting Widget to Widget&amp;</span> <span class="n">Field</span> <span class="p">=</span> <span class="k">this</span><span class="p">;</span> <span class="c1">// Okay: converting Widget to Widget&amp;</span> <span class="n">Field</span> <span class="p">=</span> <span class="n">borrowed</span><span class="p">;</span> <span class="c1">// Error: can&apos;t convert Widget&amp; to Widget</span> <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>This simple system enforces that borrowed references have the desired &#x201C;use but don&#x2019;t store&#x201D; semantics. When a value is
+passed to a borrowed parameter of a method, the caller can be assured that the value is not reference at the
+completion of the method. That is it cannot be stored into a field, used as a generic argument, returned or smuggled out via a <code class="language-plaintext highlighter-rouge">ref</code> / <code class="language-plaintext highlighter-rouge">out</code> parameter.</p> <p>This system is limiting though because there is no way to invoke instance members on borrowed references. The <code class="language-plaintext highlighter-rouge">this</code>
+reference in instance methods is a normal reference. Hence invoking an instance method on a borrowed reference would effectively be converting a borrowed reference to a normal one which breaks the model. To allow for method invocation we&#x2019;ll let methods mark the <code class="language-plaintext highlighter-rouge">this</code> reference as borrowed by adding a <code class="language-plaintext highlighter-rouge">&amp;</code> after the method signature. Further any method
+which overrides or implements a method where <code class="language-plaintext highlighter-rouge">this</code> is marked as borrowed must also be marked as borrowed.</p> <div class="language-cs highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">abstract</span> <span class="k">class</span> <span class="nc">Resource</span> <span class="p">{</span> <span class="c1">// Method with a borrowed `this`</span> <span class="k">public</span> <span class="k">abstract</span> <span class="k">void</span> <span class="nf">PrintStatus</span><span class="p">()</span> <span class="p">&amp;;</span> <span class="c1">// Normal method</span> <span class="k">public</span> <span class="k">abstract</span> <span class="k">void</span> <span class="nf">Close</span><span class="p">();</span>
+<span class="p">}</span> <span class="k">class</span> <span class="nc">MyResource</span> <span class="p">:</span> <span class="n">Resource</span> <span class="p">{</span> <span class="kt">bool</span> <span class="n">Valid</span><span class="p">;</span> <span class="k">public</span> <span class="k">override</span> <span class="k">void</span> <span class="nf">PrintStatus</span><span class="p">()</span> <span class="p">&amp;</span> <span class="p">{</span> <span class="n">Console</span><span class="p">.</span><span class="nf">WriteLine</span><span class="p">(</span><span class="s">$&quot;Is valid </span><span class="p">{</span><span class="n">Valid</span><span class="p">}</span><span class="s">&quot;</span><span class="p">);</span> <span class="n">MyResource</span> <span class="n">r</span> <span class="p">=</span> <span class="k">this</span><span class="p">;</span> <span class="c1">// Error: can&apos;t convert MyResource&amp; to MyResource</span> <span class="p">}</span> <span class="k">public</span> <span class="k">override</span> <span class="k">void</span> <span class="nf">Close</span><span class="p">()</span> <span class="p">{</span> <span class="n">Valid</span> <span class="p">=</span> <span class="k">false</span><span class="p">;</span> <span class="p">}</span> <span class="k">static</span> <span class="k">void</span> <span class="nf">Example</span><span class="p">(</span><span class="n">MyResoure</span> <span class="n">normal</span><span class="p">)</span> <span class="p">{</span> <span class="n">MyResource</span><span class="p">&amp;</span> <span class="n">borrowed</span> <span class="p">=</span> <span class="n">normal</span><span class="p">;</span> <span class="n">borrowed</span><span class="p">.</span><span class="nf">PrintStatus</span><span class="p">();</span> <span class="c1">// Okay</span> <span class="n">normal</span><span class="p">.</span><span class="nf">PrintStatus</span><span class="p">();</span> <span class="c1">// Okay</span> <span class="n">borrowed</span><span class="p">.</span><span class="nf">Close</span><span class="p">();</span> <span class="c1">// Error: can&apos;t call a normal method from a borrowed reference</span> <span class="n">normal</span><span class="p">.</span><span class="nf">PrintStatus</span><span class="p">();</span> <span class="c1">// Okay</span> <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>So far this all seems pretty sensible. Borrowed values have the desired &#x201C;use but don&#x2019;t store&#x201D; semantics, have a clean
+integration into the type system and have a minimal syntax burden.</p> <p>What happens though when we attempt to leverage this feature in the .NET SDK? Consider as an example <code class="language-plaintext highlighter-rouge">string.Format</code>.
+The parameters to this method are never stored and in practice are often a source of wasteful boxing allocations. This
+is a classic scenario where borrowing should bring big wins. The parameters can be marked properly as borrowed and then
+the runtime can safely stack allocate the boxing allocations.</p> <div class="language-cs highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">String</span> <span class="p">{</span> <span class="k">public</span> <span class="k">void</span> <span class="nf">Format</span><span class="p">(</span><span class="kt">string</span> <span class="n">format</span><span class="p">,</span> <span class="kt">object</span><span class="p">&amp;</span> <span class="n">arg</span><span class="p">)</span> <span class="p">{</span> <span class="kt">var</span> <span class="n">strArg</span> <span class="p">=</span> <span class="n">arg</span><span class="p">.</span><span class="nf">ToString</span><span class="p">();</span> <span class="nf">FormatHelper</span><span class="p">(</span><span class="n">format</span><span class="p">,</span> <span class="n">stringArg</span><span class="p">);</span> <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div> <p>This example though also reveals a significant problem: the call <code class="language-plaintext highlighter-rouge">arg.ToString</code> is illegal because the definition <code class="language-plaintext highlighter-rouge">object.ToString</code> is not defined as having a borrowed <code class="language-plaintext highlighter-rouge">this</code> parameter. Worse is that the .NET team can&#x2019;t fix this by
+going back and marking <code class="language-plaintext highlighter-rouge">object.ToString</code> as borrowed. This would be a massive compatibility break because every override
+of <code class="language-plaintext highlighter-rouge">ToString</code> would likewise need to be marked as borrowed.</p> <p>This compat burden is where borrowing starts to fall down as a feature. It&#x2019;s not just limited to <code class="language-plaintext highlighter-rouge">ToString</code> but virtually the entire surface area of .NET. Borrowed values are significantly hampered because they &#x2026;.</p> <ul> <li>Can&#x2019;t call any methods on object <code class="language-plaintext highlighter-rouge">GetHashCode</code>, <code class="language-plaintext highlighter-rouge">ToString</code>, <code class="language-plaintext highlighter-rouge">ReferenceEquals</code>, <code class="language-plaintext highlighter-rouge">GetType</code> or <code class="language-plaintext highlighter-rouge">Finalize</code></li> <li>Can&#x2019;t call <code class="language-plaintext highlighter-rouge">operator==</code>, <code class="language-plaintext highlighter-rouge">!=</code>, etc &#x2026;</li> <li>Can&#x2019;t be used as generic arguments. So no <code class="language-plaintext highlighter-rouge">List&lt;Widget&amp;&gt;</code>.</li> <li>Can&#x2019;t call any method on any interface defined in the .NET SDK surface area.</li>
+</ul> <p>The non-virtual methods could be fixed by updating their annotation in the framework to be borrowed. The <code class="language-plaintext highlighter-rouge">virtual</code> methods and <code class="language-plaintext highlighter-rouge">interface</code> definitions though can&#x2019;t be changed as it would break compatibility. That means <code class="language-plaintext highlighter-rouge">object&amp;</code> or any borrowed interface is by themselves is basically useless. They can&#x2019;t be stored as they&#x2019;re borrowed and no members
+can be invoked on them.</p> <p>This is a pretty significant problem. It means that a good portion of the .NET Framework API parameters can never be marked as borrowed because doing so would make the values unusable. That&#x2019;s true for <code class="language-plaintext highlighter-rouge">object</code>, interfaces or really any
+unsealed type where virtual methods are used. This means large sections of .NET which are perfect for ownership
+semantics can never take advantage of them. So much so that it brings up the question of whether this feature is worth doing. Successful uses of borrowing would require significant duplication of the .NET Framework surface area with the only real change being to add borrowing semantics to parameters. Not ideal.</p> <p>This is the crux of the problem with retrofitting languages with core features like ownership. The problem isn&#x2019;t just extending a 20 year old language to understand ownership, it&#x2019;s also about extending a 20 year old SDK. Both present
+challenges that need to be overcome. In the case of ownership though it&#x2019;s much more about whether the SDK could adopt it than whether it could be added to the language.</p> <p>That&#x2019;s not to say the version of borrowing laid out in this post is complete. It&#x2019;s in fact lacking a number of features
+that are necessary for a good borrowing system: relative lifetime annotations, borrowed fields, returning borrowed values, etc &#x2026; At the same time though those are all relatively solvable compared to the SDK compatibility issues.</p> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
