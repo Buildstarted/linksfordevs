@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+EfCore.GenericEventRunner: an event-driven library that works with EF Core -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>EfCore.GenericEventRunner: an event-driven library that works with EF Core</h1>
+    <body><p>In the <a href="https://www.thereformedprogrammer.net/a-robust-event-driven-architecture-for-using-with-entity-framework-core/">first article</a> I described an event-driven architecture that work with Entity Framework Core (EF Core). In this article I go into the details of how to use the EfCore.GenericEventRunner that implements this event-driven design. This article covers the specific details of why and how to use this library. </p> <blockquote class="wp-block-quote"><p>NOTE: The EfCore.GenericEventRunner is an open-source (MIT licence) <a href="https://www.nuget.org/packages/EfCore.GenericEventRunner/">NuGet library</a> designed to work with EF Core 3 and above. You can also find the code in <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner">this GitHub repo</a>.</p></blockquote> <p>The articles in this series are:</p> <ul><li>This article describes how to use the EfCore.GenericEventRunner
+library, available on <a href="https://www.nuget.org/packages/EfCore.GenericEventRunner/">NuGet </a>&#xA0;and on <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner">GitHub</a>.</li><li>EfCore.GenericEventRunner adds a specific
+event-driven system to EF Core. See <a href="https://www.thereformedprogrammer.net/a-robust-event-driven-architecture-for-using-with-entity-framework-core/">this
+article</a> for a description of this event-driven design.</li><li>I break up the description into five sections<ul><li>Code to allow your EF Core classes to send
+events</li></ul><ul><li>How to build event handlers</li></ul><ul><li>How the events are run when
+SaveChanges/SaveChangesAsync is called.</li></ul><ul><li>How to register your event handlers and GenericEventRunner
+itself.</li></ul><ul><li>How to unit test an application which uses GenericEventRunner.</li></ul></li></ul><h2 id="overview-of-efcore-genericeventrunner-library">Overview of EfCore.GenericEventRunner library<a class="anchorlink dashicons-before" href="#overview-of-efcore-genericeventrunner-library"></a></h2> <p>I&#x2019;m going to go though the four parts of the EfCore.GenericEventRunner
+library (plus something on unit testing) to demonstrate how to use this library.
+I start with a diagram which will give you an idea of how you might use GenericEventRunner.
+Then I will dive into the four parts.</p> <blockquote class="wp-block-quote"><p>NOTE: If you haven&#x2019;t read the <a href="https://www.thereformedprogrammer.net/a-robust-event-driven-architecture-for-using-with-entity-framework-core/">first article</a>, then I recommend you read/skim that article &#x2013; it might make understanding what I am trying to do. </p></blockquote> <p>In the diagram the blue rectangles are classes mapped to the database, with the events shown in light color at the bottom. The orange rounded rectangle is an event handler.</p> <figure class="wp-block-image"><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventRunnerExampleAllocate-1024x763.png" alt class="wp-image-1962" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventRunnerExampleAllocate-1024x763.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventRunnerExampleAllocate-300x224.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventRunnerExampleAllocate-768x572.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventRunnerExampleAllocate.png 1189w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>Here are the four parts of the library, plus a section on
+unit testing:</p> <ol><li>ForEntities: This has the code that allows a class to contain and create events.</li><li>ForHandlers: This contains the interfaces for building handlers.</li><li>ForDbContext: The DbContextWithEvents&lt;T&gt; which contains the overriding of the SaveChanges/ SaveChangesAsync.</li><li> The code for registering your event handlers and GenericEventRunner&#x2019;s EventsRunner.</li><li> How to unit test an application which uses GenericEventRunner (and logging).</li></ol><blockquote class="wp-block-quote"><p>NOTE: This code in is article taken from the code in the EfCore.GenericEventRunner repo used to test the library. I suggest you look at that code and the unit tests to see how it works.</p></blockquote> <h3 id="1-forentities-code-for-your-entity-classes-see-datalayer-in-genericeventrunnerrepo">1. ForEntities: code for your entity classes (see DataLayer in GenericEventRunner
+repo)<a class="anchorlink dashicons-before" href="#1-forentities-code-for-your-entity-classes-see-datalayer-in-genericeventrunnerrepo"></a></h3> <p>For this example, I am going to show you how I built the &#x201C;1.
+Create new Order&#x201D; (LHS of last diagram). The purpose of this event is to query
+the stock part a) is there enough stock to manage this order, and b) allocate some
+stock ready for this order.</p> <p>The first thing I needed is an &#x201C;allocate&#x201D; event. An event is class that inherits the IDomainEvent interface. Here is my &#x201C;allocate&#x201D; event.</p> <pre class="brush: csharp; title: ; notranslate">
+public class AllocateProductEvent : IDomainEvent
+{
+    public AllocateProductEvent(string productName, int numOrdered)
+    {
+        ProductName = productName;
+        NumOrdered = numOrdered;
+    }
+
+    public string ProductName { get; }
+    public int NumOrdered { get; }
+}
+</pre> <p>In this case this event is sent from a new order which hasn&#x2019;t been saved to the database. Therefore, I have to send the ProductName (which in my system is a unique key) and the number ordered because its not (yet) in the main database. Even if the data is in the database, I recommend sending the data in the event, as a) it saves a database access and b) it reduces the likelihood of concurrency issues (I&#x2019;ll talk more on concurrency issues in the next article).</p> <p>The next thing is to add that event to the Order class. To be able to do that the Order class must inherit abstract class called <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner/blob/master/GenericEventRunner/ForEntities/EntityEvents.cs">EntityEvents</a>, e.g.</p> <pre class="brush: csharp; title: ; notranslate">
+public class Order : EntityEvents
+{ 
+       //&#x2026; rest of class left out
+</pre> <p>The EntityEvents class provides an AddEvent method which
+allows you to add a new event to your entity. It also stores the events for the
+Event Runner to look at when SaveChanges is called. (note that the events
+aren&#x2019;t saved to the database &#x2013; they only hang around as long as the class
+exists).</p> <p>Below is the Order constructor, with the focus on the AllocateProductEvent &#x2013; see the highlighted lines 10 and 11</p> <pre class="brush: csharp; highlight: [10,11]; title: ; notranslate">
+public Order(string userId, DateTime expectedDispatchDate,
+    ICollection&lt;BasketItemDto&gt; orderLines)
+{
+    //&#x2026; some other code removed
+
+    TotalPriceNoTax = 0;
+    foreach (var basketItem in orderLines)
+    {
+        TotalPriceNoTax += basketItem.ProductPrice * basketItem.NumOrdered;
+        AddEvent(new AllocateProductEvent(
+             basketItem.ProductName, basketItem.NumOrdered));
+    }
+}
+</pre> <p>If you don&#x2019;t use DDD, then the typical way to create an
+event is to catch the setting of a property. Here is an example of doing that
+taken from the first article.</p> <pre class="brush: csharp; highlight: [8]; title: ; notranslate">
+private string _county;
+public decimal County
+{
+    get =&gt; _county;
+    private set
+    {
+        if (value != _county)
+            AddEvent(new LocationChangeEvent(value));
+        _county = value;
+    }
+}
+</pre> <p>This works because the property Country is changed into an
+EF Core <a href="https://docs.microsoft.com/en-us/ef/core/modeling/backing-field">backing
+field</a>, and the name of the column in the table is unchanged. But because it&#x2019;s
+now a backing field EF Core 3 will (by default) will read/write the field, not
+the property, which is good otherwise the load could cause an event.</p> <blockquote class="wp-block-quote"><p>NOTE: EF Core 3 default action is to read/write the field, but before EF Core 3 the default was to set via the property, which would have generated an event.</p></blockquote> <h4 id="types-of-events">Types of events<a class="anchorlink dashicons-before" href="#types-of-events"></a></h4> <p>When it comes to adding an event there are two separate
+lists: one for BeforeSave events and one for AfterSave events. The names give
+you a clue to when the handler is run: the BeforeSave events run before SaveChanges
+is called, and AfterSave events are run after SaveChanges is called. </p> <p>I cover the two types of events in the next section, but I
+can say that BeforeSave events are by far the most used type, so that is the
+default for the AddEvent method. If you want to send an event to be run after
+SaveChanges, then you need to add a second parameter with the type, e.g.
+AddEvent(&#x2026;, EventToSend.AfterSave).</p> <h3 id="2-forhandlers-building-the-event-handlers">2. ForHandlers: Building the event handlers<a class="anchorlink dashicons-before" href="#2-forhandlers-building-the-event-handlers"></a></h3> <p>You need to create the event handlers to handle the events
+that the entity classes sent out. There are two types of event handler IBeforeSaveEventHandler&lt;TEvent&gt;
+and IAfterSaveEventHandler&lt;TEvent&gt;. Let me explain why I have the two
+types.</p> <h4 id="beforesave-events-and-handlers">BeforeSave events and handlers <a class="anchorlink dashicons-before" href="#beforesave-events-and-handlers"></a></h4> <p>The BeforeSave events and handlers are all about the
+database. The idea is the BeforeSave handlers can change the entity classes in
+the database, and those changes are saved with the original data that your normal
+(non-event trigger) code set up. As I explained in the first article saving the
+original data and any data changed by the event together in one transaction is
+safe, as the data can&#x2019;t get out of step. </p> <p>Typically, a BeforeSave event will be triggered when
+something changes, or an event happens. The handler then either does some
+calculation, maybe accessing the database and returns a result to be saved in
+the calling entity and/or it might create, update or remove (delete) some other
+entity classes. The data changes applied by the normal code and the data
+changes applied by the event handler are saved together.</p> <p>BeforeSave event handlers also have two extra features:</p> <p>1. Firstly, they can return an (optional) IStatusGeneric status,
+which can send back errors. If it returns null or a status with no errors then
+the SaveChanges will be called. </p> <p>Here is an example of a BeforeSave event handler which was
+called by the AllocateProductEvent you saw before. This checks that there is
+enough stock to accept this order. If it returns a status with any errors, then
+that stops <a>SaveChanges</a>/ SaveChangesAsync from being
+called.</p> <pre class="brush: csharp; title: ; notranslate">
+public class AllocateProductHandler : IBeforeSaveEventHandler&lt;AllocateProductEvent&gt;
+{
+    private readonly ExampleDbContext _context;
+
+    public AllocateProductHandler(ExampleDbContext context)
+    {
+        _context = context;
+    }
+
+    public IStatusGeneric Handle(EntityEvents callingEntity,
+          AllocateProductEvent domainEvent)
+    {
+        var status = new StatusGenericHandler();
+        var stock = _context.Find&lt;ProductStock&gt;(domainEvent.ProductName);
+        //&#x2026; test to check it was found OK removed 
+
+        if (stock.NumInStock &lt; domainEvent.NumOrdered)
+            return status.AddError(
+                $&quot;I could not accept this order because there wasn&apos;t enough {domainEvent.ProductName} in stock.&quot;);
+
+        stock.NumAllocated += domainEvent.NumOrdered;
+        return status;
+    }
+}
+</pre> <p>The lines of code to highlight are:</p> <ul><li>Lines 18 to 19. If there isn&#x2019;t enough stock it adds an error to the status and returns it immediately. This will stop the SaveChanges from being called.</li></ul><p>The default situation is the first BeforeSave event handler
+that returns an error will stop immediately. If you want all the BeforeSave
+events to continue, say to get all the possible error messages, then you can
+set the StopOnFirstBeforeHandlerThatHasAnError property to false in the GenericEventRunnerConfig
+class provided at setup time (see 4. ForSetup: Registering service on config).</p> <p>If the returned status has errors, then all the events are
+cleared and SaveChanges/Async isn&#x2019;t called (see section &#x201C;3. ForDbContext&#x201D; for
+how these errors are returned to the application).</p> <blockquote class="wp-block-quote"><p>NOTE: Only a few of your BeforeSave handlers will need a status so you can return null as a quick way to say there are no errors (or more precisely the handler is not looking for errors). You can return a status with no errors and update the statues&#x2019; success Message string which will mean that Message will be returned at the top level (assuming a later BeforeSave handler doesn&#x2019;t overwrite it).</p></blockquote> <p>2. Secondly, BeforeSave handlers can raise more events directly or indirectly. For instance, say an event handler changed a property that raised another event we need to pick that new event too. For that reason, the BeforeSave handler runner keeps looping around checking for new events until there are no more.</p> <blockquote class="wp-block-quote"><p>NOTE:&#xA0; There is a property in the GenericEventRunnerConfig class called MaxTimesToLookForBeforeEvents value to stop circular events, e.g. an event calls something that calls the same event, which would loop for ever. If the BeforeSave handler runner loops around more than the MaxTimesToLookForBeforeEvents value (default 6) it throws an exception. See section &#x201C;4. For setup&#x201D; on how to change the GenericEventRunner&#x2019;s configuration.</p></blockquote> <h4 id="aftersave-events-and-handlers">AfterSave events and handlers <a class="anchorlink dashicons-before" href="#aftersave-events-and-handlers"></a></h4> <p>AfterSave events are there to do things once the SaveChanges is successful and you know the data is OK. Typical uses are clearing a cache because certain data has changed, or maybe use SignalR to update a screen with the changed data. Unlike the BeforeSave events the events runner only looks once at all the events in the entity classes, so AfterSave events handlers can&#x2019;t trigger new events.</p> <p>Here is an example of an AfterSaveEventHandler that would
+send an internal message to the dispatch department once an Order is
+successfully placed in the database.</p> <pre class="brush: csharp; title: ; notranslate">
+public class OrderReadyToDispatchAfterHandler : 
+    IAfterSaveEventHandler&lt;OrderReadyToDispatchEvent&gt;
+{
+    public void Handle(EntityEvents callingEntity,
+         OrderReadyToDispatchEvent domainEvent)
+    {
+        //Send message to dispatch that order has been checked and is ready to go
+    }
+}
+</pre> <p>AfterSave event handers aren&#x2019;t &#x201C;safe&#x201D; like the BeforeSave events in that if they fail the database update is already done and can&#x2019;t be undone. Therefore, you want to make your AfterSave event handlers aren&#x2019;t going to cause exceptions. They also shouldn&#x2019;t update the database (that&#x2019;s the job of the BeforeSave event handlers). </p> <p>AfterSave event handers also don&#x2019;t return any status so you
+can&#x2019;t know if they worked on not (see one way around this in section &#x201C;4. Setup&#x201D;
+on how to check an AfterSave event handler ran). </p> <h3 id="3-fordbcontext-overriding-of-ef-cores-base-savechanges-savechangesasync">3. ForDbContext: Overriding of EF Core&#x2019;s base SaveChanges/SaveChangesAsync<a class="anchorlink dashicons-before" href="#3-fordbcontext-overriding-of-ef-cores-base-savechanges-savechangesasync"></a></h3> <p>To make this all work GenericEventRunner needs to override
+the base SaveChanges/ SaveChangesAsync methods. GenericEventRunner library
+provides a class called <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner/blob/master/GenericEventRunner/ForDbContext/DbContextWithEvents.cs">DbContextWithEvents&lt;T&gt;</a>,
+which contains overrides for the SaveChanges/ SaveChangesAsync and two extra
+versions called SaveChangesWithStatus/ SaveChangesWithStatusAsync that return a
+status. Here is a my ExampleDbContext that I use for unit testing
+GenericEventRunner.</p> <pre class="brush: csharp; title: ; notranslate">
+public class ExampleDbContext
+    : DbContextWithEvents&lt;ExampleDbContext&gt;
+{
+    public DbSet&lt;Order&gt; Orders { get; set; }
+    public DbSet&lt;LineItem&gt; LineItems { get; set; }
+    public DbSet&lt;ProductStock&gt; ProductStocks { get; set; }
+    public DbSet&lt;TaxRate&gt; TaxRates { get; set; }
+
+    public ExampleDbContext(DbContextOptions&lt;ExampleDbContext&gt; options, 
+        IEventsRunner eventRunner = null)
+        : base(options, eventRunner)
+    {
+    }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity&lt;ProductStock&gt;().HasKey(x =&gt; x.ProductName);
+    }
+}
+</pre> <p>Line 2 is the only change in your DbContext. Instead of inheriting DbContext, you inherit GenericEventRunner&#x2019;s DbContextWithEvents&lt;T&gt;, where T is your class. This overrides the SaveChanges/ SaveChangesAsync and adds some other methods and the IStatusGeneric&lt;int&gt; StatusFromLastSaveChanges property.</p> <p>For people who are already overriding SaveChanges you can either still layer DbContextWithEvents&lt;T&gt; class on top of your SaveChanges method, which GenericEventRunner will override, and call at the apporriate time. If you want to customise your DbContext then the methods used in the DbContextWithEvents&lt;T&gt; class are public, so you can use them directly. This allows you to reconfigure the GenericEventRunner SaveChanges/ SaveChangesAsync to suit your system.</p> <h4 id="what-happens-if-beforesave-event-handler-send-back-an-error">What happens if BeforeSave event handler send back an error?<a class="anchorlink dashicons-before" href="#what-happens-if-beforesave-event-handler-send-back-an-error"></a></h4> <p>As I said earlier if the BeforeSave event handlers return an
+error it does not call SaveChanges/Async, but you most likely want to get the
+error messaged, which are designed to be shown to the user. I expect most
+developers to call SaveChanges/Async so the GenericEventRunner throws a GenericEventRunnerStatusException
+if the combined statuses of all the BeforeSave handlers has any errors. You can
+then get the errors in two ways:</p> <ul><li>The Message property of the GenericEventRunnerStatusException
+contains a string starting with an overall message and then each error
+(separated by the Environment.NewLine characters). This returns just the error
+text, not the full ValidationResult.</li><li>For a more detailed error response you can
+access the IStatusGeneric&lt;int&gt; StatusFromLastSaveChanges property in the
+DbContext. This provides you with access to the Errors list, where each error
+has an ErrorResult of type ValidationResult, where you can specify the exact
+property that caused a problem.</li></ul><blockquote class="wp-block-quote"><p>NOTE: The IStatusGeneric&lt;int&gt; StatusFromLastSaveChanges property will be null if SaveChanges hasn&#x2019;t yet been called.</p></blockquote> <p>The alternative is to call the SaveChangesWithStatus/ SaveChangesWithStatusAsync
+methods directly. That way you can get the status directly without having to
+use a try/catch. This makes getting the status easier, but if you have a lot of
+existing code that already calls SaveChanges/SaveChangesAsync then its most
+likely best to stay with SaveChanges/Async and capture the exception where you
+need to.</p> <h4 id="what-is-the-state-of-the-current-dbcontext-when-there-are-exceptions">What is the state of the current DbContext when there are exceptions?<a class="anchorlink dashicons-before" href="#what-is-the-state-of-the-current-dbcontext-when-there-are-exceptions"></a></h4> <p>We need to consider what state the DbContext is in when
+there are exceptions. Here is the list:</p> <ul><li><strong>Exceptions
+before SaveChanges is called</strong> (other than GenericEventRunnerStatusException):
+In this state there may be changes in the database and any events are still
+there. Therefore, you need to be very careful if you want to call SaveChanges
+again (Note: this isn&#x2019;t much different from what happens if you don&#x2019;t have
+events &#x2013; you don&#x2019;t really know what state the DbContext is in after an
+exception and you should not try to call SaveChanges).</li><li><strong>Exceptions
+during SaveChanges</strong>, e.g. DbUpdateConcurrencyException. If you get an
+exception during SaveChanges itself then it&#x2019;s something about the database. The
+DbContext will have all the data ready to retry the SaveChanges, if you can
+&#x201C;fix&#x201D; the problem. If you call SaveChanges again (after fixing it) and it
+succeeds then all the BeforeEvents have been cleared (because they have already
+been applied to the DbContext), but any AfterSave events are still there and
+will run.</li><li><strong>Exceptions
+after SaveChanges was called</strong>. The database is up to date. If an AfterSave
+event handler throws an exception then other AfterSave event handlers may be
+lost. As I said AfterSave event handlers are not robust.</li></ul><h3 id="4-forsetup-registering-your-event-handlers">4. ForSetup: Registering your event handlers<a class="anchorlink dashicons-before" href="#4-forsetup-registering-your-event-handlers"></a></h3> <p>The final stage is to register all your event handlers, and
+the EventsRunner from the GenericEventRunner library. This is done using the
+extension method called RegisterGenericEventRunner. There are two signatures
+for this method. Both need an array of assemblies that is needs to scan to find
+your BeforeSave/AfterSave event handlers, but one starts with property of type
+IGenericEventRunnerConfig by which you can change the GenericEventRunner default
+configuration. Here is an example in ASP.NET Core without a config.</p> <pre class="brush: plain; title: ; notranslate">
+public void ConfigureServices(IServiceCollection services)
+{
+    //&#x2026; other service registeration left out
+       services.RegisterGenericEventRunner(
+                Assembly.GetAssembly(typeof(OneOfMyEventHandlers)));
+}
+</pre> <p>NOTES:</p> <ul><li>You can provide multiple assemblies to scan.</li><li>If you don&#x2019;t provide any assemblies it will scan the calling assembly.</li><li>If its scan doesn&#x2019;t find any AfterSave event handlers then it sets the NotUsingAfterSaveHandlers config property to false (saves time in the the SaveChanges/ SaveChangesAsync).</li></ul><blockquote class="wp-block-quote"><p>NOTE: If you send an event has hasn&#x2019;t got a registered handler then you will get a GenericEventRunnerException at run time. </p></blockquote> <p>There are two ways to configure GenericEventRunner and the event handlers at startup. </p> <ol><li>You can provide a <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner/blob/master/GenericEventRunner/ForSetup/GenericEventRunnerConfig.cs">GenericEventRunnerConfig</a> class at the first parameter to the RegisterGenericEventRunner. You can change the default setting of various parts of GenericEventRunner (see the config class for what features it controls).</li><li>There is an EventHandlerConfig Attribute which you can add to an event handler class. From this you can set the lifetime of the handler. The default is transient</li></ol><blockquote class="wp-block-quote"><p>NOTE: The ability to change the lifetime of an event handler is there in case you need to communicate to event handler in some way, e.g. to check that an AfterSave event handler has run properly. In this case you could set the event handler&#x2019;s lifetime to &#x201C;Scoped&#x201D; and use DI to inject the same handler into your code. (This is advanced stuff! &#x2013; be careful).</p></blockquote> <h2 id="5-unit-testing-applications-which-use-genericeventrunner">5. Unit Testing applications which use GenericEventRunner<a class="anchorlink dashicons-before" href="#5-unit-testing-applications-which-use-genericeventrunner"></a></h2> <p>I recommend unit testing your events system, as if you
+haven&#x2019;t provided an event handler you will get a runtime exception. Setting up
+the system to test events is a little complex because GenericEventRunner uses
+dependency injection (DI). I have therefore built some code you might find
+useful in unit tests.</p> <p>The class called <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner/blob/master/Test/EfHelpers/SetupToTestEvents.cs">SetupToTestEvents</a> in the GenericEventRunner&#x2019;s Test assembly that contains an extension method called CreateDbWithDiForHandlers that registers your event handlers and return an instance of your DbContext, with the required EventsRunner, to use in your unit tests. Here is an example of how you would use it in a unit test.</p> <pre class="brush: csharp; title: ; notranslate">
+[Fact]
+public void TestOrderCreatedHandler()
+{
+    //SETUP
+    var options = SqliteInMemory.CreateOptions&lt;ExampleDbContext&gt;();
+    var context = options.CreateDbWithDiForHandlers 
+        &lt;OrderCreatedHandler&gt;();
+    {
+        context.Database.EnsureCreated();
+        context.SeedWithTestData();
+
+        var itemDto = new BasketItemDto
+        {
+            ProductName = context.ProductStocks.OrderBy(x =&gt; x.NumInStock).First().ProductName,
+            NumOrdered = 2,
+            ProductPrice = 123
+        };
+
+        //ATTEMPT
+        var order = new Order(&quot;test&quot;, DateTime.Now, new List&lt;BasketItemDto&gt; { itemDto });
+        context.Add(order);
+        context.SaveChanges();
+
+        //VERIFY
+        order.TotalPriceNoTax.ShouldEqual(2 * 123);
+        order.TaxRatePercent.ShouldEqual(4);
+        order.GrandTotalPrice.ShouldEqual(order.TotalPriceNoTax * (1 + order.TaxRatePercent / 100));
+        context.ProductStocks.OrderBy(x =&gt; x.NumInStock).First().NumAllocated.ShouldEqual(2);
+    }
+} 
+</pre> <p>The lines of code to highlight are:</p> <ul><li>Line 5: You create your database options. In this case I am using a method in my EfCore.TestSupport library to create an in-memory Sqlite database, but it could be any type of database.</li><li>Line 6 and 7: This is where I call the CreateDbWithDiForHandlers extension method which needs two types:<ul><li>TContext: This is your DbContext class</li></ul><ul><li>THandler: This should be one of your event handlers. This is used for find an assembly which GenericEventRunner needs to scan to find all your event handlers are in so that it can register them in DI. (It also registers any event handlers in the executing assembly &#x2013; that allows you to add extra handlers for unit testing).</li></ul></li></ul><p>The CreateDbWithDiForHandlers extension method has some
+useful optional parameters- have a look at the code to see what they provide.</p> <blockquote class="wp-block-quote"><p>NOTE: I didn&#x2019;t include the <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner/blob/master/Test/EfHelpers/SetupToTestEvents.cs">SetupToTestEvents</a> class in the EfCore.GeneriEventHandler because it uses code from my EfCore.TestSupport library. You will need to copy it by hand from the GitHub repo into your unit test assembly.</p></blockquote> <h3 id="logging">Logging <a class="anchorlink dashicons-before" href="#logging"></a></h3> <p>The GenericEventRunner Event Runner logs each event handler
+before it is run. The log message starts with a prefix:</p> <ul><li>First letter: &#x2018;A&#x2019; for AfterSave event handlers
+and &#x2018;B&#x2019; for BeforeSave event handlers</li><li>Then number: this show what loop was it run, e.g.
+1, 2, 3 etc. (remember, BeforeHandlers can create new events, which needs another
+loop around to find them). This is generally useful to see what events are
+fired when.</li></ul><p>Here is an example from one of m GenericEventRunner unit
+tests. Notice that the last log message starts with &#x201C;B2&#x201D;, which means it must
+have been triggered by a change caused by one of the event handlers that run in
+the first (i.e. &#x201C;B1&#x201D;) event loop.</p> <pre class="brush: plain; title: ; notranslate">
+&quot;B1: About to run a BeforeSave event handler &#x2026;OrderCreatedHandler.&quot;
+&quot;B1: About to run a BeforeSave event handler &#x2026;AllocateProductHandler.&quot;
+&quot;B2: About to run a BeforeSave event handler &#x2026;TaxRateChangedHandler.&quot;
+</pre> <p>Also, the unit test CreateDbWithDiForHandlers method allows you to capture logs, which can be useful in testing that events handlers run at the correct time.</p> <h2 id="conclusions">Conclusions<a class="anchorlink dashicons-before" href="#conclusions"></a></h2> <p>Well done for getting here! It&#x2019;s a long article but I hope
+it told you &#x201C;why&#x201D; and well as &#x201C;how&#x201D; to use the EfCore.GenericEventRunner
+library. If you are thinking of using this library I recommend you inspecting/cloning
+the <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner">EfCore.GenericEventRunner
+GitHub repo</a> and look at the examples and the unit tests to see how it
+works.</p> <p>While this library is new, I have been working on a similar
+system in my client&#x2019;s application for some time. That means the features and
+approach of this library has been proven in the real-world. In fact, the
+AfterSave events have been added to help deal with some issues that cropped up
+in the client&#x2019;s original implementation. </p> <p>My aim (when I can find time!) is to use this event library
+to try another way to improve the &#x201C;book app&#x201D; that I build for chapter 13 in my
+book &#x201C;<a href="http://bit.ly/2m8KRAZ">Entity Framework Core in Action</a>&#x201D;. You
+can see the original article from the book called &#x201C;<a href="https://www.thereformedprogrammer.net/entity-framework-core-performance-tuning-a-worked-example/">Entity
+Framework Core performance tuning &#x2013; a worked example</a>&#x201D; and I&#x2019;m hoping to build
+the &#x201C;cached values&#x201D; version in a much easier way. </p> <p>Happy coding.</p></body>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
