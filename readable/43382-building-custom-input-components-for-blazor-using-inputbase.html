@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Building Custom Input Components for Blazor using InputBase -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Building Custom Input Components for Blazor using InputBase</h1>
+    <div class="post-content"> <p>Out of the box, Blazor gives us some great components to get building forms quickly and easily. The <code>EditForm</code> component allows us to manage forms, coordinating validation and submission events. There&apos;s also a range of built-in input components which we can take advantage of:</p><ul><li><code>InputText</code></li><li><code>InputTextArea</code></li><li><code>InputSelect</code></li><li><code>InputNumber</code></li><li><code>InputCheckbox</code></li><li><code>InputDate</code></li></ul><p>And of course, we wouldn&apos;t get very far without being able to validate form input, and Blazor has us covered there as well. By default, Blazor uses the data annotations method for validating forms, which if you&apos;ve had any experience developing ASP.NET MVC or Razor Page applications, will be quite familiar.</p><p>Out of the many things I love about Blazor, one is the ability to customise things which don&apos;t quite suit your tastes or needs - Forms is no exception. I&apos;ve previously blogged about <a href="https://chrissainty.com/using-fluentvalidation-for-forms-validation-in-razor-components/">how you can swap out the default data annotations validation for FluentValidation</a>. In this post, I&apos;m going to show you how you can create your own input components using <code>InputBase</code> as a starting point.</p><h2 id="some-issues-when-building-real-world-apps">Some issues when building real-world apps</h2><p>The Blazor team have provided us with some great components to use out of the box, which cover many scenarios. But when building real-world applications, we start to hit little problems and limitations.</p><h3 id="verbose-code">Verbose code</h3><p>Most applications, especially line of business applications, require quite a few forms. These often have a set style and layout throughout the application. When using the built-in input components, this means things can get verbose and repetitive quite quickly.</p><pre><code class="language-html">&lt;EditForm Model=&quot;NewPerson&quot; OnValidSubmit=&quot;HandleValidSubmit&quot;&gt;
+    &lt;DataAnnotationsValidator /&gt;
+    
+    &lt;div class=&quot;form-group&quot;&gt;
+        &lt;label for=&quot;firstname&quot;&gt;First Name&lt;/label&gt;
+        &lt;InputText @bind-Value=&quot;NewPerson.FirstName&quot; class=&quot;form-control&quot; id=&quot;firstname&quot; /&gt;
+        &lt;ValidationMessage For=&quot;NewPerson.FirstName&quot; /&gt;
+    &lt;/div&gt;
+    
+    &lt;div class=&quot;form-group&quot;&gt;
+        &lt;label for=&quot;lastname&quot;&gt;Last Name&lt;/label&gt;
+        &lt;InputText @bind-Value=&quot;NewPerson.LastName&quot; class=&quot;form-control&quot; id=&quot;lastname&quot; /&gt;
+        &lt;ValidationMessage For=&quot;NewPerson.LastName&quot; /&gt;
+    &lt;/div&gt;
+    
+    &lt;div class=&quot;form-group&quot;&gt;
+        &lt;label for=&quot;occupation&quot;&gt;Occupation&lt;/label&gt;
+        &lt;InputText @bind-Value=&quot;NewPerson.Occupation&quot; class=&quot;form-control&quot; id=&quot;occupation&quot; /&gt;
+        &lt;ValidationMessage For=&quot;NewPerson.Occupation&quot; /&gt;
+    &lt;/div&gt;
+    
+    &lt;button type=&quot;submit&quot;&gt;Save&lt;/button&gt;
+&lt;/EditForm&gt;
+</code></pre>
+<p>The more significant issue, however, is maintenance. This code is using Bootstrap for layout and styling, but what happens if that changed and we moved to a different CSS framework? Or a new design was developed, and all the styling and layout had to be rebuilt from scratch? We&apos;d have to go everywhere we had a form in the application and update the code. Having experienced this first hand, I can safely say this isn&apos;t fun.</p><h3 id="limitations-in-the-standard-input-components">Limitations in the standard input components</h3><p>There are some limitations in the standard components as well. For example, the <code>InputSelect</code> component can&apos;t bind to <code>int</code> values, or <code>Guid</code>s, infact it can only bind to <code>string</code> or <code>enum</code> types. Which leads to having to write code in getters and setters to convert string values back and forth.</p><pre><code class="language-csharp">&lt;InputSelect @bind-Value=&quot;CatalogueId&quot;&gt;
+    &lt;option&gt;-- Please Select --&lt;/option&gt;
+    &lt;option values=&quot;1&quot;&gt;General&lt;/option&gt;
+    &lt;option values=&quot;2&quot;&gt;Plumbing&lt;/option&gt;
+    &lt;option values=&quot;3&quot;&gt;Electrical&lt;/option&gt;
+&lt;/InputSelect&gt;
+
+@code {
+    private int _catalogueId;
+    public string CatalogueId
+    {
+        get
+        {
+            return _catalogueId.ToString();
+        }
+        set
+        {
+            _catalogueId = int.Parse(value);
+        }
+    }
+
+}
+</code></pre>
+<h2 id="a-solution-building-custom-input-components">A solution: Building custom input components</h2><p>The approach my team and I have taken at work is to create custom input components which suit our applications needs. By doing this, we&apos;ve greatly reduce the amount of code we write, while also making updates to styling and functionality much quicker and simpler.</p><p>All our form components can have an optional label, input control and validation message. If we didn&apos;t use our custom components, the code would look like this.</p><pre><code class="language-html">&lt;!-- Control with label --&gt;
+&lt;div class=&quot;form-control-wrapper&quot;&gt;
+    &lt;label class=&quot;form-control-label&quot; for=&quot;catalogue&quot;&gt;Catalogue&lt;/label&gt;
+    &lt;InputText class=&quot;form-control&quot; id=&quot;catalogue&quot; @bind-Value=&quot;Form.Catalogue&quot; /&gt;
+    &lt;div class=&quot;form-control-validation&quot;&gt;
+        &lt;ValidationMessage For=&quot;@(() =&gt; Form.Catalogue)&quot; /&gt;
+    &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- Control without label --&gt;
+&lt;div class=&quot;form-control-wrapper&quot;&gt;
+    &lt;InputText class=&quot;form-control&quot; id=&quot;client&quot; @bind-Value=&quot;Form.Client&quot; /&gt;
+    &lt;div class=&quot;form-control-validation&quot;&gt;
+        &lt;ValidationMessage For=&quot;@(() =&gt; Form.Client)&quot; /&gt;
+    &lt;/div&gt;
+&lt;/div&gt;
+</code></pre>
+<p>But with our custom components the same functionality is achieved using far less code.</p><pre><code class="language-html">&lt;!-- Control with label --&gt;
+&lt;SwInputText Label=&quot;Catalogue&quot; @bind-Value=&quot;Form.Catalogue&quot; ValidationFor=&quot;@(() =&gt; Form.Catalogue)&quot; /&gt;
+
+&lt;!-- Control without label --&gt;
+&lt;SwInputText @bind-Value=&quot;Form.Client&quot; ValidationFor=&quot;@(() =&gt; Form.Client)&quot; /&gt;
+</code></pre>
+<p>Now if we want to update the styling of the <code>SwInputText</code> component, we can do it in one place, and the whole of our app is updated. </p><h3 id="how-do-we-do-this">How do we do this?</h3><p>All of the standard input components in Blazor inherit from a single base class called <code>InputBase</code>. This class handles all of the heavy lifting when it comes to validation by integrating with <code>EditContext</code>. It also manages the value binding boilerplate by exposing a <code>Value</code> parameter of type <code>T</code>. Hence whenever you use one of the build-in form controls you bind to it like this, <code>@bind-Value=&quot;myForm.MyValue&quot;</code>.</p><h3 id="building-on-inputbase">Building on InputBase</h3><p>We didn&apos;t want to recreate all the integration with the built-in form component. So we took <code>InputBase</code> as a starting point and built our own components on top of it. This is what the code looks like for our <code>SwInputText</code> component.</p><pre><code class="language-csharp">public class SwInputTextBase : InputBase&lt;string&gt;
+{
+    [Parameter] public string Id { get; set; }
+    [Parameter] public string Label { get; set; }
+    [Parameter] public Expression&lt;Func&lt;string&gt;&gt; ValidationFor { get; set; }
+
+    protected override bool TryParseValueFromString(string value, out string result, out string validationErrorMessage)
+    {
+        result = value;
+        validationErrorMessage = null;
+        return true;
+    }
+}
+</code></pre>
+<pre><code class="language-html">@inherits SwInputTextBase
+
+&lt;div class=&quot;form-control-wrapper&quot;&gt;
+    @if (!string.IsNullOrWhiteSpace(Label))
+    {
+        &lt;label class=&quot;form-control-label&quot; for=&quot;@Id&quot;&gt;@Label&lt;/label&gt;
+    }
+    &lt;input class=&quot;form-control @CssClass&quot; id=&quot;@Id&quot; @bind=&quot;@CurrentValue&quot; /&gt;
+    &lt;div class=&quot;form-control-validation&quot;&gt;
+        &lt;ValidationMessage For=&quot;@ValidationFor&quot; /&gt;
+    &lt;/div&gt;
+&lt;/div&gt;
+</code></pre>
+<p>The <code>SwInputTextBase</code> class inherits from <code>InputBase</code> and the only real work we have to do is provide an implementation for the <code>TryParseValueFromString</code> method and a few additional parameters. </p><p>Because all but one (InputCheckbox) of the built-in input components bind to <code>string</code> representations of the bound value internally. This method is required to convert the string value back to whatever the original type was. In our case, we&apos;re only binding to <code>string</code>s so it&apos;s just a case of setting the <code>result</code> parameter to equal the <code>value</code> parameter and we&apos;re done.</p><p>The majority of the effort has gone into the markup side of the component. This is where we&apos;re encapsulating our UI design and the logic for showing a label or not.</p><h3 id="binding-to-additional-types">Binding to additional types</h3><p>One of the issues we identified earlier was the inability for <code>InputSelect</code> to bind to values other than <code>string</code>s and <code>enum</code>s. We can solve this limitation by adding logic to the <code>TryParseValueFromString</code> method. This is the default implementation for the <code>InputSelect</code> component.</p><pre><code class="language-csharp">protected override bool TryParseValueFromString(string value, out TValue result, out string validationErrorMessage)
+{
+    if (typeof(TValue) == typeof(string))
+    {
+        result = (TValue)(object)value;
+        validationErrorMessage = null;
+        return true;
+    }
+    else if (typeof(TValue).IsEnum)
+    {
+        var success = BindConverter.TryConvertTo&lt;TValue&gt;(value, CultureInfo.CurrentCulture, out var parsedValue);
+        if (success)
+        {
+            result = parsedValue;
+            validationErrorMessage = null;
+            return true;
+        }
+        else
+        {
+            result = default;
+            validationErrorMessage = $&quot;The {FieldIdentifier.FieldName} field is not valid.&quot;;
+            return false;
+        }
+    }
+
+    throw new InvalidOperationException($&quot;{GetType()} does not support the type &apos;{typeof(TValue)}&apos;.&quot;);
+}
+</code></pre>
+<p>Using the same technique as with the <code>SwInputText</code> component above, we can start with <code>InputBase</code> and create our own version of the select component and extend the logic above to allow more types to be bound to the component.</p><pre><code class="language-csharp">protected override bool TryParseValueFromString(string value, out T result, out string validationErrorMessage)
+{
+    if (typeof(T) == typeof(string))
+    {
+        result = (T)(object)value;
+        validationErrorMessage = null;
+
+        return true;
+    }
+    else if (typeof(T) == typeof(int))
+    {
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedValue);
+        result = (T)(object)parsedValue;
+        validationErrorMessage = null;
+
+        return true;
+    }
+    else if (typeof(T) == typeof(Guid))
+    {
+        Guid.TryParse(value, out var parsedValue);
+        result = (T)(object)parsedValue;
+        validationErrorMessage = null;
+
+        return true;
+    }
+    else if (typeof(T).IsEnum)
+    {
+        try
+        {
+            result = (T)Enum.Parse(typeof(T), value);
+            validationErrorMessage = null;
+
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            result = default;
+            validationErrorMessage = $&quot;The {FieldIdentifier.FieldName} field is not valid.&quot;;
+
+            return false;
+        }
+    }
+
+    throw new InvalidOperationException($&quot;{GetType()} does not support the type &apos;{typeof(T)}&apos;.&quot;);
+}
+</code></pre>
+<p>In the above code, we&apos;ve added some additional code to allow <code>int</code>s and <code>Guid</code>s to be bound to the component.</p><p>In this post, we&apos;ve talked about some of the limitations of Blazor&apos;s built-in input components when building real world applications. We talked about the issue of maintance and maintainability as well as some limitations with binding.</p><p>We then explored some ways to deal with the issues we identified. We did this by building custom components on top of <code>InputBase</code>, and replacing the existing markup with our own implementation. This allowed us to encapsulate our UI design in a single place. We then looked at how we can provide our own implementation for the <code>TryParseValueAsString</code> method, from <code>InputBase</code>. This allowed us to bind to additional types which the default components cannot.</p> <div class="coffee-button"> <a class="bmc-button" href="https://www.buymeacoffee.com/chrissainty"> <img src="https://bmc-cdn.nyc3.digitaloceanspaces.com/BMC-button-images/BMC-btn-logo.svg" alt="Buy me a coffee"> <span>Buy me a coffee</span> </a> </div> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
