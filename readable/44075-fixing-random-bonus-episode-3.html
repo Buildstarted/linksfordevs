@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Fixing Random, bonus episode&#xA0;3 -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Fixing Random, bonus episode&#xA0;3</h1>
+    <div class="entry-content"> <p>You might recall that before my immensely long series on ways we could make C# a probabilistic programming language, I did a short series on how we can automatically computed the exact derivative in any direction of a real-valued function of any number of variables for a small cost, by using <a href="https://ericlippert.com/2019/01/07/dual-numbers-part-1/">dual numbers</a>. All we need is for the function we are computing to be computed by addition, subtraction, multiplication, division and exponentiation of functions whose derivatives are known, which is quite a lot of possible functions.</p>
+<p>There is a reason why I did that topic before &#x201C;Fixing Random&#x201D;, but sadly I never got to the connection between differential calculus and sampling from an arbitrary distribution. I thought I might spend a couple of episodes sketching out how it is useful to use automatic differentiation when trying to sample from a distribution. I&#x2019;m not going to write the code; I&#x2019;ll just give some of the &#x201C;flavour&#x201D; of the algorithms.</p>
+<p>Before I get into it, a quick refresher on the Metropolis algorithm. The algorithm is:</p>
+<ul>
+<li>We have a probability distribution function that takes a point and returns a double that is the &#x201C;probability weight&#x201D; of that point. The PDF need not be &#x201C;normalized&#x201D;; that is, the area under the curve need not add up to 1.0. We wish to generate a series of samples that conforms to this distribution.</li>
+<li>We choose a random &#x201C;initial point&#x201D; as the <em>current</em> sample.</li>
+<li>We randomly choose a <em>candidate</em> sample from some distribution based solely on the current sample.</li>
+<li>If the candidate is higher weight than current, it becomes the new current and we yield the value as the sample.</li>
+<li>If it is lower weight, then we take the ratio of candidate weight to current weight, which will be between 0.0 and 1.0. We flip an unfair coin with that probability of getting heads. Heads, we accept the candidate, tails we reject it and try again.</li>
+<li>Repeat; choose a new candidate based on the new current.</li>
+</ul>
+<p>The Metropolis algorithm is straightforward and works, but it has a few problems.</p>
+<ul>
+<li><strong>How do we choose the initial point?</strong></li>
+</ul>
+<p>Since Metropolis is typically used to compute a posterior distribution after an observation, and we typically have the prior distribution in hand, we can use the prior distribution as our source of the initial point.</p>
+<ul>
+<li><strong>What if the initial point is accidentally in a low-probability region?</strong> We might produce a series of unlikely samples before we eventually get to a high-probability current point.</li>
+</ul>
+<p>We can solve this by &#x201C;burning&#x201D; &#x2014; discarding &#x2014; some number of initial samples; we waste computation cycles so we would like the number of samples it takes to get to<br>
+&#x201C;convergence&#x201D; to the true distribution to be small. As we&#x2019;ll see, there are ways we can use automatic differentiation to help solve this problem.</p>
+<ul>
+<li><strong>What distribution should we use to choose the next candidate given the current sample?</strong></li>
+</ul>
+<p>This is a tricky problem. The examples I gave in this series were basically &#x201C;choose a new point by sampling from a normal distribution where the mean is the current point&#x201D;, which seems reasonable, but then you realize that the question has been begged. A normal distribution has two parameters: the mean and the standard deviation. The standard deviation corresponds to &#x201C;how big a step should we typically try?&#x201D;&#xA0; If the deviation is too large then we will step from high-probability regions to low-probability regions frequently, which means that we discard a lot of candidates, which wastes time. If it is too small then we get &#x201C;stuck&#x201D; in a high-probability region and produce a lot of samples close to each other, which is also bad.</p>
+<p>Basically, we have a &#x201C;tuning parameter&#x201D; in the standard deviation and it is not obvious how to choose it to get the right combination of good performance and uncorrelated samples.</p>
+<p>These last two problems lead us to ask an important question: <strong>is there information we can obtain from the weight function that helps us choose a consistently better candidate? </strong>That would lower the time to convergence and might also result in fewer rejections when we&#x2019;ve gotten to a high-probability region.</p>
+<p>I&#x2019;m going to sketch out one such technique in this episode, and another in the next.</p>
+<p>As I noted above, Metropolis is frequently used to sample points from a high-dimensional distribution; to make it easier to understand, I&#x2019;ll stick to one-dimensional cases here, but imagine that instead of a simple curve for our PDF, we have a complex multidimensional surface.</p>
+<p>Let&#x2019;s use as our motivating example the mixture model from many episodes ago:</p>
+<p><img class="alignnone size-full wp-image-6590" src="https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.18.08-pm.png?w=584" alt="Screen Shot 2019-12-10 at 12.18.08 PM.png" srcset="https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.18.08-pm.png?w=584 584w, https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.18.08-pm.png?w=150 150w, https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.18.08-pm.png?w=300 300w, https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.18.08-pm.png?w=768 768w, https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.18.08-pm.png?w=1024 1024w, https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.18.08-pm.png 1101w" sizes="(max-width: 584px) 100vw, 584px"></p>
+<p>Of course we can sample from this distribution directly if we know that it is the sum of two normal distributions, but let&#x2019;s suppose that we don&#x2019;t know that. We just have a function which produces this weight.&#xA0; Let me annotate this function to say where we want to go next if the current sample is in a particular region.</p>
+<p><img class="alignnone size-full wp-image-6592" src="https://ericlippert.files.wordpress.com/2019/12/annotated.jpg?w=584" alt="Annotated.jpg" srcset="https://ericlippert.files.wordpress.com/2019/12/annotated.jpg?w=584 584w, https://ericlippert.files.wordpress.com/2019/12/annotated.jpg?w=1166 1166w, https://ericlippert.files.wordpress.com/2019/12/annotated.jpg?w=150 150w, https://ericlippert.files.wordpress.com/2019/12/annotated.jpg?w=300 300w, https://ericlippert.files.wordpress.com/2019/12/annotated.jpg?w=768 768w, https://ericlippert.files.wordpress.com/2019/12/annotated.jpg?w=1024 1024w" sizes="(max-width: 584px) 100vw, 584px"></p>
+<p>I said that we could use the derivative to help us, but it is very unclear from this diagram how the derivative helps:</p>
+<ul>
+<li>The derivative is small and positive in the region marked &#x201C;go hard right&#x201D; and in the immediate vicinity of the two peaks and one valley.</li>
+<li>The derivative is large and positive in the &#x201C;slight right&#x201D; region and to the left of the tall peak.</li>
+<li>The derivative is large and negative in the &#x201C;slight left&#x201D; region and on the right of the small peak.</li>
+<li>The derivative is small and negative in the &#x201C;hard left&#x201D; region and in the immediate vicinity of the peaks and valley.</li>
+</ul>
+<p>No particular value for the derivative clearly identifies a region of interest. It seems like we cannot use the derivative to help us out here; what we really want is to move away from small-area regions and towards large-area regions.</p>
+<p>Here&#x2019;s the trick.</p>
+<p>Ready?</p>
+<p>I&#x2019;m going to graph the <em>log</em> of the weight function below the weight function:</p>
+<p><img class="alignnone size-full wp-image-6593" src="https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.44.39-pm.png?w=546" alt="Screen Shot 2019-12-10 at 12.44.39 PM.png" srcset="https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.44.39-pm.png 546w, https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.44.39-pm.png?w=141 141w, https://ericlippert.files.wordpress.com/2019/12/screen-shot-2019-12-10-at-12.44.39-pm.png?w=282 282w" sizes="(max-width: 546px) 100vw, 546px"></p>
+<p><em>Now look at the slope of the log-weight</em>. It is very positive in the &#x201C;move hard right&#x201D; region, and becomes more and more positive the farther left we go! Similarly in the &#x201C;move hard left&#x201D; region; the slope of the log-weight is very negative, and becomes more negative to the right.</p>
+<p>In the &#x201C;slight right&#x201D; and &#x201C;slight left&#x201D; regions, the slope becomes more moderate, and when we are in the &#x201C;stay around here&#x201D; region, the slope of the log-weight is close to zero.<em> This is what we want.</em></p>
+<p>(ASIDE: Moreover, this is even more what we want because in realistic applications we often <em>already</em> have the log-weight function in hand, not the weight function. Log weights are convenient because you can represent arbitrarily small probabilities with &#x201C;normal sized&#x201D; numbers.)</p>
+<p>We can then use this to modify our candidate proposal distribution as follows: rather than using a normal distribution centered on the <em>current</em> point to propose a candidate, <strong>we compute the derivative of the log of the weight function using dual numbers</strong>, and <em>we use the size and sign of the slope to tweak the center of the proposal distribution. </em></p>
+<p>That is, if our current point is far to the left, we see that the slope of the log-weight is very positive, so we move our proposal distribution some amount to the right, and then we are more likely to get a candidate value that is in a higher-probability region. But if our current point is in the middle, the slope of the log-weight is close to zero so we make only a small adjustment to the proposal distribution.</p>
+<p>(And again, I want to emphasize: realistically we would be doing this in a high-dimensional space, not a one-dimensional space. We would compute the <em>gradient</em> &#x2014; the direction in which the slope increases the most &#x2014; and head that direction.)</p>
+<p>If you work out the math, which I will not do here, the difference is as follows. Suppose our non-normalized weight function is <em>p</em>.</p>
+<ul>
+<li>In the plain-vanilla proposal algorithm we would use as our candidate distribution a normal centered on <em>current</em> with standard deviation <em>s.</em></li>
+<li>In our modified version we would use as our candidate distribution a normal centered on <em>current + (s / 2) * &#x2207;log(p(current))</em>, and standard deviation <em>s</em>.</li>
+</ul>
+<p>Even without the math to justify it, this should seem reasonable. The typical step in the vanilla algorithm is on the order of the standard deviation; we&#x2019;re making an adjustment towards the higher-probability region of about half a step if the slope is moderate, and a small number of steps if the slope is severe; the areas where the slope is severe are the most unlikely areas so we need to get out of them quickly.</p>
+<p>If we do this, we end up doing more math on each step (to compute the log if we do not have it already, and the gradient) but <strong>we converge to the high-probability region much faster.</strong></p>
+<p>If you&#x2019;ve been following along closely you might have noticed two issues that I seem to be ignoring.</p>
+<p>First, we have not eliminated the need for the user to choose the tuning parameter <em>s</em>. Indeed, this only addresses one of the problems I identified earlier.</p>
+<p>Second, the Metropolis algorithm requires for its correctness that the proposal distribution <em>not ever be biased in one particular direction! </em>But the whole <em>point</em> of this improvement is to bias the proposal towards the high-probability regions. Have I pulled a fast one here?</p>
+<p>I have, but we can fix it. I mentioned in the original series that I would be discussing the Metropolis algorithm, which is the oldest and simplest version of this algorithm. In practice we use a variation on it called Metropolis-Hastings which adds a correction factor to allow non-symmetric proposal distributions.</p>
+<p>The mechanism I&#x2019;ve sketched out today is called the <a href="https://en.wikipedia.org/wiki/Metropolis-adjusted_Langevin_algorithm">Metropolis Adjusted Langevin Algorithm</a> and it is quite interesting. It turns out that this technique of &#x201C;walk in the direction of the gradient plus a random offset&#x201D; is also how physicists model movements of particles in a viscous fluid where the particle is being jostled by random molecule-scale motions in the fluid. (That is, by Brownian motion.) It&#x2019;s nice to see that there is a physical interpretation in what would otherwise be a very abstract algorithm to produce samples.</p> <p><strong>Next time on FAIC:</strong> The fact that we have a connection to a real-world physical process here is somewhat inspiring. In the next episode I&#x2019;ll give a sketch of another technique that uses ideas from physics to improve the accuracy of a Metropolis process.</p> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
