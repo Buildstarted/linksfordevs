@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Send MFA signin requirement to OpenID Connect server using ASP.NET Core Identity and&#xA0;IdentityServer4 -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Send MFA signin requirement to OpenID Connect server using ASP.NET Core Identity and&#xA0;IdentityServer4</h1>
+    <div id="post-13104" class="post-13104 post type-post status-publish format-standard hentry category-net-core category-asp-net-core category-dotnet category-mvc category-oauth2 category-security category-web tag-2fa tag-authentication tag-mfa tag-oidc tag-openid-connect"> <div class="entry-content"> <p>This post adds the custom ASP.NET Core Identity, IdentityServer4 logic to check for the &#x201C;acr_values&#x201D; and react if a client application requests MFA for authentication. The &#x201C;acr_values&#x201D; parameter is used to pass the mfa value from the client to the server in the authentication request.</p>
+<p><strong>Code:</strong> <a href="https://github.com/damienbod/AspNetCoreHybridFlowWithApi">https://github.com/damienbod/AspNetCoreHybridFlowWithApi</a></p>
+<p><em>Blogs in this series</em></p> <p><strong>OpenID Connect ASP.NET Core client</strong></p>
+<p>The Razor Page ASP.NET Core Open ID Connnect Client application uses the AddOpenIdConnect method to login to the Open ID Connect server. The &#x201C;acr_values&#x201D; parameter is set with the &#x201C;mfa&#x201D; value and sent with the authentication request. The OpenIdConnectEvents is used to add this.</p>
+<pre class="brush: csharp; title: ; notranslate">
+public void ConfigureServices(IServiceCollection services)
+{
+	//...
+	
+	services.AddAuthentication(options =&gt;
+	{
+		options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+		options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+	})
+	.AddCookie()
+	.AddOpenIdConnect(options =&gt;
+	{
+		options.SignInScheme = &quot;Cookies&quot;;
+		options.Authority = &quot;https://localhost:44352&quot;;
+		options.RequireHttpsMetadata = true;
+		options.ClientId = &quot;AspNetCoreRequireMfaOidc&quot;;
+		options.ClientSecret = &quot;AspNetCoreRequireMfaOidcSecret&quot;;
+		options.ResponseType = &quot;code id_token&quot;;
+		options.Scope.Add(&quot;profile&quot;);
+		options.Scope.Add(&quot;offline_access&quot;);
+		options.SaveTokens = true;
+		options.Events = new OpenIdConnectEvents
+		{
+			OnRedirectToIdentityProvider = context =&gt;
+			{
+				context.ProtocolMessage.SetParameter(&quot;acr_values&quot;, Amr.Mfa);
+
+				return Task.FromResult(0);
+			}
+		};
+	});
+
+	//...
+}
+</pre>
+<p><strong>OpenID Connect IdentityServer 4 server with ASP.NET Core Identity</strong></p>
+<p>On the OpenID Connect server, which is implemented using ASP.NET Core Identity with MVC views, a new view ErrorEnable2FA.cshtml is created, and added.</p>
+<p>This view will be displayed if the Identity comes from an application which requires MFA but the user has not activated this in Identity. The view informs the user, and adds a link to activate this.</p>
+<pre class="brush: csharp; title: ; notranslate">
+@{
+    ViewData[&quot;Title&quot;] = &quot;ErrorEnable2FA&quot;;
+}
+
+&lt;h1&gt;The client application requires you to have MFA enabled. Enable this, try login again.&lt;/h1&gt;
+
+&lt;br /&gt;
+
+You can enable MFA to login here:
+
+
+&lt;br /&gt;
+
+&lt;a asp-controller=&quot;Manage&quot; asp-action=&quot;TwoFactorAuthentication&quot;&gt;Enable MFA&lt;/a&gt;
+
+</pre>
+<p>In the Login method, the IIdentityServerInteractionService interface implementation _interaction is used to access the Open ID Connnect request parameters. The &#x201C;acr_values&#x201D; is accessed using the AcrValues. As the client sent this as mfa, this can then be checked.</p>
+<p>If MFA is required, and the user in ASP.NET Core Identity has 2FA enabled, then the login continues. If the user has no 2FA enabled, the user is redirected to the custom view ErrorEnable2FA.cshtml. Then ASP.NET Core Identity signs the user in. </p>
+<pre class="brush: csharp; title: ; notranslate">
+//
+// POST: /Account/Login
+[HttpPost]
+[AllowAnonymous]
+[ValidateAntiForgeryToken]
+public async Task&lt;IActionResult&gt; Login(LoginInputModel model)
+{
+	var returnUrl = model.ReturnUrl;
+	var context = await _interaction.GetAuthorizationContextAsync(returnUrl);
+	var requires2Fa = context?.AcrValues.Count(t =&gt; t.Contains(&quot;mfa&quot;)) &gt;= 1;
+
+	var user = await _userManager.FindByNameAsync(model.Email);
+	if(user != null &amp;&amp; !user.TwoFactorEnabled &amp;&amp; requires2Fa)
+	{
+		return RedirectToAction(nameof(ErrorEnable2FA));
+	}
+</pre>
+<p>The ExternalLoginCallback works like the local Identity login. The AcrValues property is checked for the &#x201C;mfa&#x201D; value and if it is sent, the 2FA is forced before the login completes, ie redirected to the ErrorEnable2FA view.</p>
+<pre class="brush: csharp; title: ; notranslate">
+//
+// GET: /Account/ExternalLoginCallback
+[HttpGet]
+[AllowAnonymous]
+public async Task&lt;IActionResult&gt; ExternalLoginCallback(string returnUrl = null, string remoteError = null)
+{
+	var context = await _interaction.GetAuthorizationContextAsync(returnUrl);
+	var requires2Fa = context?.AcrValues.Count(t =&gt; t.Contains(&quot;mfa&quot;)) &gt;= 1;
+
+	if (remoteError != null)
+	{
+		ModelState.AddModelError(string.Empty, _sharedLocalizer[&quot;EXTERNAL_PROVIDER_ERROR&quot;, remoteError]);
+		return View(nameof(Login));
+	}
+	var info = await _signInManager.GetExternalLoginInfoAsync();
+
+	if (info == null)
+	{
+		return RedirectToAction(nameof(Login));
+	}
+
+	var email = info.Principal.FindFirstValue(ClaimTypes.Email);
+
+	if (!string.IsNullOrEmpty(email))
+	{
+		var user = await _userManager.FindByNameAsync(email);
+		if (user != null &amp;&amp; !user.TwoFactorEnabled &amp;&amp; requires2Fa)
+		{
+			return RedirectToAction(nameof(ErrorEnable2FA));
+		}
+	}
+
+	// Sign in the user with this external login provider if the user already has a login.
+	var result = await _signInManager.ExternalLoginSignInAsync(info.LoginProvider, info.ProviderKey, isPersistent: false);
+	
+</pre>
+<p>If the user is already logged in, the client application still validates the &#x201C;amr&#x201D; claim, and can setup the MFA then with a link to the ASP.NET Core Identity view.</p>
+<p><img src="https://damienbod.files.wordpress.com/2019/12/acr_values-1.png?w=640" alt width="640" class="alignnone size-full wp-image-13119" srcset="https://damienbod.files.wordpress.com/2019/12/acr_values-1.png?w=640&amp;h=501 640w, https://damienbod.files.wordpress.com/2019/12/acr_values-1.png?w=150&amp;h=117 150w, https://damienbod.files.wordpress.com/2019/12/acr_values-1.png?w=600&amp;h=470 600w, https://damienbod.files.wordpress.com/2019/12/acr_values-1.png?w=768&amp;h=601 768w, https://damienbod.files.wordpress.com/2019/12/acr_values-1.png?w=1024&amp;h=802 1024w, https://damienbod.files.wordpress.com/2019/12/acr_values-1.png 1105w" sizes="(max-width: 640px) 100vw, 640px"></p>
+<p><strong>Links:</strong></p>
+<p><a href="https://tools.ietf.org/html/draft-ietf-oauth-amr-values-04">https://tools.ietf.org/html/draft-ietf-oauth-amr-values-04</a></p>
+<p><a href="https://openid.net/specs/openid-connect-core-1_0.html">https://openid.net/specs/openid-connect-core-1_0.html</a></p>
+<blockquote class="wp-embedded-content"><p><a href="https://hajekj.net/2017/03/06/forcing-reauthentication-with-azure-ad/">Forcing reauthentication with Azure AD</a></p></blockquote> <p><a href="https://docs.microsoft.com/en-us/azure/active-directory/authentication/concept-mfa-howitworks">https://docs.microsoft.com/en-us/azure/active-directory/authentication/concept-mfa-howitworks</a></p>
+<p><a href="https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-protocols-oidc">https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-protocols-oidc</a></p> </div> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
