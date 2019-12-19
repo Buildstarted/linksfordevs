@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Why would a table with a Clustered Columnstore Index have many open rowgroups? -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Why would a table with a Clustered Columnstore Index have many open rowgroups?</h1>
+    <div class="post-text"> <p>I was experiencing some performance issues with a query yesterday and upon further investigation, I noticed what I believe is odd behavior with a clustered columnstore index that I&apos;m trying to get to the bottom of. </p> <p>The table is </p> <pre><code>CREATE TABLE [dbo].[NetworkVisits](
+    [SiteId] [int] NOT NULL,
+    [AccountId] [int] NOT NULL,
+    [CreationDate] [date] NOT NULL,
+    [UserHistoryId] [int] NOT NULL
+)
+</code></pre> <p>with the index:</p> <pre><code>CREATE CLUSTERED COLUMNSTORE INDEX [CCI_NetworkVisits] 
+   ON [dbo].[NetworkVisits] WITH (DROP_EXISTING = OFF, COMPRESSION_DELAY = 0) ON [PRIMARY]
+</code></pre> <p>The table currently has 1.3 Billion rows in it and we are constantly inserting new rows to it. When I say constantly, I mean all the time. It&apos;s a steady stream of inserting one row at a time to the table. </p> <pre><code>Insert Into NetworkVisits (SiteId, AccountId, CreationDate, UserHistoryId)
+Values (@SiteId, @AccountId, @CreationDate, @UserHistoryId)
+</code></pre> <p>Execution plan <a href="https://www.brentozar.com/pastetheplan/?id=HJCeiEt0H">here</a></p> <p>I also have a scheduled job that runs every 4 hours to delete duplicate rows from the table. The query is:</p> <pre><code>With NetworkVisitsRows
+  As (Select SiteId, UserHistoryId, Row_Number() Over (Partition By SiteId, UserHistoryId
+                                    Order By CreationDate Asc) RowNum
+        From NetworkVisits
+       Where CreationDate &gt; GETUTCDATE() - 30)
+DELETE
+FROM NetworkVisitsRows
+WHERE RowNum &gt; 1
+Option (MaxDop 48)
+</code></pre> <p>The execution plan has been pasted <a href="https://www.brentozar.com/pastetheplan/?id=BkVWc4YRH">here</a>.</p> <p>While digging into the issue, I noticed that the <code>NetworkVisits</code> table had roughly 2000 rowgroups in it, with about 800 of them being in an open state and no where near the max allowed (1048576). Here is a small sample of what I was seeing:</p> <p><a href="https://i.stack.imgur.com/KNG0O.jpg"><img src="https://i.stack.imgur.com/KNG0O.jpg" alt="enter image description here"></a></p> <p>I ran a reorganize on the index, which compressed all but 1 rowgroup, but this morning I checked again and we again have multiple open rowgroups - the one that was created yesterday after the reorganize, then 3 others each created roughly around the time the deletion job ran:</p> <pre><code>TableName       IndexName           type_desc               state_desc  total_rows  deleted_rows    created_time
+NetworkVisits   CCI_NetworkVisits   CLUSTERED COLUMNSTORE   OPEN        36754       0               2019-12-18 18:30:54.217
+NetworkVisits   CCI_NetworkVisits   CLUSTERED COLUMNSTORE   OPEN        172103      0               2019-12-18 20:02:06.547
+NetworkVisits   CCI_NetworkVisits   CLUSTERED COLUMNSTORE   OPEN        132628      0               2019-12-19 04:03:10.713
+NetworkVisits   CCI_NetworkVisits   CLUSTERED COLUMNSTORE   OPEN        397718      0               2019-12-19 08:02:13.063
+</code></pre> <p>I&apos;m trying to determine what possibly could be causing this to create new rowgroups instead of using the existing one. </p> <p>Is it possibly memory pressure or contention between the insert and the delete? Is this behavior documented anywhere?</p> <p>We&apos;re running SQL Server 2017 CU 16 Enterprise Edition on this server. </p> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
