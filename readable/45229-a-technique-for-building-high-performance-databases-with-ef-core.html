@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+A technique for building high-performance databases with EF Core -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>A technique for building high-performance databases with EF Core</h1>
+    <body><p>As the writer of the book &#x201C;<a href="http://bit.ly/2m8KRAZ">Entity
+Framework Core in Action</a>&#x201D; I get asked to build, or fix, applications using
+Entity Framework Core (EF Core) to be &#x201C;fast&#x201D;. Typically, &#x201C;fast&#x201D; means the
+database queries (reads) should return quickly, which in turn improves the
+scalability of the database.</p> <p>Over the years I have worked on a lot of databases, and I
+have found several ways to improve database accesses. In this article I
+describe a new technique I found that uses <a href="https://www.thereformedprogrammer.net/a-robust-event-driven-architecture-for-using-with-entity-framework-core/">an
+event-driven technique</a> to update cached values in the actual SQL database. For
+me this approach is robust, fairly easy to add to an existing database, and can
+make reads quite fast. You might want to bookmark this article in case your
+boss comes up late in a project and says &#x201C;the application isn&#x2019;t fast enough!&#x201D; &#x2013;
+this might be just the approach you need.</p> <p>The other articles in this series are:</p> <ul><li>This article describes a way to improve the performance of a database query when using EF Core. For the example application the performance gain is significate.</li><li>The technique adds new cache values to the existing database and updates them via an event-driven approach provided by my <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner">EfCore.GenericEventRunner</a> library.</li><li>It is one of the simplest ways to add/update cache values, especially if you want to apply it to an existing SQL database.</li><li>The article is very long because I describe both the &#x201C;why&#x201D; and &#x201C;how&#x201D; of this approach works.</li><li>There is an example application in my GitHub repo, <a href="https://github.com/JonPSmith/EfCoreSqlAndCosmos">EfCoreSqlAndCosmos</a>, that you can run yourself.</li></ul><h2 id="setting-the-scene-picking-the-best-way-to-performance-tune">Setting the scene &#x2013; picking the best way to performance tune<a class="anchorlink dashicons-before" href="#setting-the-scene-picking-the-best-way-to-performance-tune"></a></h2> <p>There are some things you can do to improve a database query
+using EF Core &#x2013; mainly its about writing LINQ queries that translate into
+efficient SQL database queries. But with big or complex databases this can only
+take you so far. At that point you need to think about altering the database to
+make some parts of the database query easier to do.</p> <p>The known way to speed things up is to use some form of cache, i.e. part of the query that takes a long time is pre-computed and stored so that the query can use this cached value instead. In my example I&#x2019;m going to pre-compute the average review votes for a book (think Amazon&#x2019;s star rating) &#x2013; see <a href="https://www.thereformedprogrammer.net/a-technique-for-building-high-performance-databases-with-ef-core/#performance-improvements">this section for the performance improvements</a> this provides. But the cached value(s) could be anything&#x2013; for one of my clients it was pre-calculating the total pricing of a large and complex project.</p> <p>Using cached values can make significant improvements to
+performance (see example later), but there are some big downsides. Caching data
+is notoriously difficult to get right. The typical problem is that the cache
+doesn&#x2019;t get updated when the original data changes. This means the cache value
+returns old (&#x201C;stale&#x201D;) data when it shouldn&#x2019;t. See this <a href="https://twitter.com/Nick_Craver/status/1198598285025521665">recent tweet
+from Nick Craven</a> who works at StackOverflow &#x2013; his comment is &#x201C;<em>Only cache if find you
+need to</em>&#x201D; and goes on to say &#x201C;<em>It
+absolutely has downsides in memory, confusion, complexity, races, etc. It&#x2019;s not
+free</em>.&#x201D;</p> <p>Therefore, I am always looking for caching designs that are
+simple and robust, i.e. you can be sure that the cache gets updated when the
+data changes. One approach I really like is using a two-database CQRS database
+design which is good, but not simple (I have already written about this: see <a href="https://www.thereformedprogrammer.net/ef-core-combining-sql-and-nosql-databases-for-better-performance/">this
+article on performance gain</a>, and <a href="https://www.thereformedprogrammer.net/building-a-robust-cqrs-database-with-ef-core-and-cosmos-db/">another
+article on a new design</a> using Cosmos Db). I
+needed a simpler solution for a client that could be added to their existing
+databases, which is where this new event-driven approach comes from. The rest
+of the article cover adding cached values to an example application and what
+performance gains that gave me.</p> <h2 id="example-implementation-the-book-app">Example implementation &#x2013; the book app<a class="anchorlink dashicons-before" href="#example-implementation-the-book-app"></a></h2> <p>The example application I am using is my &#x201C;book app&#x201D;, which
+is I super-simple book selling application. I used this in my &#x201C;<a href="http://bit.ly/2m8KRAZ">Entity Framework Core in Action</a>&#x201D; book so I
+have lots of performance data for this app. In this application I cache two
+sets of data:</p> <ol><li>A string holding the list of author&#x2019;s names,
+e.g. &#x201C;Erich Gamma, John Vlissides, Richard Helm, Ralph Johnson&#x201D; (those names
+are from the famous &#x201C;Design Patterns: Elements of Reusable Object-Oriented
+Software&#x201D; book). This speeds up the display as it saves looking for each author
+and getting their name.</li><li>The Reviews information, which is the number of
+reviews and the average star rating for all those reviews. This speeds up both
+the sorting/filter by the books average star rating and also speeds up the
+display of the book because </li></ol><p>Here is a diagram to showing you the display of one book, with the parts we are going to cache to improve the performance of the book app.</p> <figure class="wp-block-image"><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/BookAppCacheValues-1024x249.png" alt class="wp-image-1976" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/BookAppCacheValues-1024x249.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/BookAppCacheValues-300x73.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/BookAppCacheValues-768x187.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/BookAppCacheValues.png 1069w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>I found there are two ways you can update a calculated cache
+values. They are:</p> <ol><li>: You can
+recompute the cached value from the database, e.g. ReviewsCount = Book.Reviews.Count();</li><li><strong>Delta
+Update</strong>: You can update the cached value by adding the change (delta) to the
+existing cached value, e.g. ReviewsCount = ReviewsCount + 1;</li></ol><p>The Complete Revaluation approach is the most obvious and
+works for everything, but as you will see has some issues when accessing the
+database. The Delta Update approach is quicker and is good for mathematical
+data, but if you miss something in your implementation then you can get the
+wrong answer. </p> <blockquote class="wp-block-quote"><p>NOTE: With the Delta Update approach I recommend building a service that will calculate the values using the Complete Revaluation approach and checks/updates any cached values if there is a problem. You can run when the system is lightly loaded to a) ensure the cache values up to date and b) spot if there are any problems in your Delta Update code.</p></blockquote> <p>I will describe both of these approaches, starting with the
+List of author&#x2019;s names, which uses the Complete Revaluation approach</p> <p>I used the Complete Revaluation approach to create the common-delimited string of author&#x2019;s names. &#xA0;Here is a diagram giving you an overview of how it works.</p> <figure class="wp-block-image"><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/AuthorNameCacheUpdateViaEvents-1024x397.png" alt class="wp-image-1977" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/AuthorNameCacheUpdateViaEvents-1024x397.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/AuthorNameCacheUpdateViaEvents-300x116.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/AuthorNameCacheUpdateViaEvents-768x298.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/AuthorNameCacheUpdateViaEvents.png 1139w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>Creating an event when an individual Author&#x2019; Name is
+described in <a href="https://www.thereformedprogrammer.net/a-robust-event-driven-architecture-for-using-with-entity-framework-core/#stage-1-adding-event-triggers-to-your-entity-classes">this
+section of my previous article</a>, so I&#x2019;m going to focus first on the event
+handler.</p> <blockquote class="wp-block-quote"><p>NOTE: You should read the article &#x201C;<a href="https://www.thereformedprogrammer.net/efcore-genericeventrunner-an-event-driven-library-that-works-with-ef-core/">EfCore.GenericEventRunner: an event-driven library that works with EF Core</a>&#x201D; to understand my code as I am using the EfCore.GenericEventRunner library in my example code.</p></blockquote> <p>Here is the event handler code that will recompute the string of authors for each book. It&#x2019;s a bit more complicated than you would think, because the changed name hasn&#x2019;t yet been written to the database yet. </p> <pre class="brush: csharp; title: ; notranslate">
+public class AuthorNameUpdatedHandler :
+    IBeforeSaveEventHandler&lt;AuthorNameUpdatedEvent&gt;
+{
+    private readonly SqlEventsDbContext _context;
+
+    public AuthorNameUpdatedHandler(SqlEventsDbContext context)
+    {
+        _context = context;
+    }
+
+    public IStatusGeneric Handle(EntityEvents callingEntity, 
+        AuthorNameUpdatedEvent domainEvent)
+    {
+        foreach (var bookWithEvents in _context.BookAuthors
+            .Where(x =&gt; x.AuthorId == domainEvent.ChangedAuthor.AuthorId)
+            .Select(x =&gt; x.Book))
+        {
+            var allAuthorsInOrder = _context.Set&lt;BookWithEvents&gt;()
+                .Where(x =&gt; x.BookId == bookWithEvents.BookId)
+                .Select(x =&gt; x.AuthorsLink.OrderBy(y =&gt; y.Order).Select(y =&gt; y.Author).ToList())
+                .Single();
+
+            var newAuthorsOrdered = string.Join(&quot;, &quot;, allAuthorsInOrder.Select(x =&gt;
+                x.AuthorId == domainEvent.ChangedAuthor.AuthorId
+                    ? domainEvent.ChangedAuthor.Name 
+                    : x.Name));
+
+            bookWithEvents.AuthorsOrdered = newAuthorsOrdered;
+        }
+
+        return null;
+    }
+}
+</pre> <p>The lines to point out in the code are:</p> <ul><li>Lines 14 to 16: The author may have worked on multiple books, so we need update each book&#x2019;s AuthorsOrdered string. Note that the domainEvent contains an instance of the Author class where the Name has been changed.</li><li>Lines 18 to 21: Because the author&#x2019;s new name that created this event isn&#x2019;t in the database, we can&#x2019;t just read the current Author&#x2019;s name from the database. I have therefore read in all the Author classes, in the correct order first&#x2026;</li><li>Then in lines 23 to 26 I go though them and when it comes to the Author that has been changed, we substitute the new Name string instead of the existing database Name string.</li></ul><p>This last point shows that we need to be careful about
+accessing the database, because the events are run just before SaveChanges and
+therefore some data hasn&#x2019;t been saved. </p> <p>For the ReviewCount and ReviewsAverageVotes I used the Delta Update approach, which works well with mathematical changes. Here is a diagram showing how the &#x201C;add a new review&#x201D; events works:</p> <figure class="wp-block-image"><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/ReviewsCacheUpdateViaEvents-1024x353.png" alt class="wp-image-1978" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/ReviewsCacheUpdateViaEvents-1024x353.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/ReviewsCacheUpdateViaEvents-300x103.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/ReviewsCacheUpdateViaEvents-768x265.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/ReviewsCacheUpdateViaEvents.png 1177w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>As you will see it is much quicker to calculate and doesn&#x2019;t
+need to access the database, which also makes the code simpler. Here is the
+&#x201C;add new review&#x201D; event handler.</p> <pre class="brush: csharp; title: ; notranslate">
+public class ReviewAddedHandler :
+    IBeforeSaveEventHandler&lt;BookReviewAddedEvent&gt;
+{
+    public IStatusGeneric Handle(EntityEvents callingEntity, 
+        BookReviewAddedEvent domainEvent)
+    {
+        var totalStars = Math.Round(
+            domainEvent.Book.ReviewsAverageVotes * 
+            domainEvent.Book.ReviewsCount)
+            + domainEvent.NumStars;
+        var numReviews = domainEvent.Book.ReviewsCount + 1;
+        domainEvent.UpdateReviewCachedValues(numReviews, 
+            totalStars / numReviews);
+
+        return null;
+    }
+}
+</pre> <p>The lines to point out in the code are:</p> <ul><li>Lines 7 to 9: I get the total stars applied to this book by multiply the average star rating by the number of reviews (simple maths). I then add the delta change (line 10), which is the star rating from the new Review.</li><li>Line 11: I add 1 to the ReviewsCount because this is an &#x201C;Add new Review&#x201D; event.</li><li>Lines 12 to 13: The Book class provided an Action that can be called by the events to set the ReviewsCount and ReviewsAverageVotes. This is a nice way to control what the event handler can do within the Book class. </li></ul> <p>As I said earlier it is a good idea to back up Delta Update
+approach with code that will recalculate the cached values using the Complete
+Revaluation approach. If you are adding either approach to an existing
+database, then you will need a tool to set up the cache values for existing
+data anyway. And with a little a bit more work you can use the same tool to catch
+any updates that are going wrong and get logging/feedback so that you can try a
+track down the software problem.</p> <p>I always build a tool like this if I add cache values to a
+database. You can see my <a href="https://github.com/JonPSmith/EfCoreSqlAndCosmos/blob/master/ServiceLayer/BooksSqlWithEvents/Services/HardResetCacheService.cs">HardResetCacheService</a>
+class that uses the Complete Revaluation approach to check and reset as
+necessary any cache values. It&#x2019;s not super-fast, but you can run it when you
+know the system is normally lightly loaded, or manually if you think there is
+something wrong. Hopefully you won&#x2019;t use it a lot, but if you do need it you
+will be very happy it&#x2019;s there!</p> <h2 id="making-the-cache-design-robust">Making the cache design robust <a class="anchorlink dashicons-before" href="#making-the-cache-design-robust"></a></h2> <p>There are two parts to making the design <em>robust</em>, which means the cache values are
+always correct. As I said at the start, making sure the cache values don&#x2019;t
+return old (&#x201C;stale&#x201D;) or incorrect data is a big challenge. In this design there
+are two things to cover:</p> <ol><li>Making sure a change in the underlying data is
+reflected into the cache values</li><li>Handling multiple updates happening in parallel.</li></ol> <p>The event-driven system I am using ensures that a change in
+any data that effects a cache value can be captured and sent to the appropriate
+event handler to update the cache property. Assuming you haven&#x2019;t got a bug in
+your system then this will work.</p> <p>The other part of the event-driven design is the original
+data and the cache values are store in the same transaction. This means if
+anything goes wrong then neither changes are saved (see more on the <a href="https://www.thereformedprogrammer.net/a-robust-event-driven-architecture-for-using-with-entity-framework-core/#second-benefit-its-robust-by-design">design
+of event-driven approach</a> to see how this works). </p> <p>We now need to talk about multiple updates happening in
+parallel, which brings in all sort of interesting things. Say two people added
+a new review to the book at exactly the same time. If we don&#x2019;t do anything to
+handle this correctly the cache update from one of those reviews could be lost.
+This is known as a <a href="https://blog.sqlauthority.com/2012/11/15/sql-server-concurrency-basics-guest-post-by-vinod-kumar/">concurrency
+issue</a>.</p> <p>This is the part that took the most
+time to think. I spent days thinking around all the different concurrency
+issues that could cause a problem and then even more days coming up with the
+best way to handle those concurrency issues</p> <p>I considered doing the cache update
+inside a transaction, but the isolation level needed for totally accurate cache
+updating required &#x2018;locking&#x2019; a lot of data. Even using direct SQL commands to
+calculate and update the cache isn&#x2019;t safe (see this fascinating SO
+question/answer entitled &#x201C;<a href="https://stackoverflow.com/questions/21468742/is-a-single-sql-server-statement-atomic-and-consistent">Is
+a single SQL Server statement atomic and consistent?</a>&#x201D;).</p> <p>I found the best way to handle concurrency issues is to use EF Core concurrency tools to throw a DbUpdateConcurrencyException and then working out the correct cache value. This is most likely the most complex part of the design and I start with the try/catch of exceptions in my EfCore.GenericEventRunner library. Here is a diagram to show you what happens if two reviews are added at the same time.</p> <figure class="wp-block-image"><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventsRunnerConcurrencyHandling.png" alt class="wp-image-1979" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventsRunnerConcurrencyHandling.png 802w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventsRunnerConcurrencyHandling-300x205.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/GenericEventsRunnerConcurrencyHandling-768x524.png 768w" sizes="(max-width: 802px) 100vw, 802px"></figure><p>Now let&#x2019;s look at the code I need to
+handle these types of concurrency issue.</p> <h3 id="adding-handling-exceptions-fromsavechanges-savechangesasync">Adding handling exceptions from
+SaveChanges/SaveChangesAsync<a class="anchorlink dashicons-before" href="#adding-handling-exceptions-fromsavechanges-savechangesasync"></a></h3> <p>First I needed to add a way to
+capture exceptions when it calls SaveChanges or SaveChangesAsync. I already
+have a pattern for doing this in my other libraries (<a href="https://github.com/JonPSmith/EfCore.GenericServices">EfCore.GenericServices</a>
+and <a href="https://github.com/JonPSmith/EfCore.GenericBizRunner">EfCore.GeneriBizRunner</a>). This allows you to add exception handler to catch database
+exceptions.</p> <p>Up until now this feature has been
+used for turning database errors into error messages that are a) user-friendly
+and b) don&#x2019;t disclose anything about your system (see <a href="https://www.thereformedprogrammer.net/entity-framework-core-validating-data-and-catching-sql-errors/#example-exception-handler-targeting-sql-server">this
+section</a> from my article &#x201C;EF Core &#x2013; validating data
+and catching SQL errors&#x201D;). But now I needed a way to handle the DbUpdateConcurrencyException
+where my code fixes the problem that caused the concurrency exception and it
+then calls SaveChanges/SaveChangesAsync again. </p> <p>To do that I have added the same
+exception handler capability into my EfCore.GenericEventRunner library, but
+enhanced it for handling concurrency issues. Previously it returned null
+(exception not handled, so rethrow) or a &#x201C;bad status&#x201D; (contains user-friendly
+error messages to show the user). I added a third, return a &#x201C;good status&#x201D; (i.e.
+no errors) which &#xA0;means try the call to SaveChanges/SaveChangesAsync
+again.</p> <p>This &#x201C;good status&#x201D; is what I use when
+I fix the problems with the cache values.&#xA0;
+Here is the code in my EfCore.GenericEventRunner library that surrounds its
+calling of the base SaveChanges.</p> <pre class="brush: csharp; title: ; notranslate">
+do
+{
+    try
+    {
+        status.SetResult(callBaseSaveChanges.Invoke());
+        break; //This breaks out of the do/while
+    }
+    catch (Exception e)
+    {
+        var exceptionStatus = _config.SaveChangesExceptionHandler?
+            .Invoke(e, context);
+        if (exceptionStatus == null)
+            throw; //no handler, or handler couldn&#x2019;t handle this exception        
+
+        status.CombineStatuses(exceptionStatus);
+    }
+} while (status.IsValid);
+</pre> <p>The lines to point out in the code are:</p> <ul><li>Line 1: The call of the SaveChanges is in a do/while loop. This is needed, because if the SaveChangesExceptionHandler fixes a concurrency problem, then it needs to call SaveChanges again to store the corrected data. But because it is possible that another concurrency issue happens on this second SaveChanges, then it will call the SaveChangesExceptionHandler again.</li><li>Line 6: If the call to the base SaveChanges is successful, then it exits the do/while as all is OK.</li><li>Lines 12 to 13: This is case 1, no handler or handler can&#x2019;t manage this exception, so the exception is rethrown.</li><li>Line 17: The while will loop back and call SaveChanges again. If there is an exception the process is run again.</li></ul><h3 id="using-the-exception-handler-to-fix-cache-concurrencyissues">Using the exception handler to fix cache concurrency
+issues<a class="anchorlink dashicons-before" href="#using-the-exception-handler-to-fix-cache-concurrencyissues"></a></h3> <p>Now there is a way to capture an
+exception in my EfCore.GenericEventRunner library coming from SaveChanges/ SaveChangesAsync
+we can use this to capture concurrency issues around the cache values. </p> <p>The first thing I need to do is tell
+EF Core to throw a DbUpdateConcurrencyException if it detects a concurrency
+issue (see previous diagram). To do this I marked the three properties with the
+ConcurrencyCheck attribute, as shown below.</p> <pre class="brush: csharp; title: ; notranslate">
+public class BookWithEvents : EntityEvents
+{
+    //&#x2026; other code left out
+    [ConcurrencyCheck]
+    public string AuthorsOrdered { get; set; }
+
+    [ConcurrencyCheck]
+    public int ReviewsCount { get; set; }
+
+    [ConcurrencyCheck]
+    public double ReviewsAverageVotes { get; set; }
+    //... other code left out
+}
+</pre> <p>Then I created a method called HandleCacheValuesConcurrency,
+which I registered with the GenericEventRunner on startup (see <a href="https://www.thereformedprogrammer.net/efcore-genericeventrunner-an-event-driven-library-that-works-with-ef-core/#4-forsetup-registering-your-event-handlers">this
+documentation</a> on how to do that, or the <a href="https://github.com/JonPSmith/EfCoreSqlAndCosmos/blob/master/Infrastructure/AppStart/NetCoreDiSetupExtensions.cs">code
+in the example application</a>). I&#x2019;m also not going to my SaveChangesExceptionHandler
+method due to space, but you can <a href="https://github.com/JonPSmith/EfCoreSqlAndCosmos/blob/master/Infrastructure/ConcurrencyHandlers/BookWithEventsConcurrencyHandler.cs">find
+it here</a>. What I do want to show you are two parts
+that handle the fixing of the AuthorOrdered string and the two Review cache
+values.</p> <p>Here is the method I call from inside my HandleCacheValuesConcurrency method to handle any AuthorsOrdered
+concurrency issue. Its job is to work out if there was a concurrency issue with
+the AuthorsOrdered string, and if there is to
+recalculate the AuthorOrdered. Here is the code</p> <pre class="brush: csharp; highlight: [16]; title: ; notranslate">
+public void CheckFixAuthorOrdered(BookWithEvents bookThatCausedConcurrency, 
+    BookWithEvents bookBeingWrittenOut)
+{
+    var previousAuthorsOrdered = (string)_entry.Property(
+        nameof(BookWithEvents.AuthorsOrdered)).OriginalValue;
+
+    if (previousAuthorsOrdered != bookThatCausedConcurrency.AuthorsOrdered)
+    {
+        var allAuthorsIdsInOrder = _context.Set&lt;BookWithEvents&gt;()
+            .Where(x =&gt; x.BookId == bookBeingWrittenOut.BookId)
+            .Select(x =&gt; x.AuthorsLink.OrderBy(y =&gt; y.Order)
+            .Select(y =&gt; y.AuthorId)).ToList()
+            .Single();
+
+        var namesInOrder = allAuthorsIdsInOrder.Select(x =&gt; 
+            _context.Find&lt;AuthorWithEvents&gt;(x).Name);
+        var newAuthorsOrdered = namesInOrder.FormAuthorOrderedString();
+
+        _entry.Property(nameof(BookWithEvents.AuthorsOrdered))
+             .CurrentValue = newAuthorsOrdered;
+
+        _entry.Property(nameof(BookWithEvents.AuthorsOrdered))
+             .OriginalValue = bookThatCausedConcurrency.AuthorsOrdered;
+    }
+}
+</pre> <p>I&#x2019;m not going to explain all the lines in that code (see the actual source code, which has comments), but I do want to point out I get all the Author&#x2019;s Names using the EF Core Find command (see line 16, highlighted). </p> <p>I use EF Core&#x2019;s Find method because works in special way:
+Find a) first looks for the entity you are asking for in the tracked entities
+in the current DbContext instance, if that fails to find anything then b) it
+looks in the database. I need this Find feature because I know at least one
+Author&#x2019;s name has been updated (which kicked off the update of the
+AuthorsOrdered string) in this DbContext instance, but hasn&#x2019;t yet be written to
+the database &#x2013; that will only happen when the SaveChanges method is successful.</p> <p>If you are using the Complete Revaluation approach then you
+also will need to consider whether the database has everything you need &#x2013; it
+most likely doesn&#x2019;t and you will need to look in the tarcked entities in the
+current DbContext instance to find the data you need to fix the concurrency
+issue.</p> <p>Here is the method I call from inside my SaveChangesExceptionHandler
+to handle any Review cache value concurrency issue, i.e. the ReviewsCount
+and/or the ReviewsAverageVotes. Its job is to work out if there was a
+concurrency issue these two cache values, and if there
+is to recalculates them. Here is the code</p> <pre class="brush: csharp; title: ; notranslate">
+public void CheckFixReviewCacheValues(
+    BookWithEvents bookThatCausedConcurrency, 
+    BookWithEvents bookBeingWrittenOut)
+{
+    var previousCount = (int)_entry.Property(nameof(BookWithEvents.ReviewsCount))
+        .OriginalValue;
+    var previousAverageVotes = (double)_entry.Property(nameof(BookWithEvents.ReviewsAverageVotes))
+        .OriginalValue;
+
+    if (previousCount != bookThatCausedConcurrency.ReviewsCount ||
+        previousAverageVotes != bookThatCausedConcurrency.ReviewsAverageVotes)
+    {
+        var previousTotalStars = Math.Round(previousAverageVotes * previousCount);
+        var countChange = bookBeingWrittenOut.ReviewsCount - previousCount;
+        var starsChange = Math.Round(bookBeingWrittenOut.ReviewsAverageVotes *
+             bookBeingWrittenOut.ReviewsCount) - previousTotalStars;
+
+        var newCount = bookThatCausedConcurrency.ReviewsCount + countChange;
+        var totalStars = Math.Round(bookThatCausedConcurrency.ReviewsAverageVotes *
+             bookThatCausedConcurrency.ReviewsCount) + starsChange;
+
+        _entry.Property(nameof(BookWithEvents.ReviewsCount))
+             .CurrentValue = newCount;
+        _entry.Property(nameof(BookWithEvents.ReviewsAverageVotes))
+             .CurrentValue = totalStars / newCount;
+
+        _entry.Property(nameof(BookWithEvents.ReviewsCount))
+             .OriginalValue = bookThatCausedConcurrency.ReviewsCount;
+        _entry.Property(nameof(BookWithEvents.ReviewsAverageVotes))
+             .OriginalValue = bookThatCausedConcurrency.ReviewsAverageVotes;
+    }
+}
+</pre> <p>Like the last concurrency method, I&#x2019;m not going to explain
+all the lines in that code (see the <a href="https://github.com/JonPSmith/EfCoreSqlAndCosmos/blob/master/Infrastructure/ConcurrencyHandlers/FixConcurrencyMethods.cs">source
+code here</a>, which has comments), but I will
+talk about the differences from the AuthorsOrdered example.</p> <p>The code doesn&#x2019;t need to access the database as it can reverse
+the cache values from a) the book that caused the concurrency exception and b)
+the current book that was trying to update the database. From these two sources
+the method can a) extract the two updates and b) combine the two updates into
+one, which is equivalent to what would have happened if the two updates didn&#x2019;t
+&#x2018;collide&#x2019;.</p> <p>This approach follows the Delta Update approach, which
+allows it to fix the problem without needing recalculate the two values again
+by loading all the Reviews. To my mind this is quicker, which makes it less
+prone to getting another concurrency issue during the time you are fixing these
+cache values.</p> <h2 id="weighting-up-the-improvements-against-effort-and-added-complexity">Weighting up the improvements against effort and added complexity <a class="anchorlink dashicons-before" href="#weighting-up-the-improvements-against-effort-and-added-complexity"></a></h2> <p>I always look at a new approach and measure its success
+based on the gains, in this case the performance improvement, against the
+effort needed to achieve that performance improvement. I also look at the
+complexity that this new approach adds to an application, as more complexity
+adds to the long-term support of the application.</p> <h3 id="performance-improvements">Performance improvements<a class="anchorlink dashicons-before" href="#performance-improvements"></a></h3> <p>In terms of improving the performance this is a great
+result. One of the key queries that I expect users of my book app to use is
+sort and/or filter by votes. I run this with the first 100 books being
+returned. I measure the performance using the Chrome browser&#x2019;s developer (F12)
+Network page in milliseconds running on my local PC, taking the average of
+about 10 consecutive accesses. For comparison the viewing of the Home page,
+which only has text and some Razor functions, takes about 8 ms.</p> <p>The chart below shows &#x201C;Sort by Votes&#x201D; is about 15 times quicker and &#x201C;sort/filter&#x201D; version is about 8 times faster. That is a very good result.</p> <figure class="wp-block-image"><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/NormalEFCore3AgaintsCachedVersion-1024x632.png" alt class="wp-image-1981" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/NormalEFCore3AgaintsCachedVersion-1024x632.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/NormalEFCore3AgaintsCachedVersion-300x185.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/NormalEFCore3AgaintsCachedVersion-768x474.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2019/12/NormalEFCore3AgaintsCachedVersion-825x510.png 825w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>The other thing to note is the small improvement of test 1,
+sort by publication date. This is due to the cached AuthorsOrdered string which
+removes the many-to-many join of authors names for each book. </p> <p>The author&#x2019;s string was a big problem in EF Core 2, with a
+different of 3 to 1 (230ms for EF Core 2, 80ms for the cached value version).
+That&#x2019;s because EF Core 3 is quicker than earlier versions of EF Core as it
+combines the main book query with the many-to-many join of authors names. This
+shows than the AuthorsOrdered cached value maybe isn&#x2019;t worth keeping &#x2013; the
+extra complexity doesn&#x2019;t give a good gain in performance.</p> <h3 id="development-effort">Development effort<a class="anchorlink dashicons-before" href="#development-effort"></a></h3> <p>It certainly took me a lot of time, about 40 to 50 hours, to build this example application, but that includes the setup of the new approach and all its associated parts. There was also a lot of thinking/research time to find the best way though. Next time it would be quicker.</p> <p>In actual fact the first usage of this approach was for one
+of my clients, and I keep a detailed timesheet for all of my client work. That
+says it took 11 hours to add Total Price cached value using a Delta Update
+approach to an existing database. I think (and I think the client does too) 11
+hours is good price for the feature/performance gain it provided.</p> <h3 id="added-complexity">Added Complexity<a class="anchorlink dashicons-before" href="#added-complexity"></a></h3> <p>I built a cached values version in the chapter on
+performance tuning in my book &#x201C;Entity Framework Core in Action&#x201D; (see <a href="https://www.thereformedprogrammer.net/entity-framework-core-performance-tuning-a-worked-example/">this
+article I wrote</a> that summarises that chapter). But in that case, I added
+the setting of the cached values into the existing business logic which made
+things much more complicated. This new version is much less &#x2018;intrusive&#x2019;, i.e. the
+cache update code is separated from the existing business logic which makes it
+much easier to refactor the code.</p> <p>With this event-driven approach you only have to add minimal
+code in your classes (i.e. call an AddEvent method whenever certain events
+happen). Then all the complex code to update the cached values is in specific
+event handlers and concurrency methods. This separation makes this approach
+much nicer than my original version because the cache code isn&#x2019;t mixed in with
+all of your other business logic.</p> <h2 id="conclusion">Conclusion<a class="anchorlink dashicons-before" href="#conclusion"></a></h2> <p>I am very pleased with this new event-driven approach to improving database queries performance. I have done a lot of work on database performance, both for my book and for multiple clients, and this approach is the easiest so far. This new approach is fairly straightforward to apply to an existing database, and it keeps the cache update code separate from the rest of the business logic.</p> <p>It took me ages to research and write this article &#x2013; maybe 20 hours on top of the 40/50 hours for writing the code, which is very long for me. But I learnt a lot while looking for the best way to handle simultaneous updates of the same cache values &#x2013; things like SQL transaction isolation levels, whether a single SQL command is atomic (it isn&#x2019;t) and what to do inside a concurrency exception in EF Core. I feel quite confident to use this approach in a client&#x2019;s application, in fact I am already using this approach with my current client to good effect.</p> <p>The approach I covered isn&#x2019;t super-simple, but I hope I have
+described it well enough that you can understand it to use this yourself.
+Please do look at the example code in which I added to my open-source <a href="https://github.com/JonPSmith/EfCoreSqlAndCosmos">EfCoreSqlAndCosmos</a> project,
+and my open-source <a href="https://github.com/JonPSmith/EfCore.GenericEventRunner">EfCore.GenericEventRunner</a>,
+which is a key part of my design, but can also be useful in other situations
+too (see <a href="https://www.thereformedprogrammer.net/a-robust-event-driven-architecture-for-using-with-entity-framework-core/">this
+article</a> for more on that).</p> <p>I gave you two ways to compute the cached values: Complete
+Revaluation and Delta Update. Which of these you use will depend on the type of
+data/query that gets the cached value. I quite like the Delta Update as its so
+fast (which means there is minimal performance loss on write-side of your
+application), but some data just doesn&#x2019;t fit that way of working, especially
+strings.</p> <p>All the best with your developer journey.</p></body>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
