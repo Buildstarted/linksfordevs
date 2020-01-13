@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Browser Games Aren&#x27;t an Easy Target -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Browser Games Aren&#x27;t an Easy Target</h1>
+    <div id="text-orge6983a7" class="outline-text-2">
+<p>
+This is where one of the more interesting features of mitmproxy comes in. I
+split the page&apos;s HTML into three files: one containing everything leading up to
+the script, one containing the script itself, and one containing everything that
+follows the script. Then, I whipped up a quick <a href="https://docs.mitmproxy.org/stable/addons-overview/">addon</a> for piecing those together
+on the fly when we see a request for &apos;krunker.io&apos;.
+</p> <div class="org-src-container">
+<pre class="src src-python"><span class="org-keyword">from</span> mitmproxy <span class="org-keyword">import</span> ctx <span class="org-keyword">class</span> <span class="org-type">Replacer</span>: <span class="org-keyword">def</span> <span class="org-function-name">__init__</span>(<span class="org-keyword">self</span>): <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;header.html&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.header = f.read() <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;game.js&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.game = f.read() <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;footer.html&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.footer = f.read() <span class="org-keyword">def</span> <span class="org-function-name">response</span>(<span class="org-keyword">self</span>, flow): <span class="org-keyword">if</span> flow.request.host == <span class="org-string">&quot;krunker.io&quot;</span> <span class="org-keyword">and</span> flow.request.path == <span class="org-string">&quot;/&quot;</span>: flow.response.set_text(<span class="org-keyword">self</span>.header + <span class="org-keyword">self</span>.game + <span class="org-keyword">self</span>.footer) <span class="org-variable-name">addons</span> = [
+    Replacer()
+]
+</pre>
+</div> <p>
+With an environment set up for experimenting, it was time to get into it. I ran
+<a href="https://beautifier.io/">beautifier.io</a> on &apos;game.js&apos; and began to peer around for strings of note. There&apos;s
+a massive base64 blob in the middle of the file that stood out like a sore
+thumb, so I decoded it to see what it was.
+</p> <div class="org-src-container">
+<pre class="src src-prog">jakob@Epsilon ~ $ base64 -d &lt; /tmp/extracted.b64 | file -
+/dev/stdin: WebAssembly (wasm) binary module version 0x1 (MVP)
+</pre>
+</div> <p>
+Whoa, holy shit! This is the first time I&apos;m seeing WebAssembly in the wild!
+</p> <p>
+Thinking I&apos;d want to modify the blob, I extracted it to a file and modified the
+addon slightly.
+</p> <div class="org-src-container">
+<pre class="src src-python"><span class="org-keyword">from</span> base64 <span class="org-keyword">import</span> b64encode <span class="org-keyword">from</span> mitmproxy <span class="org-keyword">import</span> ctx <span class="org-keyword">class</span> <span class="org-type">Replacer</span>: <span class="org-keyword">def</span> <span class="org-function-name">__init__</span>(<span class="org-keyword">self</span>): <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;header.html&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.header = f.read() <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;game.js&quot;</span>) <span class="org-keyword">as</span> f, <span class="org-builtin">open</span>(<span class="org-string">&quot;krunker.wasm&quot;</span>, <span class="org-string">&quot;rb&quot;</span>) <span class="org-keyword">as</span> g: <span class="org-keyword">self</span>.game = f.read().replace(<span class="org-string">&quot;[REPLACE ME]&quot;</span>, b64encode(g.read()).decode()) <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;footer.html&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.footer = f.read() <span class="org-keyword">def</span> <span class="org-function-name">response</span>(<span class="org-keyword">self</span>, flow): <span class="org-keyword">if</span> flow.request.host == <span class="org-string">&quot;krunker.io&quot;</span> <span class="org-keyword">and</span> flow.request.path == <span class="org-string">&quot;/&quot;</span>: flow.response.set_text(<span class="org-keyword">self</span>.header + <span class="org-keyword">self</span>.game + <span class="org-keyword">self</span>.footer) <span class="org-variable-name">addons</span> = [
+    Replacer()
+]
+</pre>
+</div> <p>
+Now, in addition to stringing together our three files, we&apos;re also reading in
+&apos;krunker.wasm&apos;, the binary version of the base64 blob, encoding it to base64,
+and splicing it to the script where I&apos;d substituted the original base64 blob
+with &quot;[REPLACE ME]&quot;.
+</p> <p>
+Running <code>strings</code> on the wasm file reveals a couple of things. First, this part of
+the game is written in Rust.
+</p> <div class="org-src-container">
+<pre class="src src-prog">/rustc/73528e339aae0f17a15ffa49a8ac608f50c6cf14/src/libstd/io/impls.rs
+TLS Context not set. This is a rustc bug. Please file an issue on https://github.com/rust-lang/rust.
+attempt to calculate the remainder with a divisor of zero
+</pre>
+</div> <p>
+And, second, we&apos;re going to be met with some resistance.
+</p> <div class="org-src-container">
+<pre class="src src-prog">getElementsByTagNameCould not get elementsscriptpatchControlpatchPlayerspatchOnTickpatchOnKeyPressedpatchForAimbotDetected injected scriptHACKER
+...
+validateEvalUnmodifiedCould not set global validateEvalUnmodifiedCould not get eval functionwindow.validateEvalUnmodified(<span class="org-string">&quot;&quot;</span>);  // Ahoy, haxor kiddies! 
+Eval is tampered; preventing execution
+</pre>
+</div> <p>
+I cracked open the Firefox debugger and found that the game wasn&apos;t spending a
+lot of time in the WebAssembly component. Instead, there was a pseudo-file
+called &quot;SOURCE&quot; that I could find no reference to. My first hypothesis was that
+the code was zipped, so I tried stubbing out the methods of &apos;zip.js&apos;.
+</p> <div class="org-src-container">
+<pre class="src src-javascript">r.zip = { <span class="org-function-name">Reader</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;Reader&quot;</span>) }, <span class="org-function-name">Writer</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;Writer&quot;</span>) }, <span class="org-function-name">BlobReader</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;BlobReade&quot;</span>) }, <span class="org-function-name">Data64URIReader</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;Data64URIReader&quot;</span>) }, <span class="org-function-name">TextReader</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;TextReader&quot;</span>) }, <span class="org-function-name">BlobWriter</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;BlobWriter&quot;</span>) }, <span class="org-function-name">Data64URIWriter</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;Data64URIWriter&quot;</span>) }, <span class="org-function-name">TextWriter</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;TextWriter&quot;</span>) }, <span class="org-function-name">createReader</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;createReader&quot;</span>) }, <span class="org-function-name">createWriter</span>: <span class="org-keyword">function</span> () { console.log(<span class="org-string">&quot;createWriter&quot;</span>)
+  },
+}
+</pre>
+</div> <p>
+But the game loaded fine. So I went back to the debugger and placed some
+breakpoints around where the WebAssembly module is loaded, realizing that its
+only purpose is to deobfuscate the JavaScript that eventually makes it into that
+&quot;SOURCE&quot; pseudo-file I saw earlier. I figured this out by hooking the
+<code>getStringFromWasm</code> function in &apos;game.js&apos; and looking for any sort of JavaScript
+code. I extracted these to files so I could beautify and inspect them. The
+contents of &quot;SOURCE&quot; were in the second of these.
+</p> <p>
+My first idea was to get rid of the WebAssembly and just inject the loaded
+JavaScript instead. </p> <div class="org-src-container">
+<pre class="src src-python"><span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;game.js&quot;</span>) <span class="org-keyword">as</span> f, <span class="org-builtin">open</span>(<span class="org-string">&quot;krunker.wasm&quot;</span>, <span class="org-string">&quot;rb&quot;</span>) <span class="org-keyword">as</span> g, <span class="org-builtin">open</span>(<span class="org-string">&quot;extracted.2.js&quot;</span>) <span class="org-keyword">as</span> h: <span class="org-keyword">self</span>.game = h.read()
+</pre>
+</div> <p>
+But this breaks the game horribly. Inspecting the call stack in the debugger, I
+found that the code in &quot;SOURCE&quot; is referenced twice. The second time being from
+<code>__wbg_newwithargs_10def9c4239ab893</code>, which looks like
+</p> <div class="org-src-container">
+<pre class="src src-javascript">imports.wbg.__wbg_newwithargs_10def9c4239ab893 = <span class="org-keyword">function</span> (<span class="org-variable-name">A</span>, <span class="org-variable-name">g</span>, <span class="org-variable-name">Q</span>, <span class="org-variable-name">B</span>) { <span class="org-keyword">return</span> addHeapObject(<span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), getStringFromWasm(Q, B)))
+},
+</pre>
+</div> <p>
+I thought that the code might have been injected by an <code>eval</code> or by adding a
+<code>script</code> element to the document, but here it&apos;s using JavaScript&apos;s <code>Function</code>
+constructor &#x2013; a feature I had no idea existed.
+</p> <p>
+In my initial attempt to get a hold of the code, I encoded my extracted version
+of &quot;SOURCE&quot; as base64, introduced a string called <code>replacement_code</code>, and replaced
+the implementation of <code>__wbg_newwithargs_10def9c4239ab893</code> with this:
+</p> <div class="org-src-container">
+<pre class="src src-javascript">
+<span class="org-keyword">return</span> addHeapObject(<span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), atob(replacement_code)));
+</pre>
+</div> <p>
+This didn&apos;t work. So I added in some debug prints and realized that the function
+wasn&apos;t being called with the same arguments every time (which should be
+unsurprising).
+</p> <p>
+Here was my second attempt:
+</p> <div class="org-src-container">
+<pre class="src src-javascript"><span class="org-keyword">if</span> (getStringFromWasm(Q, B).startsWith(<span class="org-string">&quot;!&quot;</span>)) { console.log(<span class="org-string">&quot;Injecting code...&quot;</span>) <span class="org-keyword">return</span> addHeapObject(<span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), atob(replacement_code)));
+}
+<span class="org-keyword">return</span> addHeapObject(<span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), getStringFromWasm(Q, B)));
+</pre>
+</div> <p>
+This didn&apos;t work either. If we run the game twice and inspect the value of
+<code>getStringFromWasm(A, g)</code> (the argument list), it clearly isn&apos;t the same both
+times. So I decided to see if the function code was different, too.
+</p> <div class="org-src-container">
+<pre class="src src-prog">jakob@Epsilon ~/ $ radiff2 -c {1,2}.js
+File size differs 2462470 vs 2461765
+Buffer truncated to 2461765 byte(s) (705 not compared)
+86611
+</pre>
+</div> <p>
+So&#x2026; the WebAssembly is essentially generating JavaScript on-the-fly. Of
+course, all renditions of the code do the same thing, but the variable names are
+changing. My first thought was to stub out all of the nondeterministic imports
+like <code>__wbg_random_09364f2d8647f133</code>, but this just broke things. Attempt three
+was to see if I could add something to the function code and have it still work.
+</p> <div class="org-src-container">
+<pre class="src src-javascript"><span class="org-keyword">return</span> addHeapObject(<span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), getStringFromWasm(Q, B) + <span class="org-string">&quot; console.log(&apos;hello, world!&apos;&quot;</span>));
+</pre>
+</div> <p>
+The game didn&apos;t load this time, either. Strange, but then I remembered the
+rather hostile strings in &apos;krunker.wasm&apos; and decided to see what was happening
+in the debugger. I hooked <code>__wbg_newwithargs_10def9c4239ab893</code> so that when the
+<code>Function</code> object is created, that reference is saved to a global called
+<code>the_function</code>. Then, I hooked <code>getObject</code>, the JavaScript glue for getting
+something from the heap from WebAssembly, and if the object being returned is
+<code>the_function</code>, I trip a breakpoint. The first time the function is referred to is
+in <code>__wbg_toString_c663742ecc5b25ea</code>. If we&apos;ve tampered with it, it goes straight
+to <code>__wbindgen_object_drop_ref</code>. Otherwise, it goes to <code>__wbg_call_04d7c0ad06df27c9</code>
+before being freed. So it seems the WebAssembly module is doing some sort of
+tampering checking, checking the source code of the resultant <code>Function</code> to ensure
+that we haven&apos;t hooked the <code>Function</code> constructor or anything like that. This is
+actually pretty easy to get around. We could
+</p> <ol class="org-ol">
+<li>Hook <code>__wbg_toString_c663742ecc5b25ea</code> to return a fake value when it&apos;s trying
+to get the source code of the <code>Function</code>.</li>
+<li>Hook <code>__wbg_call_04d7c0ad06df27c9</code> and pull an <a href="https://www.youtube.com/watch?v=mC1ikwQ5Zgc">Indiana Jones</a>, calling a
+different function.</li>
+</ol> <p>
+I went with the latter. To summarize the game plan, we&apos;ll hook the place where
+the <code>Function</code> is constructed, get a reference to that <code>Function</code> object, hook the
+place where it&apos;s called, and if it&apos;s the same reference we got before, call a
+<code>Function</code> object of our own creation instead. Here&apos;s what my patch looks like:
+</p> <div class="org-src-container">
+<pre class="src src-javascript">imports.wbg.__wbg_newwithargs_10def9c4239ab893 = <span class="org-keyword">function</span> (<span class="org-variable-name">A</span>, <span class="org-variable-name">g</span>, <span class="org-variable-name">Q</span>, <span class="org-variable-name">B</span>) { <span class="org-keyword">if</span> (getStringFromWasm(Q, B).startsWith(<span class="org-string">&quot;!&quot;</span>)) { console.log(<span class="org-string">&quot;[PATCH] Got reference to game code function!&quot;</span>); console.log(<span class="org-string">&quot;[PATCH] Code path: __wbg_newwithargs_10def9c4239ab893&quot;</span>) the_function = <span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), getStringFromWasm(Q, B)); my_function = <span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), <span class="org-string">&quot;console.log(&apos;Successfully hooked!&apos;);&quot;</span> + getStringFromWasm(Q, B)); <span class="org-keyword">return</span> addHeapObject(the_function); } <span class="org-keyword">return</span> addHeapObject(<span class="org-keyword">new</span> <span class="org-type">Function</span>(getStringFromWasm(A, g), getStringFromWasm(Q, B)))
+},
+...
+imports.wbg.__wbg_call_04d7c0ad06df27c9 = <span class="org-keyword">function</span> (<span class="org-variable-name">A</span>, <span class="org-variable-name">g</span>, <span class="org-variable-name">Q</span>, <span class="org-variable-name">B</span>, <span class="org-variable-name">I</span>) { <span class="org-keyword">try</span> { <span class="org-keyword">const</span> <span class="org-variable-name">target</span> = getObject(A); <span class="org-keyword">if</span> (target === the_function) { console.log(<span class="org-string">&quot;[PATCH] Preparing to Indiana Jones that shit...&quot;</span>) <span class="org-keyword">return</span> addHeapObject(my_function .call(getObject(g), getObject(Q), getObject(B), getObject(I))) } <span class="org-keyword">return</span> addHeapObject(getObject(A) .call(getObject(g), getObject(Q), getObject(B), getObject(I))) } <span class="org-keyword">catch</span> (A) {
+    handleError(A)
+  }
+},
+</pre>
+</div> <div class="org-src-container">
+<pre class="src src-prog">...
+[PATCH] Got reference to game code function!
+[PATCH] Code path: __wbg_newwithargs_10def9c4239ab893
+[PATCH] Preparing to Indiana Jones that shit...
+Successfully hooked!
+...
+</pre>
+</div> <p>
+This time, our modification of the code worked. Nice! With that, we can address
+one quality-of-life issue that was starting to get on my nerves.
+</p> <div class="org-src-container">
+<pre class="src src-python"><span class="org-keyword">from</span> base64 <span class="org-keyword">import</span> b64encode
+<span class="org-keyword">from</span> os.path <span class="org-keyword">import</span> getmtime <span class="org-keyword">from</span> mitmproxy <span class="org-keyword">import</span> ctx <span class="org-keyword">def</span> <span class="org-function-name">create_page</span>(header, prefix, game, wasm, footer): <span class="org-keyword">return</span> <span class="org-string">&quot;&quot;</span>.join([ header, <span class="org-string">&quot;let replacement_code=\&quot;&quot;</span>, b64encode(prefix).decode(), <span class="org-string">&quot;\&quot;;&quot;</span>, game.replace(<span class="org-string">&quot;[REPLACE ME]&quot;</span>, b64encode(wasm).decode()), footer ]) <span class="org-keyword">class</span> <span class="org-type">Replacer</span>: <span class="org-keyword">def</span> <span class="org-function-name">__init__</span>(<span class="org-keyword">self</span>): <span class="org-keyword">self</span>.most_recent_update = 0 <span class="org-keyword">self</span>.check_for_updates() <span class="org-keyword">def</span> <span class="org-function-name">check_for_updates</span>(<span class="org-keyword">self</span>): <span class="org-keyword">for</span> filename <span class="org-keyword">in</span> [<span class="org-string">&quot;header.html&quot;</span>, <span class="org-string">&quot;extracted.2.js&quot;</span>, <span class="org-string">&quot;game.js&quot;</span>, <span class="org-string">&quot;krunker.wasm&quot;</span>, <span class="org-string">&quot;footer.html&quot;</span>]: <span class="org-keyword">if</span> getmtime(filename) &gt; <span class="org-keyword">self</span>.most_recent_update: <span class="org-keyword">self</span>.most_recent_update = getmtime(filename) <span class="org-keyword">self</span>.update_replacement() <span class="org-keyword">print</span>(<span class="org-string">&quot;Updating files...&quot;</span>) <span class="org-keyword">def</span> <span class="org-function-name">update_replacement</span>(<span class="org-keyword">self</span>): <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;header.html&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.header = f.read() <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;extracted.2.js&quot;</span>, <span class="org-string">&quot;rb&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.prefix = f.read() <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;game.js&quot;</span>) <span class="org-keyword">as</span> f, <span class="org-builtin">open</span>(<span class="org-string">&quot;krunker.wasm&quot;</span>, <span class="org-string">&quot;rb&quot;</span>) <span class="org-keyword">as</span> g: <span class="org-keyword">self</span>.game = f.read() <span class="org-keyword">self</span>.wasm = g.read() <span class="org-keyword">with</span> <span class="org-builtin">open</span>(<span class="org-string">&quot;footer.html&quot;</span>) <span class="org-keyword">as</span> f: <span class="org-keyword">self</span>.footer = f.read() <span class="org-keyword">self</span>.replacement = create_page( <span class="org-keyword">self</span>.header, <span class="org-keyword">self</span>.prefix, <span class="org-keyword">self</span>.game, <span class="org-keyword">self</span>.wasm, <span class="org-keyword">self</span>.footer ) <span class="org-keyword">def</span> <span class="org-function-name">response</span>(<span class="org-keyword">self</span>, flow): <span class="org-keyword">self</span>.check_for_updates() <span class="org-keyword">if</span> flow.request.host == <span class="org-string">&quot;krunker.io&quot;</span> <span class="org-keyword">and</span> (flow.request.path == <span class="org-string">&quot;/&quot;</span> <span class="org-keyword">or</span> flow.request.path.startswith(<span class="org-string">&quot;/?game=&quot;</span>)): flow.response.set_text(<span class="org-keyword">self</span>.replacement) <span class="org-variable-name">addons</span> = [
+    Replacer()
+]
+</pre>
+</div> <p>
+Because the names of references are generated at runtime, we can&apos;t really just
+substitute in our own code string. We have to modify the string that&apos;s generated
+by the WebAssembly module. We&apos;ll have to find something worth changing before we
+can do that, though, so I began to read through the generated source code. The
+first thing that stood out to me was an array of weapon definitions. Here&apos;s how
+the sniper rifle is defined:
+</p> <div class="org-src-container">
+<pre class="src src-javascript">{ <span class="org-string">&apos;name&apos;</span>: <span class="org-string">&apos;Sniper Rifle&apos;</span>, <span class="org-string">&apos;src&apos;</span>: <span class="org-string">&apos;weapon_1&apos;</span>, <span class="org-string">&apos;icon&apos;</span>: <span class="org-string">&apos;icon_1&apos;</span>, <span class="org-string">&apos;sound&apos;</span>: <span class="org-string">&apos;weapon_1&apos;</span>, <span class="org-string">&apos;animWhileAim&apos;</span>: !0x0, <span class="org-string">&apos;trail&apos;</span>: !0x0, <span class="org-string">&apos;flap&apos;</span>: { <span class="org-string">&apos;src&apos;</span>: <span class="org-string">&apos;flap_0&apos;</span>, <span class="org-string">&apos;rot&apos;</span>: 2.1, <span class="org-string">&apos;scl&apos;</span>: 0x1, <span class="org-string">&apos;zOff&apos;</span>: 0.43, <span class="org-string">&apos;xOff&apos;</span>: 0.17, <span class="org-string">&apos;yOff&apos;</span>: 0.53 }, <span class="org-string">&apos;noAo&apos;</span>: !0x0, <span class="org-string">&apos;VuFlFKJOHFGfinUeccOKbaQQPyhjvfYD&apos;</span>: !0x0, <span class="org-string">&apos;type&apos;</span>: 0x0, <span class="org-string">&apos;scope&apos;</span>: !0x0, <span class="org-string">&apos;swapTime&apos;</span>: 0x12c, <span class="org-string">&apos;aimSpeed&apos;</span>: 0x78, <span class="org-string">&apos;spdMlt&apos;</span>: 0.95, <span class="org-string">&apos;ammo&apos;</span>: 0x3, <span class="org-string">&apos;reload&apos;</span>: 0x5dc, <span class="org-string">&apos;dmg&apos;</span>: 0x64, <span class="org-string">&apos;pierce&apos;</span>: 0.2, <span class="org-string">&apos;range&apos;</span>: 0x3e8, <span class="org-string">&apos;dropStart&apos;</span>: 0xe6, <span class="org-string">&apos;dmgDrop&apos;</span>: 0x1e, <span class="org-string">&apos;scale&apos;</span>: 0.00115608717587935, <span class="org-string">&apos;leftHoldY&apos;</span>: -0.7, <span class="org-string">&apos;rightHoldY&apos;</span>: -0.75, <span class="org-string">&apos;leftHoldZ&apos;</span>: 2.4, <span class="org-string">&apos;rightHoldZ&apos;</span>: 0.4, <span class="org-string">&apos;xOff&apos;</span>: 0.8, <span class="org-string">&apos;yOff&apos;</span>: -0.68, <span class="org-string">&apos;zOff&apos;</span>: -1.8, <span class="org-string">&apos;xOrg&apos;</span>: 0x0, <span class="org-string">&apos;yOrg&apos;</span>: -0.55, <span class="org-string">&apos;zOrg&apos;</span>: -0.8, <span class="org-string">&apos;cLean&apos;</span>: 0.2, <span class="org-string">&apos;cRot&apos;</span>: 0.2, <span class="org-string">&apos;cDrop&apos;</span>: 0.1, <span class="org-string">&apos;inspectR&apos;</span>: 0.2, <span class="org-string">&apos;inspectM&apos;</span>: 0.1, <span class="org-string">&apos;muzOff&apos;</span>: 0x8, <span class="org-string">&apos;muzMlt&apos;</span>: 1.6, <span class="org-string">&apos;rate&apos;</span>: 0x384, <span class="org-string">&apos;spread&apos;</span>: 0x104, <span class="org-string">&apos;zoom&apos;</span>: 2.7, <span class="org-string">&apos;leanMlt&apos;</span>: 1.5, <span class="org-string">&apos;recoil&apos;</span>: 0.009, <span class="org-string">&apos;recoilR&apos;</span>: 0.02, <span class="org-string">&apos;recover&apos;</span>: 0.993, <span class="org-string">&apos;recoverY&apos;</span>: 0.997, <span class="org-string">&apos;recoverF&apos;</span>: 0.975, <span class="org-string">&apos;recoilYM&apos;</span>: 0.35, <span class="org-string">&apos;recoilZ&apos;</span>: 1.4, <span class="org-string">&apos;recoilAnim&apos;</span>: { <span class="org-string">&apos;time&apos;</span>: 0x118, <span class="org-string">&apos;aimTime&apos;</span>: 0x1f4, <span class="org-string">&apos;recoilTweenY&apos;</span>: 0.3 }, <span class="org-string">&apos;jumpYM&apos;</span>: 0.15, <span class="org-string">&apos;rumble&apos;</span>: 0.9, <span class="org-string">&apos;rumbleDur&apos;</span>: 0x1f4, <span class="org-string">&apos;icnPad&apos;</span>: 0x9
+}
+</pre>
+</div> <p>
+Some parts of it are obfuscated,<sup><a id="fnr.3" href="#fn.3" class="footref">3</a></sup> but some aren&apos;t. My first attempt at a
+cheat was to set all of the <code>recoil</code> and <code>spread</code> values to zero.
+</p> <div class="org-src-container">
+<pre class="src src-javascript">code = code.replace(<span class="org-string">/(&apos;recoil\w*?&apos;:)[0-9\x\. ]*?,/</span>g, <span class="org-keyword">function</span>(<span class="org-variable-name">match</span>, <span class="org-variable-name">p1</span>, <span class="org-variable-name">offset</span>, <span class="org-variable-name">string</span>) { console.log(match); <span class="org-keyword">return</span> p1 + <span class="org-string">&quot;0.000,&quot;</span>;
+});
+code = code.replace(<span class="org-string">/(&apos;spread&apos;:)[0-9\x\. ]*?,/</span>g, <span class="org-keyword">function</span>(<span class="org-variable-name">match</span>, <span class="org-variable-name">p1</span>, <span class="org-variable-name">offset</span>, <span class="org-variable-name">string</span>) { console.log(match); <span class="org-keyword">return</span> p1 + <span class="org-string">&quot;0x0,&quot;</span>;
+});
+</pre>
+</div> <p>
+This seemed to work until I actually tried shooting people and realized that my
+bullets weren&apos;t hitting anything, which made me suspect that the server was
+responsible for taking the spread into account.
+</p> <p>
+I also came across the definitions for the game&apos;s &quot;classes&quot;.
+</p> <div class="org-src-container">
+<pre class="src src-javascript">{ <span class="org-string">&apos;name&apos;</span>: <span class="org-string">&apos;Triggerman&apos;</span>, <span class="org-string">&apos;loadout&apos;</span>: [0x1], <span class="org-string">&apos;secondary&apos;</span>: !0x0, <span class="org-string">&apos;colors&apos;</span>: [0xa77860, 0x3d3d3d, 0x232323, 0x282828, 0x6c5042, 0xbfbfbf], <span class="org-string">&apos;health&apos;</span>: 0x64, <span class="org-string">&apos;segs&apos;</span>: 0x6, <span class="org-string">&apos;speed&apos;</span>: 1.05
+}
+</pre>
+</div> <p>
+So I tried setting <code>speed</code> to something absurdly high, but after a few seconds of
+moving forward I&apos;d be teleported back. Again, it seems the server is also
+calculating my movement and realizing that something&apos;s wrong.
+</p> <p>
+Rather than find which values are truly client-side and which are verified
+server-side, I decided to implement the bread and butter of client-side cheats:
+a wallhack. My thinking was that the easy way to go about this would be to patch
+every call to <code>gl.depthFunc</code> and set the <code>func</code> parameter to <code>gl.ALWAYS</code>.
+</p> <div class="org-src-container">
+<pre class="src src-javascript">code = code.replace(<span class="org-string">/\[&apos;depthFunc&apos;\]\(0x\d\d\d\)/</span>g, <span class="org-keyword">function</span>(<span class="org-variable-name">match</span>, <span class="org-variable-name">p1</span>, <span class="org-variable-name">offset</span>, <span class="org-variable-name">string</span>) { <span class="org-keyword">return</span> <span class="org-string">&quot;[&apos;depthFunc&apos;](0x207)&quot;</span>;
+});
+</pre>
+</div> <p>
+This actually worked, but not in a way that&apos;s helpful for getting an advantage
+in the game. So I had to be a bit more clever. Looking through &apos;extracted.2.js&apos;,
+it&apos;s pretty obvious that they&apos;re using <a href="https://threejs.org/">three.js</a>, and from experience, I know
+that when it comes to rendering something 2D over a three.js scene, most people
+opt for some sort of overlay. So I did a search for &apos;game-overlay&apos;, and found
+that it occurs only once.
+</p> <div class="org-src-container">
+<pre class="src src-javascript"><span class="org-keyword">function</span> (<span class="org-variable-name">czO</span>, <span class="org-variable-name">czP</span>, <span class="org-variable-name">czQ</span>) { <span class="org-keyword">let</span> <span class="org-variable-name">czR</span> = czQ(0x7), czS = czQ(0x15), czT = czQ(0x8), czU = czQ(0x4), czV = {}; <span class="org-keyword">var</span> <span class="org-variable-name">czW</span>; <span class="org-keyword">let</span> <span class="org-variable-name">czX</span> = czV[<span class="org-string">&apos;canvas&apos;</span>] = document[<span class="org-string">&apos;getElementById&apos;</span>](<span class="org-string">&apos;game-overlay&apos;</span>); ... czV[<span class="org-string">&apos;render&apos;</span>] = <span class="org-keyword">function</span> (<span class="org-variable-name">czO</span>, <span class="org-variable-name">czP</span>, <span class="org-variable-name">czQ</span>, <span class="org-variable-name">czU</span>, <span class="org-variable-name">czY</span>) { <span class="org-keyword">let</span> <span class="org-variable-name">cA3</span> = czV, cAs = czX[<span class="org-string">&apos;width&apos;</span>] / czO, cAt = czX[<span class="org-string">&apos;height&apos;</span>] / czO, cAu = <span class="org-string">&apos;none&apos;</span> == menuHolder[<span class="org-string">&apos;style&apos;</span>][<span class="org-string">&apos;display&apos;</span>] &amp;&amp; <span class="org-string">&apos;none&apos;</span> == endUI[<span class="org-string">&apos;style&apos;</span>][<span class="org-string">&apos;display&apos;</span>] &amp;&amp; <span class="org-string">&apos;none&apos;</span> == killCardHolder[<span class="org-string">&apos;style&apos;</span>][<span class="org-string">&apos;display&apos;</span>], cAv = czQ[<span class="org-string">&apos;camera&apos;</span>][<span class="org-string">&apos;OAyrBAIOyFXMWtKxEfkVjBvqsgcYuyWi&apos;</span>](); ... <span class="org-keyword">for</span> (cAw = 0x0; cAw &lt; czP[<span class="org-string">&apos;players&apos;</span>][<span class="org-string">&apos;list&apos;</span>][<span class="org-string">&apos;length&apos;</span>]; ++cAw) { <span class="org-keyword">if</span> (!(czW = czP[<span class="org-string">&apos;players&apos;</span>][<span class="org-string">&apos;list&apos;</span>][cAw])[<span class="org-string">&apos;active&apos;</span>]) <span class="org-keyword">continue</span>; <span class="org-keyword">if</span> (czW[<span class="org-string">&apos;aeWOplgwNeuXsCSinrkfFWfJBNPqqMsp&apos;</span>] || !czW[<span class="org-string">&apos;eaXYenBVjWrAqKUShuRgPGpSwPVbhVHm&apos;</span>]) <span class="org-keyword">continue</span>; <span class="org-keyword">if</span> (!czW[<span class="org-string">&apos;igkTahukFkFIrcwuUsvtqgPJfhPajghp&apos;</span>]) <span class="org-keyword">continue</span>; <span class="org-keyword">if</span> ((cAI = czW[<span class="org-string">&apos;eaXYenBVjWrAqKUShuRgPGpSwPVbhVHm&apos;</span>][<span class="org-string">&apos;position&apos;</span>][<span class="org-string">&apos;clone&apos;</span>]())[<span class="org-string">&apos;y&apos;</span>] += czR[<span class="org-string">&apos;bSnWGqqv&apos;</span>] + czR[<span class="org-string">&apos;nameOffset&apos;</span>] - czW[<span class="org-string">&apos;crouchVal&apos;</span>] * czR[<span class="org-string">&apos;crouchDst&apos;</span>], 0x0 &lt;= czW[<span class="org-string">&apos;hatIndex&apos;</span>] &amp;&amp; (cAI[<span class="org-string">&apos;y&apos;</span>] += czR[<span class="org-string">&apos;nameOffsetHat&apos;</span>]), !(0x1 &lt;= 0x14 * (cAJ = Math[<span class="org-string">&apos;max&apos;</span>](0.3, 0x1 - czT[<span class="org-string">&apos;SHAokGxkzQABudAEqJwdYyVzJPmwCsxg&apos;</span>](cAv[<span class="org-string">&apos;x&apos;</span>], cAv[<span class="org-string">&apos;y&apos;</span>], cAv[<span class="org-string">&apos;z&apos;</span>], cAI[<span class="org-string">&apos;x&apos;</span>], cAI[<span class="org-string">&apos;y&apos;</span>], cAI[<span class="org-string">&apos;z&apos;</span>]) / 0x258)) &amp;&amp; czQ[<span class="org-string">&apos;frustum&apos;</span>][<span class="org-string">&apos;containsPoint&apos;</span>](cAI))) <span class="org-keyword">continue</span>; cAb[<span class="org-string">&apos;save&apos;</span>](), cAI[<span class="org-string">&apos;project&apos;</span>](czQ[<span class="org-string">&apos;camera&apos;</span>]), cAI[<span class="org-string">&apos;x&apos;</span>] = (cAI[<span class="org-string">&apos;x&apos;</span>] + 0x1) / 0x2, cAI[<span class="org-string">&apos;y&apos;</span>] = (cAI[<span class="org-string">&apos;y&apos;</span>] + 0x1) / 0x2, cAb[<span class="org-string">&apos;translate&apos;</span>](cAs * cAI[<span class="org-string">&apos;x&apos;</span>], cAt * (0x1 - cAI[<span class="org-string">&apos;y&apos;</span>])), cAb[<span class="org-string">&apos;scale&apos;</span>](cAJ, cAJ); <span class="org-keyword">let</span> <span class="org-variable-name">czO</span> = 0x78, czX = 0x1 == czV[<span class="org-string">&apos;nametagStyle&apos;</span>] ? 0x6 : 0x10; <span class="org-keyword">if</span> (0x0 == czV[<span class="org-string">&apos;nametagStyle&apos;</span>] || 0x3 == czV[<span class="org-string">&apos;nametagStyle&apos;</span>]) { cAb[<span class="org-string">&apos;fillStyle&apos;</span>] = <span class="org-string">&apos;rgba(0, 0, 0, 0.4)&apos;</span>, cAb[<span class="org-string">&apos;fillRect&apos;</span>](-0x3c, -czX, czO, czX), cA3[<span class="org-string">&apos;dynamicHP&apos;</span>] &amp;&amp; czW[<span class="org-string">&apos;hpChase&apos;</span>] &gt; czW[<span class="org-string">&apos;health&apos;</span>] / czW[<span class="org-string">&apos;pAblSevloQuKmtUpAKdXIHpqBTWHCbRR&apos;</span>] &amp;&amp; (cAb[<span class="org-string">&apos;fillStyle&apos;</span>] = <span class="org-string">&apos;#FFFFFF&apos;</span>, cAb[<span class="org-string">&apos;fillRect&apos;</span>](-0x3c, -czX, czO * czW[<span class="org-string">&apos;hpChase&apos;</span>], czX)); <span class="org-keyword">var</span> <span class="org-variable-name">cAA</span> = czU &amp;&amp; czU[<span class="org-string">&apos;team&apos;</span>] ? czU[<span class="org-string">&apos;team&apos;</span>] : window[<span class="org-string">&apos;spectating&apos;</span>] ? 0x1 : 0x0; cAb[<span class="org-string">&apos;fillStyle&apos;</span>] = cAA == czW[<span class="org-string">&apos;team&apos;</span>] ? czS[<span class="org-string">&apos;teams&apos;</span>][0x0] : czS[<span class="org-string">&apos;teams&apos;</span>][0x1], cAb[<span class="org-string">&apos;fillRect&apos;</span>](-0x3c, -czX, czO * (czW[<span class="org-string">&apos;health&apos;</span>] / czW[<span class="org-string">&apos;pAblSevloQuKmtUpAKdXIHpqBTWHCbRR&apos;</span>]), czX); } <span class="org-keyword">if</span> (0x3 &gt; czV[<span class="org-string">&apos;nametagStyle&apos;</span>]) { <span class="org-keyword">let</span> <span class="org-variable-name">czO</span> = czW[<span class="org-string">&apos;name&apos;</span>], czP = czW[<span class="org-string">&apos;clan&apos;</span>] ? <span class="org-string">&apos;[&apos;</span> + czW[<span class="org-string">&apos;clan&apos;</span>] + <span class="org-string">&apos;]&apos;</span> : <span class="org-constant">null</span>, czQ = czW[<span class="org-string">&apos;level&apos;</span>]; cAb[<span class="org-string">&apos;font&apos;</span>] = <span class="org-string">&apos;30px GameFont&apos;</span>; <span class="org-keyword">let</span> <span class="org-variable-name">czT</span> = czQ &amp;&amp; 0x1 != czV[<span class="org-string">&apos;nametagStyle&apos;</span>] ? cAb[<span class="org-string">&apos;measureText&apos;</span>](czQ)[<span class="org-string">&apos;width&apos;</span>] + 0xa : 0x0; cAb[<span class="org-string">&apos;font&apos;</span>] = <span class="org-string">&apos;20px GameFont&apos;</span>; <span class="org-keyword">let</span> <span class="org-variable-name">czU</span> = cAb[<span class="org-string">&apos;measureText&apos;</span>](czO)[<span class="org-string">&apos;width&apos;</span>] + (czP ? 0x5 : 0x0), czY = czT + czU + (czP ? cAb[<span class="org-string">&apos;measureText&apos;</span>](czP)[<span class="org-string">&apos;width&apos;</span>] : 0x0); cAb[<span class="org-string">&apos;translate&apos;</span>](0x0, -czX - 0xa), cAb[<span class="org-string">&apos;fillStyle&apos;</span>] = <span class="org-string">&apos;white&apos;</span>, cAb[<span class="org-string">&apos;font&apos;</span>] = <span class="org-string">&apos;30px GameFont&apos;</span>, czQ &amp;&amp; 0x1 != czV[<span class="org-string">&apos;nametagStyle&apos;</span>] &amp;&amp; cAb[<span class="org-string">&apos;fillText&apos;</span>](czQ, -czY / 0x2, 0x0), cAb[<span class="org-string">&apos;font&apos;</span>] = <span class="org-string">&apos;20px GameFont&apos;</span>, cAb[<span class="org-string">&apos;globalAlpha&apos;</span>] = 0x1, cAb[<span class="org-string">&apos;fillText&apos;</span>](czO, -czY / 0x2 + czT, 0x0), cAb[<span class="org-string">&apos;globalAlpha&apos;</span>] = 0x0 &lt;= czR[<span class="org-string">&apos;verClans&apos;</span>][<span class="org-string">&apos;indexOf&apos;</span>](czW[<span class="org-string">&apos;clan&apos;</span>]) ? 0x1 : 0.4, cAb[<span class="org-string">&apos;fillStyle&apos;</span>] = 0x0 &lt;= czR[<span class="org-string">&apos;verClans&apos;</span>][<span class="org-string">&apos;indexOf&apos;</span>](czW[<span class="org-string">&apos;clan&apos;</span>]) ? czS[<span class="org-string">&apos;verified&apos;</span>][<span class="org-string">&apos;clan&apos;</span>] : <span class="org-string">&apos;white&apos;</span>, czP &amp;&amp; cAb[<span class="org-string">&apos;fillText&apos;</span>](czP, -czY / 0x2 + czT + czU, 0x0); } cAb[<span class="org-string">&apos;restore&apos;</span>]();
+    }
+    ...
+</pre>
+</div> <p>
+Not the most readable snippet, but there are a few things that stand out to me.
+Namely, iterating over the <code>players</code> list and rendering something using the <code>health</code>
+attribute. Those four <code>if</code> statements seem to be checking if the player is visible
+(given away by the <code>czQ[&apos;frustum&apos;][&apos;containsPoint&apos;](cAI)</code>), so what if we just
+patch out the <code>continue</code>&apos;s?
+</p> <div class="org-src-container">
+<pre class="src src-javascript">code = code.replace(<span class="org-string">/if\(\!\(czW=czP\[&apos;players&apos;].*cAI\)\)\)continue;/</span>, <span class="org-keyword">function</span>(<span class="org-variable-name">match</span>, <span class="org-variable-name">p1</span>, <span class="org-variable-name">offset</span>, <span class="org-variable-name">string</span>) { <span class="org-keyword">return</span> <span class="org-string">&quot;try{&quot;</span> + match.replace(<span class="org-string">/continue/</span>g, <span class="org-string">&quot;true&quot;</span>) + <span class="org-string">&quot;}catch(e){continue;}&quot;</span>;
+});
+</pre>
+</div> <p>
+I pulled a professional programmer move and wrapped everything in a <code>try</code>, <code>catch</code>
+block because the game would freeze up without it, but this works pretty well.
+</p> <p>
+And, hey! We have a wallhack! This probably isn&apos;t representative of <i>all</i> browser
+games &#x2013; I&apos;d expect most to be easier to screw with &#x2013; but I thought that the
+obfuscation and anti-cheat measures here made for a worthy opponent. It doesn&apos;t
+stack up against <a href="https://vmcall.blog/battleye-stack-walking/">BattlEye</a>, but this did take me more than an afternoon to figure
+out. To that effect, nice work, Sidney!
+</p> <blockquote class="twitter-tweet"><p>New Rotation map and Anti Cheat tomorrow bois</p> Sidney (@Sidney_de_Vries) <a href="https://twitter.com/Sidney_de_Vries/status/1190593818233425920?ref_src=twsrc%5Etfw">November 2, 2019</a></blockquote> <p>
+&#x2026; </p> <p>
+Even if your new &quot;Anti Cheat&quot; was this :)
+</p> <p>
+I&apos;m inevitably going to get flack for cheating in a video game. Before you write
+me an email, understand that I really don&apos;t care. I have a lot more fun reverse
+engineering games and writing cheats for them than I do playing them. If it
+makes you feel any better, the only time these cheats see any use is when I&apos;m
+demonstrating them. Peace out.
+</p>
+</div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
