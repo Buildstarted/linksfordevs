@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Fixing Random, part&#xA0;27 -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Fixing Random, part&#xA0;27</h1>
+    <div class="entry-content"> <p><a href="https://ericlippert.com/2019/04/29/fixing-random-part-26/">Last time on FAIC</a> we went through a loose, hand-wavy definition of what it means to have a &#x201C;weighted&#x201D; continuous distribution: our weights are now doubles, and given by a Probability Distribution Function; the probability of a sample coming from any particular range is the area under the curve of that range, divided by the total area under the function. (Which need not be 1.0.)</p>
+<p>A central question of the rest of this series will be this problem: <strong>suppose we have a delegate that implements a non-normalized PDF; can we implement <code>Sample()</code> such that the samples conform to the distribution?</strong></p>
+<p>The short answer is: in general, no.</p>
+<p>A delegate from double to double that is defined over the entire range of doubles has well over a billion billion possible inputs and outputs. Consider for example the function that has a high-probability lump in the neighbourhood of -12345.678 and another one at 271828.18 and is zero everywhere else; if you really know <em>nothing</em> about the function, <em>how would you know to look there?</em></p>
+<p>We need to know <em>something</em> about the PDF in order to implement <code>Sample()</code>.</p>
+<p>The long answer is: if we can make a few assumptions then sometimes we can do a pretty good job.</p> <p><strong>Aside:</strong> As I&#x2019;ve mentioned before in this series:<em> if we know the quantile function associated with the PDF then we can very easily sample from the distribution</em>. We just sample from a standard continuous uniform distribution, call the quantile function with the sampled value, and the value returned is our sample. Let&#x2019;s assume that we do <em>not</em> know the quantile function of our PDF.</p> <p>Let&#x2019;s look at an example. Suppose I have this weight function:</p>
+<p><span><span>double</span><span>&#xA0;</span><span>Mixture</span><span>(</span><span>double</span><span>&#xA0;</span><span>x</span><span>)</span><span>&#xA0;</span><span>=&gt;</span><br>
+<span>&#xA0; </span><span>Exp</span><span>(</span><span>&#x2013;</span><span>x</span><span>&#xA0;</span><span>*</span><span>&#xA0;</span><span>x</span><span>)</span><span>&#xA0;</span><span>+</span><span>&#xA0;</span><span>Exp</span><span>((</span><span>1.0</span><span>&#xA0;</span><span>&#x2013;</span><span>&#xA0;</span><span>x</span><span>)</span><span>&#xA0;</span><span>*</span><span>&#xA0;</span><span>(</span><span>x</span><span>&#xA0;</span><span>&#x2013;</span><span>&#xA0;</span><span>1.0</span><span>)</span><span>&#xA0;</span><span>*</span><span>&#xA0;</span><span>10.0</span><span>)</span><span>;</span></span></p>
+<p>If we graph that out, it looks like this:</p>
+<p><img class="alignnone size-full wp-image-5771" src="https://ericlippert.files.wordpress.com/2019/05/mixed.png?w=584" alt="Mixed.png" srcset="https://ericlippert.files.wordpress.com/2019/05/mixed.png?w=584 584w, https://ericlippert.files.wordpress.com/2019/05/mixed.png?w=150 150w, https://ericlippert.files.wordpress.com/2019/05/mixed.png?w=300 300w, https://ericlippert.files.wordpress.com/2019/05/mixed.png 588w" sizes="(max-width: 584px) 100vw, 584px"></p>
+<p>I called it &#x201C;mixture&#x201D; because it is the sum of two (non-normalized) normal distributions. This is a valid non-normalized PDF: it&#x2019;s a pure function from all doubles to a non-negative double and it has finite area under the curve.</p>
+<p>How can we implement a <code>Sample()</code> method such that the histogram looks like this?</p> <p><strong>Exercise:</strong> Recall that I used a special technique to implement sampling from a normal distribution. You can use a variation on that technique to efficiently sample from a mixture of normal distributions; can you see how to do so? See if you can implement it.</p>
+<p>However, the point of this exercise is: what if we did <em>not</em> know that there was a trick to sampling from this distribution? Can we sample from it anyways?</p> <p>The technique I&#x2019;m going to describe today is, once more, rejection sampling. The idea is straightforward; to make this technique work we need to find a weighted &#x201C;helper&#x201D; distribution that has this property:</p>
+<p><em>The weight function of the helper distribution is always greater than or equal to the weight function we are trying to sample from.</em></p>
+<p>Now, remember, the weight function need not be &#x201C;scaled&#x201D; so that the area under the curve is 1.0. This means that <em>we can multiply any weight function by a positive constant,</em> and the distribution associated with the multiplied weight function is the same. That means that we can weaken our requirement:</p>
+<p><em>There exists a constant factor such that the weight function of the helper distribution multiplied by the factor is always greater than or equal to the weight function we are trying to sample from.</em></p>
+<p>This will probably be more clear with an example.</p>
+<p>Let&#x2019;s take the standard normal distribution as our helper. We already know how to sample from it, and we know it&#x2019;s weight function. But it just so happens that there exists a constant &#x2014; seven &#x2014; such that multiplying the constant factor by the helper&#x2019;s weight function dominates our desired distribution:</p>
+<p><img class="alignnone size-full wp-image-5772" src="https://ericlippert.files.wordpress.com/2019/05/screen-shot-2019-03-12-at-8.39.07-pm.png?w=584" alt="Screen Shot 2019-03-12 at 8.39.07 PM.png" srcset="https://ericlippert.files.wordpress.com/2019/05/screen-shot-2019-03-12-at-8.39.07-pm.png?w=584 584w, https://ericlippert.files.wordpress.com/2019/05/screen-shot-2019-03-12-at-8.39.07-pm.png?w=150 150w, https://ericlippert.files.wordpress.com/2019/05/screen-shot-2019-03-12-at-8.39.07-pm.png?w=300 300w, https://ericlippert.files.wordpress.com/2019/05/screen-shot-2019-03-12-at-8.39.07-pm.png 624w" sizes="(max-width: 584px) 100vw, 584px"></p>
+<p>Again, we&#x2019;re going to throw some darts and hope they land below the red curve.</p>
+<ul>
+<li>The black curve is the weight function of the helper &#x2014; the standard normal distribution &#x2014; multiplied by seven.</li>
+<li>We know how to sample from that distribution.</li>
+<li>Doing so gives us an x coordinate for our dart, distributed according to the height of the black curve; the chosen coordinate is more likely to be in a higher region of any particular width than a lower region of the same width.</li>
+<li>We&#x2019;ll then pick a random y coordinate between the x axis and the black curve.</li>
+<li>Now we have a point that is definitely below the black line, and <em>might</em> be below the red line.</li>
+<li>If it is not below the red line, reject the sample and try again.</li>
+<li>If it is below the red line, the x coordinate is the sample.</li>
+</ul>
+<p>Let&#x2019;s implement it!</p>
+<p>Before we do, once again I&#x2019;m going to implement a Bernoulli &#x201C;flip&#x201D; operation, this time as the class:</p>
+<p><span><span>sealed</span><span>&#xA0;</span><span>class</span><span>&#xA0;</span><span>Flip</span><span>&lt;</span><span>T</span><span>&gt;</span><span>&#xA0;</span><span>:</span><span>&#xA0;</span><span>IWeightedDistribution</span><span>&lt;</span><span>T</span><span>&gt;</span><br>
+<span>{</span><br>
+<span>&#xA0; public</span><span>&#xA0;</span><span>static</span><span>&#xA0;</span><span>IWeightedDistribution</span><span>&lt;</span><span>T</span><span>&gt;</span><span>&#xA0;</span><span>Distribution</span><span>(<br>
+</span><span>&#xA0; &#xA0; T</span><span>&#xA0;</span><span>heads</span><span>,</span><span>&#xA0;</span><span>T</span><span>&#xA0;</span><span>tails</span><span>,</span><span>&#xA0;</span><span>double</span><span>&#xA0;</span><span>p</span><span>)</span></span></p>
+<p>You know how this goes; I will skip writing out all that boilerplate code. We take values for &#x201C;heads&#x201D; and &#x201C;tails&#x201D;, and the probability (from 0 to 1) of getting heads. <a href="https://github.com/ericlippert/probability/tree/episode27">See the github repository for the source code if you care.</a></p>
+<p>I&#x2019;m also going to implement this obvious helper:</p>
+<p><span><span>static</span><span>&#xA0;</span><span>IWeightedDistribution</span><span>&lt;</span><span>bool</span><span>&gt;</span><span>&#xA0;</span><span>BooleanBernoulli</span><span>(</span><span>double</span><span>&#xA0;</span><span>p</span><span>)</span><span>&#xA0;</span><span>=&gt;</span><br>
+<span><span>&#xA0;&#xA0;</span></span><span>Flip</span><span>&lt;</span><span>bool</span><span>&gt;</span><span>.</span><span>Distribution</span><span>(</span><span>true</span><span>,</span><span>&#xA0;</span><span>false</span><span>,</span><span>&#xA0;</span><span>p</span><span>);</span></span></p>
+<p>All right. How are we going to implement rejection sampling? I always begin by reasoning about what we want, and what we have. By assumption we have a <em>target</em> weight function, a helper distribution whose weight function &#x201C;dominates&#x201D; the given function when multiplied, and the multiplication factor. The code practically writes itself:</p>
+<p><span><span>public</span><span>&#xA0;</span><span>class</span><span>&#xA0;</span><span>Rejection</span><span>&lt;</span><span>T</span><span>&gt;</span><span>&#xA0;</span><span>:</span><span>&#xA0;</span><span>IWeightedDistribution</span><span>&lt;</span><span>T</span><span>&gt;</span><br>
+<span>{</span><br>
+<span>&#xA0;&#xA0;</span><span>public</span><span>&#xA0;</span><span>static</span><span>&#xA0;</span><span>IWeightedDistribution</span><span>&lt;</span><span>T</span><span>&gt;</span><span>&#xA0;</span><span>Distribution</span><span>(<br>
+</span><span>&#xA0; &#xA0; &#xA0; Func</span><span>&lt;</span><span>T</span><span>,</span><span>&#xA0;</span><span>double</span><span>&gt;</span><span>&#xA0;</span><span>weight</span><span>,</span><br>
+<span>&#xA0; &#xA0; &#xA0;&#xA0;</span><span>IWeightedDistribution</span><span>&lt;</span><span>T</span><span>&gt;</span><span>&#xA0;</span><span>helper</span><span>,</span><span><br>
+</span><span>&#xA0; &#xA0; &#xA0; double</span><span>&#xA0;</span><span>factor</span><span>&#xA0;</span><span>=</span><span>&#xA0;</span><span>1.0</span><span>)</span><span>&#xA0;</span><span>=&gt;</span><br>
+<span>&#xA0; &#xA0; </span><span>new</span><span>&#xA0;</span><span>Rejection</span><span>&lt;</span><span>T</span><span>&gt;(</span><span>weight</span><span>,</span><span>&#xA0;</span><span>dominating</span><span>,</span><span>&#xA0;</span><span>factor</span><span>);</span><br>
+</span></p>
+<p>I&#x2019;ll skip the rest of the boilerplate. The weight function is just:</p>
+<p><span> <span>public</span><span>&#xA0;</span><span>double</span><span>&#xA0;</span><span>Weight</span><span>(</span><span>T</span><span>&#xA0;</span><span>t</span><span>)</span><span>&#xA0;</span><span>=&gt;</span><span>&#xA0;</span><span>weight</span><span>(</span><span>t</span><span>);</span></span></p>
+<p>The interesting step is, as usual, in the sampling.</p>
+<p>Rather than choosing a random number for the y coordinate directly, instead we&#x2019;ll just decide whether or not to accept or reject the sample based on a Bernoulli flip where the likelihood of success is the fraction of the weight consumed by the target weight function; if it is not clear to you why that works, give it some thought.</p>
+<p><span><span>public</span><span>&#xA0;</span><span>T</span><span>&#xA0;</span><span>Sample</span><span>()</span><br>
+<span>{</span><br>
+<span>&#xA0;&#xA0;</span><span>while</span><span>(</span><span>true</span><span>)</span><br>
+<span>&#xA0;&#xA0;</span><span>{</span><br>
+<span>&#xA0; &#xA0;&#xA0;</span><span>T</span><span>&#xA0;</span><span>t</span><span>&#xA0;</span><span>=</span><span>&#xA0;</span><span>this</span><span>.</span><span>helper</span><span>.</span><span>Sample</span><span>();</span><br>
+<span>&#xA0;&#xA0;&#xA0;&#xA0;</span><span>double</span><span>&#xA0;h</span><span>w</span><span>&#xA0;</span><span>=</span><span>&#xA0;</span><span>this</span><span>.</span><span>helper</span><span>.</span><span>Weight</span><span>(</span><span>t</span><span>)</span><span>&#xA0;</span><span>*</span><span>&#xA0;</span><span>this</span><span>.</span><span>factor</span><span>;</span><br>
+<span>&#xA0;&#xA0;&#xA0;&#xA0;</span><span>double</span><span>&#xA0;</span><span>w</span><span>&#xA0;</span><span>=</span><span>&#xA0;</span><span>this</span><span>.</span><span>weight</span><span>(</span><span>t</span><span>);</span><br>
+<span>&#xA0;&#xA0;&#xA0;&#xA0;</span><span>if</span><span>&#xA0;</span><span>(</span><span>BooleanBernoulli</span><span>(</span><span>w&#xA0;</span><span>/ h</span><span>w</span><span>)</span><span>.</span><span>Sample</span><span>())</span><br>
+<span>&#xA0; &#xA0; &#xA0;&#xA0;</span><span>return</span><span>&#xA0;</span><span>t</span><span>;</span><span>&#xA0;</span><br>
+<span>&#xA0;&#xA0;</span><span>}</span><br>
+<span>}</span></span></p>
+<p>All right, let&#x2019;s take it for a spin:</p>
+<p><span><span>var</span><span>&#xA0;</span><span>r</span><span>&#xA0;</span><span>=</span><span>&#xA0;</span><span>Rejection</span><span>&lt;</span><span>double</span><span>&gt;</span><span>.</span><span>Distribution</span><span>(<br>
+</span><span>&#xA0; Mixture</span><span>,</span><span>&#xA0;</span><span>Normal</span><span>.</span><span>Standard</span><span>,</span><span>&#xA0;</span><span>7.0</span><span>);</span><br>
+<span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>r</span><span>.</span><span>Histogram</span><span>(</span><span>&#x2013;</span><span>2.0</span><span>,</span><span>&#xA0;</span><span>2.0</span><span>));</span><br>
+</span></p>
+<p>And sure enough, the histogram looks exactly as we would wish:</p>
+<pre>                             **         
+                            ***         
+                            ***         
+                           *****        
+                           *****        
+                 ******   ******        
+                ****************        
+               *****************        
+              *******************       
+             ********************       
+            *********************       
+            *********************       
+           ***********************      
+          ************************      
+         *************************      
+        ***************************     
+      *****************************     
+    *********************************   
+----------------------------------------</pre>
+<p>How efficient was rejection sampling in this case? Actually, pretty good. As you can see from the graph, the total area under the black curve is about three times the total area under the red curve, so on average we end up rejecting two samples for every one we accept. Not great, but certainly not terrible.</p>
+<p>Could we improve that? Sure. You&#x2019;ll notice that the standard normal distribution times seven is not a great fit. We could shift the mean 0.5 to the right, and if we do that then we can reduce the multiplier to 4:</p>
+<p><img class="alignnone size-full wp-image-5774" src="https://ericlippert.files.wordpress.com/2019/05/mixedbetter.png?w=536" alt="MixedBetter.png" srcset="https://ericlippert.files.wordpress.com/2019/05/mixedbetter.png 536w, https://ericlippert.files.wordpress.com/2019/05/mixedbetter.png?w=150 150w, https://ericlippert.files.wordpress.com/2019/05/mixedbetter.png?w=300 300w" sizes="(max-width: 536px) 100vw, 536px"></p>
+<p>That is a far better fit, and if we sampled from this distribution instead, we&#x2019;d reject a relatively small fraction of all the samples.</p> <p><strong>Exercise:</strong> Try implementing it that way and see if you get the same histogram.</p> <p>Once again we&#x2019;ve managed to implement <code>Sample()</code> by rejection sampling; once again, what are the pros and cons of this technique?</p>
+<ul>
+<li><strong>Pro</strong>: it&#x2019;s conceptually very straightforward. We&#x2019;re just throwing darts and rejecting the darts that do not fall in the desired area. The darts that do fall in the desired area have the desired property: that samples from a given area arrive in proportion to that area&#x2019;s size.</li>
+<li><strong>Con</strong>: It is by no means obvious how to find a tight-fitting helper distribution that we can sample such that the helper weight function is always bigger than the target weight function. What distribution should we use? How do we find the constant multiplication factor?</li>
+</ul>
+<p>The rejection sampling method works best when we have the target weight function ahead of time so that we can graph it out and an expert can make a good decision about what the helper distribution should be. It works poorly when the weight function arrives at runtime, which, unfortunately, is often the case.</p> <p><strong>Next time on FAIC:</strong> We&#x2019;ll look at a completely different technique for sampling from an arbitrary PDF that requires less &#x201C;expert choice&#x201D; of a helper distribution.</p> </div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

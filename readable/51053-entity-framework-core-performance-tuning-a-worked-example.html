@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Entity Framework Core performance tuning &#x2013; a worked example -
+linksfor.dev(s)
+    </title>
+	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <h1>Entity Framework Core performance tuning &#x2013; a worked example</h1>
+    <body><p>This is the first in a series of articles on performance tuning EF Core. In this article I take an example book selling site that I have built for <a href="http://bit.ly/2m8KRAZ">my book</a> and see how fast I can get it to perform. I have got some really excellent performance out of <a href="https://docs.microsoft.com/en-us/ef/core/index">Entity Framework Core</a> (EF Core) and I wanted to share it with you all.</p>
+<blockquote><p>Note: This article is from chapter 13 of <a href="http://bit.ly/2m8KRAZ">my book</a>, and gives more information on the implementation (the chapter is 33 pages long). <span>Manning Publications have offered the coupon to get 37% off my book, &#x201C;<a href="http://bit.ly/2m8KRAZ">Entity Framework in Action</a>&#x201D; &#x2013; use&#xA0;<strong>fccefcoresmith.</strong></span></p></blockquote> <p>I build an example book selling web site using EF Core version 2.0.0 and filled it with 100,000 books and &#xBD; million reviews. I then went through four staged of performance tuning. The figure below shows you the results through these stages for two different, but demanding areas of performance:</p>
+<ul><li>Displaying 100 books out of 100,000 possible books.</li>
+<li>Displaying 100 books out of 100,000 possible books, sorted by average votes<br>
+(timings are how long the web request took to finish, as measured by Chrome on my development PC).</li>
+</ul><p><a href="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan.png"><img class="aligncenter size-large wp-image-1119" src="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-1024x462.png" alt width="660" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-1024x462.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-300x135.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-768x347.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan.png 1516w" sizes="(max-width: 660px) 100vw, 660px"></a>The four stages on the graph are:</p>
+<ol><li>Part 1: Working with EF Core built queries
+<ol><li>I get my LINQ code in a form that EF Core can turn it into good SQL</li>
+<li>I performance tune the existing EF Core query by adding a DbFunction.</li>
+</ol></li>
+<li>Part 2: I build a SQL query by copying EF Core&#x2019;s SQL and &#x2018;tweaked&#x2019; one bit to get some extra performance</li>
+<li>Part 3: I added cached values to the database that held hard-to-calculate values, such as the average votes for a book.</li>
+</ol><h4 id="you-can-try-the-final-part-3-tuned-up-example-book-selling-site-at-http-efcoreinaction-com"><span><strong>You can try the final, Part 3, &#x201C;tuned up&#x201D; example book selling site at&#xA0; <a href="http://efcoreinaction.com/">http://efcoreinaction.com/</a>.</strong></span><a class="anchorlink dashicons-before" href="#you-can-try-the-final-part-3-tuned-up-example-book-selling-site-at-http-efcoreinaction-com"></a></h4>
+<p><em>Note: The site </em><a href="http://www.efcoreinaction.com"><em>www.efcoreinaction.com</em></a><em> isn&#x2019;t running on some massively powerful cloud system, but on shared hosting site that costs &#xA3;3.50/month. (see </em><a href="https://www.webwiz.net/web-hosting/windows-web-hosting.htm"><em>Web Wiz</em></a><em>, who are a great hosting site for .NET. They have always been early supporters of new .NET features.)</em></p>
+<h2 id="setting-the-scene-my-example-application">Setting the scene &#x2013; my example application<a class="anchorlink dashicons-before" href="#setting-the-scene-my-example-application"></a></h2>
+<p>Right from the second chapter of <a href="http://bit.ly/2m8KRAZ">my book</a> I introduce an example book selling site, and as the book progresses I add more feature to the application. Admittedly the site only has a few features, but I purposely included some sorting and filtering features that can be a challenge when the site has a lot of books to show. The diagram below shows you the features of the site.</p>
+<h3 id="what-makes-the-book-list-a-challenge"><a href="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Example-book-selling-site-diagram.png"><img class="aligncenter size-large wp-image-1120" src="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Example-book-selling-site-diagram-1024x694.png" alt width="660" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Example-book-selling-site-diagram-1024x694.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Example-book-selling-site-diagram-300x203.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Example-book-selling-site-diagram-768x521.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Example-book-selling-site-diagram.png 1572w" sizes="(max-width: 660px) 100vw, 660px"></a>What makes the book list a challenge?<a class="anchorlink dashicons-before" href="#what-makes-the-book-list-a-challenge"></a></h3>
+<p>I tried to create an example application which was at least credible, and included some complicated queries. The diagram below shows you the listing of a book, and some information on how easy or complex it is to get that data from the database.</p>
+<p><a href="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Book-query-book-display-with-difficulty-selan.png"><img class="aligncenter size-large wp-image-1121" src="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Book-query-book-display-with-difficulty-selan-1024x443.png" alt width="660" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Book-query-book-display-with-difficulty-selan-1024x443.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Book-query-book-display-with-difficulty-selan-300x130.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Book-query-book-display-with-difficulty-selan-768x332.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Book-query-book-display-with-difficulty-selan.png 1581w" sizes="(max-width: 660px) 100vw, 660px"></a></p>
+<p>On top of that the sorting, filtering and paging commands adds another level of complexity. I came up with four sort and filter tests that got progressively difficult, each done with page size of 10 and 100 to see how much showing more books effected performance. Here are the four tests.</p>
+<ol><li>Easy &#x2013; just show the page, with default everything.</li>
+<li>Moderate &#x2013; sort the books by their publication date.</li>
+<li>Hard &#x2013; sort by average votes, which is calculated from all the reviews linked to a book.</li>
+<li>Double hard &#x2013; filter by average votes and the sort by price, both of which are calculated values.</li>
+</ol><p><em>Note: </em><em>I did all my testing on my development PC using the ASP.NET Core example book selling site running in debug mode. The timings are from Chrome, and are the total time it takes for the page to return (including downloading the content). For comparison, accessing the About page, which has no database accesses in it, typically takes 11 ms to load, so the database accesses are always going to be slower than that. </em></p>
+<h2 id="my-four-steps-in-performance-tuning">My four steps in performance tuning<a class="anchorlink dashicons-before" href="#my-four-steps-in-performance-tuning"></a></h2>
+<p>I went through four iterations of tuning of the application, and I will cover each one in this article. The stages are:</p>
+<ol><li>Tuning up my EF Core query
+<ol><li>Making sure EF Core could translate all parts of my LINQ query to SQL</li>
+<li>Tweaking my query by adding a user defined function</li>
+</ol></li>
+<li>Going SQL &#x2013; moving the query to Dapper</li>
+<li>Modifying the database &#x2013; adding cached values (this is running on <a href="http://www.efcoreinaction.com">efcoreinaction.com</a>)</li>
+</ol><h3 id="part-1a-getting-my-query-to-translate-into-sql">Part 1a &#x2013; Getting my query to translate into SQL<a class="anchorlink dashicons-before" href="#part-1a-getting-my-query-to-translate-into-sql"></a></h3>
+<p>I started this performance tuning process by looking at what EF Core can do with well written code. Throughout <a href="http://bit.ly/2m8KRAZ">my book</a>, I have recommended the LINQ Select query, as this creates the most efficient database access. The Select query works well for the book display as it needs to get data from other tables, this the Reviews, and it doesn&#x2019;t need some of the columns in the Books table, such as the book&#x2019;s Description column, which could be very long. Here is my Select query object.</p>
+<pre class="brush: csharp; title: ; notranslate">
+public static IQueryable&lt;BookListDto&gt;           
+    MapBookToDto(this IQueryable&lt;Book&gt; books)   
+{
+    return books.Select(p =&gt; new BookListDto
+    {
+        BookId = p.BookId,                      
+        Title = p.Title,                        
+        Price = p.Price,                        
+        PublishedOn = p.PublishedOn,            
+        ActualPrice = p.Promotion == null       
+                ? p.Price                       
+                : p.Promotion.NewPrice,         
+        PromotionPromotionalText =              
+                p.Promotion == null             
+                  ? null                        
+                  : p.Promotion.PromotionalText,
+        AuthorNamesOrdered = p.AuthorsLink
+                .OrderBy(q =&gt; q.Order)
+                .Select(q =&gt; q.Author.Name),
+        ReviewsCount = p.Reviews.Count,        
+        ReviewsAverageVotes =                  
+            p.Reviews.Select(y =&gt; (double?)y.NumStars).Average() 
+    });
+}
+</pre>
+<p>Note the calculation at the end of the MapBookToDto code, which calculates the average votes from all the reviews linked to this book. I took me a bit of time to get the LINQ command in the right format &#x2013; finally solved it by asking a question of the <a href="https://github.com/aspnet/EntityFrameworkCore/issues">EF Core issues page</a>. But the result is that average is done in the database using the SQL command AVG. This was critical in getting the performance I needed, not only in calculating the value to so in each book info, but also to make the &#x201C;sort by average votes&#x201D; as quick as it was.</p>
+<p>Here are the results for 100,000 books (same data as on the <a href="http://www.efcoreinaction.com">www.efcoreinaction.com</a> site).</p>
+<table><tbody><tr><td width="198"><strong>Test</strong></td>
+<td width="76"><strong>10 books</strong></td>
+<td width="85"><strong>100 books</strong></td>
+<td width="242"><strong>Comment</strong></td>
+</tr><tr><td width="198">All books</td>
+<td width="76">45 ms</td>
+<td width="85">230 ms</td>
+<td width="242">Sorts on primary key</td>
+</tr><tr><td width="198">Sort by publication dates</td>
+<td width="76">45 ms</td>
+<td width="85">230 ms</td>
+<td width="242">Sorts on PublishedOn, with index</td>
+</tr><tr><td width="198">Sort by votes</td>
+<td width="76">500 ms</td>
+<td width="85">650 ms</td>
+<td width="242">Must average &#xBD; million reviews!</td>
+</tr><tr><td width="198">Sort by price, filter by 4+ votes</td>
+<td width="76">450 ms</td>
+<td width="85">600 ms</td>
+<td width="242">Less books, so quicker</td>
+</tr></tbody></table><p>The &#x201C;sort on votes&#x201D; performance, at 500ms sounds slow, but it was a lot quicker than I expected. EF Core produced the ideal SQL, using the SQL AVG command, but it had to be called 100,000 times, and had a total of over &#xBD; million Reviews to process. For some applications, this level of performance would be acceptable, but for this example I deem that this is too slow, and I will be looking again at the &#x201C;sort on votes&#x201D; in Part 2 and Part 3.</p>
+<p>The one item that did seem very slow was the display of 100 books. I analysed that and, because the Authors names came back as a collection, EF Core ran a separate query for each book &#x2013; so, instead of 2 database access it had 12 database accesses for 10 books, and 102 database accesses for the 100 books.</p>
+<p>I know that every separate database access costs, so I wanted to remove those extra database accesses. And because I knew something that EF Core didn&#x2019;t know, then I could fix it, as you will see in the next Part.</p>
+<h3 id="part-1b-tweak-the-query-with-the-dbfunction-feature">Part 1b &#x2013; tweak the query with the DbFunction feature<a class="anchorlink dashicons-before" href="#part-1b-tweak-the-query-with-the-dbfunction-feature"></a></h3>
+<p>So, in my first performance tweak, I wanted to see if I keep all the good SQL that EF Core has produced, but inject a bit of my own SQL to improve the performance of the AuthorNamesOrdered part. What I knew was I only wanted the names to concatenate them into a comma-delimited string, and I could do that in SQL very easily.</p>
+<p>EF Core 2.0.0, released in August 2017, has a great new feature contribution by Paul Middleton. This allows you to register a SQL user defined function (UDF) with EF Core and then use it in the query. This is a really useful tool, and I expect to be using DbFunctions a lot in the future.</p>
+<p>So, with help from Stack Overflow I produced a UDF, as shown below.</p>
+<pre class="brush: sql; title: ; notranslate">
+CREATE FUNCTION AuthorsStringUdf (@bookId int)
+RETURNS NVARCHAR(4000)
+AS
+BEGIN
+-- Thanks to https://stackoverflow.com/a/194887/1434764
+DECLARE @Names AS NVARCHAR(4000)
+SELECT @Names = COALESCE(@Names + &apos;, &apos;, &apos;&apos;) + a.Name
+FROM Authors AS a, Books AS b, BookAuthor AS ba 
+WHERE ba.BookId = @bookId
+      AND ba.AuthorId = a.AuthorId 
+      AND ba.BookId = b.BookId
+ORDER BY ba.[Order]
+RETURN @Names
+END
+GO
+</pre>
+<p>I could then replace the extraction of a list of author&#x2019;s names with a call to my UDF, as shown below.</p>
+<pre class="brush: csharp; title: ; notranslate">
+public static IQueryable&lt;BookListDto&gt;            
+    MapBookToDto(this IQueryable&lt;Book&gt; books)    
+{
+    return books.Select(p =&gt; new BookListDto
+    {
+        //&#x2026; other code removed for clarity
+        AuthorsOrdered = UdfDefinitions.AuthorsStringUdf(p.BookId),
+        //&#x2026; etc.
+    });
+}
+</pre>
+<p>The UDF returns a single string, so there is no need for extra database accessed. After this change, there were only two databases accessed, a count for paging and then the real query, no matter how many books in a page.</p>
+<p><em>Note: I have not covered how to register the UDF with EF Core, nor the best way to add the UDF to the EF Core created database. There just isn&#x2019;t room in this article. There is some information on this in the <a href="https://github.com/aspnet/EntityFrameworkCore/issues/8923#issuecomment-311250484">this GitHub documentation</a>. I do have more information on DbFunctions in &#xA0;chapter 8 of my book, and how to add UDFs and other SQL code to an EF Core database in chapter 11.</em></p>
+<p>Before I show you the improved performance figures let me first show you the new SQL that EF Core produces. EF Core now produces very readable SQL, almost like how a human would lay it out (I did a couple of minor changes to the layout to make the diagram work, but is mostly as EF Core created it).</p>
+<p><a href="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/BookListDtoSelect-SQL-output-selan.png"><img class="aligncenter size-large wp-image-1123" src="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/BookListDtoSelect-SQL-output-selan-1024x556.png" alt width="660" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/BookListDtoSelect-SQL-output-selan-1024x556.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/BookListDtoSelect-SQL-output-selan-300x163.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/BookListDtoSelect-SQL-output-selan-768x417.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/BookListDtoSelect-SQL-output-selan.png 1581w" sizes="(max-width: 660px) 100vw, 660px"></a></p>
+<p>The only change in the SQL from the Part 1a version is the call to the UDF, but the effect on performance is great, especially on the 100-book display, is good. See the figures below</p>
+<p>Here are the results for using the 100,000 book test data, with the &#x2018;Improvement&#x2019; columns showing how much faster the Part 1b implementation is compared to Part 1a&#x2019;s performance.</p>
+<table><tbody><tr><td width="208"><strong>Test</strong></td>
+<td width="76"><strong>10 books</strong></td>
+<td width="104"><strong>Improvement</strong></td>
+<td width="83"><strong>100 books</strong></td>
+<td width="98"><strong>Improvement</strong></td>
+</tr><tr><td width="208">All books</td>
+<td width="76">30 ms</td>
+<td width="104"><strong>150%</strong></td>
+<td width="83">80 ms</td>
+<td width="98"><strong>250%</strong></td>
+</tr><tr><td width="208">Sort by publication dates</td>
+<td width="76">30 ms</td>
+<td width="104"><strong>150%</strong></td>
+<td width="83">80 ms</td>
+<td width="98"><strong>250%</strong></td>
+</tr><tr><td width="208">Sort by votes</td>
+<td width="76">480 ms</td>
+<td width="104">minor</td>
+<td width="83">530 ms</td>
+<td width="98">minor</td>
+</tr><tr><td width="208">Sort by price, filter by 4+ votes</td>
+<td width="76">420 ms</td>
+<td width="104">minor</td>
+<td width="83">470 ms</td>
+<td width="98">minor</td>
+</tr></tbody></table><h3 id="part-2-converting-the-query-to-hand-written-sql">Part 2 &#x2013; converting the query to hand-written SQL<a class="anchorlink dashicons-before" href="#part-2-converting-the-query-to-hand-written-sql"></a></h3>
+<p>When I studied the SQL from part 1b, I noticed that EF Core repeated any calculation in the SQL ORDER BY section, rather than referring to the SELECT&#x2019;s alias name of the calculated value. I did some tests and they showed using the SELECT&#x2019;s alias name, ReviewsAverageVote, which holds the calculated average vote, in the ORDER BY section would improve performance.</p>
+<p>Based on this I decided to replace the EF Core query with a fully, hand-code SQL command. That meant I had to write the SQL code, but because EF Core&#x2019;s SQL is so great (and readable), I just copied it (!), and replaced the one area, the ORDER BY part, with some tweaked SQL as shown below &#x2013; see the ReviewsAverageVotes value used in the ORDER BY at the end of the SQL</p>
+<pre class="brush: sql; title: ; notranslate">
+SELECT TOP(@pageSize) [b].[BookId], [b].[Title], 
+     [b].[Price], [b].[PublishedOn], 
+CASE
+    WHEN [p.Promotion].[PriceOfferId] IS NULL
+    THEN [b].[Price] ELSE [p.Promotion].[NewPrice]
+END AS [ActualPrice], 
+[p.Promotion].[PromotionalText] AS [PromotionPromotionalText], 
+[dbo].AuthorsStringUdf([b].[BookId]) AS [AuthorsOrdered], 
+(
+    SELECT COUNT(*)
+    FROM [Review] AS [r]
+    WHERE [b].[BookId] = [r].[BookId]
+) AS [ReviewsCount], (
+    SELECT AVG(CAST([y].[NumStars] AS float))
+    FROM [Review] AS [y]
+    WHERE [b].[BookId] = [y].[BookId]
+) AS [ReviewsAverageVotes]
+FROM [Books] AS [b]
+LEFT JOIN [PriceOffers] AS [p.Promotion] 
+    ON [b].[BookId] = [p.Promotion].[BookId]
+WHERE ([b].[SoftDeleted] = 0) 
+ORDER BY [ReviewsAverageVotes] DESC
+</pre>
+<p>The next problem was how I would execute the SQL. I could have used ADO.NET but the well-respected mini-OR/M called <a href="https://github.com/StackExchange/Dapper">Dapper</a>. Dapper has a feature that maps the data returned from the SQL to a .NET class by matching the class property names to the column names returned. EF Core also has a feature that can provide the correct type of connection for Dapper to access the database, which makes using Dapper pretty easy.</p>
+<p>The unit test code below shows how to use Dapper with an EF Core&#x2019;s application DbContext &#x2013; the Dapper part is the line &#x201C;Query&lt;Book&gt;(&#x201C;SELECT * FROM Books&#x201D;)&#x201D; in the code below.</p>
+<pre class="brush: csharp; title: ; notranslate">
+[Fact]
+public void DapperReadBooksEfCoreSqlServer()
+{
+    //SETUP
+    //&#x2026; I removed the options and database setup 
+    //so that it&#x2019;s easier to see the Dapper part 
+    using (var context = new EfCoreContext(options))
+    {
+        //ATTEMPT
+        var books = context.Database 
+            .GetDbConnection() 
+            .Query&lt;Book&gt;(&quot;SELECT * FROM Books&quot;); 
+
+        //VERIFY
+        books.Count().ShouldEqual(4);
+    }
+}
+</pre>
+<p>The book list query I implemented in chapter 2 was split up into four separate query objects: MapBookToDto, OrderBooksBy, FilterBooksBy, and a generic paging method. That meant each part was easy to understand and could be separately tested. Duplicating this query in Dapper requires me to sacrifice the elegance of query objects and move to a design that combines snippets of SQL to create the query. But that&#x2019;s what I need to do to squeeze out the best performance.</p>
+<p>The results of swapping over to this improved SQL is shown in the table below, with the big change in bold (Sort on Average votes).</p>
+<table><tbody><tr><td width="168"><strong>Test scenario </strong></td>
+<td width="104"><strong>Part 1b &#x2013; EF Core</strong></td>
+<td width="115"><strong>Part 2 &#x2013; SQL</strong></td>
+<td width="189"><strong>Comment</strong></td>
+</tr><tr><td width="168">Show books</td>
+<td width="104">&#xA0;10 =30 ms<br>
+100 = 80 ms</td>
+<td width="115">10 =30 ms<br>
+100 = 85 ms</td>
+<td width="189">No real change &#x2013; within normal variations</td>
+</tr><tr><td width="168">Sort on PublishedOn</td>
+<td width="104">10 = 30 ms<br>
+100 = 80 ms</td>
+<td width="115">10 = 30 ms<br>
+100 = 90 ms</td>
+<td width="189">No real change &#x2013; within normal variations</td>
+</tr><tr><td width="168">Sort by average votes</td>
+<td width="104"><strong>10 = 500 ms<br>
+100 = 530 ms</strong></td>
+<td width="115"><strong>10 = 325 ms<br>
+100 = 390 ms</strong></td>
+<td width="189"><strong>The improved SQL is about 40% faster than EF Core</strong></td>
+</tr><tr><td width="168">Filter by average votes (4 or more), sort by price</td>
+<td width="104">10 = 440 ms<br>
+100 = 490 ms</td>
+<td width="115">10 = 455 ms<br>
+100 = 520 ms</td>
+<td width="189">No real change &#x2013; within normal variations</td>
+</tr></tbody></table><p>As you can see, the only part that improved was the &#x201C;sort by average votes&#x201D; situation. What I found interesting is that none of the other more mundane queries had improved. I kind of expected them to because Dapper&#x2019;s current site states <a href="https://github.com/StackExchange/Dapper#performance">its ten times faster or more than EF</a> (most likely EF6.x), which didn&#x2019;t show up in these results.</p>
+<p>I therefore tried a simple &#x201C;read one book row&#x201D; test, and yes, in that case Dapper is about seven times faster than EF Core. That makes sense, as EF Core has several things to do on loading, like relational fixup, while Dapper just executes the SQL. But it turns out, when it comes to large or complex queries where the database execution is the limiting factor, then the performance is down to the quality SQL produced, and not the library you use. The fact is, small accesses aren&#x2019;t normally the ones that need performance tuning, as they are quick anyway, using Dapper or EF Core only has a difference if the SQL is different, which in the &#x201D;sort by average votes&#x201D; case it was.</p>
+<p>But the question is, &#x201C;was all that effort to swap to SQL worth it?&#x201D; Before you decide that you should read Part 3, where I use another approach that take more work, but improves performance much more than my hand-tuned SQL does.</p>
+<h2 id="part-3-modifying-the-database-to-increase-performance">Part 3 &#x2013;&#xA0; Modifying the database to increase performance<a class="anchorlink dashicons-before" href="#part-3-modifying-the-database-to-increase-performance"></a></h2>
+<p>The final stage I decided to try modifying the database and adding cached values for the calculations that take a lot of time. These are:</p>
+<ol><li>The Price, which varies depending on whether there is a PriceOffer promotion linked to the book.</li>
+<li>The average votes and number of reviews for this book</li>
+<li>The AuthorsString, containing the comma-delimited list of authors of a book.</li>
+</ol><p>Caching is a great tool for improving performance, but ensuring the cached value is up to date needs very careful handing. This is especially true in a database, where you may have a simultaneous update of the same row, which could make the cached value incorrect.</p>
+<p>In chapter 13 in my book I cover how I handled the three types of caching, which need different techniques. But for this article I&#x2019;m going to focus on the most difficult one of the three, that is the caching of the average votes and number of reviews for this book. This is difficult because I still need to keep the actual Review entities so that users can look at the Review&#x2019;s comments on a book. This means I have two versions of the average votes value: one that is found by averaging the reviews dynamically, as I have done in Part 1a to 2, or the cached value held in the AverageVotes in my modified Book entity class. Keeping these in set is a challenge.</p>
+<p>To keep my cached values up to date I need to make some fairly large changes to how things work, as summarised below:</p>
+<ol><li>I still need the Reviews property, which sets up the one-to-many relationship between a Book entity and its Review But I must ensure that Review entities cannot be added or removed from the Reviews property, that is, all adds or removes must go through my AddReview and RemoveReview methods.I also I need to &#x201C;lock down&#x201D; the Review entity class by making its properties have private setters, and stop any methods outside of the DataLayer from being able to create a Review entity instance.</li>
+<li>Because the AverageVotes and ReviewsCount properties are cached values then there is the possibility of a concurrent adding or removing of a Review, which could invalidate the cached values.</li>
+</ol><p>I will deal with each of these two stages separately</p>
+<h3 id="lock-down-access-to-reviews-collection-property">Lock down access to Reviews collection property<a class="anchorlink dashicons-before" href="#lock-down-access-to-reviews-collection-property"></a></h3>
+<p>EF Core allows navigational properties to be set up which EF Core will use them when doing certain read and writes to the database. My initial Book entity class had a property called Reviews that contained a list of Review entities for this book instance. I would then add or remove a Review instance from the list to change what reviews where linked to the Book.</p>
+<p>For my caching of the values related to the Reviews to be kept up to date I need intercept all changes to the Book&#x2019;s Reviews. To do that I use a feature in EF Core called backing fields. This allow me to &#x2018;hide&#x2019; the Reviews list, and provide a IEnumerable&lt;Review&gt; Reviews property, which a developer cannot add or remove from. Here is what the updated Book entity class looks like</p>
+<pre class="brush: csharp; title: ; notranslate">
+public class Book
+{
+    private readonly List&lt;Review&gt; _reviews 
+        = new List&lt;Review&gt;(); 
+
+    //&#x2026; other properties removed for clarity
+
+    public IEnumerable&lt;Review&gt; Reviews =&gt; 
+         _reviews.ToList();
+&#x2026;
+</pre>
+<p>Now I can add two methods, AddReview and RemoveReview, to the Book class that update its backing field _reviews and at the same time recalculate the AverageVotes and ReviewCount cache properties.</p>
+<p>The other back door to changing the Reviews is if the develop loaded a Review entity and altered its values, say changing the reviews vote from 1 to 5. To stop the developer from do that I set all the Review class property setters to private, and I make the constructor internal, so only my DataLayer can create a new instance of the Review class.</p>
+<p>The figure below shows the backing field in the Book class and its AddReview method in blue, with the &#x201C;locked down&#x201D; Review class in purple.</p>
+<p><a href="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Cached-AverageVotes-process-selan.png"><img class="aligncenter size-large wp-image-1125" src="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Cached-AverageVotes-process-selan-1024x763.png" alt width="660" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Cached-AverageVotes-process-selan-1024x763.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Cached-AverageVotes-process-selan-300x224.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Cached-AverageVotes-process-selan-768x573.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Cached-AverageVotes-process-selan.png 1588w" sizes="(max-width: 660px) 100vw, 660px"></a></p>
+<h3 id="handling-simultaneous-additions-of-a-reviews-to-the-same-book">Handling simultaneous additions of a Reviews to the same book<a class="anchorlink dashicons-before" href="#handling-simultaneous-additions-of-a-reviews-to-the-same-book"></a></h3>
+<p>The other problem is multiple users adding Reviews at the same time. There is a small window of time between the loading of the current Reviews linked to a Book and the saving of the new review collection and the associated cached values. In that time window, another Review could be added/removed from the same book by another user, which would make the cached values out of step with the database.</p>
+<p>The solution to this problem is to use EF Core&#x2019;s concurrency conflict feature. What I do is add the attribute [ConcurrencyCheck] to the AverageVotes and ReviewsCount properties. This means that EF Core will check they haven&#x2019;t changed since the Book instance was loaded, which is window where other updates could make my calculations invalid. If they have been changed then I can write some code that recalculates the cached values using the current state of the database.&#xA0; I&#x2019;m not going to show the code for that because the article is already very long. You can find my <a href="https://github.com/JonPSmith/EfCoreInAction/blob/Chapter13-Part3/DataLayer/EfCode/SaveChangesBookFixer.cs">concurrency code here</a>.</p>
+<h3 id="the-performance-results-from-part-3-cached-values">The performance results from Part 3 &#x2013; cached values<a class="anchorlink dashicons-before" href="#the-performance-results-from-part-3-cached-values"></a></h3>
+<p>The results from all this is impressive, as you can see in the table below</p>
+<table width="597"><tbody><tr><td width="171"><strong>Test</strong></td>
+<td width="76"><strong>10 books</strong></td>
+<td width="132"><strong>Improvement over Part 2 (SQL)</strong></td>
+<td width="85"><strong>100 books</strong></td>
+<td width="132"><strong>Improvement over Part 2 (SQL)</strong></td>
+</tr><tr><td width="171">All books</td>
+<td width="76">30 ms</td>
+<td width="132">no improvement</td>
+<td width="85">80 ms</td>
+<td width="132">no improvement</td>
+</tr><tr><td width="171">Sort by publication dates</td>
+<td width="76">30 ms</td>
+<td width="132">no improvement</td>
+<td width="85">80 ms</td>
+<td width="132">no improvement</td>
+</tr><tr><td width="171">Sort by votes</td>
+<td width="76">30 ms</td>
+<td width="132"><strong>12 times better</strong></td>
+<td width="85">80 ms</td>
+<td width="132"><strong>5 times better</strong></td>
+</tr><tr><td width="171">Sort by price, filter by 4+ votes</td>
+<td width="76">30 ms</td>
+<td width="132"><strong>12 times better</strong></td>
+<td width="85">80 ms</td>
+<td width="132"><strong>5 times better</strong></td>
+</tr></tbody></table><p><em>Extra notes on performance:</em></p>
+<ul><li><em>I tried &#xBD; million books: the 10-book time was 85 ms and the 100-book time was 150 ms. For this amount of books the database server is starting to be a limiting factor.</em></li>
+<li><em>In Parts 1a, 1b and 2 if the sort by price, filtered by +1 votes, then the timings were all over a second in length. But this Part 3 implementation stills comes in at 30ms.</em></li>
+<li><em>I took the SQL produced by EF Core in Part 3 and used Dapper to execute it, but there was no further performance improvement so it wasn&#x2019;t worth doing.</em></li>
+</ul><p>Obviously, the standout improvement are the last two items, which were the ones I was targeting. You can see this code in action, with 100,000 books, at <a href="http://efcoreinaction.com/">http://efcoreinaction.com/</a></p> <p>Below is a repeat of the chart I had at the beginning that shows you the results for Part 1a to 3 for the 100-book display and 100-book display with sort on average votes.</p>
+<p><a href="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan.png"><img class="aligncenter size-large wp-image-1119" src="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-1024x462.png" alt width="660" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-1024x462.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-300x135.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan-768x347.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2017/09/Overall-performance-selan.png 1516w" sizes="(max-width: 660px) 100vw, 660px"></a></p>
+<p>However, what this graph does convey is that the Part 3 performance improvements make all the 10-book displays, or any sort or filter, come in at around 30 ms. As the 10-book display is the default then the site is now really fast. Also, the 30 ms is the time for the ASP.NET page to display, which includes other overheads outside the database access &#x2013; in actual fact, the database accesses are between 10 ms to 15 ms.</p>
+<p>The other questions I asked myself was how much effort did each stage take and where there any problem or adverse effects to the application? The table below gives my answers to these questions.</p>
+<table><tbody><tr><td width="132"><strong>Part</strong></td>
+<td width="78"><strong>Effort</strong></td>
+<td width="376"><strong>Comments</strong></td>
+</tr><tr><td width="132">1a. Straight EF Core</td>
+<td width="78">Few days</td>
+<td width="376">Finding the correct format for the LINQ average wasn&#x2019;t easy. I had to ask the EF Core team via EF Core&#x2019;s GitHub issue page. But once I got this right EF Core produced great SQL code.</td>
+</tr><tr><td width="132">1b. +DbFunction</td>
+<td width="78">&#xBD; day</td>
+<td width="376">Very easy. I like the DbFunction a lot, and in this case, it made a significant improvement to the performance.</td>
+</tr><tr><td width="132">2. Better SQL</td>
+<td width="78">One day</td>
+<td width="376">Fairly easy, as I simply copied the SQL code that EF Core produces and tweaked the bit that my experiments said would help. But only useful if you can come up with some better SQL, i.e. the difference in speed of Dapper over EF Core only helps on small, very quick database accesses, which you don&#x2019;t need to performance tune anyway!</td>
+</tr><tr><td width="132">3. Cached values</td>
+<td width="78">Three days</td>
+<td width="376">Definitely hard work, but also a fantastic result. I think the performance changes to the code don&#x2019;t hinder future development of the application at all, and in some cases improves it.</td>
+</tr></tbody></table><p>Overall I am very pleased with the process. EF Core produces great SQL code from the get go, but only because I made sure my LINQ queries in a way such that EF Core can translate every part into SQL. I had to persevere with the LINQ Average method to get EF Core to translate that to SQL.</p>
+<p><em>Note I think plenty of developer will fall foul of this problem and think EF Core is slow &#x2013; but before you blame EF Core check your logs for </em><em>QueryClientEvaluationWarning</em><em> warnings, which tell you part of your LINQ query didn&#x2019;t translate to SQL and is being run in software. See the section &#x201C;Understanding the limitations of Client vs. Server evaluation&#x201D; in my&#xA0; article about EF Core&#x2019;s <a href="https://www.thereformedprogrammer.net/entity-framework-core-client-vs-server-evaluation/">Client vs. Server evaluation</a> feature.</em></p>
+<p>But when I had to go beyond straight EF Core I found there was plenty I could do. And I didn&#x2019;t go as far as I wanted to due to time and limits on the chapter length &#x2013; my next step was to change the application&#x2019;s architecture (I give a few ideas at the end of chapter 13).</p>
+<h2 id="conclusion">Conclusion<a class="anchorlink dashicons-before" href="#conclusion"></a></h2>
+<p>I took a query that was designed around a fictitious, but believable example, which wasn&#x2019;t a walk over to implement. I got the best out of EF Core, and I think that performance was quite credible. I then pushed through two more stages, ending with a complex, but eminently implementable solution where the slow parts of the query were between eight and fifteen times faster from where I started. But more importantly <u>all</u> the queries for a 10-book display are at 30 ms.</p>
+<p>You most likely selected EF Core for your database access library because it allowed you to develop your application rapidly (good choice!). That means you should have a working application quickly, and can then you can performance tune the parts that need it.</p>
+<p>When you start performance tuning I would recommend persevering with conventional EF Core (see my note about QueryClientEvaluationWarning). But at some point you might decide that the standard EF Core approach won&#x2019;t produce the performance you need. That&#x2019;s when this article could be useful to you, so bookmark this URL for that day (or buy <a href="http://bit.ly/2m8KRAZ">my book</a> &#x1F642; ).</p>
+<p>If you are interested in .NET in general I recommend the <strong>ASP.NET weekly newsletter</strong>, curated by Jerrie Pelser. This contains a list of articles on ASP.NET, Entity Framework and .NET in general (mostly .NET Core versions) &#xA0;&#x2013; sign up at <a href="http://em.getrevue.co/wf/click?upn=Cxddp8diHLcW45D85hCuPc-2FuqPqP35JZb0QzC-2F5p9xHftIOk-2Fr3qIfBWdsZ4-2ByFjninKU-2BRNM0yvFROYGW0CaQ-3D-3D_XH-2BuQHtiidmUQeK53ewonda1WJle5fULnR1vVG-2FAIWbNiTuhGiSaXpmrMS1BgdJScYgR0FRdoo0wqaqtyxL7hv0FrKDcEszdc79-2F56EGcC3VALickzka8J5WZqykUz-2F-2Fzc-2BkG4pHhv47IhRMa4hcYNzECgup9NAPSmKsggGqWK1koPl4Tn-2FWW-2BuYDxq5lZ69ZDMBS184kLHHCso05RlkkaJEot9NTg3SVN-2BRWFOy6UTLEsFGsFirleQudLEJxqHjm7QOYj-2BbILvxQCesmX4CFkYBrZIPrlgihWDLfUcqWCPEQfU3lddmnuvwOLz1Dt-2FNIpVyZ2-2BMAE7KYWqA6-2B28MQ-3D-3D">https://www.getrevue.co/profile/aspnetweekly</a></p></body>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+    </footer>
+    
+    <script>
+        (function() {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function() {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) {}
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
