@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+RDRAND on AMD CPUs does not work &#xB7; Issue #11810 &#xB7; systemd/systemd &#xB7; GitHub -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>RDRAND on AMD CPUs does not work · Issue #11810 · systemd/systemd · GitHub</h1><div><div id="" class="d-block comment-body markdown-body  js-comment-body"><p>The Linux kernel uses a (mostly) sane construction: It seeds an entropy pool and uses a cryptographic hard (chacha20-based) PRNG to emit a stream of randomness. With 16 bytes out of a chacha20-based PRNG with a central entropy pool (so no way to read the same value twice; there's a central counter besides the entropy pool), collision is clearly low enough to be tolerable.</p><p>Remaining sanity problems: The kernel uses rdrand() in some places (get_random_u64(), e.g. used as random ID for seccomp stuff; this is probably arcane enough).  What it should do is using get_random_bytes() that does not block when there's not enough entropy in the pool.  This still delivers a stream of cryptographic hard stream of randomness that is to some extend predictable (not enough entropy in the pool), but certainly won't provide collisions.</p><p>This is something the Linux kernel only partly delivers to userland, but is worth having.  Implementation would be straight-forward, just another flag to getrandom() which returns a bunch of pseudo-random bytes without blocking, even when the pool is not yet filled with trustworthy entropy, but only with the non-trustworthy RDSEED entropy.  This would relieve the systemd's problem that it needs entropy very early in the boot sequence.</p><p>Essentially, it's a one-line patch of random.c, line 2135:</p><p>-if (!crng_ready()) {<br>+if (!crng_ready() &amp;&amp; !(flags &amp; GRND_PREMATURE) {</p><p>BTW: Directly reading from /dev/urandom has the same effect, as unlike getrandom() it does never block, only warn when there's no entropy.</p><p>The point is that when you want collision-free stuff, you have about four options:</p><p>a) use a known cryptographic hard random source that has central entropy pool+state (entropy doesn't matter much, it matters that reads always give non-overlapping parts of the output stream)<br>b) a nonce generator that is guaranteed to deliver non-repeating numbers (which, BTW, even the LCG rand() does, as long as it follows the central entropy pool+state paradigm which is probably difficult if that are different processes, and the seed may fail); cryptographic hard nonce generators are e.g. block ciphers in counter mode with a random seed as key<br>c) a central counter (not worrying about predictability)<br>d) a entropy source that is good enough to pass the randomness test suite like dieharder (looks like AMD's entropy source actually is that, because RDRAND and RDSEED fail the same way — that indicates that they don't have a conditioning PRBG in RDRAND, just an entropy source with an inadequate power saving mode, and RDRAND+RDSEED are identical)</p><p>If you want to scale, and not rely on a centralized pool or state, you can use construct a) with per-process/thread PRBG (pseudo-random; if you a block cipher with a counter as tweak, a per-thread guaranteed non-overlapping starting point of the counter is sufficient); the seed for that can come from something like randombytes(), or you use construct d) with per-core entropy sources (non-deterministic NRBG).</p><p>The thing that is no option is a entropy source that is not either monitored for quality or by audit known good.  The failure modes of hardware are not necessarily the ones you think they are.  “Don't matter that much” assumes maybe a well-hidden backdoor (indistinguishable from randomness unless you have the key), not a rather hard failure mode, e.g. entropy source not powered up.</p><p>You don't trust RDRAND for cryptography, but you do trust it for non-collision.  That works for the Intel case, where RDRAND is the output of a stream cipher (AES in counter mode with the key coming from the entropy source — if the entropy source fails, the key stream still will look indistinguishable from proper random).  That doesn't work for the AMD case, where a failing entropy source also causes RDRAND to fail the same way as RDSEED.</p><p>A dubious quality random number source where you can know when it is failing (by simply analyzing it) is probably one of the better deals you can get in this situation.  It helps if you can only destroy it, but can't make it predictable by someone who knows a secret.</p><p>BTW: You missed the main point in the last part: have separate functions for separate purposes, and clearly specify what they should deliver.  The callback for checking for collisions was an example.  The main thing is that you properly specify what you need, and then you can evaluate whether you call the right function.  Linux has generate_random_uuid(), which calls get_random_bytes(), which warns only if the entropy is insufficient, but delivers a collision-unlikely PRNG output nonetheless.</p><p>This is something that is quite straight-forward to audit, even when it lacks comments.  Anyways: with the exception of two or three cases where get_random_u64 is used in the Linux kernel, and the lack of a pseudo-random fallback mode for getrandom(), there's almost nothing to complain there: This uses a state of the art construction with entropy source+predictable expansion.  The code there has clearly been written by someone who knows what he was doing, and has changed completely after 2013 (for good).</p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

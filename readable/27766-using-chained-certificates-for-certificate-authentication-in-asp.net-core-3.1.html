@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Using Chained Certificates for Certificate Authentication in ASP.NET Core 3.1 -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Using Chained Certificates for Certificate Authentication in ASP.NET Core 3.1</h1><div><div class="entry-content"><p>This article shows how to create self signed certificates and use these for chained certificate authentication in ASP.NET Core. By using chained certificates, each client application can use a unique certificate which was created from a root CA directly, or an intermediate certificate which was created from the root CA. The clients can then be grouped or authenticated as required.</p><p><strong>Code</strong><a href="https://github.com/damienbod/AspNetCoreCertificateAuth" rel="nofollow">https://github.com/damienbod/AspNetCoreCertificateAuth</a></p><p>Posts in this series</p><p><strong>History</strong></p><p><strong>2020-01-22:</strong> Updated certificates, now using CertificateManager<br><strong>2019-12-06:</strong> Updated Nuget packages, .NET Core 3.1<br><strong>2019-09-06:</strong> Updated Nuget packages, .NET Core 3 preview 9</p><p><strong>Creating the Certificates</strong></p><p>Creating the certificates is the hardest part in setting up this flow. A self signed <strong>Root CA Certificate</strong> is created using the <a href="https://www.nuget.org/packages/CertificateManager/">CertificateManager </a>nuget package. When creating this, please use a strong password, replace the demo one, do not just copy the code.</p><pre class="brush: csharp; title: ; notranslate" title="">var serviceProvider = new ServiceCollection()
+	.AddCertificateManager()
+	.BuildServiceProvider();
+
+var createClientServerAuthCerts = 
+	serviceProvider.GetService&lt;CreateCertificatesClientServerAuth&gt;();
+
+var root = createClientServerAuthCerts.NewRootCertificate(
+	new DistinguishedName { CommonName = "root_localhost",
+		Country = "CH" },
+	new ValidityPeriod { ValidFrom = DateTime.UtcNow, 
+		ValidTo = DateTime.UtcNow.AddYears(10) },
+	3, "localhost");
+	
+root.FriendlyName = "root_localhost certificate";
+
+string password = "1234";
+var importExportCertificate = serviceProvider.GetService&lt;ImportExportCertificate&gt;();
+
+var rootCertInPfxBtyes = importExportCertificate.ExportRootPfx(password, root);
+File.WriteAllBytes("root_localhost.pfx", rootCertInPfxBtyes);
+
+</pre><p>Install the root certificate in the trusted root of the host windows PC. If deploying this on Linux, different tools need to be used.</p><p><a href="https://social.msdn.microsoft.com/Forums/SqlServer/en-US/5ed119ef-1704-4be4-8a4f-ef11de7c8f34/a-certificate-chain-processed-but-terminated-in-a-root-certificate-which-is-not-trusted-by-the" rel="nofollow">https://social.msdn.microsoft.com/Forums/SqlServer/en-US/5ed119ef-1704-4be4-8a4f-ef11de7c8f34/a-certificate-chain-processed-but-terminated-in-a-root-certificate-which-is-not-trusted-by-the</a></p><p>A chained <strong>intermediate certificate</strong> can now be created from the root certificate. This is not required for all use cases, but you might need to create many certificates or need to activate, disable groups of certificates. The TextExtension parameter is required to set the pathlength in the basic constraints of the certificate. </p><p>The intermediate certificate can then be added to the trusted intermediate certificate in the windows host system.</p><pre class="brush: csharp; title: ; notranslate" title="">var intermediate = createClientServerAuthCerts
+		.NewIntermediateChainedCertificate(
+		
+	new DistinguishedName { CommonName = "intermediate_localhost",
+		Country = "CH" },
+		
+	new ValidityPeriod { ValidFrom = DateTime.UtcNow, 
+		ValidTo = DateTime.UtcNow.AddYears(10) },
+	2, "localhost", root);
+	
+intermediate.FriendlyName = "intermediate_localhost certificate";
+
+string password = "1234";
+var importExportCertificate = serviceProvider.GetService&lt;ImportExportCertificate&gt;();
+
+var intermediateCertInPfxBtyes = importExportCertificate.ExportChainedCertificatePfx(password, intermediate, root);
+File.WriteAllBytes("intermediate_localhost.pfx", intermediateCertInPfxBtyes);
+</pre><p>A <strong>child certificate</strong> can be created from the intermediate certificate. This is the end entity and does not need to create more child certificates.</p><pre class="brush: csharp; title: ; notranslate" title="">
+
+var client = createClientServerAuthCerts.NewClientChainedCertificate(
+	new DistinguishedName { CommonName = "client", Country = "CH" },
+	new ValidityPeriod { ValidFrom = DateTime.UtcNow, ValidTo = DateTime.UtcNow.AddYears(10) },
+	"localhost", intermediate);
+client.FriendlyName = "client certificate";
+
+string password = "1234";
+var importExportCertificate = serviceProvider.GetService&lt;ImportExportCertificate&gt;();
+
+var clientCertInPfxBtyes = importExportCertificate.ExportChainedCertificatePfx(password, client, intermediate);
+File.WriteAllBytes("client.pfx", clientCertInPfxBtyes);
+</pre><p>See the CertificateManager documentation for details in creating certificates.</p><p><a href="https://github.com/damienbod/AspNetCoreCertificates" rel="nofollow">https://github.com/damienbod/AspNetCoreCertificates</a></p><p><strong>Server Setup</strong></p><p>Now that the certificates are setup, the applications are created like in the previous <a href="https://damienbod.com/2019/06/13/certificate-authentication-in-asp-net-core-3-0/">blog</a>. The AddAuthentication is configured to only accept CertificateTypes.Chained and the RevocationMode is set to NoCheck because we are using self signed chained certificates.</p><pre class="brush: csharp; title: ; notranslate" title="">services.AddAuthentication(CertificateAuthenticationDefaults.AuthenticationScheme)
+	.AddCertificate(options =&gt; // code from ASP.NET Core sample
+	{
+		options.AllowedCertificateTypes = CertificateTypes.Chained;
+		options.RevocationMode = X509RevocationMode.NoCheck;
+
+		options.Events = new CertificateAuthenticationEvents
+		{
+			OnCertificateValidated = context =&gt;
+			{
+				var validationService =
+					context.HttpContext.RequestServices.GetService&lt;MyCertificateValidationService&gt;();
+
+				if (validationService.ValidateCertificate(context.ClientCertificate))
+				{
+					var claims = new[]
+					{
+						new Claim(ClaimTypes.NameIdentifier, context.ClientCertificate.Subject, ClaimValueTypes.String, context.Options.ClaimsIssuer),
+						new Claim(ClaimTypes.Name, context.ClientCertificate.Subject, ClaimValueTypes.String, context.Options.ClaimsIssuer)
+					};
+
+					context.Principal = new ClaimsPrincipal(new ClaimsIdentity(claims, context.Scheme.Name));
+					context.Success();
+				}
+				else
+				{
+					context.Fail("invalid cert");
+				}
+
+				return Task.CompletedTask;
+			}
+		};
+	});
+
+</pre><p>The application is configured in the program class to use the root certificate to validate the requests.</p><pre class="brush: csharp; title: ; notranslate" title="">public static IWebHost BuildWebHost(string[] args)
+	=&gt; WebHost.CreateDefaultBuilder(args)
+	.UseStartup&lt;Startup&gt;()
+	.ConfigureKestrel(options =&gt;
+	{
+		var cert = new X509Certificate2(Path.Combine("root_ca_dev_damienbod.pfx"), "1234");
+		options.ConfigureHttpsDefaults(o =&gt;
+		{
+			o.ServerCertificate = cert;
+			o.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
+		});
+	})
+	.Build();
+</pre><p>The custom validation can then be added to the MyCertificateValidationService class. Here the client certificates are validated against the root certificate, or the intermediate certificate. This change be extended to use a dynamic list of Issuers and Subjects so that certificates can be activated or deactivated at runtime.</p><pre class="brush: csharp; title: ; notranslate" title="">using System.Collections.Generic;
+using System.IO;
+using System.Security.Cryptography.X509Certificates;
+
+namespace AspNetCoreCertificateAuthApi
+{
+    public class MyCertificateValidationService 
+    {
+        public bool ValidateCertificate(X509Certificate2 clientCertificate)
+        {
+            return CheckIfThumbprintIsValid(clientCertificate);
+        }
+
+        private bool CheckIfThumbprintIsValid(X509Certificate2 clientCertificate)
+        {
+            var listOfValidThumbprints = new List&lt;string&gt;
+            {
+                "CBF52D037D4CF0401F8EC8260C6382520D60EDD3",
+                "BEE026E73A64D58943A66451D94389FA466169A4",
+                "70D38240A71DD2882B4103E703F94D0B22285B0D",
+                // valid but incorret DNS
+                "ABF302B616CDEED10C53EA2C0E07CA1616814C68"
+            };
+
+            if (listOfValidThumbprints.Contains(clientCertificate.Thumbprint))
+            {
+                return true;
+            }
+
+            return false;
+        }
+    }
+}
+
+</pre><p><strong>Client Code</strong></p><p>The client application is then setup to send the client certificate in the X-ARR-ClientCert request header. The server API is configured to use this to receive the certificates from the client. Now the chained certificates can be used to get access to the API.</p><pre class="brush: csharp; title: ; notranslate" title="">private async Task&lt;JsonDocument&gt; CallApiClientIntermediateLocalhost()
+{
+	try
+	{
+		// This is a child created from the intermediate certificate which is a cert created from the root cert, must work
+		//var cert = new X509Certificate2(Path.Combine(_environment.ContentRootPath, "client_intermediate_localhost.pfx"), "1234");
+		var client = _clientFactory.CreateClient("client");
+
+		var request = new HttpRequestMessage()
+		{
+			RequestUri = new Uri("https://localhost:44378/api/values"),
+			Method = HttpMethod.Get,
+		};
+
+		var response = await client.SendAsync(request);
+
+		if (response.IsSuccessStatusCode)
+		{
+			var responseContent = await response.Content.ReadAsStringAsync();
+			var data = JsonDocument.Parse(responseContent);
+
+			return data;
+		}
+
+		throw new ApplicationException($"Status code: {response.StatusCode}, Error: {response.ReasonPhrase}");
+	}
+	catch (Exception e)
+	{
+		throw new ApplicationException($"Exception {e}");
+	}
+}
+</pre><p>In the Startup ConfigureServices method, add the handler:</p><pre class="brush: csharp; title: ; notranslate" title="">var clientCertificateIntermediate = new X509Certificate2("../Certs/client.pfx", "1234");
+var handlerClientCertificateIntermediate = new HttpClientHandler();
+handlerClientCertificateIntermediate.ClientCertificates.Add(clientCertificateIntermediate);
+
+services.AddHttpClient("client", c =&gt; {})
+	.ConfigurePrimaryHttpMessageHandler(() =&gt; handlerClientCertificateIntermediate);
+</pre><p>See the github code for the full working example. By using chained certificates, new certificates can be created on the fly for usage with new API clients, and the root certificate does not need to be deployed. This would become really useful when securing APIs which are not always connected to the internet, or with distributed devices.</p><p><strong>Links</strong></p><p><a href="https://github.com/damienbod/AspNetCoreCertificates" rel="nofollow">https://github.com/damienbod/AspNetCoreCertificates</a></p><p><a href="https://docs.microsoft.com/en-us/aspnet/core/security/authentication/certauth?view=aspnetcore-3.0" rel="nofollow">https://docs.microsoft.com/en-us/aspnet/core/security/authentication/certauth?view=aspnetcore-3.0</a></p><p><a href="https://docs.microsoft.com/en-us/dotnet/framework/wcf/feature-details/working-with-certificates" rel="nofollow">https://docs.microsoft.com/en-us/dotnet/framework/wcf/feature-details/working-with-certificates</a></p><p><a href="https://docs.microsoft.com/en-us/dotnet/framework/wcf/feature-details/how-to-create-temporary-certificates-for-use-during-development" rel="nofollow">https://docs.microsoft.com/en-us/dotnet/framework/wcf/feature-details/how-to-create-temporary-certificates-for-use-during-development</a></p><blockquote class="wp-embedded-content" data-secret="pySoy6dWiP"><p><a href="https://blog.davidchristiansen.com/2016/09/howto-create-self-signed-certificates-with-powershell/">HowTo: Create Self-Signed Certificates with PowerShell</a></p></blockquote><p><a href="https://dotnetcodr.com/2015/06/01/https-and-x509-certificates-in-net-part-2-creating-self-signed-certificates/">HTTPS and X509 certificates in .NET Part 2: creating self-signed&nbsp;certificates</a></p><p><a href="https://www.humankode.com/asp-net-core/develop-locally-with-https-self-signed-certificates-and-asp-net-core" rel="nofollow">https://www.humankode.com/asp-net-core/develop-locally-with-https-self-signed-certificates-and-asp-net-core</a></p><p><a href="https://damienbod.com/2018/09/21/deploying-an-asp-net-core-application-to-windows-iis/" rel="nofollow">https://damienbod.com/2018/09/21/deploying-an-asp-net-core-application-to-windows-iis/</a></p><p><a href="https://docs.microsoft.com/en-us/powershell/module/pkiclient/new-selfsignedcertificate?view=win10-ps" rel="nofollow">https://docs.microsoft.com/en-us/powershell/module/pkiclient/new-selfsignedcertificate?view=win10-ps</a></p><p><a href="https://github.com/damienbod/IdentityServer4AspNetCoreIdentityTemplate#using-powershell-to-create-the-self-signed-certs" rel="nofollow">https://github.com/damienbod/IdentityServer4AspNetCoreIdentityTemplate#using-powershell-to-create-the-self-signed-certs</a></p><p><a href="https://dotnetcodr.com/2016/01/25/using-client-certificates-in-net-part-5-working-with-client-certificates-in-a-web-project/">Using client certificates in .NET part 5: working with client certificates in a web&nbsp;project</a></p><p><a href="https://stackoverflow.com/questions/42623080/how-to-validate-a-certificate-chain-from-a-specific-root-ca-in-c-sharp" rel="nofollow">https://stackoverflow.com/questions/42623080/how-to-validate-a-certificate-chain-from-a-specific-root-ca-in-c-sharp</a></p><p><a href="https://docs.microsoft.com/en-us/aspnet/core/security/authentication/certauth?view=aspnetcore-3.0" rel="nofollow">https://docs.microsoft.com/en-us/aspnet/core/security/authentication/certauth?view=aspnetcore-3.0</a></p><p><a href="https://social.msdn.microsoft.com/Forums/SqlServer/en-US/5ed119ef-1704-4be4-8a4f-ef11de7c8f34/a-certificate-chain-processed-but-terminated-in-a-root-certificate-which-is-not-trusted-by-the" rel="nofollow">https://social.msdn.microsoft.com/Forums/SqlServer/en-US/5ed119ef-1704-4be4-8a4f-ef11de7c8f34/a-certificate-chain-processed-but-terminated-in-a-root-certificate-which-is-not-trusted-by-the</a></p><p><a href="https://tools.ietf.org/html/rfc3280.html" rel="nofollow">https://tools.ietf.org/html/rfc3280.html</a></p><p><a href="https://github.com/aspnet/AspNetCore/tree/master/src/Security/Authentication/Certificate/src" rel="nofollow">https://github.com/aspnet/AspNetCore/tree/master/src/Security/Authentication/Certificate/src</a></p><p><a href="https://tools.ietf.org/html/rfc5246#section-7.4.4" rel="nofollow">https://tools.ietf.org/html/rfc5246#section-7.4.4</a></p><div id="jp-post-flair" class="sharedaddy sd-like-enabled sd-sharing-enabled"><h3 class="jp-relatedposts-headline"><em>Related</em></h3></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

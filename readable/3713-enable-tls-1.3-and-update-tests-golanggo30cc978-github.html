@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+enable TLS 1.3 and update tests &#xB7; golang/go@30cc978 &#xB7; GitHub -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>enable TLS 1.3 and update tests · golang/go@30cc978 · GitHub</h1><div><div class="commit full-commit px-2 pt-2 "><a href="/golang/go/tree/30cc9780856b5a88ca2a8f05312758077ca48ba1" class="btn btn-outline float-right" title="Browse the repository at this point in the history" rel="nofollow">Browse files</a><p class="commit-title">
+      crypto/tls: enable TLS 1.3 and update tests
+    </p><div class="commit-desc"><pre>To disable TLS 1.3, simply remove VersionTLS13 from supportedVersions,
+as tested by TestEscapeRoute, and amend documentation. To make it
+opt-in, revert the change to (*Config).supportedVersions from this CL.
+
+I did not have the heart to implement the early data skipping feature
+when I realized that it did not offer a choice between two
+abstraction-breaking options, but demanded them both (look for handshake
+type in case of HelloRetryRequest, trial decryption otherwise). It's a
+lot of complexity for an apparently small gain, but if anyone has strong
+opinions about it let me know.
+
+Note that in TLS 1.3 alerts are encrypted, so the close_notify peeking
+to return (n &gt; 0, io.EOF) from Read doesn't work. If we are lucky, those
+servers that unexpectedly close connections after serving a single
+request will have stopped (maybe thanks to H/2) before they got updated
+to TLS 1.3.
+
+Relatedly, session tickets are now provisioned on the client first Read
+instead of at Handshake time, because they are, well, post-handshake
+messages. If this proves to be a problem we might try to peek at them.
+
+Doubled the tests that cover logic that's different in TLS 1.3.
+
+The benchmarks for TLS 1.2 compared to <a class="commit-link" data-hovercard-type="commit" data-hovercard-url="https://github.com/golang/go/commit/be0f3c286b59a486bec798a4aa6e5eba512e49b8/hovercard" href="https://github.com/golang/go/commit/be0f3c286b59a486bec798a4aa6e5eba512e49b8"><tt>be0f3c2</tt></a> (before TLS 1.3 and
+its refactors, after CL 142817 changed them to use real connections)
+show little movement.
+
+name                                       old time/op   new time/op   delta
+HandshakeServer/RSA-8                        795µs ± 1%    798µs ± 1%    ~     (p=0.057 n=10+18)
+HandshakeServer/ECDHE-P256-RSA-8             903µs ± 0%    909µs ± 1%  +0.68%  (p=0.000 n=8+17)
+HandshakeServer/ECDHE-P256-ECDSA-P256-8      198µs ± 0%    204µs ± 1%  +3.24%  (p=0.000 n=9+18)
+HandshakeServer/ECDHE-X25519-ECDSA-P256-8    202µs ± 3%    208µs ± 1%  +2.98%  (p=0.000 n=9+20)
+HandshakeServer/ECDHE-P521-ECDSA-P521-8     15.5ms ± 1%   15.9ms ± 2%  +2.49%  (p=0.000 n=10+20)
+Throughput/MaxPacket/1MB-8                  5.81ms ±23%   6.14ms ±44%    ~     (p=0.605 n=8+18)
+Throughput/MaxPacket/2MB-8                  8.91ms ±22%   8.74ms ±33%    ~     (p=0.498 n=9+19)
+Throughput/MaxPacket/4MB-8                  12.8ms ± 3%   14.0ms ±10%  +9.74%  (p=0.000 n=10+17)
+Throughput/MaxPacket/8MB-8                  25.1ms ± 7%   24.6ms ±16%    ~     (p=0.129 n=9+19)
+Throughput/MaxPacket/16MB-8                 46.3ms ± 4%   45.9ms ±12%    ~     (p=0.340 n=9+20)
+Throughput/MaxPacket/32MB-8                 88.5ms ± 4%   86.0ms ± 4%  -2.82%  (p=0.004 n=10+20)
+Throughput/MaxPacket/64MB-8                  173ms ± 2%    167ms ± 7%  -3.42%  (p=0.001 n=10+19)
+Throughput/DynamicPacket/1MB-8              5.88ms ± 4%   6.59ms ±64%    ~     (p=0.232 n=9+18)
+Throughput/DynamicPacket/2MB-8              9.08ms ±12%   8.73ms ±21%    ~     (p=0.408 n=10+18)
+Throughput/DynamicPacket/4MB-8              14.2ms ± 5%   14.0ms ±11%    ~     (p=0.188 n=9+19)
+Throughput/DynamicPacket/8MB-8              25.1ms ± 6%   24.0ms ± 7%  -4.39%  (p=0.000 n=10+18)
+Throughput/DynamicPacket/16MB-8             45.6ms ± 3%   43.3ms ± 1%  -5.22%  (p=0.000 n=10+8)
+Throughput/DynamicPacket/32MB-8             88.4ms ± 3%   84.8ms ± 2%  -4.06%  (p=0.000 n=10+10)
+Throughput/DynamicPacket/64MB-8              175ms ± 3%    167ms ± 2%  -4.63%  (p=0.000 n=10+10)
+Latency/MaxPacket/200kbps-8                  694ms ± 0%    694ms ± 0%  -0.02%  (p=0.000 n=9+9)
+Latency/MaxPacket/500kbps-8                  279ms ± 0%    279ms ± 0%  -0.09%  (p=0.000 n=10+10)
+Latency/MaxPacket/1000kbps-8                 140ms ± 0%    140ms ± 0%  -0.15%  (p=0.000 n=10+9)
+Latency/MaxPacket/2000kbps-8                71.1ms ± 0%   71.0ms ± 0%  -0.09%  (p=0.001 n=8+9)
+Latency/MaxPacket/5000kbps-8                30.5ms ± 6%   30.1ms ± 6%    ~     (p=0.905 n=10+9)
+Latency/DynamicPacket/200kbps-8              134ms ± 0%    134ms ± 0%    ~     (p=0.796 n=9+9)
+Latency/DynamicPacket/500kbps-8             54.8ms ± 0%   54.7ms ± 0%  -0.18%  (p=0.000 n=8+10)
+Latency/DynamicPacket/1000kbps-8            28.5ms ± 0%   29.1ms ± 8%    ~     (p=0.173 n=8+10)
+Latency/DynamicPacket/2000kbps-8            15.3ms ± 6%   15.9ms ±10%    ~     (p=0.905 n=9+10)
+Latency/DynamicPacket/5000kbps-8            9.14ms ±21%   9.65ms ±82%    ~     (p=0.529 n=10+10)
+
+name                                       old speed     new speed     delta
+Throughput/MaxPacket/1MB-8                 175MB/s ±13%  167MB/s ±64%    ~     (p=0.646 n=7+20)
+Throughput/MaxPacket/2MB-8                 241MB/s ±25%  241MB/s ±40%    ~     (p=0.660 n=9+20)
+Throughput/MaxPacket/4MB-8                 328MB/s ± 3%  300MB/s ± 9%  -8.70%  (p=0.000 n=10+17)
+Throughput/MaxPacket/8MB-8                 335MB/s ± 7%  340MB/s ±17%    ~     (p=0.212 n=9+20)
+Throughput/MaxPacket/16MB-8                363MB/s ± 4%  367MB/s ±11%    ~     (p=0.340 n=9+20)
+Throughput/MaxPacket/32MB-8                379MB/s ± 4%  390MB/s ± 4%  +2.93%  (p=0.004 n=10+20)
+Throughput/MaxPacket/64MB-8                388MB/s ± 2%  401MB/s ± 7%  +3.25%  (p=0.004 n=10+20)
+Throughput/DynamicPacket/1MB-8             178MB/s ± 4%  157MB/s ±73%    ~     (p=0.127 n=9+20)
+Throughput/DynamicPacket/2MB-8             232MB/s ±11%  243MB/s ±18%    ~     (p=0.415 n=10+18)
+Throughput/DynamicPacket/4MB-8             296MB/s ± 5%  299MB/s ±15%    ~     (p=0.295 n=9+20)
+Throughput/DynamicPacket/8MB-8             334MB/s ± 6%  350MB/s ± 7%  +4.58%  (p=0.000 n=10+18)
+Throughput/DynamicPacket/16MB-8            368MB/s ± 3%  388MB/s ± 1%  +5.48%  (p=0.000 n=10+8)
+Throughput/DynamicPacket/32MB-8            380MB/s ± 3%  396MB/s ± 2%  +4.20%  (p=0.000 n=10+10)
+Throughput/DynamicPacket/64MB-8            384MB/s ± 3%  403MB/s ± 2%  +4.83%  (p=0.000 n=10+10)
+
+Comparing TLS 1.2 and TLS 1.3 at tip shows a slight (~5-10%) slowdown of
+handshakes, which might be worth looking at next cycle, but the latency
+improvements are expected to overshadow that.
+
+name                                       old time/op   new time/op   delta
+HandshakeServer/ECDHE-P256-RSA-8             909µs ± 1%    963µs ± 0%   +5.87%  (p=0.000 n=17+18)
+HandshakeServer/ECDHE-P256-ECDSA-P256-8      204µs ± 1%    225µs ± 2%  +10.20%  (p=0.000 n=18+20)
+HandshakeServer/ECDHE-X25519-ECDSA-P256-8    208µs ± 1%    230µs ± 2%  +10.35%  (p=0.000 n=20+18)
+HandshakeServer/ECDHE-P521-ECDSA-P521-8     15.9ms ± 2%   15.9ms ± 1%     ~     (p=0.444 n=20+19)
+Throughput/MaxPacket/1MB-8                  6.14ms ±44%   7.07ms ±46%     ~     (p=0.057 n=18+19)
+Throughput/MaxPacket/2MB-8                  8.74ms ±33%   8.61ms ± 9%     ~     (p=0.552 n=19+17)
+Throughput/MaxPacket/4MB-8                  14.0ms ±10%   14.1ms ±12%     ~     (p=0.707 n=17+20)
+Throughput/MaxPacket/8MB-8                  24.6ms ±16%   25.6ms ±14%     ~     (p=0.107 n=19+20)
+Throughput/MaxPacket/16MB-8                 45.9ms ±12%   44.7ms ± 6%     ~     (p=0.607 n=20+19)
+Throughput/MaxPacket/32MB-8                 86.0ms ± 4%   87.9ms ± 8%     ~     (p=0.113 n=20+19)
+Throughput/MaxPacket/64MB-8                  167ms ± 7%    169ms ± 2%   +1.26%  (p=0.011 n=19+19)
+Throughput/DynamicPacket/1MB-8              6.59ms ±64%   6.79ms ±43%     ~     (p=0.480 n=18+19)
+Throughput/DynamicPacket/2MB-8              8.73ms ±21%   9.58ms ±13%   +9.71%  (p=0.006 n=18+20)
+Throughput/DynamicPacket/4MB-8              14.0ms ±11%   13.9ms ±10%     ~     (p=0.687 n=19+20)
+Throughput/DynamicPacket/8MB-8              24.0ms ± 7%   24.6ms ± 8%   +2.36%  (p=0.045 n=18+17)
+Throughput/DynamicPacket/16MB-8             43.3ms ± 1%   44.3ms ± 2%   +2.48%  (p=0.001 n=8+9)
+Throughput/DynamicPacket/32MB-8             84.8ms ± 2%   86.7ms ± 2%   +2.27%  (p=0.000 n=10+10)
+Throughput/DynamicPacket/64MB-8              167ms ± 2%    170ms ± 3%   +1.89%  (p=0.005 n=10+10)
+Latency/MaxPacket/200kbps-8                  694ms ± 0%    699ms ± 0%   +0.65%  (p=0.000 n=9+10)
+Latency/MaxPacket/500kbps-8                  279ms ± 0%    280ms ± 0%   +0.68%  (p=0.000 n=10+10)
+Latency/MaxPacket/1000kbps-8                 140ms ± 0%    141ms ± 0%   +0.59%  (p=0.000 n=9+9)
+Latency/MaxPacket/2000kbps-8                71.0ms ± 0%   71.3ms ± 0%   +0.42%  (p=0.000 n=9+9)
+Latency/MaxPacket/5000kbps-8                30.1ms ± 6%   30.7ms ±10%   +1.93%  (p=0.019 n=9+9)
+Latency/DynamicPacket/200kbps-8              134ms ± 0%    138ms ± 0%   +3.22%  (p=0.000 n=9+10)
+Latency/DynamicPacket/500kbps-8             54.7ms ± 0%   56.3ms ± 0%   +3.03%  (p=0.000 n=10+8)
+Latency/DynamicPacket/1000kbps-8            29.1ms ± 8%   29.1ms ± 0%     ~     (p=0.173 n=10+8)
+Latency/DynamicPacket/2000kbps-8            15.9ms ±10%   16.4ms ±36%     ~     (p=0.633 n=10+8)
+Latency/DynamicPacket/5000kbps-8            9.65ms ±82%   8.32ms ± 8%     ~     (p=0.573 n=10+8)
+
+name                                       old speed     new speed     delta
+Throughput/MaxPacket/1MB-8                 167MB/s ±64%  155MB/s ±55%     ~     (p=0.224 n=20+19)
+Throughput/MaxPacket/2MB-8                 241MB/s ±40%  244MB/s ± 9%     ~     (p=0.407 n=20+17)
+Throughput/MaxPacket/4MB-8                 300MB/s ± 9%  298MB/s ±11%     ~     (p=0.707 n=17+20)
+Throughput/MaxPacket/8MB-8                 340MB/s ±17%  330MB/s ±13%     ~     (p=0.201 n=20+20)
+Throughput/MaxPacket/16MB-8                367MB/s ±11%  375MB/s ± 5%     ~     (p=0.607 n=20+19)
+Throughput/MaxPacket/32MB-8                390MB/s ± 4%  382MB/s ± 8%     ~     (p=0.113 n=20+19)
+Throughput/MaxPacket/64MB-8                401MB/s ± 7%  397MB/s ± 2%   -0.96%  (p=0.030 n=20+19)
+Throughput/DynamicPacket/1MB-8             157MB/s ±73%  156MB/s ±39%     ~     (p=0.738 n=20+20)
+Throughput/DynamicPacket/2MB-8             243MB/s ±18%  220MB/s ±14%   -9.65%  (p=0.006 n=18+20)
+Throughput/DynamicPacket/4MB-8             299MB/s ±15%  303MB/s ± 9%     ~     (p=0.512 n=20+20)
+Throughput/DynamicPacket/8MB-8             350MB/s ± 7%  342MB/s ± 8%   -2.27%  (p=0.045 n=18+17)
+Throughput/DynamicPacket/16MB-8            388MB/s ± 1%  378MB/s ± 2%   -2.41%  (p=0.001 n=8+9)
+Throughput/DynamicPacket/32MB-8            396MB/s ± 2%  387MB/s ± 2%   -2.21%  (p=0.000 n=10+10)
+Throughput/DynamicPacket/64MB-8            403MB/s ± 2%  396MB/s ± 3%   -1.84%  (p=0.005 n=10+10)
+
+<span class="issue-keyword tooltipped tooltipped-se" aria-label="This commit closes issue #9671.">Fixes</span><a class="issue-link js-issue-link" data-error-text="Failed to load issue title" data-id="55240967" data-permission-text="Issue title is private" data-url="https://github.com/golang/go/issues/9671" data-hovercard-type="issue" data-hovercard-url="/golang/go/issues/9671/hovercard" href="https://github.com/golang/go/issues/9671">#9671</a>
+
+Change-Id: Ieb57c5140eb2c083b8be0d42b240cd2eeec0dcf6
+Reviewed-on: <a href="https://go-review.googlesource.com/c/147638" rel="nofollow">https://go-review.googlesource.com/c/147638</a>
+Run-TryBot: Filippo Valsorda &lt;filippo@golang.org&gt;
+TryBot-Result: Gobot Gobot &lt;gobot@golang.org&gt;
+Reviewed-by: Adam Langley &lt;agl@golang.org&gt;</pre></div><div class="commit-branches"><include-fragment src="/golang/go/branch_commits/30cc9780856b5a88ca2a8f05312758077ca48ba1"><svg class="octicon octicon-git-branch" viewBox="0 0 10 16" version="1.1" width="10" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M10 5c0-1.11-.89-2-2-2a1.993 1.993 0 00-1 3.72v.3c-.02.52-.23.98-.63 1.38-.4.4-.86.61-1.38.63-.83.02-1.48.16-2 .45V4.72a1.993 1.993 0 00-1-3.72C.88 1 0 1.89 0 3a2 2 0 001 1.72v6.56c-.59.35-1 .99-1 1.72 0 1.11.89 2 2 2 1.11 0 2-.89 2-2 0-.53-.2-1-.53-1.36.09-.06.48-.41.59-.47.25-.11.56-.17.94-.17 1.05-.05 1.95-.45 2.75-1.25S8.95 7.77 9 6.73h-.02C9.59 6.37 10 5.73 10 5zM2 1.8c.66 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2C1.35 4.2.8 3.65.8 3c0-.65.55-1.2 1.2-1.2zm0 12.41c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2zm6-8c-.66 0-1.2-.55-1.2-1.2 0-.65.55-1.2 1.2-1.2.65 0 1.2.55 1.2 1.2 0 .65-.55 1.2-1.2 1.2z"></path></svg><ul class="branches-list"><li class="loading">Loading branch information<span class="AnimatedEllipsis"></span></li></ul></include-fragment></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+C# ReadOnlySpan and static data -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>C# ReadOnlySpan<byte> and static data</byte></h1><div><div class="post-content" itemprop="articleBody"><p>Since C# 7 there have been a lot of point releases that contain all kinds of
+goodies. Many of them are performance focused, such as safe stack allocations
+using <code class="highlighter-rouge">Span&lt;T&gt;</code>, or interoperability with improvements to <code class="highlighter-rouge">fixed</code>.</p><p>One that I love, but is not documented well, is some special treatment
+that <code class="highlighter-rouge">ReadOnlySpan&lt;byte&gt;</code> gets when its contents are known at compile time.</p><p>Here’s an example of a lookup table I used to aide with hex encoding that uses
+a <code class="highlighter-rouge">byte[]</code>:</p><div class="language-csharp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">private</span><span class="k">static</span><span class="kt">byte</span><span class="p">[]</span><span class="n">LookupTable</span><span class="p">=&gt;</span><span class="k">new</span><span class="kt">byte</span><span class="p">[]</span><span class="p">{</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'0'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'1'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'2'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'3'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'4'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'5'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'6'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'7'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'8'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'9'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'A'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'B'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'C'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'D'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'E'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'F'</span><span class="p">,</span><span class="p">};</span></code></pre></div></div><p>This binary data has to get stored <em>somewhere</em> in our produced library. If we
+use <code class="highlighter-rouge">dumpbin</code> we can see it in the .text section of the binary.</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>dumpbin /RAWDATA /SECTION:.text mylib.dll
+</code></pre></div></div><p>Right at the bottom, we see:</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>00402A40: 30 31 32 33 34 35 36 37 38 39 41 42 43 44 45 46  0123456789ABCDEF
+</code></pre></div></div><p>I won’t go into the a lot of the details on how this data is compiled into the
+<code class="highlighter-rouge">.text</code> section, but at this point we need to get that data into the array
+somehow.</p><p>If we look at the jit assembly of <code class="highlighter-rouge">LookupTable</code>, we see:</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sub rsp, 0x28
+vzeroupper
+mov rcx, 0x7ffc4638746a
+mov edx, 0x10
+call 0x7ffc49b52630
+mov rdx, 0x1b51450099c
+lea rcx, [rax+0x10]
+vmovdqu xmm0, [rdx]
+vmovdqu [rcx], xmm0
+add rsp, 0x28
+ret
+</code></pre></div></div><p>Where <code class="highlighter-rouge">0x7ffc49b52630</code> is <code class="highlighter-rouge">InitializeArray</code>.</p><p>With an array, our property leans on <code class="highlighter-rouge">InitializeArray</code>, the source of which is
+<a href="https://github.com/dotnet/coreclr/blob/a28b25aacdcd2adb0fdfa70bd869f53ba6565976/src/classlibnative/bcltype/arraynative.cpp#L1377">in the CoreCLR</a>. For little-endian platforms, it boils down to a <code class="highlighter-rouge">memcpy</code>
+from a runtime field handle.</p><p>Indeed, with a debugger we finally see:</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>00007ffd`b18b701a e831a40e00       call    coreclr!memcpy (00007ffd`b19a1450)
+</code></pre></div></div><p>Dumping <code class="highlighter-rouge">@rdx L10</code> yields:</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>000001f0`4c552a90  30 31 32 33 34 35 36 37-38 39 41 42 43 44 45 46  0123456789ABCDEF
+</code></pre></div></div><p>So that was a very long-winded way of saying that when using arrays, initializing
+a field or variable with bytes results in <code class="highlighter-rouge">memcpy</code> from the image into the array,
+which results in more data on the heap.</p><p>Now, starting in 7.3, we can avoid that <code class="highlighter-rouge">memcpy</code> when using <code class="highlighter-rouge">ReadOnlySpan&lt;byte&gt;</code>.</p><div class="language-csharp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">private</span><span class="k">static</span><span class="n">ReadOnlySpan</span><span class="p">&lt;</span><span class="kt">byte</span><span class="p">&gt;</span><span class="n">LookupTable</span><span class="p">=&gt;</span><span class="k">new</span><span class="kt">byte</span><span class="p">[]</span><span class="p">{</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'0'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'1'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'2'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'3'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'4'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'5'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'6'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'7'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'8'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'9'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'A'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'B'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'C'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'D'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'E'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'F'</span><span class="p">,</span><span class="p">};</span></code></pre></div></div><p>Looking at the jit assembly:</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mov eax, 0x10
+xor edx, edx
+mov r8, 0x1b5144c0968
+mov [rcx], rdx
+mov [rcx+0x8], r8
+mov [rcx+0x10], eax
+mov rax, rcx
+ret
+</code></pre></div></div><p>We see that there is <code class="highlighter-rouge">mov r8, 0x1b5144c0968</code>. The contents of <code class="highlighter-rouge">0x1b5144c0968</code>
+are:</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>000001b5`144c0968  30 31 32 33 34 35 36 37-38 39 41 42 43 44 45 46  0123456789ABCDEF
+</code></pre></div></div><p>So we see that the method is now returning the data directly and
+omitting the <code class="highlighter-rouge">memcpy</code> entirely, so our <code class="highlighter-rouge">ReadOnlySpan&lt;byte&gt;</code> is pointing directly
+to the <code class="highlighter-rouge">.text</code> section.</p><p>This works for property getters as shown above, but also as the return of a
+method:</p><div class="language-csharp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">ReadOnlySpan</span><span class="p">&lt;</span><span class="kt">byte</span><span class="p">&gt;</span><span class="nf">GetBytes</span><span class="p">()</span><span class="p">{</span><span class="k">return</span><span class="k">new</span><span class="kt">byte</span><span class="p">[]</span><span class="p">{</span><span class="p">...</span><span class="p">};</span><span class="p">}</span></code></pre></div></div><p>Which works similar to the getter of the property. In addition, this also works
+for locals in a method body as well:</p><div class="language-csharp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">void</span><span class="nf">Write200Ok</span><span class="p">(</span><span class="n">Stream</span><span class="n">s</span><span class="p">)</span><span class="p">{</span><span class="n">ReadOnlySpan</span><span class="p">&lt;</span><span class="kt">byte</span><span class="p">&gt;</span><span class="n">data</span><span class="p">=</span><span class="k">new</span><span class="kt">byte</span><span class="p">[]</span><span class="p">{</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'H'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'T'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'T'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'P'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'/'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'1'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'.'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'1'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">' '</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'2'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'0'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'0'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">' '</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'O'</span><span class="p">,</span><span class="p">(</span><span class="kt">byte</span><span class="p">)</span><span class="sc">'K'</span><span class="p">};</span><span class="n">s</span><span class="p">.</span><span class="nf">Write</span><span class="p">(</span><span class="n">data</span><span class="p">);</span><span class="p">}</span></code></pre></div></div><p>Which also produces a reasonable JIT disassembly:</p><div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sub     rsp, 0x38
+xor     eax, eax
+mov     qword ptr [rsp+0x28], rax
+mov     qword ptr [rsp+0x30], rax
+mov     rcx, 0x1e595b42ade
+mov     eax, 0x0F
+lea     r8, [rsp+0x28]
+mov     qword ptr [r8], rcx
+mov     dword ptr [r8+8], eax
+mov     rcx, rdx
+lea     rdx, [rsp+0x28]
+cmp     dword ptr [rcx], ecx
+call    0x7ff89ede10c8 (Stream.Write(System.ReadOnlySpan`1&lt;Byte&gt;), mdToken: 0000000006000001)
+add     rsp, 0x38
+ret
+</code></pre></div></div><p>Here we see  <code class="highlighter-rouge">mov rcx, 0x1e595b42ade</code> which moves the address of the static
+ data directly in to the register with no additional work to create a byte array.</p><p>These optimizations currently only works with <code class="highlighter-rouge">ReadOnlySpan&lt;byte&gt;</code> right now.
+Other types will continue to use <code class="highlighter-rouge">InitializeArray</code> due to needing to handle
+different platforms and how they handle endianness.</p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

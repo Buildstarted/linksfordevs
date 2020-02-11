@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+[WIP] Remove tailcall limitations on unix64 and arm64 by jakobbotsch &#xB7; Pull Request #25932 &#xB7; dotnet/coreclr &#xB7; GitHub -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>[WIP] Remove tailcall limitations on unix64 and arm64 by jakobbotsch · Pull Request #25932 · dotnet/coreclr · GitHub</h1><div><div id="" class="d-block comment-body markdown-body  js-comment-body"><p>The basic problem is the following: <code>PUTARG_STK</code> will write values into the arg space area which, for fast tail calls, is the area of the incoming args. A <code>PUTARG_STK</code> may therefore end up overwrite (parts of) an argument that is used later in the call sequence. On Windows the ABI allows us to know that, if we are doing a <code>PUTARG_STK</code> for argument at index <code>i</code>, then this will overwrite the <code>i</code>th argument to the caller. Thus it is easy to introduce a temp for the <code>i</code>th arg if it is used later than the <code>PUTARG_STK</code>.</p><p>On Unix this assumption about the ABI does not hold. The argument position does not tell us anything about where the argument will go on the stack; for instance, <code>void foo(S32 a, int b)</code> and <code>void foo(int b, S32 a)</code> will both have <code>a</code> in the first 4 stack slots and <code>b</code> in a register.</p><p>This PR fixes this in a simple way: just introduce temps for any stack arg with uses before tailcalls. The harder way is to figure out if they are read after they would be overwritten by a <code>PUTARG_STK</code> and only introduce a temp in that situation. This is what the previous Windows implementation did based on the argument position.</p><p>Generally this might introduce copies in cases where there previously would have been none. However since we now allow tailcalls in more situations, this still turns out to be a net win space wise on unix64 (following is PMI over frameworks):</p><pre><code>Found 38 files with textual diffs.
+
+Summary:
+(Lower is better)
+
+Total bytes of diff: -296 (-0.001% of base)
+    diff is an improvement.
+
+Top file regressions by size (bytes):
+        1547 : System.Linq.Parallel.dasm (0.089% of base)
+         335 : System.Data.Common.dasm (0.022% of base)
+         262 : Microsoft.CodeAnalysis.dasm (0.014% of base)
+          44 : System.Numerics.Vectors.dasm (0.089% of base)
+          42 : System.Threading.Tasks.Parallel.dasm (0.025% of base)
+
+Top file improvements by size (bytes):
+       -1002 : Microsoft.CodeAnalysis.VisualBasic.dasm (-0.017% of base)
+        -598 : Microsoft.CodeAnalysis.CSharp.dasm (-0.013% of base)
+        -516 : System.Private.CoreLib.dasm (-0.011% of base)
+        -113 : System.Collections.Immutable.dasm (-0.010% of base)
+         -49 : System.Reflection.Metadata.dasm (-0.011% of base)
+
+35 total files with size differences (21 improved, 14 regressed), 94 unchanged.
+
+Top method regressions by size (bytes):
+         490 (3.163% of base) : System.Linq.Parallel.dasm - FirstQueryOperator`1:WrapPartitionedStream(ref,ref,bool,struct):this (49 methods)
+         490 (3.163% of base) : System.Linq.Parallel.dasm - LastQueryOperator`1:WrapPartitionedStream(ref,ref,bool,struct):this (49 methods)
+         490 (3.163% of base) : System.Linq.Parallel.dasm - TakeOrSkipQueryOperator`1:WrapPartitionedStream(ref,ref,bool,struct):this (49 methods)
+         490 (3.163% of base) : System.Linq.Parallel.dasm - TakeOrSkipWhileQueryOperator`1:WrapPartitionedStream(ref,ref,bool,struct):this (49 methods)
+         100 (0.345% of base) : System.Linq.Parallel.dasm - ConcatQueryOperator`1:WrapPartitionedStream(ref,ref,ref,bool,struct):this (49 methods)
+
+Top method improvements by size (bytes):
+        -442 (-1.724% of base) : System.Linq.Parallel.dasm - ILStubClass:IL_STUB_InstantiatingStub(ref,ref,bool,struct):this (221 methods)
+        -205 (-50.000% of base) : System.Private.CoreLib.dasm - Marshal:AllocCoTaskMem(int):long (2 base, 1 diff methods)
+        -144 (-50.000% of base) : System.Private.CoreLib.dasm - AnsiCharMarshaler:DoAnsiConversion(ref,bool,bool,byref):ref (2 base, 1 diff methods)
+        -120 (-17.595% of base) : System.Collections.Immutable.dasm - ILStubClass:IL_STUB_InstantiatingStub(ref,struct):struct (6 methods)
+        -106 (-50.000% of base) : System.Private.CoreLib.dasm - Buffer:Memcpy(long,int,ref,int,int) (2 base, 1 diff methods)
+
+Top method regressions by size (percentage):
+          55 (98.214% of base) : Microsoft.CodeAnalysis.CSharp.dasm - PEParameterSymbol:Create(ref,ref,int,struct,byref):ref
+          35 (36.082% of base) : Microsoft.CodeAnalysis.dasm - VtblGap:Microsoft.Cci.ISignature.GetType(struct):ref:this
+          35 (36.082% of base) : Microsoft.CodeAnalysis.dasm - ArrayMethodParameterInfo:GetType(struct):ref:this
+          35 (36.082% of base) : Microsoft.CodeAnalysis.dasm - ArrayConstructor:GetType(struct):ref:this
+          35 (36.082% of base) : Microsoft.CodeAnalysis.dasm - ArraySet:GetType(struct):ref:this
+
+Top method improvements by size (percentage):
+        -106 (-50.000% of base) : System.Private.CoreLib.dasm - Buffer:Memcpy(long,int,ref,int,int) (2 base, 1 diff methods)
+        -144 (-50.000% of base) : System.Private.CoreLib.dasm - AnsiCharMarshaler:DoAnsiConversion(ref,bool,bool,byref):ref (2 base, 1 diff methods)
+        -205 (-50.000% of base) : System.Private.CoreLib.dasm - Marshal:AllocCoTaskMem(int):long (2 base, 1 diff methods)
+         -21 (-35.593% of base) : Microsoft.DotNet.Cli.Utils.dasm - ILStubClass:IL_STUB_InstantiatingStub(struct):struct:this
+         -23 (-27.711% of base) : System.Threading.Tasks.Dataflow.dasm - WriteOnceBlock`1:CloneItem(struct):struct:this
+
+917 total methods with size differences (543 improved, 374 regressed), 200968 unchanged.
+</code></pre><p>How this affects perf is harder to measure, however. Instead I will continue to see if I can improve this to only introduce necessary temps by computing the correct stack offsets of arguments and then using this information in the same way that the code used the argument positions before.</p><p>cc <a class="user-mention" data-hovercard-type="user" data-hovercard-url="/users/jashook/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/jashook">@jashook</a><a class="user-mention" data-hovercard-type="user" data-hovercard-url="/users/AndyAyersMS/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/AndyAyersMS">@AndyAyersMS</a><a class="user-mention" data-hovercard-type="user" data-hovercard-url="/users/RussKeldorph/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/RussKeldorph">@RussKeldorph</a></p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

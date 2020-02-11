@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Rendering Markdown to HTML and Parsing YAML Front Matter in C# -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Rendering Markdown to HTML and Parsing YAML Front Matter in C#</h1><div><div itemprop="articleBody"><p>A year ago I <a href="https://markheath.net/post/aspnet-core-blog-rewrite">rewrote this blog in ASP.NET Core</a>. One of the goals I had was to be able to transition to writing all my posts in Markdown as I wanted to get away from relying on the obsolete Windows Live Writer and simply use VS Code for editing posts.</p><p>However, I needed to be able to store each blog post as a Markdown file, and for that I decided to use <a href="https://jekyllrb.com/docs/front-matter/">"YAML front matter"</a> as a way to store metadata such as the post title and categories.</p><p>So a the contents of a typical blog post file look something like:</p><pre><code>---
+title: Welcome!
+categories: [ASP.NET Core, C#]
+---
+Welcome to my new blog! I built it with:
+
+- C#
+- ASP.NET Core
+- StackOverflow
+</code></pre><h3>Parsing YAML Front Matter with YamlDotNet</h3><p>First of all, to parse the YAML front matter, I used the <a href="https://www.nuget.org/packages/YamlDotNet/">YamlDotNet NuGet package</a>. It's a little bit fiddly, but you can use the <code>Parser</code> to find the front matter (it comes after a <code>StreamStart</code> and a <code>DocumentStart</code>), and then use an <code>IDeserializer</code> to deserialize the YAML into a suitable class with properties matching the YAML. In my case, the <code>Post</code> class supports setting many properties including the post title, categories, publication date, and even a list of comments, but for my blog I keep things simple and usually only set the title and categories (I use a file name convention to indicate the publication date).</p><pre><code class="language-cs">using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
+using YamlDotNet.Core;
+using YamlDotNet.Core.Events;
+
+// ...
+var yamlDeserializer = new DeserializerBuilder()
+                    .WithNamingConvention(new CamelCaseNamingConvention())
+                    .Build();
+
+var text = File.ReadAllText(blogPostMarkdownFile);
+using (var input = new StringReader(text))
+{
+    var parser = new Parser(input);
+    parser.Expect&lt;StreamStart&gt;();
+    parser.Expect&lt;DocumentStart&gt;();
+    var post = yamlDeserializer.Deserialize&lt;Post&gt;(parser);
+    parser.Expect&lt;DocumentEnd&gt;();
+}
+</code></pre><h3>Rendering HTML with MarkDig</h3><p>To convert the Markdown into HTML, I used the superb <a href="https://github.com/lunet-io/markdig">MarkDig library</a>. This not only makes it super easy to convert basic Markdown to HTML, but supports several useful extensions. The library author, Alexandre Mutel, is very responsive to pull requests, so I was able to contribute a couple of minor improvements myself to add some features I wanted.</p><p>I created a basic <code>MarkdownRenderer</code> class that renders Markdown using the settings I want for my blog. A couple of things of note. First of all, you'll notice in <code>CreateMarkdownPipeline</code> that I've enabled a bunch of helpful extensions that are available out of the box. These gave me pretty much all the support I needed for things like syntax highlighting, tables, embedded YouTube videos, etc. I'm telling it to expect YAML front matter, so I don't need to strip off the YAML before passing it to the renderer. I needed to add a missing mime type, so I've shown how that can be done, even though it's included now. And the most hacky thing I needed to do was to ensure that generated tables had a specific class I wanted to be present for my CSS styling to work properly (I guess there may be an easier way to achieve this now).</p><p>Once the <code>MarkdownPipeline</code> has been constructed, we use a <code>MarkdownParser</code> in conjunction with a <code>HtmlRenderer</code> to parse the Markdown and then render it as HTML. One of the features I contributed to MarkDig was the ability to turn relative links into absolute ones. This is needed for my RSS feed, which needs to use absolute links, while my posts just use relative ones.</p><p>Here's the code for my <code>MarkdownRenderer</code> which you can adapt for your own needs:</p><pre><code class="language-cs">using Markdig;
+using Markdig.Syntax;
+using Markdig.Renderers.Html;
+using Markdig.Extensions.MediaLinks;
+using Markdig.Parsers;
+using Markdig.Renderers;
+
+// ...
+
+public class MarkdownRenderer
+{
+    private readonly MarkdownPipeline pipeline;
+    public MarkdownRenderer()
+    {
+        pipeline = CreateMarkdownPipeline();
+    }
+
+    public string Render(string markdown, bool absolute)
+    {
+        var writer = new StringWriter();
+        var renderer = new HtmlRenderer(writer);
+        if(absolute) renderer.BaseUrl = new Uri("https://markheath.net");
+        pipeline.Setup(renderer);
+
+        var document = MarkdownParser.Parse(markdown, pipeline);
+        renderer.Render(document);
+        writer.Flush();
+
+        return writer.ToString();
+    }
+
+    private static MarkdownPipeline CreateMarkdownPipeline()
+    {
+        var builder = new MarkdownPipelineBuilder()
+            .UseYamlFrontMatter()
+            .UseCustomContainers()
+            .UseEmphasisExtras()
+            .UseGridTables()
+            .UseMediaLinks()
+            .UsePipeTables()
+            .UseGenericAttributes(); // Must be last as it is one parser that is modifying other parsers
+
+        var me = builder.Extensions.OfType&lt;MediaLinkExtension&gt;().Single();
+        me.Options.ExtensionToMimeType[".mp3"] = "audio/mpeg"; // was missing (should be in the latest version now though)
+        builder.DocumentProcessed += document =&gt; {
+            foreach(var node in document.Descendants())
+            {
+                if (node is Markdig.Syntax.Block)
+                {
+                    if (node is Markdig.Extensions.Tables.Table)
+                    {
+                        node.GetAttributes().AddClass("md-table");
+                    }
+                }
+            }
+        };
+        return builder.Build();
+    }
+}
+</code></pre></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

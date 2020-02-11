@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Using Entity Framework Core to process Azure Service Messages in ASP.NET Core -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Using Entity Framework Core to process Azure Service Messages in ASP.NET Core</h1><div><div class="entry-content"><p>This article shows how to use Entity Framework Core together with an Azure Service Bus receiver in ASP.NET Core. This message handler is a singleton and so requires that an Entity Framework Core context inside this singleton is not registered as a scoped service but created and disposed for each message event.</p><p><strong>Code:</strong><a href="https://github.com/damienbod/AspNetCoreServiceBus" rel="nofollow">https://github.com/damienbod/AspNetCoreServiceBus</a></p><p>Posts in this series:</p><p><strong>Processing the Azure Service Bus Messages</strong></p><p>The ProcessData class is used to handle the messages in the ASP.NET Core application. The service uses an Entity Framework Core context to save the required data to a database. </p><pre class="brush: csharp; title: ; notranslate" title="">using AspNetCoreServiceBusApi2.Model;
+using Microsoft.Extensions.Configuration;
+using ServiceBusMessaging;
+using System;
+using System.Threading.Tasks;
+
+namespace AspNetCoreServiceBusApi2
+{
+    public class ProcessData : IProcessData
+    {
+        private IConfiguration _configuration;
+
+        public ProcessData(IConfiguration configuration)
+        {
+            _configuration = configuration;
+        }
+        public async Task Process(MyPayload myPayload)
+        {
+            using (var payloadMessageContext = 
+                new PayloadMessageContext(
+                    _configuration.GetConnectionString("DefaultConnection")))
+            {
+                await payloadMessageContext.AddAsync(new Payload
+                {
+                    Name = myPayload.Name,
+                    Goals = myPayload.Goals,
+                    Created = DateTime.UtcNow
+                });
+
+                await payloadMessageContext.SaveChangesAsync();
+            }
+        }
+    }
+}
+
+</pre><p>The services used to consume the Azure Service Bus are registered to the IoC (Inversion of Control) as singletons. Due to this, only singletons or transient services can be used. If we use the context as a singleton, we will end up having connection and pooling problems with the database.</p><pre class="brush: csharp; title: ; notranslate" title="">services.AddSingleton&lt;IServiceBusConsumer, ServiceBusConsumer&gt;();
+services.AddSingleton&lt;IServiceBusTopicSubscription, ServiceBusTopicSubscription&gt;();
+services.AddSingleton&lt;IProcessData, ProcessData&gt;();
+</pre><p>A PayloadMessageContext Entity Framework Core context was created for the Azure Service Bus message handling.</p><pre class="brush: csharp; title: ; notranslate" title="">using Microsoft.EntityFrameworkCore;
+
+namespace AspNetCoreServiceBusApi2.Model
+{
+    public class PayloadMessageContext : DbContext
+    {
+        private string _connectionString;
+
+        public DbSet&lt;Payload&gt; Payloads { get; set; }
+      
+        public PayloadMessageContext(string connectionString)
+        {
+            _connectionString = connectionString;
+        }
+
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+        {
+            optionsBuilder.UseSqlite(_connectionString);
+        }
+
+        protected override void OnModelCreating(ModelBuilder builder)
+        {
+            builder.Entity&lt;Payload&gt;().Property(n =&gt; n.Id).ValueGeneratedOnAdd();
+            builder.Entity&lt;Payload&gt;().HasKey(m =&gt; m.Id); 
+            base.OnModelCreating(builder); 
+        } 
+    }
+}
+</pre><p>The required NuGet packages were added to the project. This demo uses SQLite.</p><pre class="brush: xml; title: ; notranslate" title="">&lt;PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="3.0.0-preview4.19216.3" /&gt;
+    &lt;PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="3.0.0-preview4.19216.3"&gt;
+      &lt;PrivateAssets&gt;all&lt;/PrivateAssets&gt;
+      &lt;IncludeAssets&gt;runtime; build; native; contentfiles; analyzers; buildtransitive&lt;/IncludeAssets&gt;
+    &lt;/PackageReference&gt;
+</pre><p>The service is then added in the Startup class as a singleton. The Entity Framework Core context used for the messaging is not registered here, because it is used inside the singleton instance and we do not want a context which is a singleton, because it will have problems with the database connections, and pooling. Instead a new context is created inside the service for each message event and disposed after. If you have a lot of messages, this would need to be optimized.</p><p>Now when the ASP.NET Core application receives messages, the singleton service context handles this messages, and saves the data to a database.</p><p><strong>Links:</strong></p><p><a href="https://docs.microsoft.com/en-us/azure/service-bus-messaging/" rel="nofollow">https://docs.microsoft.com/en-us/azure/service-bus-messaging/</a></p><p><a href="https://docs.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dotnet-get-started-with-queues" rel="nofollow">https://docs.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dotnet-get-started-with-queues</a></p><p><a href="https://www.nuget.org/packages/Microsoft.Azure.ServiceBus" rel="nofollow">https://www.nuget.org/packages/Microsoft.Azure.ServiceBus</a></p><p><a href="https://www.planetgeek.ch/2019/01/07/azure-service-bus-topologies/">Azure Service Bus Topologies</a></p><p><a href="https://docs.microsoft.com/en-us/dotnet/standard/microservices-architecture/multi-container-microservice-net-applications/integration-event-based-microservice-communications" rel="nofollow">https://docs.microsoft.com/en-us/dotnet/standard/microservices-architecture/multi-container-microservice-net-applications/integration-event-based-microservice-communications</a></p><blockquote class="wp-embedded-content" data-secret="DxNVigCFSg"><p><a href="https://connectedcircuits.blog/2019/04/24/always-subscribe-to-dead-lettered-messages-in-an-azure-service-bus/">Always subscribe to Dead-lettered messages when using an Azure Service Bus</a></p></blockquote><p><a href="https://ml-software.ch/posts/stripe-api-with-asp-net-core-part-3" rel="nofollow">https://ml-software.ch/posts/stripe-api-with-asp-net-core-part-3</a></p><blockquote class="wp-embedded-content" data-secret="o4X6ck7ETt"><p><a href="https://www.serverless360.com/blog/auto-forwarding-a-hidden-gem-of-service-bus">Auto Forwarding, a hidden gem of Service Bus</a></p></blockquote><div id="jp-post-flair" class="sharedaddy sd-like-enabled sd-sharing-enabled"><h3 class="jp-relatedposts-headline"><em>Related</em></h3></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

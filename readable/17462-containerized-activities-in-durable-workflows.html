@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Containerized Activities in Durable Workflows -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Containerized Activities in Durable Workflows</h1><div><div itemprop="articleBody"><p>This is the second part in a series about how we can build a serverless workflow using Azure Durable Functions, but implement some of the activities in that workflow using containers with Azure Container Instances. Today we'll look at creating the necessary infrastructure using the Azure CLI.</p><p>Current table of contents:</p><p>We'll create a resource group for the Function App containing:</p><ul><li>A <strong>Storage Account</strong> for Durable Functions to use as well as a <strong>File Share</strong> for our containers to use</li><li>An <strong>Application Insights</strong> instance for monitoring and diagnostics</li><li>A <strong>Function App</strong> (running on the consumption plan) with a <strong>system assigned managed identity</strong></li></ul><p>We'll also create another resource group that will be used to host our ACI containers. Then we'll grant <strong>contributor access</strong> to our managed identity so that our Function App is allowed to create resources in that resource group.</p><h3>Create Storage Account</h3><p>As usual, I've chosen to automate this with the <a href="https://docs.microsoft.com/en-us/cli/azure/?view=azure-cli-latest">Azure CLI</a> in PowerShell. First, we create a resource group for our Storage Account and Function App:</p><pre><code class="language-powershell">$resourceGroup = "DurableFunctionsAci"
+$location = "westeurope"
+az group create -n $resourceGroup -l $location
+</code></pre><p>In my demo code, I'm using a random number as part of the Storage Account name, but this means my script isn't idempotent unless I first check whether the Storage Account already exists and use the same random number.</p><pre><code class="language-powershell">$existingName = az storage account list -g $resourceGroup `
+  --query "[].name" -o tsv
+$prefix = "durablefuncsaci"
+if ($existingName) {
+    $rand = $existingName.SubString($prefix.Length)
+}
+else
+{ $rand = Get-Random -Minimum 10000 -Maximum 99999 }
+$storageAccountName = "$prefix$rand"
+</code></pre><p>Now we know the Storage Account name we want to use, we can create it with <code>az storage account create</code> which is idempotent if the Storage Account already exists. Then we can get the Storage Account key with <code>az storage account keys list</code> which we need for later.</p><pre><code class="language-powershell">az storage account create `
+  -n $storageAccountName `
+  -l $location `
+  -g $resourceGroup `
+  --sku Standard_LRS
+
+$storageAccountKey = az storage account keys list -n $storageAccountName `
+  --query [0].value -o tsv
+</code></pre><h3>Create a File Share</h3><p>We want a File Share that we can mount to our ACI containers later. So I'll create one with <code>az storage share create</code></p><pre><code class="language-powershell">$shareName = "acishare"
+az storage share create `
+  -n $shareName `
+  --account-key $storageAccountKey `
+  --account-name $storageAccountName
+</code></pre><h3>Create an Application Insights instance</h3><p>I've blogged before about creating an Application Insights instance with the Azure CLI, but I've since found a slightly less cumbersome way to do it. Here's how to create the App Insights instance.</p><pre><code class="language-powershell">$appInsightsName = "$prefix$rand"
+az resource create `
+  -g $resourceGroup -n $appInsightsName `
+  --resource-type "Microsoft.Insights/components" `
+  --properties '{\"Application_Type\":\"web\"}'
+</code></pre><h3>Create a Function App</h3><p>We also need a Function App to host our Durable Functions workflow, and connect it to the Storage Account and App Insights instance we just created. The <code>az functionapp create</code> command conveniently has flags that lets us connect everything together and with the <code>--consumption-plan-location</code> flag we can indicate that we want to use the consumption App Service Plan without explicitly needing to create one first.</p><pre><code class="language-powershell">$functionAppName = "$prefix$rand"
+az functionapp create `
+    -n $functionAppName `
+    --storage-account $storageAccountName `
+    --consumption-plan-location $location `
+    --app-insights $appInsightsName `
+    --runtime dotnet `
+    -g $resourceGroup
+</code></pre><h3>Give the Function App a Managed Identity</h3><p>We need to give our Function App a "system assigned" managed identity, and we can use <code>az functionapp identity assign</code> to do that, which again is idempotent, returning the existing identity if one has already been created. I also need to get hold of the principal and tenant ids for use later.</p><pre><code class="language-powershell">az functionapp identity assign -n $functionAppName -g $resourceGroup
+
+$principalId = az functionapp identity show -n $functionAppName `
+  -g $resourceGroup --query principalId -o tsv
+$tenantId = az functionapp identity show -n $functionAppName `
+  -g $resourceGroup --query tenantId -o tsv
+</code></pre><h3>Grant Contributor Rights to the Managed Identity</h3><p>We want our Function App to have permissions to create new ACI container groups, so we're going to put the managed identity we just created into the "contributor" role for a resource group that will hold all the ACI container groups. Let's create the resource group first:</p><pre><code class="language-powershell">$aciResourceGroup = "DurableFunctionsAciContainers"
+az group create -n $aciResourceGroup -l $location
+</code></pre><p>Now we can assign the contributor role to the managed identity but scope it to only have rights to the resource group we just created.</p><pre><code class="language-powershell">$subscriptionId = az account show --query "id" -o tsv
+az role assignment create --role "Contributor" `
+    --assignee-object-id $principalId `
+    --scope "/subscriptions/$subscriptionId/resourceGroups/$aciResourceGroup"
+</code></pre><h3>Summary</h3><p>We've created most of the Azure resources we need for this demo. The only missing thing is the Event Grid subscription, which is a bit more complex to set up so we'll look at that in <a href="/post/serverless-containers-durable-workflows-3">part 3</a></p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

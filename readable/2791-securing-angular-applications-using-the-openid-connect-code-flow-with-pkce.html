@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Securing Angular applications using the OpenID Connect Code Flow with PKCE -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Securing Angular applications using the OpenID Connect Code Flow with PKCE</h1><div><div class="entry-content"><p>In this post, I show how an Angular application could be secured using the OpenID Connect Code Flow with Proof Key for Code Exchange (PKCE).</p><p>The Angular application uses the OIDC lib <a href="https://www.npmjs.com/package/angular-auth-oidc-client">angular-auth-oidc-client</a>.  In this example, the src code is used directly, but you could also use the npm package. Here’s an <a href="https://github.com/damienbod/AspNetCoreAngularSignalRSecurity">example</a> which uses the npm package.</p><p><strong>Code</strong><a href="https://github.com/damienbod/AspNet5IdentityServerAngularImplicitFlow" rel="nofollow">https://github.com/damienbod/AspNet5IdentityServerAngularImplicitFlow</a></p><p>lib src: <a href="https://github.com/damienbod/angular-auth-oidc-client" rel="nofollow">https://github.com/damienbod/angular-auth-oidc-client</a></p><p>npm package: <a href="https://www.npmjs.com/package/angular-auth-oidc-client" rel="nofollow">https://www.npmjs.com/package/angular-auth-oidc-client</a></p><p><strong>Configuring the Angular client</strong></p><p>The Angular application loads the configurations from a configuration json file. The response_type is set to “code”. This defines the OpenID Connect (OIDC) flow. PKCE is always used, as this is a public client which cannot keep a secret.</p><p>The other configurations must match the OpenID Connect client configurations on the server. </p><pre class="brush: csharp; title: ; notranslate" title="">"ClientAppSettings": {
+    "stsServer": "https://localhost:44318",
+    "redirect_url": "https://localhost:44352",
+    "client_id": "angular_code_client",
+    "response_type": "code",
+    "scope": "dataEventRecords securedFiles openid profile",
+    "post_logout_redirect_uri": "https://localhost:44352",
+    "start_checksession": true,
+    "silent_renew": true,
+    "startup_route": "/dataeventrecords",
+    "forbidden_route": "/forbidden",
+    "unauthorized_route": "/unauthorized",
+    "log_console_warning_active": true,
+    "log_console_debug_active": true,
+    "max_id_token_iat_offset_allowed_in_seconds": 10,
+}
+</pre><p>The Angular application reads the configuration in the app.module and initializes the security lib.</p><pre class="brush: csharp; title: ; notranslate" title="">import { NgModule, APP_INITIALIZER } from '@angular/core';
+import { HttpClientModule } from '@angular/common/http';
+
+import { AuthModule } from './auth/modules/auth.module';
+import { OidcSecurityService } from './auth/services/oidc.security.service';
+import { OpenIDImplicitFlowConfiguration } from './auth/modules/auth.configuration';
+import { OidcConfigService } from './auth/services/oidc.security.config.service';
+import { AuthWellKnownEndpoints } from './auth/models/auth.well-known-endpoints';
+
+// Add then other imports, config you need
+
+export function loadConfig(oidcConfigService: OidcConfigService) {
+    console.log('APP_INITIALIZER STARTING');
+    return () =&gt; oidcConfigService.load(`${window.location.origin}/api/ClientAppSettings`);
+}
+
+@NgModule({
+    imports: [
+        BrowserModule,
+        FormsModule,
+        routing,
+        HttpClientModule,
+        AuthModule.forRoot(),
+    ],
+    declarations: [
+        AppComponent,
+    ],
+    providers: [
+        OidcConfigService,
+        OidcSecurityService,
+        {
+            provide: APP_INITIALIZER,
+            useFactory: loadConfig,
+            deps: [OidcConfigService],
+            multi: true
+        },
+        Configuration
+    ],
+    bootstrap: [AppComponent],
+})
+
+export class AppModule {
+
+    constructor(
+        private oidcSecurityService: OidcSecurityService,
+        private oidcConfigService: OidcConfigService,
+        configuration: Configuration
+    ) {
+        this.oidcConfigService.onConfigurationLoaded.subscribe(() =&gt; {
+
+            const openIDImplicitFlowConfiguration = new OpenIDImplicitFlowConfiguration();
+            openIDImplicitFlowConfiguration.stsServer = this.oidcConfigService.clientConfiguration.stsServer;
+            openIDImplicitFlowConfiguration.redirect_url = this.oidcConfigService.clientConfiguration.redirect_url;
+            // The Client MUST validate that the aud (audience) Claim contains its client_id value registered at the Issuer
+            // identified by the iss (issuer) Claim as an audience.
+            // The ID Token MUST be rejected if the ID Token does not list the Client as a valid audience,
+            // or if it contains additional audiences not trusted by the Client.
+            openIDImplicitFlowConfiguration.client_id = this.oidcConfigService.clientConfiguration.client_id;
+            openIDImplicitFlowConfiguration.response_type = this.oidcConfigService.clientConfiguration.response_type;
+            openIDImplicitFlowConfiguration.scope = this.oidcConfigService.clientConfiguration.scope;
+            openIDImplicitFlowConfiguration.post_logout_redirect_uri = this.oidcConfigService.clientConfiguration.post_logout_redirect_uri;
+            openIDImplicitFlowConfiguration.start_checksession = this.oidcConfigService.clientConfiguration.start_checksession;
+
+            openIDImplicitFlowConfiguration.silent_renew = this.oidcConfigService.clientConfiguration.silent_renew;
+            openIDImplicitFlowConfiguration.silent_renew_url = this.oidcConfigService.clientConfiguration.redirect_url + '/silent-renew.html';
+
+            openIDImplicitFlowConfiguration.post_login_route = this.oidcConfigService.clientConfiguration.startup_route;
+            // HTTP 403
+            openIDImplicitFlowConfiguration.forbidden_route = this.oidcConfigService.clientConfiguration.forbidden_route;
+            // HTTP 401
+            openIDImplicitFlowConfiguration.unauthorized_route = this.oidcConfigService.clientConfiguration.unauthorized_route;
+            openIDImplicitFlowConfiguration.log_console_warning_active = this.oidcConfigService.clientConfiguration.log_console_warning_active;
+            openIDImplicitFlowConfiguration.log_console_debug_active = this.oidcConfigService.clientConfiguration.log_console_debug_active;
+            // id_token C8: The iat Claim can be used to reject tokens that were issued too far away from the current time,
+            // limiting the amount of time that nonces need to be stored to prevent attacks.The acceptable range is Client specific.
+            openIDImplicitFlowConfiguration.max_id_token_iat_offset_allowed_in_seconds =
+                this.oidcConfigService.clientConfiguration.max_id_token_iat_offset_allowed_in_seconds;
+
+            // openIDImplicitFlowConfiguration.iss_validation_off = false;
+            configuration.FileServer = this.oidcConfigService.clientConfiguration.apiFileServer;
+            configuration.Server = this.oidcConfigService.clientConfiguration.apiServer;
+
+            const authWellKnownEndpoints = new AuthWellKnownEndpoints();
+            authWellKnownEndpoints.setWellKnownEndpoints(this.oidcConfigService.wellKnownEndpoints);
+
+            this.oidcSecurityService.setupModule(openIDImplicitFlowConfiguration, authWellKnownEndpoints);
+
+        });
+
+        console.log('APP STARTING');
+    }
+}
+
+</pre><p>The redirect request with the code from the secure token server (STS) needs to be handled inside the Angular application. This is done in the app.component.</p><p>If the redirected URL from the server has the code and state parameters, and the state is valid, the tokens are requested from the STS server. The tokens in the response are validated as defined in the OIDC specification.</p><pre class="brush: csharp; title: ; notranslate" title="">private doCallbackLogicIfRequired() {
+   console.log(window.location);
+   // Will do a callback, if the url has a code and state parameter.
+   this.oidcSecurityService.authorizedCallbackWithCode(window.location.toString());
+}
+</pre><p>or if you want more control, or have specific logic:</p><pre class="brush: csharp; title: ; notranslate" title="">private doCallbackLogicIfRequired() {
+        console.log(window.location);
+   
+        const urlParts = window.location.toString().split('?');
+        const params = new HttpParams({
+            fromString: urlParts[1]
+        });
+        const code = params.get('code');
+        const state = params.get('state');
+        const session_state = params.get('session_state');
+
+        if (code &amp;&amp; state &amp;&amp; session_state) {
+            this.oidcSecurityService.requestTokensWithCode(code, state, session_state);
+        }
+}
+</pre><p>IdentityServer4 is used to configure and implement the secure token server. The client is configured to use PKCE and no secret. The client ID must match the Angular application configuration.</p><pre class="brush: csharp; title: ; notranslate" title="">new Client
+{
+	ClientName = "angular_code_client",
+	ClientId = "angular_code_client",
+	AccessTokenType = AccessTokenType.Reference,
+	// RequireConsent = false,
+	AccessTokenLifetime = 330,// 330 seconds, default 60 minutes
+	IdentityTokenLifetime = 30,
+
+	RequireClientSecret = false,
+	AllowedGrantTypes = GrantTypes.Code,
+	RequirePkce = true,
+
+	AllowAccessTokensViaBrowser = true,
+	RedirectUris = new List&lt;string&gt;
+	{
+		"https://localhost:44352",
+		"https://localhost:44352/silent-renew.html"
+
+	},
+	PostLogoutRedirectUris = new List&lt;string&gt;
+	{
+		"https://localhost:44352/unauthorized",
+		"https://localhost:44352"
+	},
+	AllowedCorsOrigins = new List&lt;string&gt;
+	{
+		"https://localhost:44352"
+	},
+	AllowedScopes = new List&lt;string&gt;
+	{
+		"openid",
+		"dataEventRecords",
+		"dataeventrecordsscope",
+		"securedFiles",
+		"securedfilesscope",
+		"role",
+		"profile",
+		"email"
+	}
+},
+</pre><p><strong>Silent Renew</strong></p><p>The tokens are refreshed using an iframe like the OpenID Connect Implicit Flow. The HTML has one small difference. The detail value of the event returned to the Angular application returns the URL and not just the hash.</p><pre class="brush: xml; title: ; notranslate" title="">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+    &lt;base href="./"&gt;
+    &lt;meta charset="utf-8" /&gt;
+    &lt;meta name="viewport" content="width=device-width, initial-scale=1.0" /&gt;
+    &lt;title&gt;silent-renew&lt;/title&gt;
+    &lt;meta http-equiv="content-type" content="text/html; charset=utf-8" /&gt;
+&lt;/head&gt;
+&lt;body&gt;
+
+    &lt;script&gt;
+        window.onload = function () {
+            /* The parent window hosts the Angular application */
+            var parent = window.parent;
+            /* Send the id_token information to the oidc message handler */
+            var event = new CustomEvent('oidc-silent-renew-message', { detail: window.location });
+            parent.dispatchEvent(event);
+        };
+    &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+
+</pre><p>Now the OIDC Flow can be used in the Angular client application. When the application is started, the configurations are loaded.</p><p>The authorize request is sent to the STS with the code_challenge and the code_challenge_method.</p><pre class="brush: plain; title: ; notranslate" title="">https://localhost:44318/connect/authorize?
+client_id=angular_code_client
+&amp;redirect_uri=https%3A%2F%2Flocalhost%3A44352
+&amp;response_type=code
+&amp;scope=dataEventRecords%20securedFiles%20openid%20profile
+&amp;nonce=N0.55639781033142241546880026878
+&amp;state=15468798618260.8857500931703779
+&amp;code_challenge=vBcZBGqBEcQAA3HYf_nSWy6jViRjtGQyiqrrZYUdHHU
+&amp;code_challenge_method=S256
+&amp;ui_locales=de-CH
+</pre><p>The STS redirects back to the Angular application with the code and state.</p><pre class="brush: plain; title: ; notranslate" title="">https://localhost:44352/?
+code=2ee056b556db7dcd5c936686c4b30056e7efd78046eb4e8d4f57c3f6cc638449
+&amp;scope=openid%20profile%20dataEventRecords%20securedFiles
+&amp;state=15468798618260.8857500931703779
+&amp;session_state=xQzQduNOGHP7Qh8l5Pjs02piChWuSawPBpDhb2vCmqo.8cccc6873860ec345ea65ead4233c4ee
+</pre><p>The client application then requests the tokens using the code:</p><pre class="brush: plain; title: ; notranslate" title="">HTTP POST
+https://localhost:44318/connect/token
+
+BODY
+grant_type=authorization_code
+&amp;client_id=angular_code_client
+&amp;code_verifier=C0.8490756539574429154688002688015468800268800.23727863075955402
+&amp;code=2ee056b556db7dcd5c936686c4b30056e7efd78046eb4e8d4f57c3f6cc638449
+&amp;redirect_uri=https://localhost:44352
+</pre><p>The tokens are then returned and validated. The silent renew works in the same way.</p><p><strong>Notes</strong></p><p>The Angular application works now using OIDC Code Flow with PKCE to authenticate and authorize, but requires other security protections such as CSP, HSTS XSS protection, and so on. This is a good solution for Angular applications which uses APIs from any domain.</p><p><strong>Links</strong></p><p><a href="https://tools.ietf.org/html/rfc7636" rel="nofollow">https://tools.ietf.org/html/rfc7636</a></p><p><a href="https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest" rel="nofollow">https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest</a></p><p><a href="https://www.npmjs.com/package/angular-auth-oidc-client" rel="nofollow">https://www.npmjs.com/package/angular-auth-oidc-client</a></p><div id="jp-post-flair" class="sharedaddy sd-like-enabled sd-sharing-enabled"><h3 class="jp-relatedposts-headline"><em>Related</em></h3></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

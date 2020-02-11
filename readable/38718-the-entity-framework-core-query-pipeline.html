@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+The Entity Framework Core Query Pipeline -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>The Entity Framework Core Query Pipeline</h1><div><div id="" class=""><section><h2><a id="user-content-lets-get-translating" class="anchor" href="#lets-get-translating" aria-hidden="true"></a>Let’s Get Translating!</h2><aside class="notes">SQL shown is not real EF-generated SQL</aside></section><section><h2><a id="user-content-null-semantics" class="anchor" href="#null-semantics" aria-hidden="true"></a>Null Semantics</h2><p>Let’s translate this:</p><pre><code class="language-csharp">employees.Where(c =&gt; c.FirstName == c.LastName)
+</code></pre><div class="fragment"><p class="readability-styled" style="display: inline;">
+To this, right?
+</p><pre><code language="sql">SELECT ... FROM Employees WHERE FirstName = LastName</code></pre></div><p class="fragment"><strong>Could be wrong, SQL has three-valued logic</strong></p><p><span class="fragment">In SQL, FirstName = NULL is never true… </span><span class="fragment">(and it ain’t false either :))</span></p><aside class="notes">
+Major major!
+</aside></section><section><h2><a id="user-content-null-semantics-2" class="anchor" href="#null-semantics-2" aria-hidden="true"></a>Null Semantics 2</h2><p>Try to mimic C# behavior (best-effort only!)</p><div class="fragment"><pre><code lang="sql">WHERE FirstName = LastName OR
+  (FirstName IS NULL AND LastName IS NULL)
+</code></pre><p class="fragment">If one of the columns is non-nullable in the database schema, we can optimize</p><p class="fragment">Counter-example: case-sensitivity</p><aside class="notes">
+Perf/hacks, align to natural database behavior.
+</aside></div></section><section><h2><a id="user-content-subqueries" class="anchor" href="#subqueries" aria-hidden="true"></a>Subqueries</h2><p>Let’s get complicated:</p><pre><code class="language-csharp">employees.Where(e =&gt; e.Tasks.Count == 2)
+</code></pre><div class="fragment"><pre><code class="sql">SELECT ...
+FROM Employees AS e
+WHERE (
+    SELECT COUNT(*)
+    FROM Tasks AS t
+    WHERE t.EmployeeId = e.Id
+) = 2;
+</code></pre></div></section><section><h2><a id="user-content-instance-equality" class="anchor" href="#instance-equality" aria-hidden="true"></a>Instance Equality</h2><p>What about this?</p><pre><code class="language-c#">employees.Where(e =&gt; e == e.Boss)
+</code></pre><div class="fragment"><p class="readability-styled" style="display: inline;">
+We need to compare keys:
+</p><pre><code class="sql">WHERE e.Id = Boss.Id</code></pre></div><div class="fragment"><p class="readability-styled" style="display: inline;">
+The same happens if instead of a Boss we have a subquery:
+</p><pre><code class="csharp">employees.Where(e =&gt; e.Tasks.First() == x)
+
+WHERE (SELECT ... FROM Tasks ...).Id1 = x.Id1
+</code></pre></div><aside class="notes">
+Contains (check that a subordinate is my boss)
+OrderBy.
+</aside><aside class="notes">
+C#: reference identity (although can be overridden, mismatch).
+<p>Explain the word entity</p></aside></section><section><h2><a id="user-content-more-instance-equality" class="anchor" href="#more-instance-equality" aria-hidden="true"></a>More Instance Equality</h2><p>Now, what happens if something has a composite key?</p><div class="fragment"><pre><code class="sql">WHERE Id1 = Boss.Id1 AND Id2 = Boss.Id2</code></pre></div><div class="fragment"><p class="readability-styled" style="display: inline;">
+And with a subquery?
+</p><pre><code class="csharp">employees.Where(e =&gt; e.Tasks.First() == x)</code></pre></div><div class="fragment"><pre><code class="sql">WHERE (SELECT ...).Id1 = x.Id1 AND (SELECT ...).Id2 = x.Id2</code></pre></div><p><span class="fragment"><strong>Double evaluation… Better not do this!</strong></span></p></section><section><h2><a id="user-content-related-instances" class="anchor" href="#related-instances" aria-hidden="true"></a>Related Instances</h2><p>In C#, “related instances” are just there in memory.</p><div class="fragment"><p class="readability-styled" style="display: inline;">
+With DB, we need to fetch only what's needed:
+</p><pre><code language="csharp">employees.Include(b =&gt; b.Tasks)</code></pre></div><div class="fragment"><pre><code language="sql">SELECT ...
+FROM Employees AS e
+LEFT JOIN Tasks AS t ON e.Id = t.EmployeeId
+ORDER BY e.Id, t.Id
+</code></pre></div><ul><li class="fragment">Previous versions of EF Core translated this with multiple queries
+<ul><li>Multiple roundtrips vs. “cartesian explosion”</li><li>Transactionality</li></ul></li></ul><aside class="notes">
+Manual ways to split apart the query to multiple ones.
+</aside></section><section><h2><a id="user-content-untranslatability" class="anchor" href="#untranslatability" aria-hidden="true"></a>Untranslatability</h2><p>What to do about this?</p><pre><code class="language-c#">employees.Where(e =&gt; SomeFunc(e))
+</code></pre><p class="fragment">Previous versions: translate to server if we can, otherwise evaluate on client</p><ul><li class="fragment">Can bring <em>lots</em> of data to client</li><li class="fragment">Adding a new translation can break behavior</li></ul><p class="fragment">EF Core 3 throws, except for top-most projection</p><aside class="notes">
+Not just about functions, other expression types
+</aside></section><section><h2><a id="user-content-lessons-learned" class="anchor" href="#lessons-learned" aria-hidden="true"></a>Lessons Learned</h2><ul><li>There are many, many mismatches between C# LINQ and SQL</li><li class="fragment">ORMs need to make decisions about how to translate</li><li class="fragment">We need to do many things to expression trees before they can be converted</li></ul></section></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

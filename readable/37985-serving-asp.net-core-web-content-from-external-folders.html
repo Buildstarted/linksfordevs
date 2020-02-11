@@ -5,40 +5,264 @@
 Serving ASP.NET Core Web Content from External Folders -
 linksfor.dev(s)
     </title>
-	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
     <meta charset="utf-8">
     <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
     <meta name="google" value="notranslate">
     <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
 </head>
 <body>
     <div class="grid">
         
 <div class="readable">
-    <h1>Serving ASP.NET Core Web Content from External Folders</h1>
-    <div id="page-wrapper"> </div>
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Serving ASP.NET Core Web Content from External Folders</h1><div><div id="ArticleBody" class="postcontent" itemprop="articleBody"><p><img src="https://weblog.west-wind.com/images/2019/Serving-ASP.NET-Core-Web-Content-from-External-Folders/reloaded.jpg" alt=""></p><p>ASP.NET Core makes it easy to create a Web application regardless of whether you want to create code in raw middleware, using traditional MVC Controllers and Views, or by using Razor Pages as well as static content.</p><p>I love the fact that you can easily create a self-contained, <strong>local</strong> web server with ASP.NET Core. I have a lot of scenarios in desktop applications that need access to local Web content for rendering or preview functionality and having a quick way to display content is useful. I also have a host of local static documentation sites that I need to often tweak the HTML with and having a local Web Server that includes LiveReload functionality is very useful for quickly making small quick-fix changes.</p><h2 id="standalone-generic-local-web-server-in-net">Standalone Generic Local Web Server in .NET</h2><p>One scenario I've been thinking about recently is to build a generic Web server that makes it easy to serve Web content <strong>from an arbitrary local folder - generically</strong>. Yeah, I know there are lots of NodeJs tools that do this, but <strong>it's just as easy to create a standalone server in .NET now</strong>. By writing my own I can customize and <strong>provide exactly the features I need</strong>.</p><p>It's easy to build and just as easy to then publish that customized generic server as a .NET tool or as a self-contained EXE, so it's easy to share - even if it's just for myself on other machines.</p><p>I've talked a lot about Live Reload recently because I ended up integrating this functionality into a number of applications and frameworks to make it that much easier to build and debug applications. So my use case is to have a local Web static file Web Server that automatically has Live Reload enabled. Point it at a foler of HTML resources and go. Make changes to resources in that folder and see the page in the browser updated. As a bonus it also works with Razor Pages (with limitations) - all in a folder that you specify (or launch in).</p><p>If you want to take a look at this generic static file Web server with included LiveReload functionality, you can install the <code>LiveReloadServer</code> .NET Tool like this <small>(requires that the Dotnet Core 3.0 SDK is installed)</small>:</p><pre><code class="language-ps">dotnet tool install -g LiveReloadServer
+
+# run in current folder
+LiveReloadServer
+
+# point at a folder elsewhere
+LiveReloadServer --WebRoot c:/temp/mysite/web --port 5500 --UseSsl true
+</code></pre><p>Just in case you're unfamiliar with how LiveReload functionality works, here's the <code>Westwind.AspnetCore.LiveReload</code> middleware in action inside of a Web application. It's slightly different for the generic LiveReloadServer as there's no code - only file resources. You get the same features in this <code>LiveReloadServer</code>, with the exception of controller source code change refreshing:</p><p><img src="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/blob/master/Westwind.AspNetCore.LiveReload.gif?raw=true" alt=""></p><p>In this post I'll describe how to build this generic standalone Web server that can serve static files and also - in limited capacity -  Razor Pages. The server also supports fast and efficient, built-in LiveReload functionality which is enabled by default and so makes it perfect for developer scenarios.</p><h2 id="standard-aspnet-core-site-vs-generic-site">Standard ASP.NET Core Site vs Generic Site</h2><p>By default ASP.NET Core's services are bound to a <code>HostingEnvironment</code> and a <code>ContentRoot</code> folder in which the application is installed. The <code>ContentRoot</code> is the folder where the application's binary resources and configuration files live. There's also a <code>WebRoot</code> folder and typically this is the <code>wwwroot</code> folder where the Web application expects static content to be served from. Static HTML files and CSS, Images and JavaScript resources typically live in this static <code>wwwroot</code> folder.</p><p>This is pretty accepted common ground and almost every ASP.NET Core application uses that same pattern. And this is totally fine for typical custom Web applications.</p><p>But if you want to serve content from other locations than the host folder or dynamically configure your application to process files from other locations, some additional setup is required. Turns out though, that ASP.NET Core makes this fairly easy via configuration once you find the right dials to tweak.  Specifically various ASP.NET frameworks support specifying a <code>FileProvider</code> that determines where files are loaded from and by customizing paths it's relatively easy to serve content from other locations.</p><h3 id="aspnet-cores-file-providers">ASP.NET Core's File Providers</h3><p><code>IFileProvider</code> is a base interface that is used to - as the name suggests - provide files to the application. Files can come from different locations and rather than hard coding physical paths there are various file providers.</p><p>One of those providers is a <code>PhysicalFileProvider</code> which is used to specify a physical disk path from which to serve file resources. Other providers can serve files directly from embedded resources, from a stream or from custom data providers.</p><p>For loading content out of folders other than the default folder I'll use a <code>PhysicalFileProvider</code> and point it at an application provided path via commandline most commonly but any of the other configuration points.</p><h2 id="static-files-from-external-folders">Static Files from external Folders</h2><p>My specific use case is to build a generic static file Web server with Live Reload functionality, that I can either run from a given folder or provide a <code>--WebRootPath</code> parameter to point at a folder to launch out of.</p><p>ASP.NET Core uses the <code>StaticFiles</code> middleware, so to serve static files out of a different folder we can configure the <code>.UseStaticFiles()</code> initialization in <code>Startup.Configure()</code>:</p><pre><code class="language-cs">WebRootPath = Configuration["WebRootPath"];  // from config/CommandLine/Env
+if(string.IsNullOrEmpty(WebRootPath))
+    WebRootPath = Environment.CurrentPath;
+...
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(WebRoot),
+    RequestPath = new PathString("")
+});
+</code></pre><p>One of the options of the <code>StaticFiles</code> middleware is to specify a file provider which determines <strong>which folder to use for static files</strong> to serve. This folder location is set as the root path, with the <code>context.Request.Path</code> appended to find the file to serve.</p><p>Here I assign a <code>PhysicalFileProvider</code> with a new root path. I also set the <code>RequestPath</code> to <code>""</code> which is the <strong>Root Path</strong> - normally this defaults to <code>/wwwroot</code> which is the location in default ASP.NET Core project where static content is served from. But in this case I want my server to serve <strong>directly out of the root folder I specify</strong> via config or the command line - as provided by a <code>WebRoot</code> configuration switch. RequestPath is set to empty to use the root folder.</p><p>That's literally all it takes to create a generic static file server. You can now access any static content from the Web root on the port you specify:</p><pre><code class="language-text">http://localhost:5000
+</code></pre><p>This is a <strong>very simple, yet powerful use case</strong>: doing literally nothing more than adding the StaticFile middleware into a new application and setting the path gives you a generic static file Web server. Nice!</p><p>Now all that's left to do is to make this easily accessible to me and others.  You can now build this application into an easy self-contained EXE console application, or to take it one level further make it into an easily shared <strong>dotnet tool</strong> that can be installed via the .NET SDK similar to an NPM install. The latter is likely the preferred use case, but I'll show both.</p><p>I've created the dotnet tool and have <a href="https://www.nuget.org/packages/LiveReloadServer/">published it on NuGet</a>. So if you're interested in a local static file Web server with LiveReload,  you can install the server and run it with a couple of commands:</p><pre><code class="language-ps">dotnet tool install -g LiveReloadServer
+
+# Start in any folder or provide a --webroot
+LiveReloadServer --webroot c:/sites/test site/web --port 5300 --UseSsl True
+</code></pre><p>This fires up the local file server and includes the LiveReload functionality. Open a Web Page or dependent resource in the folder, make a change to the page or one of the dependent resources and see those the active page in the browser auto-refresh almost immediately.</p><p>Note that you can turn that off <code>--LiveReloadEnabled False</code> but the idea is to have ready to go pre-configured, fast live reload HTTP server to local content. It's great for quickly testing and tweaking a local HTML page or JavaScript library.</p><p>More on that later.</p><p>This tool fits a practical use case for me. I maintain a number of small Javascript libraries and running and modifying code and HTML layout is made much easier by using a local server with Live Reload. There are existing tools - mostly NodeJs based and NPM hosted - that do this including  <a href="https://browsersync.io">Browser-Sync</a> and while this tool works, it's relatively slow and for me at least unreliable forcing me to frequently have to restart the server. So I've wanted to have a static file server that <strong>I can tweak and customize easily</strong>, and more importantly can create my own custom versions of.</p><h2 id="razor-pages">Razor Pages</h2><p>My primary use case was for static files, but as I was playing around with the static file functionality I thought to myself we should also be able to do the same thing with Razor Pages - in a limited fashion at least.</p><p>It turns out you can! You can redirect the Razor Pages base folder to a different location on disk at runtime and serve Razor Pages from that folder. This means I can start my generic server point it at an external folder and serve Razor pages out of that! Instant Razor Web Server - pretty cool, right?</p><h3 id="hooking-up-generic-razor-support">Hooking up Generic Razor Support</h3><p>Here's what it takes to hook up Razor Pages in an external folder. As of ASP.NET Core 3.0 dynamic Razor compilation at runtime is <strong>an optional feature</strong>, so the first step is to turn dynamic runtime compilation on and add a NuGet package that put that support back in.</p><pre><code class="language-xml">  &lt;ItemGroup&gt;
+    &lt;PackageReference Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="3.0.0" /&gt;
+  &lt;/ItemGroup&gt;
+</code></pre><p>Next, compilation needs to be configured. It's not very different from what I did earlier with the Static File Provider:</p><pre><code class="language-csharp">public void ConfigureServices(IServiceCollection services)
+{
+    services.AddLiveReload();
+
+    WebRoot = Configuration["WebRoot"];
+    if (string.IsNullOrEmpty(WebRoot))
+        WebRoot = Environment.CurrentDirectory;
+        
+    var razEnabled = Configuration["RazorEnabled"];
+    UseRazor = string.IsNullOrEmpty(razEnabled) ||
+               !razEnabled.Equals("false", StringComparison.InvariantCultureIgnoreCase);
+
+
+#if USE_RAZORPAGES
+    if (UseRazor)
+    {
+        services.AddRazorPages(opt =&gt; { opt.RootDirectory = "/"; })
+            .AddRazorRuntimeCompilation(
+                opt =&gt;
+                {
+                    // This would be useful but it's READ-ONLY
+                    // opt.AdditionalReferencePaths = Path.Combine(WebRoot,"bin");
+
+                    opt.FileProviders.Add(new PhysicalFileProvider(WebRoot));
+                });
+    }
+#endif
+}
+</code></pre><p>With this in place you can now drop <code>.cshtml</code> pages - as well as layout and partial pages, _viewstart etc. - into the Web root and have them work <strong>as long as logic does not need to reference external code or packages</strong>.</p><h3 id="excluding-razor-conditionally">Excluding Razor Conditionally</h3><p>Adding Razor to the local file server has a price - it adds significant size to the tool and/or EXE. By adding the Razor Compilation package to the application the size goes up by nearly 20 megs for an EXE and close to 8megs for a .NET tool.</p><p>I made the Razor functionality compile conditionally using a Compiler Constant, because if you truly just need a static file server, removing the Razor dependency results in a much leaner package with faster startup time and much smaller footprint (especially if you create a standalone EXE).</p><p>To conditionally include the RazorCompilation NuGet package I can use a conditional in the <code>.csproj</code> file:</p><pre><code class="language-xml">  &lt;PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'"&gt;
+    &lt;DefineConstants&gt;TRACE;USE_RAZORPAGES&lt;/DefineConstants&gt;
+  &lt;/PropertyGroup&gt;
+
+  &lt;ItemGroup Condition="$(DefineConstants.Contains(USE_RAZORPAGES))"&gt;
+    &lt;PackageReference Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="3.0.0" /&gt;
+  &lt;/ItemGroup&gt;
+</code></pre><p>For the startup configuration too I need to make sure that the Razor Libraries never get referenced if Razor is excluded - otherwise I end up with compiler errors for missing Razor dependencies.</p><p>To do this I can use a bracketing block:</p><pre><code class="language-cs">#if USE_RAZORPAGES
+    if (UseRazor)
+    {
+         services.AddRazorPages(opt =&gt; { opt.RootDirectory = "/"; })
+            ...
+    }
+#endif
+</code></pre><p>This works great. Now I can easily switch back and forth between the Razor inclusive or exclusive build just by adding or removing the <code>USE_RAZORPAGES</code> compiler constant. Remove the Compiler Constant and I get a lean static files only build. Add it back in and Razor is added, but I get a decidedly larger build with Razor Pages support.</p><h3 id="razor-and-dynamic-compilation-sharp-edges">Razor and Dynamic Compilation: Sharp Edges</h3><p>Ok, now for the disclaimers: As nice as it seems to be able to just plop Razor pages into a folder a la ASP.NET Web Pages, there are serious limitations due to the static nature of a compiled application.</p><p>It totally works, but there are big limitations in terms of what you can with your Razor Pages in this dynamically loaded site.</p><p>The idea is that you can simply drop a <code>.cshtml</code> page into a folder and it runs with access to in-page code Razor code, as long as <strong>it doesn't depend on external libraries or externally compiled code (.cs files)</strong>.</p><p>In a nutshell the dynamic location suffers these shortcomings:</p><ul><li>No source code compilation (no loose .cs files)</li><li>No way to add Nuget packages or assembly references</li></ul><p>That's a pretty big disclaimer and yes this isn't suitable to build full-fledged applications, but that's not the use case - at least not for me.</p><p>The use case is what I call <strong>static content with benefits</strong>: Simple scripting scenarios common in Web pages. It works for what it is: Script page only Razor code and expressions, without adding explicit source code files, or external packages and assemblies.</p><p>Note that all of the file based Razor features work: You can use Layout and Partial Pages, you can use <code>__ViewStart</code> etc. And you can access Razor code inside of your Razor pages so it's fully functionalt, but only with those components and packages that the original application is compiled for.</p><p>It's certainly possible to recompile the main server application and <strong>manually add additional dependencies</strong> that are then available in the dynamically accessed site, but it's not possible (AFAIK) to dynamically add packages or assemblies once the application has started.</p><p><em><strong>Disclaimer</strong>: I didn't look too hard, since that scenario isn't part of my use case so there might be a way to actually do this. But comments from David Fowler suggested that it's not and if it does not a recommended use case.</em></p><p>Why all the disclaimers? Because as Damien Edwards so eloquently pointed out:</p><p><em>“You're trying to re-create ASP.NET Web Pages”</em></p><p>While that would be super cool if that was possible, unfortunately due to the dynamic loading limitations it's more like what I mentioned earlier:</p><p><strong>Static Pages with Benefits</strong></p><h3 id="still-useful">Still Useful</h3><p>That's still pretty powerful though - you can use this for simple page logic for simple fixups like adding a current year to a copyright notice, or doing an HttpClient lookup for a a latest version number for a download, load files from a different location etc. There are lots of use cases that are for mostly static pages that need a few simple helpers.</p><p>But it's not useful for creating full applications <strong>with custom code logic</strong> broken out into separate assemblies and complex business logic. There's no reason for not using a regular .NET Core project for this and have proper support for all the features that Razor Pages and the eco-system provides. If you need Live Reload services, you just add the <a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload">Live Reload middleware</a> into your project directly.</p><h2 id="creating-a-generic-livereload-web-server-for-local-static-files">Creating a Generic LiveReload Web Server for Local Static Files</h2><p>So my particular use case for this tooling is to build a static file Web server I can use to quickly preview and edit static Web sites locally. I have a number of documentation ‘sites’ that are static and having them quickly browsable is very useful. I also manage a number of small JavaScript libraries and being able to quickly run the demos and tests, and also have LiveReload to make iterative changes is nice.</p><p>This is nothing new. There are plenty of NodeJS based tools that do similar things. I've used <code>http-server</code> for static file serving and <code>browser-sync</code> for LiveReload functionality. However, I've always had issues with browser-sync getting… wait for it… out of sync 😃 and requiring refresh, plus it generally tends to be pretty slow.</p><p>.NET now provides an NPM like experience for publishing and sharing tools much in the same way you can on NPM. In fact, it's even easier because you can simply build a Nuget package and publish that to NuGet to make it available as a .NET Tool by specifying a couple of extra project tags.</p><p>To do this all I need to do is:</p><p>A Dotnet Tool is basically a Console application that is turned into a NuGet package. This ends up creating a special package that the Dotnet SDK can unpack and execute once it's been installed.</p><blockquote><h4 id="icon-warning-requires-a-console-application"><i class="fa fa-warning"></i>  Requires a Console Application!</h4><p>It's important that you create a <strong>Console Application</strong> not a regular Web application as a Dotnet Tool <strong>will not be created from a Web SDK project</strong>. Instead create a console application and add the ASP.NET Core framework reference which gives you the same behavior but can be built into a Dotnet Tool NuGet package.</p></blockquote><p>The first step is to create a Console Application. Note that my project should be a Console application rather than a Web application. Technically a Web Application is also a console application, but the project types and how they build and how dependencies are included are slightly different.</p><p>A <strong>Web project</strong> uses:</p><pre><code class="language-xml">&lt;Project Sdk="Microsoft.NET.Sdk.Web"&gt;
+</code></pre><p>while a <strong>Console app</strong> uses:</p><pre><code class="language-xml">&lt;Project Sdk="Microsoft.NET.Sdk"&gt;
+</code></pre><p>so I want to use the latter.</p><p>In order to pull in ASP.NET Core's feature support in the EXE I also have to add the <code>Microsoft.AspNetCore.App</code> so that the base ASP.NET Core libraries are available:</p><pre><code class="language-xml">&lt;ItemGroup&gt;
+  &lt;FrameworkReference Include="Microsoft.AspNetCore.App" /&gt;
+  ...
+&lt;/ItemGroup&gt;
+</code></pre><p>With .NET 3.0 Microsoft recommends this approach over adding individual packages as it keeps the package list lean, and automatically ensures you get patched updates.  Note that although this screams <strong>add the whole enchilada</strong>, the compiler is actually smart enough to add only assemblies out of that framework reference that you actually are using/referencing. I was skeptical at first, looking at the executables I can see only a small number of libs are included in the final output.</p><h3 id="a-custom-program-class">A custom Program Class</h3><p>This is a special use case so rather than using the Default Builder, I explicitly specify what features I want to use in the Web startup so I use a custom host builder setup in <code>program.cs</code> (<a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/blob/master/LiveReloadServer/Program.cs">GitHub</a>):</p><pre><code class="language-csharp">public static IHostBuilder CreateHostBuilder(string[] args)
+{
+    // Custom Config
+    var config = new ConfigurationBuilder()
+        .AddJsonFile("LiveReloadServer.json", optional: true)
+        .AddEnvironmentVariables("LiveReloadServer_")
+        .AddCommandLine(args)
+        .Build();
+
+
+    if (args.Contains("--help", StringComparer.InvariantCultureIgnoreCase) ||
+        args.Contains("/h") || args.Contains("-h"))
+    {
+        ShowHelp();
+        return null;
+    }
+
+    return Host.CreateDefaultBuilder(args)
+        .ConfigureWebHostDefaults(webBuilder =&gt;
+        {
+            webBuilder
+                .UseConfiguration(config);
+
+            string sport = config["Port"];
+            bool useSsl = config["UseSsl"].Equals("true",StringComparison.InvariantCultureIgnoreCase);
+            int.TryParse(sport, out int port);
+            if (port == 0)
+                port = 5000;
+
+            webBuilder.UseUrls($"http{(useSsl ? "s" : "")}://0.0.0.0:{port}");
+
+            webBuilder
+                .UseStartup&lt;Startup&gt;();
+        });
+}
+</code></pre><p>Specifically I want to limit the configuration providers used and explicitly specify my host urls as provided either by the defaults of the app or from the user's command line options (or <code>LiveReload.json</code> config).</p><p>The other thing thing the startup class needs to do is dynamically assign the host URL used to map the port provided and whether plain HTTP or HTTPS is used in the server which has to be done <strong>before the app gets bootstrapped</strong>.</p><p>This code also handles the help page, and displaying an error message if the builder fails to start the application which most commonly is due to the host port already being in use.</p><h3 id="a-simple-startup-class">A simple Startup Class</h3><p>The startup class is almost ridiculously simple - it only includes configuration for my <code>LiveReload</code>  and the <code>StaticFiles</code> middleware, plus the Razor Pages config (<a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/blob/master/LiveReloadServer/Startup.cs">GitHub</a>):</p><pre><code class="language-csharp">public void ConfigureServices(IServiceCollection services)
+{
+    // Get Configuration Settings
+    UseLiveReload = GetLogicalSetting("LiveReloadEnabled");
+    UseRazor = GetLogicalSetting("RazorEnabled");
+    
+    WebRoot = Configuration["WebRoot"];
+    if (string.IsNullOrEmpty(WebRoot))
+        WebRoot = Environment.CurrentDirectory;
+    else
+        WebRoot = Path.GetFullPath(WebRoot,Environment.CurrentDirectory);
+
+    if (UseLiveReload)
+    {
+        services.AddLiveReload(opt =&gt;
+        {
+            opt.FolderToMonitor = WebRoot;
+            opt.LiveReloadEnabled = UseLiveReload;
+        });
+    }
+
+
+#if USE_RAZORPAGES
+    if (UseRazor)
+    {
+        services.AddRazorPages(opt =&gt; { opt.RootDirectory = "/"; })
+            .AddRazorRuntimeCompilation(
+                opt =&gt;
+                {
+                    // This would be useful but it's READ-ONLY
+                    // opt.AdditionalReferencePaths = Path.Combine(WebRoot,"bin");
+                    opt.FileProviders.Add(new PhysicalFileProvider(WebRoot));
+                });
+    }
+#endif    
+}    
+</code></pre><p>The <code>Configure()</code> implementation has a little more code, primarily because it maps some of the configuration parameters onto features provided. Here I pull out the WebRoot and Port plus a few other items:</p><pre><code class="language-csharp">public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+{
+    bool useSsl = GetLogicalSetting("useSsl");
+    bool showUrls = GetLogicalSetting("ShowUrls");
+    
+    string defaultFiles = Configuration["DefaultFiles"];
+    if (string.IsNullOrEmpty(defaultFiles))
+        defaultFiles = "index.html,default.htm,default.html";
+
+    var strPort = Configuration["Port"];
+    if (!int.TryParse(strPort, out Port))
+        Port = 5000;
+
+    if (UseLiveReload)
+        app.UseLiveReload();
+
+    if (showUrls)
+    {
+        app.Use(async (context, next) =&gt;
+        {
+            var url = $"{context.Request.Scheme}://{context.Request.Host}  {context.Request.Path}{context.Request.QueryString}";
+            Console.WriteLine(url);
+            await next();
+        });
+    }
+
+    app.UseDefaultFiles(new DefaultFilesOptions
+    {
+        FileProvider = new PhysicalFileProvider(WebRoot),
+        DefaultFileNames = new List&lt;string&gt;(defaultFiles.Split(',',';'))
+    });
+
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new PhysicalFileProvider(WebRoot),
+        RequestPath = new PathString("")
+    });
+
+#if USE_RAZORPAGES
+    if (UseRazor)
+    {
+        app.UseRouting();
+        app.UseEndpoints(endpoints =&gt; { endpoints.MapRazorPages(); });
+    }
+#endif
+}
+</code></pre><p>This code sets up the StaticFile and - if enabled - the Razor Pages middleware. It also adds another bit of optional inline middleware for echoing out the active URL to the console via the <code>--ShowUrls</code> flag which is fired on every request if enabled.</p><p>This is all there's to this little Console app that acts as a static file and Razor Page Web server with Live Reload. You should be able to run this application now with a command line like this:</p><pre><code class="language-ps">LiveReload --UseSsl True --WebRoot c:\MySite\web --port 5310 --ShowUrls True 
+</code></pre><p>At this point I've created a .NET Console application which has a folder full of files:</p><p><img src="https://weblog.west-wind.com/images/2019/Serving-ASP.NET-Core-Web-Content-from-External-Folders/LiveReloadServer-BinFolder.png" alt=""></p><p>As you can see not much in the way of hard dependencies. Basically the only hard dependencies are the my own LiveReload dll from a package and its own WebSocket dependency. This is not bad, but let's deploy this a little bit cleaner by re-publishing as a Dotnet Tool that can be easily shared and updated.</p><p>A dotnet tool is a special NuGet package that can be installed locally and run as a tool. Some dotnet tools you may be familiar with is <code>dotnet watch</code>, the User Secrets manager, the EF Core Migrations manager. Each of these is installed as a Dotnet Tool that happens to be preinstalled, but you can also install your own tools.</p><p>The process is simple:</p><ul><li>Create a Console App</li><li>Add special Packaging Tags to the Project that identifies as tool</li><li>Recompile your project</li><li>Publish (or share) the NuGet Package</li></ul><p>We already have a Console app, so the next step is to add some additional tags into the project file to identify this project as a Dotnet Tool:</p><pre><code class="language-xml">&lt;PropertyGroup&gt;
+    ...
+    
+    &lt;PackAsTool&gt;true&lt;/PackAsTool&gt;
+    &lt;ToolCommandName&gt;LiveReloadServer&lt;/ToolCommandName&gt;
+    &lt;PackageOutputPath&gt;./nupkg&lt;/PackageOutputPath&gt;
+    &lt;GeneratePackageOnBuild&gt;true&lt;/GeneratePackageOnBuild&gt;
+    &lt;PackageRequireLicenseAcceptance&gt;false&lt;/PackageRequireLicenseAcceptance&gt;
+&lt;/PropertyGroup&gt;    
+</code></pre><p>This creates the package locally in the ./nupkg folder. Build the project…</p><p>Now you can test the tool locally by installing it from the output folder:</p><pre><code class="language-ps">dotnet tool install -g LiveReloadServer --add-source ./nupkg
+</code></pre><p>If all goes well you should then be able to run the tool:</p><pre><code class="language-ps">LiveReloadServer --WebRoot c:\temp\MySite\web
+</code></pre><p>If that all works, the next step is to publish the package to NuGet. I like to use the <a href="https://github.com/NuGetPackageExplorer/NuGetPackageExplorer">NuGet Package Explorer</a> for this (but you can also use command line tools to do it if you choose):</p><p><img src="https://weblog.west-wind.com/images/2019/Serving-ASP.NET-Core-Web-Content-from-External-Folders/NuGetPackageExplorer.png" alt=""></p><p>From here I typically use <strong>File-&gt;Sign</strong>, to first sign the package, and then using <strong>File-&gt;Publish</strong> using my NuGet publish key to publish the package.</p><p>Once pushed to NuGet you can now install the global tool on any machine that has the Dotnet Core SDK installed:</p><pre><code class="language-ps">dotnet tool install LiveReloadServer -g
+</code></pre><p>and then run it:</p><pre><code class="language-ps"># run in current folder
+LiveReloadServer
+
+#specify a WebRoot
+LiveReloadServer --WebRoot c:/temp/mysite/web
+</code></pre><p>Using a global tool for this Live Reload Server is useful as it makes it extremely easy to install the tool on any machine that has the SDK installed. This includes machines on other platforms. I built this on Windows, but it'll work just the same on a Mac or Linux assuming the .NET SDK 3.0 is installed on those platforms.</p><h2 id="single-exe">Single EXE</h2><p>Another option is publishing to a self-contained EXE. A self-contained EXE can contain everything it needs to run - including the .NET Core Runtime -  in a single self-contained EXE.</p><p>To do this again you need to add some settings to your project file.</p><blockquote><p>Note that EXE Single File publishing and NuGet Tool Packaging are mutually exclusive. So you can only use one or the other. I comment out the appropriate sections depending on how I want to build the application.</p></blockquote><p>The configuration settings required look like this:</p><pre><code class="language-xml">&lt;PropertyGroup&gt;  
+    &lt;PublishSingleFile&gt;true&lt;/PublishSingleFile&gt;
+    &lt;PublishTrimmed&gt;true&lt;/PublishTrimmed&gt;
+    &lt;RuntimeIdentifier&gt;win-x64&lt;/RuntimeIdentifier&gt;
+
+    &lt;!--
+    &lt;PackAsTool&gt;true&lt;/PackAsTool&gt;
+    &lt;ToolCommandName&gt;LiveReloadServer&lt;/ToolCommandName&gt;
+    &lt;PackageOutputPath&gt;./nupkg&lt;/PackageOutputPath&gt;
+    &lt;GeneratePackageOnBuild&gt;true&lt;/GeneratePackageOnBuild&gt;
+    &lt;PackageRequireLicenseAcceptance&gt;false&lt;/PackageRequireLicenseAcceptance&gt;
+    --&gt;
+&lt;/PropertyGroup&gt;      
+</code></pre><p>Note that you have to specify a specific platform  to compile to - in this case <code>win-x64</code>. In order to publish this file go to the command line and run this command to build:</p><pre><code class="language-ps">dotnet publish -c Release /p:PublishSingleFile=true /p:PublishTrimmed=true -r win-x64
+</code></pre><p>Here's what that looks like as is churns for a minute or so:</p><p><img src="https://weblog.west-wind.com/images/2019/Serving-ASP.NET-Core-Web-Content-from-External-Folders/PublishSingleExe.png" alt=""></p><p>This produced a 46mb Exe that is 100% self contained and has no external dependencies. Not exactly small, but still not too bad given that it includes all the dependencies - .NET Core and ASP.NET - to run the application. I can take that file and drop onto any 64 bit Windows box and <strong>it'll just work</strong> without installing anything else. If I want this to work on other platforms I have to explicitly build and compile for those platforms by changing the <code>RuntimeIdentifier</code> shown above.</p><p>This addresses a nice use case where you might want to provide a fully self contained tool without telling users to install an SDK or runtime first.</p><h2 id="which-distribution-model">Which Distribution Model?</h2><p>Which publish path you choose is up to you obviously - you've got choices and it depends on your target audience.</p><p>Here are some of the trade offs:</p><p><strong>Dotnet Tool Pros</strong></p><ul><li>Easy to install with <code>dotnet tool install</code></li><li>Easy to update with <code>dotnet tool update</code></li><li>Works cross platform</li></ul><p><strong>Dotnet Tool Cons</strong></p><ul><li>Requires Dotnet SDK is installed</li></ul><p><strong>Self Contained Exe Pros</strong></p><ul><li>Single File you can place somewhere and run</li><li>No pre-requisites at all</li></ul><p><strong>Self Contained Exe Cons</strong></p><ul><li>Large file size (zip cuts 60-70%)</li><li>Separate Files for each Platform</li></ul><p>At the end of the day it's a matter of preference. I have a few different use cases for this. As a simple HTTP server, the dotnet tooling is perfect because it's easy to grab the tool from any machine as long as the .NET SDK is installed.</p><p>But I also have some legacy applications with which I would like to ship a local Web Server. For that scenario a self-contained EXE is a much better choice, although the large size is not so cool.</p><h2 id="summary">Summary</h2><p>This is a long winded post that talks about some of the cool things you can do fairly easily with .NET Core. It's literally just a handful of lines of code to spin up a generic local Web server you can use to serve local file resources, plus provide Live Reload services. The server spins up super fast and the integrated Live Reload functionality using WebSockets is also very responsive and quick.</p><p>The fact that you can build self contained server applications so easily and launch them from the command line is incredibly liberating. Even cooler is that this even works on multiple platforms. The tool I showed here works both on Windows, Linux and Mac.</p><p>Although the code in this tool is ridiculously simple as it defers all the heavy lifting to other middleware components, it provides a lot of value to me and fits in right with the idea of being able to repackage functionality into something new and useful.</p><p>Having a very simple Live Reload server locally that I can fire with a single simple command is a big improvement over the mish-mash of tools I was using before. The fact that I can easily customize this code to add on additional features with a few lines of code that I easily understand is even more of a bonus.</p><p>It's great to see the scenarios like this that .NET Core enables with minimal effort. There's a lot of interesting stuff that the hosting runtime provides that was very difficult to do in older versions of .NET - HTTP hosting, hosting HTTPS requests, Web Sockets etc. All of that is so much easier it opens up many opportunities… take advantage of it!</p><h2 id="resources">Resources</h2><div><h3>Other Posts you might also like
+            </h3></div></div></div></div></div>
 </div>
     </div>
     <footer>
-        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
         <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
     </footer>
     
     <script>
-        (function() {
+        (function () {
             var COLLECT_URL = "https://dna.buildstarted.com/t";
             var SITE_ID = "linksfor.devs";
             var GLOBAL_VAR_NAME = "__DNA__";
 
             window[GLOBAL_VAR_NAME] = {};
 
-            window[GLOBAL_VAR_NAME].sendPageView = function() {
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
                 var path = location.pathname;
                 var referrer = document.referrer;
 
                 var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
 
-                try { fetch(url, { method: "GET" }); } catch (e) {}
+                try { fetch(url, { method: "GET" }); } catch (e) { }
             };
 
             window[GLOBAL_VAR_NAME].sendPageView();

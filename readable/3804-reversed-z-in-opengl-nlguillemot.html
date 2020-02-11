@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Reversed-Z in OpenGL | nlguillemot -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Reversed-Z in OpenGL | nlguillemot</h1><div><div class="content"><p>Maybe you’ve heard of Reversed-Z:</p><p>It’s a pretty good way to get more precision out of your depth buffer. Very useful for games with long view distances, like for example Just Cause 2 (as shown in a link above).</p><div data-shortcode="caption" id="attachment_3031" class="wp-caption alignnone"><img aria-describedby="caption-attachment-3031" data-attachment-id="3031" data-permalink="https://nlguillemot.wordpress.com/2016/12/07/reversed-z-in-opengl/revdepth/" data-orig-file="https://nlguillemot.files.wordpress.com/2016/12/revdepth.png" data-orig-size="1282,759" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="revdepth" data-image-description="" data-medium-file="https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=300" data-large-file="https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=830" class="alignleft  wp-image-3031" src="https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=528&amp;h=312" alt="revdepth" width="528" height="312" srcset="https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=528&amp;h=312 528w, https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=1054&amp;h=624 1054w, https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=150&amp;h=89 150w, https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=300&amp;h=178 300w, https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=768&amp;h=455 768w, https://nlguillemot.files.wordpress.com/2016/12/revdepth.png?w=1024&amp;h=606 1024w" sizes="(max-width: 528px) 100vw, 528px"><p id="caption-attachment-3031" class="wp-caption-text">Reversed-Z visualized: Near objects have a higher Z value than far objects.</p></div><p>So, how to use it in OpenGL? Here’s a no-nonsense step-by-step guide.</p><h2>Step One: Set Clip Space Conventions</h2><p>Reversed-Z is designed for clip-space Z values in the range [0,1], not [-1,+1]. OpenGL’s default convention is [-1,+1], but you can override that using <a href="https://www.opengl.org/sdk/docs/man/html/glClipControl.xhtml" target="_blank">glClipControl</a>:</p><pre class="brush: cpp; title: ; notranslate" title="">glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+</pre><p>I recommend sticking this line of code at the start of your program, and never changing the clip conventions after that. <strong>Give up entirely on the [-1,+1] convention</strong>, it’s hands-down objectively worse than the [0,1] convention when it comes to precision. It’s a good decision even if you’re not using Reversed-Z. Anyways, when you sample from a depth texture in OpenGL, you already get a value between 0 and 1… so switching to the [0,1] convention for clip coordinates will make everything more consistent.</p><p>glClipControl is an OpenGL 4.5 feature. If you don’t have OpenGL 4.5, it might still be available as an extension (see: <a href="http://opengl.gpuinfo.org/gl_listreports.php?listreportsbyextension=GL_ARB_clip_control" target="_blank">hardware supporting GL_ARB_clip_control</a>). Therefore, you could use something like the following code snippet:</p><pre class="brush: cpp; title: ; notranslate" title="">GLint major, minor;
+glGetIntegerv(GL_MAJOR_VERSION, &amp;major);
+glGetIntegerv(GL_MINOR_VERSION, &amp;minor);
+if ((major &gt; 4 || (major == 4 &amp;&amp; minor &gt;= 5)) ||
+    SDL_GL_ExtensionSupported("GL_ARB_clip_control"))
+{
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+}
+else
+{
+    fprintf(stderr, "glClipControl required, sorry.\n");
+    exit(1);
+}
+</pre><h2>Step Two: Create a Floating Point Depth Buffer</h2><p>The whole Reversed-Z thing is designed for floating point depth, not fixed point. That means you should be using a floating point depth buffer.</p><p>You can follow the FBO setup code below as an example:</p><pre class="brush: cpp; title: ; notranslate" title="">int width = 640, height = 480;
+GLuint color, depth, fbo;
+
+glGenTextures(1, &amp;color);
+glBindTexture(GL_TEXTURE_2D, color);
+glTexStorage2D(GL_TEXTURE_2D, 1, GL_SRGB8_ALPHA8, width, height);
+glBindTexture(GL_TEXTURE_2D, 0);
+
+glGenTextures(1, &amp;depth);
+glBindTexture(GL_TEXTURE_2D, depth);
+glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH_COMPONENT32F, width, height);
+glBindTexture(GL_TEXTURE_2D, 0);
+
+glGenFramebuffers(1, &amp;fbo);
+glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth, 0);
+GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+if (status != GL_FRAMEBUFFER_COMPLETE) {
+    fprintf(stderr, "glCheckFramebufferStatus: %x\n", status);
+}
+glBindFramebuffer(GL_FRAMEBUFFER, 0);
+</pre><h3>Side tip: Copying a Framebuffer to a Window</h3><p>If you didn’t know, you don’t need to create a depth buffer when you create your window. You can render your scene (and depth buffer) into an offscreen FBO, then copy to your window only at the end. For example:</p><pre class="brush: cpp; title: ; notranslate" title="">glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+// TODO: Render scene
+glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // default FBO
+glBlitFramebuffer(
+    0, 0, fboWidth, fboHeight,
+    0, 0, windowWidth, windowHeight,
+    GL_COLOR_BUFFER_BIT, GL_LINEAR);
+glBindFramebuffer(GL_FRAMEBUFFER, 0);
+</pre><p>With this approach, you can also be rendering your scene at a lower resolution than your window, since the call to glBlitFramebuffer will scale up your rendering. You might find this useful if you’re on a 4K display, but still want to render at a lower resolution for improved frame rate or battery power savings. This also saves you the trouble of creating a window in SRGB mode, which takes away further complexity from your window management code.</p><p>You can also use glBlitFramebuffer to convert a multi-sampled framebuffer into a single-sampled framebuffer, but you’re not allowed to do scaling simultaneously with resolving multi-samples in a call to glBlitFramebuffer, so you might have to call glBlitFramebuffer twice: Once to resolve multisamples, and once again to copy and scale up to your window. At this point, it might become interesting to do all this through a single fragment shader instead. You <em>can</em> simultaneously resolve and scale if you use the <a href="https://www.opengl.org/registry/specs/EXT/framebuffer_multisample_blit_scaled.txt" target="_blank">GL_EXT_framebuffer_multisample_blit_scaled</a> extension (see: <a href="http://opengl.gpuinfo.org/gl_listreports.php?listreportsbyextension=GL_EXT_framebuffer_multisample_blit_scaled" target="_blank">hardware supporting GL_EXT_framebuffer_multisample_blit_scaled</a>).</p><p>Anyways, back to the whole Reversed-Z thing…</p><h2>Step Three: Clear your Depth Buffer to Zero</h2><p>With a normal depth test, you might have been clearing the depth buffer to 1, since that was the “far” value. When you call glClear(GL_DEPTH_BUFFER_BIT), it clears the depth buffer using the last set value of glClearDepth, which is 1 by default. On the other hand, with Reversed-Z, the “far” value is now 0, so you have to use the proper clear depth value:</p><pre class="brush: cpp; title: ; notranslate" title="">glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+glClearDepth(0.0f);
+glClear(GL_DEPTH_BUFFER_BIT);
+</pre><h2>Step Four: Flip your Depth Comparison to GREATER</h2><p>As implied by its name, using Reversed-Z means that far depth values are represented by smaller numbers. That means you need to switch your glDepthFunc from GL_LESS to GL_GREATER, as shown in the code below. In this example code, I also reset the comparison and depth state back to OpenGL defaults, so the state doesn’t leak into other code that might not be doing Reversed-Z, or that might not be using depth testing.</p><pre class="brush: cpp; title: ; notranslate" title="">glEnable(GL_DEPTH_TEST);
+glDepthFunc(GL_GREATER);
+// TODO: Draw your scene
+glDepthFunc(GL_LESS);
+glDisable(GL_DEPTH_TEST);
+</pre><h2>Step Five: Update your Projection Matrix</h2><p>Reversed-Z requires a slightly different projection matrix than what (for example) gluPerspective creates. What follows is some code you can use to create this new projection matrix. It uses the “right-handed” coordinate system convention, meaning that the Z axis points out of your computer screen. Alternatively, that means the objects in front of your camera have a negative Z value in view space. This is the OpenGL convention.</p><p>Note that this matrix doesn’t only reverse the Z, it also sets the far plane to infinity, which works well for extremely large view distances. You can find the derivation of this matrix in the following article: <a href="http://dev.theomader.com/depth-precision/" target="_blank">http://dev.theomader.com/depth-precision/</a></p><pre class="brush: cpp; title: ; notranslate" title="">glm::mat4 MakeInfReversedZProjRH(float fovY_radians, float aspectWbyH, float zNear)
+{
+    float f = 1.0f / tan(fovY_radians / 2.0f);
+    return glm::mat4(
+        f / aspectWbyH, 0.0f,  0.0f,  0.0f,
+                  0.0f,    f,  0.0f,  0.0f,
+                  0.0f, 0.0f,  0.0f, -1.0f,
+                  0.0f, 0.0f, zNear,  0.0f);
+}
+</pre><p>You can call this code as follows:</p><pre class="brush: cpp; title: ; notranslate" title="">glm::mat4 proj = MakeInfReversedZProjRH(glm::radians(70.0f), (float)width/height, 0.01f);
+
+glUniformMatrix4fv(PROJECTION_MATRIX_LOCATION, 1, GL_FALSE, value_ptr(proj));
+// TODO: glDraw*()
+</pre><p>Note that I’m referring to the <a href="http://glm.g-truc.net/" target="_blank">OpenGL Mathematics library “glm”</a>, which by OpenGL convention uses column-major order for the arguments of its constructor. That means the first 4 inputs to the constructor are actually the first column of the matrix. Might be important if you’re translating to a different matrix library.</p><h2>That’s it?</h2><p><em>That’s it!</em></p><h2>In Summary</h2><ol><li>Set your depth clip conventions to [0,1] using glClipControl.</li><li>Create and use a floating point depth buffer.</li><li>Clear your depth buffer to 0 instead of the default of 1.</li><li>Use GL_GREATER instead of GL_LESS for your depth test.</li><li>Use a projection matrix that flips the depth.</li></ol><h2>What about DirectX?</h2><p>There’s almost no difference in implementing this in DirectX. First, you don’t need glClipControl because the [0,1] convention is already the default in DirectX. Second, if you’re following DirectX conventions and using a “left-handed” convention for the view, then just turn the “-1” into “+1” in the projection matrix. You also need to do this in OpenGL if you’re using left-handed conventions, meaning that the camera’s Z axis goes into your screen, or equivalently that you consider objects to be in front of the camera if their Z value in view space is positive.</p><div id="jp-post-flair" class="sharedaddy sd-like-enabled sd-sharing-enabled"></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

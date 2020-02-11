@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+[RyuJIT] Recognize and optimize constant set membership tests &#xB7; Issue #8418 &#xB7; dotnet/runtime &#xB7; GitHub -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>[RyuJIT] Recognize and optimize constant set membership tests · Issue #8418 · dotnet/runtime · GitHub</h1><div><div id="" class="d-block comment-body markdown-body  js-comment-body"><p>I went a bit crazy after reading through <a class="user-mention" data-hovercard-type="user" data-hovercard-url="/users/EgorBo/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/EgorBo">@EgorBo</a>'s <a href="https://egorbo.com/llvm-range-checks.html" rel="nofollow">blog post</a> and wrote an <a href="https://github.com/MihaZupan/PreJitOptimizer/tree/master/src/PreJitOptimizer/PreJitOptimizer/CharacterRangeCheck">analyzer-codefix</a> for many common character check patterns. Do you think something like this would be a candidate for a Roslyn/JIT codegen optimization?</p><p>I went a bit crazy and did it for ranges up to 128 wide.</p><p>It recognizes all <code>Func&lt;char, bool&gt;</code> that match the following patterns:</p><ul><li><code>return c == 'a' || c == 'b' ...</code></li><li><code>return (c &gt;= 'A' &amp;&amp; c &lt;= Z') || (c &gt;= 'a' &amp;&amp; c &lt;= 122) ...</code>, also &lt; and &gt; and rotated</li></ul><p>(Or any mix of the above)</p><ul><li><code>"abcdef".IndexOf(c) &gt;= 0</code> or <code>&gt; -1</code> or rotated ...</li></ul><div class="highlight highlight-source-cs"><pre><span class="pl-k">public</span><span class="pl-k">static</span><span class="pl-k">bool</span><span class="pl-en">IsEmailUsernameSpecialChar</span>(<span class="pl-k">char</span><span class="pl-smi">c</span>)
+{
+    <span class="pl-k">return</span><span class="pl-s"><span class="pl-pds">"</span>.!#$%&amp;'*+/=?^_`{|}~-+.~<span class="pl-pds">"</span></span>.<span class="pl-en">IndexOf</span>(<span class="pl-smi">c</span>) <span class="pl-k">&gt;=</span><span class="pl-c1">0</span>;
+}</pre></div><p>And switch statements with the following patterns:</p><div class="highlight highlight-source-cs"><pre><span class="pl-k">public</span><span class="pl-k">static</span><span class="pl-k">bool</span><span class="pl-en">IsAsciiPunctuation</span>(<span class="pl-k">this</span><span class="pl-k">char</span><span class="pl-smi">c</span>)
+{
+    <span class="pl-k">switch</span> (<span class="pl-smi">c</span>)
+    {
+        <span class="pl-k">case</span><span class="pl-s">'!'</span>:
+        <span class="pl-c"><span class="pl-c">//</span> ...</span><span class="pl-k">case</span><span class="pl-s">'~'</span>:
+            <span class="pl-k">return</span><span class="pl-c1">true</span>;
+    }
+    <span class="pl-k">return</span><span class="pl-c1">false</span>;
+}
+<span class="pl-k">public</span><span class="pl-k">static</span><span class="pl-k">bool</span><span class="pl-en">IsAsciiPunctuation</span>(<span class="pl-k">this</span><span class="pl-k">char</span><span class="pl-smi">c</span>)
+{
+    <span class="pl-k">switch</span> (<span class="pl-smi">c</span>)
+    {
+        <span class="pl-k">case</span><span class="pl-s">'!'</span>:
+        <span class="pl-c"><span class="pl-c">//</span> ...</span><span class="pl-k">case</span><span class="pl-s">'~'</span>:
+            <span class="pl-k">return</span><span class="pl-c1">true</span>;
+
+        <span class="pl-k">default</span>:
+            <span class="pl-k">return</span><span class="pl-c1">false</span>;
+    }
+}</pre></div><p>128 bit wide checks end up looking like this</p><div class="highlight highlight-source-cs"><pre><span class="pl-k">public</span><span class="pl-k">static</span><span class="pl-k">bool</span><span class="pl-en">IsEmailUsernameSpecialChar</span>(<span class="pl-k">char</span><span class="pl-smi">c</span>)
+{
+    <span class="pl-c"><span class="pl-c">/*</span> return ".!#$%&amp;'*+/=?^_`{|}~-+.~".IndexOf(c) &gt;= 0; <span class="pl-c">*/</span></span><span class="pl-k">int</span><span class="pl-smi">testValue</span><span class="pl-k">=</span><span class="pl-smi">c</span>;
+    <span class="pl-k">if</span> (<span class="pl-smi">testValue</span><span class="pl-k">&gt;</span><span class="pl-c1">126</span>)
+        <span class="pl-k">return</span><span class="pl-c1">false</span>;
+    <span class="pl-k">return</span><span class="pl-smi">testValue</span><span class="pl-k">&lt;</span><span class="pl-c1">64</span><span class="pl-k">?</span> ((<span class="pl-k">-</span><span class="pl-c1">6917268469155102720L</span><span class="pl-k">&gt;&gt;</span><span class="pl-smi">testValue</span>) <span class="pl-k">&amp;</span><span class="pl-c1">1</span>) <span class="pl-k">!=</span><span class="pl-c1">0</span><span class="pl-k">:</span> ((<span class="pl-c1">8646911292067545088L</span><span class="pl-k">&gt;&gt;</span> (<span class="pl-smi">testValue</span><span class="pl-k">-</span><span class="pl-c1">64</span>)) <span class="pl-k">&amp;</span><span class="pl-c1">1</span>) <span class="pl-k">!=</span><span class="pl-c1">0</span>;
+}</pre></div><p>More examples from <a href="https://github.com/lunet-io/markdig">Markdig</a>'s character helper class: <a href="https://gist.github.com/MihaZupan/2240e24ff571ec7bdbed1cd9e9ab2bcc">gist</a></p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

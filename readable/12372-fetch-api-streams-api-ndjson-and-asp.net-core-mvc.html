@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Fetch API, Streams API, NDJSON, and ASP.NET Core MVC -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook" xmlns=""><div id="readInner" class="margin-medium size-medium"><h1>Fetch API, Streams API, NDJSON, and ASP.NET Core MVC</h1><div><div class="post-body" itemprop="articleBody" xmlns="http://www.w3.org/1999/xhtml"><p>Recently I've stumbled upon a <a href="http://deanhume.com/experimenting-with-the-streams-api/">blog post</a> describing how to use <a href="https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API">Fetch API</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">Streams API</a>, and <a href="http://ndjson.org/">NDJSON</a> to improve user experience by streaming JSON objects from server to client. I immediately thought about a couple of places in projects I'm working on, which could benefit from that. In result, I've decided to create a POC with ASP.NET Core as a backend.</p><p>The mentioned blog post describes the client side pretty well, so I won't be focusing on it too much. If you want to get familiar with it before reading about the server side, go ahead, I'll wait.</p><h2 id="initial-scenario">Initial Scenario</h2><p>The thing I usually find to be hard when starting work on a POC is a scenario which doesn't obfuscate the actual task. In this case I've decided to use weather forecasts idea from "ASP.NET Core application with Angular" template. Imagine a controller which returns the weather forecast for the next couple of days.</p><pre><code class="lang-cs">[Route("api/[controller]")]
+[ApiController]
+public class WeatherForecastsController : Controller
+{
+    public class WeatherForecast
+    {
+        ...
+    }
+
+    [HttpGet]
+    public async Task&lt;IEnumerable&lt;WeatherForecast&gt;&gt; Get()
+    {
+        List&lt;WeatherForecast&gt; weatherForecasts = new List&lt;WeatherForecast&gt;();
+
+        Random rng = new Random();
+
+        for (int index = 1; index &lt;= 10; index++)
+        {
+            await Task.Delay(100);
+
+            weatherForecasts.Add(CreateWeatherForecast(index, rng));
+        };
+
+        return weatherForecasts;
+    }
+
+    private static WeatherForecast CreateWeatherForecast(int index, Random rng)
+    {
+        return new WeatherForecast
+        {
+            ...
+        };
+    }
+}
+</code></pre><p>I've omitted some details, which are not so important (don't worry, I will provide a link to complete demo at the end). The <code>Task.Delay</code> call simulates expensive server-side processing needed to generate every forecast.</p><p>On the client-side, there is a function which fetches the data from the above action and renders a table based on them.</p><pre><code class="lang-js">function fetchWeatherForecasts() {
+    clearWeatherForecasts();
+
+    fetch('api/WeatherForecasts')
+        .then(function (response) {
+            return response.json();
+        })
+        .then(function (weatherForecasts) {
+            weatherForecasts.forEach(appendWeatherForecast);
+        });
+}
+</code></pre><p>This function is being called on a click of a button. The result is easy to guess. First, the current content of the table is cleared, and then the new content takes about a second to appear. Improving the user experience regarding that one-second delay is the goal of this POC.</p><h2 id="streaming-ndjson">Streaming NDJSON</h2><p>How should an API for streaming objects from controller action look like? There is one similar scenario in ASP.NET Core - <a href="https://docs.microsoft.com/en-us/aspnet/core/signalr/streaming?wt.mc_id=MVP">streaming from SignalR hub</a>. Attempting to provide similar API in a controller could look like this.</p><pre><code class="lang-cs">...
+public class WeatherForecastsController : Controller
+{
+    ...
+
+    [HttpGet("stream")]
+    public NdjsonStreamResult GetStream()
+    {
+        NdjsonStreamResult result = new NdjsonStreamResult();
+
+        _ = StreamAsync(result);
+
+        return result;
+    }
+
+    private async Task StreamAsync(NdjsonStreamResult result)
+    {
+        Random rng = new Random();
+
+        for (int index = 1; index &lt;= 10; index++)
+        {
+            await Task.Delay(100);
+
+            await result.WriteAsync(CreateWeatherForecast(index, rng));
+        };
+
+        result.Complete();
+    }
+
+    ...
+}
+</code></pre><p>In this approach, writing an object to the <code>NdjsonStreamResult</code> should result in that object being immediately serialized and sent to the client. Once all objects are written, the result needs to be notified that it should complete. Pretty simple, the only challenge is <code>NdjsonStreamResult</code> implementation.</p><p>Typically, in ASP.NET Core, <code>ActionResult</code> implementations are offloading the actual processing to executors, which are usually singleton services. This case is different. There is a response specific state and constant interaction. It seems better to make the result an orchestrator. The thing that result will be orchestrating should be a writer capable of serializing the objects to the response. Instantiation of that writer is not a trivial task, so it would be nice to separate it as well, for example by introduction of a factory. Let's take a look at those three objects, starting from the bottom.</p><p>The writer should be a wrapper around response stream writer with NDJSON serialization capabilities. NDJSON is still JSON, it just serializes every object separately, puts a new line between them, and flushes after every object.</p><pre><code class="lang-cs">public class NdjsonTextWriter : INdjsonTextWriter
+{
+    private readonly TextWriter _textResponseStreamWriter;
+    private readonly JsonTextWriter _jsonResponseStreamWriter;
+    private readonly JsonSerializer _jsonSerializer;
+
+    public NdjsonTextWriter(TextWriter textResponseStreamWriter, JsonSerializerSettings jsonSerializerSettings,
+        JsonArrayPool&lt;char&gt; jsonArrayPool)
+    {
+        _textResponseStreamWriter = textResponseStreamWriter;
+
+        _jsonResponseStreamWriter = new JsonTextWriter(textResponseStreamWriter)
+        {
+            ArrayPool = jsonArrayPool,
+            CloseOutput = false,
+            AutoCompleteOnClose = false
+        };
+
+        _jsonSerializer = JsonSerializer.Create(jsonSerializerSettings);
+    }
+
+    public async Task WriteAsync(object value)
+    {
+        _jsonSerializer.Serialize(_jsonResponseStreamWriter, value);
+        await _textResponseStreamWriter.WriteAsync("\n");
+        await _textResponseStreamWriter.FlushAsync();
+    }
+
+    public void Dispose()
+    {
+        _textResponseStreamWriter?.Dispose();
+        ((IDisposable)_jsonResponseStreamWriter)?.Dispose();
+    }
+}
+</code></pre><p>You might be wondering what <code>JsonArrayPool</code> is. It's an ASP.NET Core implementation of JSON.NET <code>IArrayPool</code>. After all, this is still JSON serialization and ASP.NET Core has a lot of infrastructure for it. It would be a waste not to use it. This also means that the factory should make use of <code>MvcJsonOptions</code> so serialization configuration is shared.</p><pre><code class="lang-cs">internal class NdjsonTextWriterFactory : INdjsonTextWriterFactory
+{
+    private static readonly string DEFAULT_CONTENT_TYPE = new MediaTypeHeaderValue("application/x-ndjson")
+    {
+        Encoding = Encoding.UTF8
+    }.ToString();
+
+    private readonly IHttpResponseStreamWriterFactory _httpResponseStreamWriterFactory;
+    private readonly MvcJsonOptions _options;
+    private readonly JsonArrayPool&lt;char&gt; _jsonArrayPool;
+
+    public NdjsonTextWriterFactory(IHttpResponseStreamWriterFactory httpResponseStreamWriterFactory, IOptions&lt;MvcJsonOptions&gt; options,
+        ArrayPool&lt;char&gt; innerJsonArrayPool)
+    {
+        // Null checks removed for brevity
+        ...
+
+        _jsonArrayPool = new JsonArrayPool&lt;char&gt;(innerJsonArrayPool);
+    }
+
+    public INdjsonTextWriter CreateWriter(ActionContext context, NdjsonStreamResult result)
+    {
+        // Null checks removed for brevity
+        ...
+
+        HttpResponse response = context.HttpContext.Response;
+
+        ResponseContentTypeHelper.ResolveContentTypeAndEncoding(result.ContentType, response.ContentType, DEFAULT_CONTENT_TYPE,
+            out var resolvedContentType, out var resolvedContentTypeEncoding);
+        response.ContentType = resolvedContentType;
+
+        if (result.StatusCode != null)
+        {
+            response.StatusCode = result.StatusCode.Value;
+        }
+
+        DisableResponseBuffering(context.HttpContext);
+
+        return new IHttpResponseStreamWriterFactory(_httpResponseStreamWriterFactory.CreateWriter(response.Body, resolvedContentTypeEncoding),
+            _options.SerializerSettings, _jsonArrayPool);
+    }
+
+    private static void DisableResponseBuffering(HttpContext context)
+    {
+        IHttpBufferingFeature bufferingFeature = context.Features.Get&lt;IHttpBufferingFeature&gt;();
+        if (bufferingFeature != null)
+        {
+            bufferingFeature.DisableResponseBuffering();
+        }
+    }
+}
+</code></pre><p>The <code>CreateWriter</code> method does what you've probably already expected. It grabs the response, resolves the value of <code>Content-Type</code> header, sets a status code, with help of <code>IHttpResponseStreamWriterFactory</code> creates an instance of response stream writer, and instantiates <code>NdjsonTextWriter</code>. There is one extra thing - disabling response buffering. This is important, we don't want objects to stuck in response buffer instead of being sent to the client immediately.</p><p>With writer and factory in place, it's time to put everything together by implementing the <code>NdjsonStreamResult</code>. There are some traps here. First is waiting for information about completion. The <code>ExecuteResultAsync</code> method cannot finish before it's certain that all objects have been sent. The second trap is synchronization. It is possible that first call to <code>WriteAsync</code> will happen before the <code>ExecuteResultAsync</code> has been called or that it didn't finish preparing the writer. In such a case, <code>WriteAsync</code> should wait. So there are two places where we need to wait for something. As we want to make the whole implementation thread pool friendly, it might be a good idea to use <code>TaskCompletionSource</code> for both.</p><pre><code class="lang-cs">public class NdjsonStreamResult : ActionResult, IStatusCodeActionResult
+{
+    private INdjsonTextWriter _ndjsonTextWriter;
+    private readonly TaskCompletionSource&lt;bool&gt; _readyTaskCompletionSource = new TaskCompletionSource&lt;bool&gt;();
+    private readonly TaskCompletionSource&lt;bool&gt; _completeTaskCompletionSource = new TaskCompletionSource&lt;bool&gt;();
+
+    public string ContentType { get; set; }
+
+    public int? StatusCode { get; set; }
+
+    public override async Task ExecuteResultAsync(ActionContext context)
+    {
+        // Null checks removed for brevity
+        ...
+
+        INdjsonTextWriterFactory ndjsonTextWriterFactory = context.HttpContext.RequestServices.GetRequiredService&lt;INdjsonTextWriterFactory&gt;();
+        using (_ndjsonTextWriter = ndjsonTextWriterFactory.CreateWriter(context, this))
+        {
+            _readyTaskCompletionSource.SetResult(true);
+
+            await _completeTaskCompletionSource.Task;
+        }
+    }
+
+    public async Task WriteAsync(object value)
+    {
+        if (!_readyTaskCompletionSource.Task.IsCompletedSuccessfully)
+        {
+            await _readyTaskCompletionSource.Task;
+        }
+
+        await _ndjsonTextWriter.WriteAsync(value);
+    }
+
+    public void Complete()
+    {
+        _completeTaskCompletionSource.SetResult(true);
+    }
+}
+</code></pre><p>This should do the trick. The last thing left is modifying the client side code.</p><pre><code class="lang-js">function fetchWeatherForecastsStream() {
+    clearWeatherForecasts();
+
+    fetch('api/WeatherForecasts/stream')
+        .then(function (response) {
+            const weatherForecasts = response.body
+                .pipeThrough(new TextDecoderStream())
+                .pipeThrough(parseNDJSON());
+
+            readWeatherForecastsStream(weatherForecasts.getReader());
+        });
+}
+
+function parseNDJSON() {
+    let ndjsonBuffer = '';
+
+    return new TransformStream({
+        transform: function(ndjsonChunk, controller) {
+            ndjsonBuffer += ndjsonChunk;
+
+            const jsonValues = ndjsonBuffer.split('\n');
+            jsonValues.slice(0, -1).forEach(function (jsonValue) { controller.enqueue(JSON.parse(jsonValue)); });
+
+            ndjsonBuffer = jsonValues[jsonValues.length - 1];
+        },
+        flush: function(controller) {
+            if (ndjsonBuffer) {
+                controller.enqueue(JSON.parse(ndjsonBuffer));
+            }
+        }
+    });
+}
+
+function readWeatherForecastsStream(weatherForecastsStreamReader) {
+    weatherForecastsStreamReader.read()
+        .then(function (result) {
+            if (!result.done) {
+                appendWeatherForecast(result.value);
+
+                readWeatherForecastsStream(weatherForecastsStreamReader);
+            }
+        });
+}
+</code></pre><p>The code above is entirely based on the blog post I've mentioned in the beginning.</p><p>So what happens when the <code>fetchWeatherForecastsStream</code> function is called on a click of a button? It still takes about a second for the entire table to appear, but it starts appearing almost immediately. The user sees the data appearing row by row and is able to start reading them before the whole processing is done. This improves the user experience and perceived performance of the application.</p><h2 id="this-is-cool">This Is Cool</h2><p>Yes, this is cool. Of course, it shouldn't be blindly used everywhere. The use case must be suitable (sometimes we need to wait for all the data) and there must be a place for improvement. The streaming approach might bring some improvements if the response is simply large (by avoiding long serialization and deserialization). It will shine in scenarios with noticeable per item fetching or processing. But for small, quick to generate response it probably be an overkill.</p><p>The above implementation is a POC. There is probably a place for improvements. There also might be a bug hiding somewhere. But if you want to play with it (which I strongly encourage), the complete source code is available on <a href="https://github.com/tpeczek/Demo.AspNetCore.Mvc.FetchStreaming">GitHub</a>.</p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

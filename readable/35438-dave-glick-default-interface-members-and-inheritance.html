@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Dave Glick - Default Interface Members and Inheritance -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Dave Glick - Default Interface Members and Inheritance</h1><div><div id="content" class="col-md-12"><p>Default interface members (or "DIM" as I've seen the feature called) is a new language feature available in C# 8 that lets you define implementations directly in an interface. I started out with the intent of writing about use cases for the feature, but ended up writing so much that I decided to split the post in two. This part deals with how default interface members need to be invoked and the differences in semantics between class inheritance and default interface member implementation.</p><h1 id="must-invoke-from-the-interface">Must Invoke From The Interface</h1><p>Consider the following code:</p><pre><code class="language-csharp">interface ICar
+{
+    // Seems like a reasonable default
+    public int GetTopSpeed() =&gt; 150;
+}
+
+public class Elantra : ICar
+{
+}
+</code></pre><p>This defines an interface <code>ICar</code> with a method <code>GetTopSpeed()</code> and that method has a default implementation. You might think you could then write:</p><pre><code class="language-csharp">Elantra e = new Elantra();
+e.GetTopSpeed();
+</code></pre><p>But that won't compile. You have to invoke default interface members from an instance of the interface (unless they've been redefined, more on that in a minute):</p><pre><code class="language-csharp">Elantra e = new Elantra();
+((ICar)e).GetTopSpeed();
+</code></pre><p>At this point you might be thinking "well that seems silly," but there's a good reason why default interface members behave this way. Consider the following:</p><pre><code class="language-csharp">interface ICar
+{
+    // Seems like a reasonable default
+    public int GetTopSpeed() =&gt; 150;
+}
+
+interface IMovable
+{
+    // Nothing moves faster than the speed of light
+    public int GetTopSpeed() =&gt; 671000000;
+}
+
+public class Elantra : ICar, IMovable
+{
+}
+</code></pre><p>If you called <code>GetTopSpeed()</code> on an instance of <code>Elantra</code> what would the result be? Are you actually calling <code>ICar.GetTopSpeed()</code> or <code>IMovable.GetTopSpeed()</code>? This problem (often referred to as "diamond inheritance") is one of the reasons true multiple inheritance is so difficult to do well in a language like C++. To avoid it, the C# language team explicitly elected <em>not</em> to make default interface members a mechanism to achieve multiple inheritance. Instead you have to be explicit about which implementation you're calling to remove all ambiguity.</p><h1 id="default-implementations-vs.inheritance">Default Implementations vs. Inheritance</h1><p><a href="https://twitter.com/daveaglick/status/1169777331608707075">Something that initially confused me</a> was the relationship between default interface members and the way members are inherited in a traditional class hierarchy. Consider this code:</p><pre><code class="language-csharp">interface ICar
+{
+    public string Make { get; }
+    public int Cylinders =&gt; 4;
+}
+
+public abstract class Toyota : ICar
+{
+    public string Make =&gt; "Toyota";
+}
+
+public class Avalon : Toyota
+{
+    public int Cylinders =&gt; 6;
+}
+</code></pre><p>What would you expect this code to output:</p><pre><code class="language-csharp">ICar car = new Avalon();
+Console.WriteLine(car.Cylinders);
+</code></pre><p>My initial reaction was that this should output <code>6</code>, but it actually outputs <code>4</code>.</p><img src="https://media.giphy.com/media/g01ZnwAUvutuK8GIQn/giphy.gif" width="480" height="270"><p>The reason is because <code>Avalon.Cylinders</code> isn't actually implementing <code>ICar.Cylinders</code> given that the interface is implicit via the base <code>Toyota</code> class. They're two totally different properties.</p><p><a href="https://twitter.com/ben_a_adams/status/1169790052425240581">Ben Adams was the first</a> of many to point out that this behavior isn't actually different from the way interfaces currently work. The code above is essentially equivalent to writing the following, which will also output <code>4</code> instead of <code>6</code>:</p><pre><code class="language-csharp">interface ICar
+{
+    public string Make { get; }
+    public int Cylinders { get; }
+}
+
+public abstract class Toyota : ICar
+{
+    public string Make =&gt; "Toyota";
+    int ICar.Cylinders =&gt; 4;
+}
+
+public class Avalon : Toyota
+{
+    public int Cylinders =&gt; 6;
+}
+</code></pre><p>I envision this being something I'll have to keep reminding myself about. I think the reason is that the semantics are different from what we're used to after a decade of working with <code>virtual</code> and <code>override</code> in class hierarchies.</p><p>More specifically, up until default interface members we <em>had</em> to provide an implementation within an implementing class because the interface simply couldn't contain one. That means in the code above for the abstract <code>Toyota</code> base class I would've had to write one of these:</p><ul><li><code>public int Cylinders =&gt; 4</code> to implement the interface property and provide a default value, forcing the property into the inheritance chain of <code>Toyota</code>.</li><li><code>public abstract int Cylinders { get; }</code> to define the interface property as abstract and force derived classes to provide an implementation.</li><li><code>int ICar.Cylinders =&gt; 4</code> to implement the interface property and provide a default value, but not place the property into the inheritance chain of <code>Toyota</code>.</li></ul><p>I've come to think of that last syntax as "opting-out" of class inheritance. I have to have <em>something</em> that implements the interface property (because it's not implemented in the interface) and I have to use a special syntax that makes it very clear I'm implementing the property at the interface and not the class level if that's my intent. <strong>If you don't want the property to be a part of the class inheritance hierarchy you have to opt-out</strong>.</p><p>Contrast that with the semantics of a default interface member. The equivalent <code>int ICar.Cylinders =&gt; 4</code> definition never has to show up in the implementing <code>Toyota</code> class since the default property implementation was provided directly in the interface. In this case <code>Cylinders</code> has an implementation from the interface so you're not forced to put <em>anything</em> in the <code>Toyota</code> class about it. That property does not belong to the class in this case. <strong>If you want the property to be a part of the class inheritance hierarchy you have to opt-in</strong>:</p><pre><code class="language-csharp">interface ICar
+{
+    public string Make { get; }
+    public int Cylinders =&gt; 4;
+}
+
+public abstract class Toyota : ICar
+{
+    public string Make =&gt; "Toyota";
+    public virtual int Cylinders =&gt;
+        ((ICar)this).Cylinders;
+}
+
+public class Avalon : Toyota
+{
+    public override int Cylinders =&gt; 6;
+}
+</code></pre><p>This code will output the expected <code>6</code> because we "opted-in" to implementing the <code>Cylinders</code> property in the <code>Toyota</code> class instead of leaving the implementation in the interface. The <code>Toyota</code> class only invokes the implementation from the interface, but by doing so we've placed the property implementation into the class inheritance hierarchy and can now rely on the <code>virtual</code> and <code>override</code> behavior we know.</p><p>One final note: the <code>((ICar)this).Cylinders</code> syntax in the class implementation that calls the default interface implementation is awkward. <a href="https://github.com/dotnet/csharplang/issues/406">There's an open issue</a> to add support for <code>base(ICar).Cylinders</code> syntax, but it requires changes to the CLR so <a href="https://github.com/dotnet/csharplang/blob/master/meetings/2019/LDM-2019-04-29.md#conclusion">it got pushed to a later language version</a>.</p><p><strong>Update: don't use the code above!</strong> If you do, you're asking for trouble. It occurred to me after writing the post, and was pointed out by a few folks on Twitter, that the pattern above with a call to <code>((ICar)this).Cylinders</code> will <em>only</em> work if <code>Cylinders</code> is implemented in a derived class. In that case the call invokes the derived implementation and you're fine. If it's not implemented in a derived class though, BOOM! You'll end up with a stack overflow because the method will invoke itself recursively. I'm leaving the example here for educational purposes. This example illustrates why we really need the <code>base(ICar)</code> feature to handle bridging default interface members and class inheritance hierarchies.</p><a href="http://disqus.com" class="dsq-brlink">comments powered by </a></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

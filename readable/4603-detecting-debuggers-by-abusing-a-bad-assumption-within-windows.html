@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Detecting debuggers by abusing a bad assumption within Windows -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Detecting debuggers by abusing a bad assumption within Windows</h1><div><div><p class="readability-styled" style="display: inline;">
+The </p><span>_KTRAP_FRAME</span><p class="readability-styled" style="display: inline;"> is essentially an extension of the elements saved on the stack by the CPU. It's purpose is to provide a place to store volatile registers which can be clobbered when calling into functions that are compiled in C.</p><p>A very important thing to note is that the instruction pointer (EIP) saved by the CPU on the stack (<span>_KTRAP_FRAME.Rip</span>) will be set to the <b>instruction immediately following the one</b> that caused entry into the handler. In our scenario, this means that the&nbsp;<span>_KTRAP_FRAME.Rip</span>&nbsp;member will be the instruction following our <span>int 3</span>, which will be&nbsp;<span><span>ret</span></span> (<span>0xC3</span>) in the example code above.</p><p>After the volatile registers have been saved off, <span>nt!KiBreakpointTrap</span>&nbsp;performs a quick check to see whether the interrupt fired from usermode (ring3) or kernelmode code (ring0). If execution is coming from ring3, a&nbsp;<span>swapgs</span>&nbsp;needs to occur as well as some other bookkeeping with debug registers.</p><p>Eventually, control flow will reconvene and the <a href="https://docs.microsoft.com/en-us/cpp/build/register-usage" target="_blank">volatile floating point registers will also be stored off</a> into the <span>_KTRAP_FRAME</span>. Before entering into more exception handling logic,&nbsp;the instruction pointer will be extracted from <span>_KTRAP_FRAME.Rip</span> (saved by the CPU upon entering <span>nt!KiBreakpointTrap</span>), <b>decremented by one</b>, and passed as an argument to&nbsp;<span>nt!KiExceptionDispatch</span>. Additionally, the exception code,&nbsp;<span>EXCEPTION_BREAKPOINT&nbsp;</span>(<span>0x80000003</span>), will also be passed in. The prototype for&nbsp;<span>nt!KiExceptionDispatch</span>:</p><p>It's important to note that&nbsp;<span>nt!KiExceptionDispatch</span>&nbsp;(like <span>nt!KiBreakpointTrap</span>) is written in hand-ASM. It assumes that <span>ecx</span> contains the exception code, <span>edx</span> is the number of exception parameters (up to 3), <span>r8</span> contains the address of the exception, <span>r9</span> is the first exception parameter (if one exists), <span>r10</span> is the second exception parameter (if one exists), <span>r11</span> is the third exception parameter (if one exists), and <span>rbp</span>&nbsp;points&nbsp;to a segment in the <span>_KTRAP_FRAME </span>structure (at offset <span>+0x80</span>).</p><p>Upon entry of <span>nt!KiExceptionDispatch</span>, the first thing that occurs is the generation of a&nbsp;<span>_KEXCEPTION_FRAME</span>. Whereas the <span>_KTRAP_FRAME</span> was used to store volatile registers, the <span>_KEXCEPTION_FRAME</span> provides a place to save all nonvolatile registers:</p><p><span>nt!KiExceptionDispatch</span> also creates an <a href="https://msdn.microsoft.com/en-us/library/windows/desktop/aa363082(v=vs.85).aspx" target="_blank"><span>_EXCEPTION_RECORD</span> structure</a>&nbsp;on the stack. If you've done any error handling in Windows (in either usermode or kernelmode), you'll be familiar with this data structure as it is contained as a child within the&nbsp;<a href="https://msdn.microsoft.com/en-us/library/windows/desktop/ms679331(v=vs.85).aspx" target="_blank"><span>_EXCEPTION_POINTERS</span>&nbsp;data structure</a>. We use both of these structures in our example above.</p><p>Furthermore, this explains the first part of our mystery, namely, why the <span>_EXCEPTION_RECORD.ExceptionAddress</span> is incorrect. Recall that the&nbsp;<span>_EXCEPTION_RECORD.ExceptionAddress</span> is populated by the 3rd (<span>r8</span>) argument to <span>nt!KiExceptionDispatch</span>. This was passed in from&nbsp;<span>nt!KiBreakpointTrap</span>. This argument is a copy of the &nbsp;<span>_KTRAP_FRAME.Rip</span>&nbsp;member decremented by one.</p><p>To figure out where the <span>_CONTEXT.Rip</span> member is populated, we need to go deeper down the rabbit hole.</p><p><span>nt!KiExceptionDispatch</span> will call into <span>nt!KiDispatchException</span> (yes, the ordering of the words are intentionally flipped) passing in the recently created <span>_EXCEPTION_RECORD</span> and <span>_KEXCEPTION_FRAME</span>:</p><p>This function will build a <span>_CONTEXT</span> out of the <span>_KTRAP_FRAME</span> and <span>_KEXCEPTION_FRAME</span> by invoking the helper routine&nbsp;<span>KeContextFromKFrame</span>. After the <span>_CONTEXT</span> is created, a check is made against the <span>_EXCEPTION_RECORD.ExceptionCode</span>&nbsp;(received as an argument from <span>nt!KiExceptionDispatch</span>) for <span>STATUS_BREAKPOINT</span> (<span>0x80000003</span>). If it's true, the <span>_CONTEXT.Rip</span> member will be decremented:</p><p>This solves the last part of the mystery and causes the value in&nbsp;<span>_CONTEXT.Rip</span>&nbsp;to be tainted.<br></p><h2>
+The anti-debug trick</h2><p>
+Knowing what we know about how Windows handles the different types of int 3s, is it possible to leverage this discrepancy in a useful way? The answer is yes.&nbsp;</p><p>
+Debuggers display the state of the program at the time of an exception. Since Windows will incorrectly assume that our&nbsp;<span>int 3</span>&nbsp;exception was generated from the single-byte variant, it is possible to confuse the debugger into reading "extra" memory. We leverage this inconsistency to trip a "guard page" of sorts.&nbsp;</p><div><p class="readability-styled" style="display: inline;">
+As we saw in our first example (at the start of the article), when a multi-byte&nbsp;</p><span>int 3</span><p class="readability-styled" style="display: inline;">&nbsp;occurs, the&nbsp;</p><span>_EXCEPTION_RECORD.ExceptionAddress</span><p class="readability-styled" style="display: inline;"> and </p><span>_CONTEXT.Rip</span><p class="readability-styled" style="display: inline;">&nbsp;values will lie in the middle of our multi-byte instruction instead of at the start. This means that the debugger will incorrectly determine that the instruction which threw the software breakpoint begins with the opcode </p><span>0x03</span><p class="readability-styled" style="display: inline;">. Referring to the trusty Intel manual, we can see that this opcode represents a 2-byte </p><span>add</span><p class="readability-styled" style="display: inline;"> instruction:</p><p class="readability-styled" style="display: inline;">
+What would happen if we positioned our multi-byte&nbsp;</p><span>int 3</span><p class="readability-styled" style="display: inline;">&nbsp;near the end of a page of memory?</p><p>When the operating system notifies our attached debugger of the breakpoint exception, the instruction pointer will point to memory that will be misinterpreted as the start of an&nbsp;<span>add</span>&nbsp;(<span>0x03</span>) instruction. This will cause the debugger to disassemble data on the adjacent page (since this instruction is 2 bytes long), and effectively read one byte past our "valid" memory range.</p><p>Our trick relies on the fact that Windows, as an optimization, will not commit virtual memory to physical RAM unless it absolutely needs it. That is to say that most memory, especially in usermode, is paged. When memory needs to be made available for use that is not currently in physical RAM, a page fault occurs. To learn more about memory management, check out the following articles on our site:&nbsp;<a href="http://www.triplefault.io/2017/07/introduction-to-ia-32e-hardware-paging.html" target="_blank">Introduction to IA-32e hardware paging</a> and <a href="http://www.triplefault.io/2017/08/exploring-windows-virtual-memory.html" target="_blank">Exploring Windows virtual memory management</a>.</p><p>So, we can detect the memory read on this adjacent page by inspecting the corresponding PTE (Page Table Entry) using the&nbsp;<a href="https://msdn.microsoft.com/en-us/library/windows/desktop/ms684949(v=vs.85).aspx" target="_blank">QueryWorkingSetEx</a>&nbsp;API. If the page is resident in our process' working set (e.g. mapped into our process by the debugger), the Valid bit in the&nbsp;<span><a href="https://msdn.microsoft.com/en-us/library/windows/desktop/ms684903(v=vs.85).aspx" target="_blank">_PSAPI_WORKING_SET_EX_BLOCK</a></span>&nbsp;will be set.<br></p><h2>
+PoC||GTFO</h2></div><div><p class="readability-styled" style="display: inline;">
+A full example can be found below:</p><p>As always, if you have any questions or comments, please feel free to send us a message below. Happy hacking 😎.</p></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+sql server - Why would a table with a Clustered Columnstore Index have many open rowgroups? -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>sql server - Why would a table with a Clustered Columnstore Index have many open rowgroups?</h1><div><div class="post-text" itemprop="text"><blockquote><p>Why would a table with a Clustered Columnstore Index have many open rowgroups?</p></blockquote><p>There are many different scenarios that can cause this. I'm going to pass on answering the generic question in favor of addressing your specific scenario, which I think is what you want.</p><blockquote><p>Is it possibly memory pressure or contention between the insert and the delete?</p></blockquote><p>It's not memory pressure. SQL Server won't ask for a memory grant when inserting a single row into a columnstore table. It knows that the row will be inserted into a delta rowgroup so the memory grant isn't needed. It is possible to get more delta rowgroups than one might expect when inserting more than 102399 rows per <code>INSERT</code> statement and hitting the fixed 25 second memory grant timeout. That memory pressure scenario is for bulk loading though, not trickle loading.</p><p>Incompatible locks between the <code>DELETE</code> and <code>INSERT</code> is a plausible explanation for what you're seeing with your table. Keep in mind I don't do trickle inserts in production, but the current locking implementation for deleting rows from a delta rowgroup seems to require a UIX lock. You can see this with a simple demo:</p><p>Throw some rows into the delta store in the first session:</p><pre><code>DROP TABLE IF EXISTS dbo.LAMAK;
+
+CREATE TABLE dbo.LAMAK (
+ID INT NOT NULL,
+INDEX C CLUSTERED COLUMNSTORE
+);
+
+INSERT INTO dbo.LAMAK
+SELECT TOP (64000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL))
+FROM master..spt_values t1
+CROSS JOIN master..spt_values t2;
+</code></pre><p>Delete a row in the second session, but don't commit the change yet:</p><pre><code>BEGIN TRANSACTION;
+
+DELETE FROM dbo.LAMAK WHERE ID = 1;
+</code></pre><p>Locks for the <code>DELETE</code> per <code>sp_whoisactive</code>:</p><pre><code>&lt;Lock resource_type="HOBT" request_mode="UIX" request_status="GRANT" request_count="1" /&gt;
+&lt;Lock resource_type="KEY" request_mode="X" request_status="GRANT" request_count="1" /&gt;
+&lt;Lock resource_type="OBJECT" request_mode="IX" request_status="GRANT" request_count="1" /&gt;
+&lt;Lock resource_type="OBJECT.INDEX_OPERATION" request_mode="S" request_status="GRANT" request_count="1" /&gt;
+&lt;Lock resource_type="PAGE" page_type="*" request_mode="IX" request_status="GRANT" request_count="1" /&gt;
+&lt;Lock resource_type="ROWGROUP" resource_description="ROWGROUP: 5:100000004080000:0" request_mode="UIX" request_status="GRANT" request_count="1" /&gt;
+</code></pre><p>Insert a new row in the first session:</p><pre><code>INSERT INTO dbo.LAMAK
+VALUES (0);
+</code></pre><p>Commit the changes in the second session and check <code>sys.dm_db_column_store_row_group_physical_stats</code>:</p><p><a href="https://i.stack.imgur.com/GsSbi.png" rel="noreferrer"><img src="https://i.stack.imgur.com/GsSbi.png" alt="dr dmv"></a></p><p>A new rowgroup was created because the insert requests an IX lock on the rowgroup that it changes. An IX lock is not compatible with a UIX lock. This seems to be the current internal implementation, and perhaps Microsoft will change it over time.</p><p>In terms of what to do how to fix it, you should consider how this data is used. Is it important for the data to be as compressed as possible? Do you need good rowgroup elimination on the <code>[CreationDate]</code> column? Would it be okay for new data to not show up in the table for a few hours? Would end users prefer if duplicates never showed up in the table as opposed to existing in it for up to four hours?</p><p>The answers to all of those questions determines the right path to addressing the issue. Here are a few options:</p><ol><li><p>Run a <code>REORGANIZE</code> with the <code>COMPRESS_ALL_ROW_GROUPS = ON</code> option against the columnstore once a day. On average this will mean that the table won't exceed a million rows in the delta store. This is a good option if you don't need the best possible compression, you don't need the best rowgroup elimination on the <code>[CreationDate]</code> column, and you want to maintain the status quo of deleting duplicate rows every four hours.</p></li><li><p>Break the <code>DELETE</code> into separate <code>INSERT</code> and <code>DELETE</code> statements. Insert the rows to delete into a temp table as a first step and delete them with <code>TABLOCKX</code> in the second query. This doesn't need to be in one transaction based on your data loading pattern (only inserts) and the method that you use to find and remove duplicates. Deleting a few hundred rows should be very fast with good elimination on the <code>[CreationDate]</code> column, which you will eventually get with this approach. The advantage of this approach is that your compressed rowgroups will have tight ranges for <code>[CreationDate]</code>, assuming that the date for that column is the current date. The disadvantage is that your trickle inserts will be blocked from running for maybe a few seconds.</p></li><li><p>Write new data to a staging table and flush it into the columnstore every X minutes. As part of the flush process you can skip inserting duplicates, so the main table will never contain duplicates. The other advantage is that you control how often the data flushes so you can get rowgroups of the desired quality. The disadvantage is that new data will be delayed from appearing in the <code>[dbo].[NetworkVisits]</code> table. You could try a view that combines the tables but then you have to be careful that your process to flush data will result in a consistent view of the data for end users (you don't want rows to disappear or to show up twice during the process).</p></li></ol><p>Finally, I do not agree with other answers that a redesign of the table should be considered. You're only inserting 9 rows per second on average into the table which just isn't a high rate. A single session can do 1500 singleton inserts per second into a columnstore table with six columns. You may want to change the table design once you start to see numbers around that.</p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

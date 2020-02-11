@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+invalidate inode pagecache when atomic_o_trunc flag is enabled &#x2014; Linux Filesystem Development -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>invalidate inode pagecache when atomic_o_trunc flag is enabled — Linux Filesystem Development</h1><div><div>
+[<a href="msg118988.html">Date Prev</a>][<a href="msg118990.html">Date Next</a>][<a href="msg118986.html">Thread Prev</a>][<a href="msg121603.html">Thread Next</a>][<a href="mail4.html#118989">Date Index</a>][<a href="thrd4.html#118989">Thread Index</a>]
+
+
+<ins class="adsbygoogle" data-ad-client="ca-pub-3422782820843221" data-ad-slot="6345952567" data-ad-format="auto"></ins><hr><ul><li><em>To</em>: Miklos Szeredi &lt;miklos@xxxxxxxxxx&gt;</li><li><em>Subject</em>: [PATCH] fuse: invalidate inode pagecache when atomic_o_trunc flag is enabled</li><li><em>From</em>: Chad Austin &lt;chadaustin@xxxxxx&gt;</li><li><em>Date</em>: Tue, 5 Dec 2017 13:12:38 -0800</li><li><em>Cc</em>: &lt;linux-fsdevel@xxxxxxxxxxxxxxx&gt;, &lt;clm@xxxxxx&gt;, &lt;chad@xxxxxxxxxxxxx&gt;,        Chad Austin &lt;chadaustin@xxxxxx&gt;</li><li><em>Smtp-origin-cluster</em>: prn1c35</li><li><em>Smtp-origin-hostname</em>: devvm27209.prn1.facebook.com</li><li><em>Smtp-origin-hostprefix</em>: devvm</li></ul><hr><ins class="adsbygoogle" data-ad-client="ca-pub-3422782820843221" data-ad-slot="8681825769" data-ad-format="link"></ins><div class="content" itemprop="articleBody"><pre>When the atomic_o_trunc flag is set, fuse_do_setattr skips most of its
+logic, including truncating the page cache.  Run the same invalidation
+logic in fuse_finish_open when truncating.  This fixes a bug where
+open(O_TRUNC) followed by a sequence of writes does not flush the page
+cache, resulting in an mmap longer than the new file's length (from
+another process) not properly zero-filling the last page.
+
+Does fuse_finish_open() need additional locking?  I am not sure of the
+locking requirements of truncate_pagecache or invalidate_inode_pages2.
+
+The following C++ program reproduces the bug.  The FUSE daemon must
+have enabled the ATOMIC_O_TRUNC flag
+<a rel="nofollow" href="https://gist.github.com/chadaustin/8e4ba1e2cd2d023ff6f9eff921eb8bfc">https://gist.github.com/chadaustin/8e4ba1e2cd2d023ff6f9eff921eb8bfc</a>
+
+Signed-off-by: Chad Austin &lt;chadaustin@xxxxxx&gt;
+---
+ fs/fuse/dir.c    |  7 ++-----
+ fs/fuse/file.c   | 12 ++++++++++++
+ fs/fuse/fuse_i.h |  2 ++
+ 3 files changed, 16 insertions(+), 5 deletions(-)
+
+diff --git a/fs/fuse/dir.c b/fs/fuse/dir.c
+index 2496738..c387171 100644
+--- a/fs/fuse/dir.c
++++ b/fs/fuse/dir.c
+@@ -1698,11 +1698,8 @@ int fuse_do_setattr(struct dentry *dentry, struct iattr *attr,
+ 	 * Only call invalidate_inode_pages2() after removing
+ 	 * FUSE_NOWRITE, otherwise fuse_launder_page() would deadlock.
+ 	 */
+-	if ((is_truncate || !is_wb) &amp;&amp;
+-	    S_ISREG(inode-&gt;i_mode) &amp;&amp; oldsize != outarg.attr.size) {
+-		truncate_pagecache(inode, outarg.attr.size);
+-		invalidate_inode_pages2(inode-&gt;i_mapping);
+-	}
++	if ((is_truncate || !is_wb) &amp;&amp; oldsize != outarg.attr.size)
++		fuse_truncate_inode_cache(inode, outarg.attr.size);
+ 
+ 	clear_bit(FUSE_I_SIZE_UNSTABLE, &amp;fi-&gt;state);
+ 	return 0;
+diff --git a/fs/fuse/file.c b/fs/fuse/file.c
+index cb7dff5..cb1968e 100644
+--- a/fs/fuse/file.c
++++ b/fs/fuse/file.c
+@@ -188,6 +188,10 @@ void fuse_finish_open(struct inode *inode, struct file *file)
+ 		i_size_write(inode, 0);
+ 		spin_unlock(&amp;fc-&gt;lock);
+ 		fuse_invalidate_attr(inode);
++
++		if (!fc-&gt;writeback_cache)
++			fuse_truncate_inode_cache(inode, 0);
++
+ 		if (fc-&gt;writeback_cache)
+ 			file_update_time(file);
+ 	}
+@@ -195,6 +199,14 @@ void fuse_finish_open(struct inode *inode, struct file *file)
+ 		fuse_link_write_file(file);
+ }
+ 
++void fuse_truncate_inode_cache(struct inode *inode, loff_t newsize)
++{
++	if (S_ISREG(inode-&gt;i_mode)) {
++		truncate_pagecache(inode, newsize);
++		invalidate_inode_pages2(inode-&gt;i_mapping);
++	}
++}
++
+ int fuse_open_common(struct inode *inode, struct file *file, bool isdir)
+ {
+ 	struct fuse_conn *fc = get_fuse_conn(inode);
+diff --git a/fs/fuse/fuse_i.h b/fs/fuse/fuse_i.h
+index d5773ca..47baea4 100644
+--- a/fs/fuse/fuse_i.h
++++ b/fs/fuse/fuse_i.h
+@@ -913,6 +913,8 @@ void fuse_release_nowrite(struct inode *inode);
+ 
+ u64 fuse_get_attr_version(struct fuse_conn *fc);
+ 
++void fuse_truncate_inode_cache(struct inode *inode, loff_t newsize);
++
+ /**
+  * File-system tells the kernel to invalidate cache for the given node id.
+  */
+-- 
+2.9.5
+
+
+
+</pre></div><hr><center><span><a href="/lists/">[Index&nbsp;of&nbsp;Archives]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/linux-ext4/">[Linux&nbsp;Ext4&nbsp;Filesystem]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/linux-unionfs/">[Union&nbsp;Filesystem]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/fstests/">[Filesystem&nbsp;Testing]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/ceph-users/">[Ceph&nbsp;Users]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/ecryptfs/">[Ecryptfs]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/autofs/">[AutoFS]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/newbies/">[Kernel&nbsp;Newbies]</a>
+&nbsp;
+&nbsp;
+<a href="http://yosemitephotos.net/">[Share&nbsp;Photos]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/security/">[Security]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/netfilter/">[Netfilter]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/bugtraq/">[Bugtraq]</a>
+&nbsp;
+&nbsp;
+<a href="https://yosemitenews.info/">[Yosemite&nbsp;News]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/mips/">[MIPS&nbsp;Linux]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/arm/">[ARM&nbsp;Linux]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/security/">[Linux&nbsp;Security]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/linux-cachefs/">[Linux&nbsp;Cachefs]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/reiserfs-devel/">[Reiser&nbsp;Filesystem]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/raid/">[Linux&nbsp;RAID]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/samba/">[Samba]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/dm-devel/">[Device&nbsp;Mapper]</a>
+&nbsp;
+&nbsp;
+<a href="/lists/ceph-devel/">[CEPH&nbsp;Development]</a></span></center><hr><ins class="adsbygoogle" data-ad-format="autorelaxed" data-ad-client="ca-pub-3422782820843221" data-ad-slot="1424524564"></ins></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Is making a struct readonly a breaking change? -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Is making a struct readonly a breaking change?</h1><div><div class="article_body"><p>C# 7.2 added the ability to mark a <code class="language-plaintext highlighter-rouge">struct</code> declaration as <code class="language-plaintext highlighter-rouge">readonly</code>. This has the effect of guaranteeing that no 
+member of the <code class="language-plaintext highlighter-rouge">struct</code> can mutate its contents as it ensures every field is marked as <code class="language-plaintext highlighter-rouge">readonly</code>. This guarantee is 
+imporant because it allows the compiler to avoid defensive copies of <code class="language-plaintext highlighter-rouge">struct</code> values in cases where the underlying 
+location is considered <code class="language-plaintext highlighter-rouge">readonly</code>. For example when invoking members of a <code class="language-plaintext highlighter-rouge">struct</code> which is stored in a 
+<code class="language-plaintext highlighter-rouge">readonly</code> field.</p><div class="language-csharp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span><span class="nc">Operation</span><span class="p">{</span><span class="k">readonly</span><span class="kt">string</span><span class="n">Name</span><span class="p">;</span><span class="k">readonly</span><span class="n">DateTimeOffset</span><span class="n">Started</span><span class="p">;</span><span class="k">public</span><span class="k">override</span><span class="kt">string</span><span class="nf">ToString</span><span class="p">()</span><span class="p">=&gt;</span><span class="n">Name</span><span class="p">+</span><span class="n">Started</span><span class="p">.</span><span class="nf">ToString</span><span class="p">();</span><span class="p">}</span></code></pre></div></div><p>When calling <code class="language-plaintext highlighter-rouge">Started.ToString</code> here the compiler first creates a defensive copy of <code class="language-plaintext highlighter-rouge">Started</code> on the stack. The 
+<code class="language-plaintext highlighter-rouge">ToString</code> operation is then invoked on that copy. The reason for this is the compiler must assume the worst case
+which is <code class="language-plaintext highlighter-rouge">ToString</code> mutates the contents of the <code class="language-plaintext highlighter-rouge">struct</code> and hence violates the <code class="language-plaintext highlighter-rouge">readonly</code> contract on the field.</p><p>Starting with netcoreapp2.1 though <code class="language-plaintext highlighter-rouge">DateTime</code>, and <a href="https://github.com/dotnet/corefx/pull/24997">many other types</a>,
+are now marked as <code class="language-plaintext highlighter-rouge">readonly struct</code>. Invocations like the <code class="language-plaintext highlighter-rouge">ToString</code> above now occur directly on the field, avoiding
+the wasteful copy it had before.</p><p>These defense copies are small when looked at individually but can quickly add up to a significant performance issue. 
+Particularly in high performance scenarios which make heavy use of <code class="language-plaintext highlighter-rouge">readonly</code> and tend to use larger sized <code class="language-plaintext highlighter-rouge">struct</code> 
+declarations. Before the <code class="language-plaintext highlighter-rouge">readonly struct</code> feature these code bases often had to sacrifice correctness by avoiding
+<code class="language-plaintext highlighter-rouge">readonly</code> to improve perforamnce by avoiding defensive copies. Now though the same code bases can have performance 
+and without sacrificing correctness.</p><p>One question that frequently comes up with <code class="language-plaintext highlighter-rouge">readonly struct</code> though is whether or not this is a breaking change? The 
+short answer is no. This is a very safe change to make. Adding <code class="language-plaintext highlighter-rouge">readonly</code> is not a source breaking change for 
+consumers: it is still recognized by older compilers, it doesn’t cause overload resolution changes, it can be used in 
+other <code class="language-plaintext highlighter-rouge">struct</code> types, etc … The only effect it has is that it allows the compiler to elide defensive copies in a
+number of cases.</p><p>That being said there is one scenario to be careful of when applying this feature. One of the requirements is that every 
+field of the type be explicitly marked as <code class="language-plaintext highlighter-rouge">readonly</code>. Adding <code class="language-plaintext highlighter-rouge">readonly</code> to a field as a part of making the containing
+type <code class="language-plaintext highlighter-rouge">readonly</code> can cause observable behavior changes. When the field type is a non-readonly <code class="language-plaintext highlighter-rouge">struct</code> defensive copies 
+will now be made for invocations and this can cause changes to be dropped where previously they were persisted. This 
+has nothing to do with <code class="language-plaintext highlighter-rouge">readonly struct</code> but instead is a direct result of making the field <code class="language-plaintext highlighter-rouge">readonly</code>.</p><p>The CoreFX team ran into exactly this problem when making <code class="language-plaintext highlighter-rouge">Nullable&lt;T&gt;</code> into a <code class="language-plaintext highlighter-rouge">readonly struct</code>. The <code class="language-plaintext highlighter-rouge">T value</code> field 
+was marked as <code class="language-plaintext highlighter-rouge">readonly</code> as a part of that process. This turned out to be 
+<a href="https://github.com/dotnet/corefx/pull/24997#issuecomment-346523578">a breaking change</a> because it meant operations 
+like <code class="language-plaintext highlighter-rouge">value.ToString</code> now caused a defensive copy to occur which caused all mutations inside <code class="language-plaintext highlighter-rouge">value</code> to be discarded.
+Eventually this lead to the change <a href="https://github.com/dotnet/coreclr/pull/15198">being reverted</a> because of the high
+impact of <code class="language-plaintext highlighter-rouge">Nullable&lt;T&gt;</code>.</p><div class="language-csharp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span><span class="nc">Nullable</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;</span><span class="p">{</span><span class="k">readonly</span><span class="n">T</span><span class="k">value</span><span class="p">;</span><span class="kt">bool</span><span class="n">hasValue</span><span class="p">;</span><span class="k">public</span><span class="k">override</span><span class="kt">string</span><span class="nf">ToString</span><span class="p">()</span><span class="p">{</span><span class="c1">// Oops: value.ToString now creates a defensive copy</span><span class="k">return</span><span class="n">hasValue</span><span class="p">?</span><span class="k">value</span><span class="p">.</span><span class="nf">ToString</span><span class="p">()</span><span class="p">:</span><span class="s">""</span><span class="p">;</span><span class="p">}</span><span class="p">}</span></code></pre></div></div><p>Again though, this is about marking fields <code class="language-plaintext highlighter-rouge">readonly</code>, not the containing type. This type of problem is fairly rare
+though. Even in code bases where compat is of incredibly high value there have been sweeping changes to 
+<a href="https://github.com/dotnet/roslyn/pull/34478">mark</a><a href="https://github.com/dotnet/corefx/pull/24997">large</a><a href="https://github.com/dotnet/coreclr/pull/14789">blocks</a> of <code class="language-plaintext highlighter-rouge">struct</code><a href="https://github.com/dotnet/corert/pull/4855">declarations</a> as <code class="language-plaintext highlighter-rouge">readonly</code>.</p><p>The other case where behavior changes can occur has to do with aliasing. This is extremely rare though, only showing 
+up in hypotheticals vs. actual code bases. It is best demonstrated by example:</p><div class="language-csharp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span><span class="nc">S</span><span class="p">{</span><span class="k">static</span><span class="n">S</span><span class="n">StaticField</span><span class="p">=</span><span class="k">new</span><span class="nf">S</span><span class="p">(</span><span class="m">0</span><span class="p">);</span><span class="k">public</span><span class="k">static</span><span class="k">ref</span><span class="k">readonly</span><span class="n">S</span><span class="nf">Get</span><span class="p">()</span><span class="p">=&gt;</span><span class="k">ref</span><span class="n">StaticField</span><span class="p">;</span><span class="k">public</span><span class="k">readonly</span><span class="kt">int</span><span class="n">Field</span><span class="p">;</span><span class="k">public</span><span class="nf">S</span><span class="p">(</span><span class="kt">int</span><span class="n">field</span><span class="p">)</span><span class="p">{</span><span class="n">Field</span><span class="p">=</span><span class="n">field</span><span class="p">;</span><span class="p">}</span><span class="k">public</span><span class="kt">int</span><span class="nf">M</span><span class="p">(</span><span class="kt">int</span><span class="k">value</span><span class="p">)</span><span class="p">{</span><span class="n">StaticField</span><span class="p">=</span><span class="k">new</span><span class="nf">S</span><span class="p">(</span><span class="k">value</span><span class="p">);</span><span class="k">return</span><span class="n">Field</span><span class="p">;</span><span class="p">}</span><span class="k">static</span><span class="k">void</span><span class="nf">Main</span><span class="p">()</span><span class="p">{</span><span class="n">Console</span><span class="p">.</span><span class="nf">WriteLine</span><span class="p">(</span><span class="n">S</span><span class="p">.</span><span class="nf">Get</span><span class="p">().</span><span class="nf">M</span><span class="p">(</span><span class="m">42</span><span class="p">));</span><span class="p">}</span><span class="p">}</span></code></pre></div></div><p>This code will print <code class="language-plaintext highlighter-rouge">0</code>. The invocation of <code class="language-plaintext highlighter-rouge">M(42)</code> here occurs on a <code class="language-plaintext highlighter-rouge">ref readonly S</code> which means the receiver location
+is conisdered <code class="language-plaintext highlighter-rouge">readonly</code>. This is the <code class="language-plaintext highlighter-rouge">ref</code> equivalent of invoking <code class="language-plaintext highlighter-rouge">M</code> when the receiver is contained in a 
+<code class="language-plaintext highlighter-rouge">static readonly</code> field. The location itself is <code class="language-plaintext highlighter-rouge">readonly</code>, the member is not and hence the compiler creates a 
+defensive copy.</p><p>When the declaration is changed to <code class="language-plaintext highlighter-rouge">readonly struct S</code> the code will print <code class="language-plaintext highlighter-rouge">42</code>. The reason is that there is no longer
+a defensive copy during the invocation of <code class="language-plaintext highlighter-rouge">M</code>. Defensive copies are all about ensuring the target method does not 
+directly mutate the contents of the receiver. But it is still possible for other aliases to the same location to 
+indirectly mutate the contents by assigning into the location.</p><p>This is a fairly contrived example though and not one that is likely to occur in many code bases. It is listed here 
+not as a warning against using <code class="language-plaintext highlighter-rouge">readonly struct</code> but quite the opposite. It’s meant to demonstrate the level of 
+complication needed to observe the difference.</p><p>The take away here is <code class="language-plaintext highlighter-rouge">readonly struct</code> is a beneficial annotation, both for performance and correctness, that is 
+very safe to add to your code base.</p></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

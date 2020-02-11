@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Security Experiments with gRPC and ASP.NET Core 3.1 -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Security Experiments with gRPC and ASP.NET Core 3.1</h1><div><div class="entry-content"><p>This article shows how a <a href="https://grpc.io/">gRPC </a>service could implement OAuth2 security using IdentityServer4 as the token service. </p><p><strong>Code:</strong><a href="https://github.com/damienbod/Secure_gRpc" rel="nofollow">https://github.com/damienbod/Secure_gRpc</a></p><p><strong>Posts in this series</strong></p><p><strong>History</strong></p><p><strong>2019-12-17:</strong> Updated Nuget packages, .NET Core 3.1, updated grpc implementations<br><strong>2019-09-06:</strong> Updated Nuget packages, .NET Core 3 preview 9<br><strong>2019-08-13:</strong> Updated Nuget packages, .NET Core 3 preview 8<br><strong>2019-07-28:</strong> Updated Nuget packages, .NET Core 3 preview 7<br><strong>2019-06-14:</strong> Updated Nuget packages, .NET Core 3 preview 6 changes<br><strong>2019-05-07:</strong> Updated Nuget packages, .NET Core 3 preview 5 changes<br><strong>2019-04-20:</strong> Updated Nuget packages, .NET Core 3 preview 4 changes<br><strong>2019-03-08:</strong> Removing the IHttpContextAccessor, no longer required<br><strong>2019-03-07:</strong> Updated the auth security to configure this on the route, attributes are not supported in the current preview.</p><p><strong>Setup</strong></p><p>The application is implemented using 3 applications. A console application is used as the gRPC client. This application requests an access token for the gRPC server using the IdentityServer4 token service. The client application then sends the access token in the header of the HTTP2 request. The gRPC server then validates the token using Introspection, and if the token is valid, the data is returned. If the token is not valid, a RPC exception is created and sent back to the server. </p><p>At present, as this code is still in production, securing the API using the Authorization attributes with policies does not seem to work, so as a quick fix, the policy is added to the routing configuration.</p><p>The gRPC client and server were setup using the Visual Studio template for gRPC.</p><p><strong>gRPC Server</strong></p><p>The GreeterService class is the generated class from the Visual Studio template. The security bits were then added to this class. The Authorize attribute is added to the class which is how the security should work. </p><pre class="brush: csharp; title: ; notranslate" title="">using System.Threading.Tasks;
+using Greet;
+using Grpc.Core;
+using Microsoft.AspNetCore.Authorization;
+
+namespace Secure_gRpc
+{
+    [Authorize(Policy = "protectedScope")]
+    public class GreeterService : Greeter.GreeterBase
+    {
+        public override Task&lt;HelloReply&gt; SayHello(HelloRequest request, ServerCallContext context)
+        {
+            return Task.FromResult(new HelloReply
+            {
+                Message = "Hello " + request.Name
+            });
+        }
+    }
+}
+
+</pre><p>The startup class configures the gRPC service and the required security to use this service. IdentityServer4.AccessTokenValidation is used to validate the access token using introspection. The gRPC service is added along with the authorization and the authentication.</p><pre class="brush: csharp; title: ; notranslate" title="">using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using IdentityServer4.AccessTokenValidation;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.Security.Claims;
+
+namespace Secure_gRpc
+{
+    public class Startup
+    {
+        private string stsServer = "https://localhost:44352";
+
+        // This method gets called by the runtime. Use this method to add services to the container.
+        // For more information on how to configure your application, visit https://go.microsoft.com/fwlink/?LinkID=398940
+        public void ConfigureServices(IServiceCollection services)
+        {
+            services.AddHttpContextAccessor();
+
+            services.AddAuthorization(options =&gt;
+            {
+                options.AddPolicy("protectedScope", policy =&gt;
+                {
+                    policy.RequireClaim("scope", "grpc_protected_scope");
+                });
+            });
+
+            services.AddAuthorizationPolicyEvaluator();
+
+            services.AddAuthentication(IdentityServerAuthenticationDefaults.AuthenticationScheme)
+                .AddIdentityServerAuthentication(options =&gt;
+                {
+                    options.Authority = stsServer;
+                    options.ApiName = "ProtectedGrpc";
+                    options.ApiSecret = "grpc_protected_secret";
+                    options.RequireHttpsMetadata = false;
+                });
+
+            services.AddGrpc(options =&gt;
+            {
+                options.EnableDetailedErrors = true;
+            });
+        }
+
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+        {
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+
+            app.UseStaticFiles();
+            app.UseHttpsRedirection();
+
+            app.UseRouting();
+
+            app.UseAuthentication();
+            app.UseAuthorization();
+            app.UseCors();
+
+            app.UseEndpoints(endpoints =&gt;
+            {
+                endpoints.MapGrpcService&lt;GreeterService&gt;().RequireAuthorization("protectedScope");
+                endpoints.MapGrpcService&lt;DuplexService&gt;().RequireAuthorization("protectedScope");
+                endpoints.MapRazorPages();
+            });
+        }
+    }
+}
+
+</pre><p>The gRPC service is then setup to run using HTTPS and HTTP2. </p><pre class="brush: csharp; title: ; notranslate" title="">using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Hosting;
+
+namespace Secure_gRpc
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            CreateHostBuilder(args).Build().Run();
+        }
+
+        public static IHostBuilder CreateHostBuilder(string[] args) =&gt;
+            Host.CreateDefaultBuilder(args)
+                .ConfigureWebHostDefaults(webBuilder =&gt;
+                {
+                    webBuilder.UseStartup&lt;Startup&gt;()
+                    .ConfigureKestrel(options =&gt;
+                    {
+                        options.Limits.MinRequestBodyDataRate = null;
+                        options.ListenLocalhost(50051, listenOptions =&gt;
+                        {
+                            listenOptions.UseHttps("server.pfx", "1111");
+                            listenOptions.Protocols = HttpProtocols.Http2;
+                        });
+                    });
+                });
+    }
+}
+
+</pre><p><strong>RPC interface definition</strong></p><p>The RPC API is defined using proto3 and referenced in both projects. When the applications are built, the C# classes are created.</p><pre class="brush: csharp; title: ; notranslate" title="">syntax = "proto3";
+
+package Greet;
+
+// The greeting service definition.
+service Greeter {
+  // Sends a greeting
+  rpc SayHello (HelloRequest) returns (HelloReply) {}
+}
+
+// The request message containing the user's name.
+message HelloRequest {
+  string name = 1;
+}
+
+// The response message containing the greetings.
+message HelloReply {
+  string message = 1;
+}
+
+</pre><p><strong>gRPC client</strong></p><p>The client is implemented in a simple console application. This client gets the access token from the IdentityServer4 token service, and adds it to the Authorization header as a bearer token. The client then uses a cert to connect over HTTPS. This code will probably change before the release. Then the API is called and the data is returned, or an exception. If you comment in the incorrect token, an auth exception is returned.</p><pre class="brush: csharp; title: ; notranslate" title="">using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Formatters.Binary;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+using Greet;
+using Grpc.Core;
+using Grpc.Net.Client;
+
+namespace SecureGrpc.Client
+{
+    public class Program
+    {
+        static async Task Main(string[] args)
+        {
+            ///
+            /// Token init
+            /// 
+            HttpClient httpClient = new HttpClient();
+            ApiService apiService = new ApiService(httpClient);
+            var token = await apiService.GetAccessTokenAsync();
+            //var token = "This is invalid, I hope it fails";
+
+            var tokenValue = "Bearer " + token;
+            var metadata = new Metadata
+            {
+                { "Authorization", tokenValue }
+            };
+
+            var channel = GrpcChannel.ForAddress("https://localhost:50051", new GrpcChannelOptions
+            {
+                HttpClient = CreateHttpClient()
+            });
+
+            CallOptions callOptions = new CallOptions(metadata);
+
+            var client = new Greeter.GreeterClient(channel);
+
+            var reply = await client.SayHelloAsync(
+                new HelloRequest { Name = "GreeterClient" }, callOptions);
+
+            Console.WriteLine("Greeting: " + reply.Message);
+
+            Console.WriteLine("Press any key to exit...");
+            Console.ReadKey();
+        }
+
+        private static HttpClient CreateHttpClient()
+        {
+            var handler = new HttpClientHandler();
+            var cert = new X509Certificate2(Path.Combine("Certs/client2.pfx"), "1111");
+            handler.ClientCertificates.Add(cert);
+
+            // Create client
+            return new HttpClient(handler);
+        }
+    }
+}
+
+</pre><p>Sending a valid token</p><p><img data-attachment-id="12075" data-permalink="https://damienbod.com/2019/03/06/security-experiments-with-grpc-and-asp-net-core-3-0/secure_grpc_01/" data-orig-file="https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png" data-orig-size="1230,448" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="Secure_gRpc_01" data-image-description="" data-medium-file="https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=600" data-large-file="https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=640" src="https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=640&amp;h=233" alt="" width="640" height="233" class="alignnone size-full wp-image-12075" srcset="https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=640&amp;h=233 640w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=150&amp;h=55 150w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=600&amp;h=219 600w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=768&amp;h=280 768w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png?w=1024&amp;h=373 1024w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_01.png 1230w" sizes="(max-width: 640px) 100vw, 640px"></p><p>Sending an invalid token</p><p><img data-attachment-id="12076" data-permalink="https://damienbod.com/2019/03/06/security-experiments-with-grpc-and-asp-net-core-3-0/secure_grpc_02/" data-orig-file="https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png" data-orig-size="1223,551" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="Secure_gRpc_02" data-image-description="" data-medium-file="https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=600" data-large-file="https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=640" src="https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=640&amp;h=288" alt="" width="640" height="288" class="alignnone size-full wp-image-12076" srcset="https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=640&amp;h=288 640w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=150&amp;h=68 150w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=600&amp;h=270 600w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=768&amp;h=346 768w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png?w=1024&amp;h=461 1024w, https://damienbod.files.wordpress.com/2019/03/secure_grpc_02.png 1223w" sizes="(max-width: 640px) 100vw, 640px"></p><p>This code is still in development, and a lot will change before the first release. The demo shows some of the new gRPC, HTTP2, hosting features which will be released as part of ASP.NET Core 3.0.</p><p><strong>Links:</strong></p><p><a href="https://github.com/grpc/grpc-dotnet/" rel="nofollow">https://github.com/grpc/grpc-dotnet/</a></p><p><a href="https://grpc.io/" rel="nofollow">https://grpc.io/</a></p><blockquote class="wp-embedded-content" data-secret="4wal5NKoQY"><p><a href="https://www.stevejgordon.co.uk/early-look-at-grpc-using-aspnet-core-3">An Early Look at gRPC and ASP.NET Core 3.0</a></p></blockquote><p><a href="https://www.zoeys.blog/first-impressions-of-grpc-integration-in-asp-net-core-3-preview/" rel="nofollow">https://www.zoeys.blog/first-impressions-of-grpc-integration-in-asp-net-core-3-preview/</a></p><div id="jp-post-flair" class="sharedaddy sd-like-enabled sd-sharing-enabled"><h3 class="jp-relatedposts-headline"><em>Related</em></h3></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

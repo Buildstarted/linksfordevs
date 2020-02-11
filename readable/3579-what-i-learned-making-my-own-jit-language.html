@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+What I Learned Making My Own JIT Language -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook" xmlns=""><div id="readInner" class="margin-medium size-medium"><h1>What I Learned Making My Own JIT Language</h1><div><div class="post-body entry-content" id="post-body-9069936050702165579" itemprop="description articleBody" xmlns="http://www.w3.org/1999/xhtml"><a href="https://github.com/MichaelRFairhurst/vaiven/commit/91ca0464b9f96106f3050cc437f332bc8a67d30e">Early last year</a><p class="readability-styled" style="display: inline;" xmlns=""> I started creating </p><a href="https://github.com/MichaelRFairhurst/vaiven">a little JIT language named Vaiven</a><p class="readability-styled" style="display: inline;" xmlns="">. It is a super minimal little language including objects, lists, control flow, functions, ints, and doubles. Vaiven currently includes GC, an interpreter, a first pass assembler, and hot code gets optimized via an SSA optimization pipeline. The assembled code can call back into the interpreter as needed and vice versa. It's a functioning (but tiny) JIT. It was a super fun little project, and I had a number of reasons why I wanted to make it.
+</p><p>After creating <a href="https://github.com/MichaelRFairhurst/wake-compiler">Wake</a>, which AOT compiled into JS, I wanted to go from AOT to JIT, from the "assembly" of the web to, well, real assembly!
+</p><p>I imagined a sort of <a href="https://docs.google.com/document/d/1OZsbQyUbAppa75f_HOSFL7h_fsFBrE7YRYNYUwlWCPA/edit?usp=sharing">ncurses-as-a-language TUI framework</a> (Text User Interface), and that gave me an excuse to create a new language. I think it will work better as a language than a library for reasons detailed in <a href="http://www.mikedrivendevelopment.com/2015/11/going-open-with-encase.html">my original blogpost</a> about why I wanted to make it. This is not entirely crazy, as Elm sort of took the same approach. The TUI part is still completely untouched because it’s really something outside of my expertise. Still, it’s possible that a good, tailored JIT like what I have started with Vaiven will make such a TUI language possible.
+</p><p>I was also a few months into newly joining the Dart team. Dart was created by the minds behind V8. As a perk of my job, I was able to ask some brilliant VM engineers questions, and I wanted to understand the roots of my project language as well as I could.
+</p><p>The current state of Vaiven has some gaping holes —&nbsp;it has no object literal syntax, no load/store optimization, or stack traces, and the GC is a pile of hacks for reasons I wish I had space to fit into this post. Nevertheless, what I was able to do taught me a lot about JITs in general — how to best use them, when to trust or distrust them, how a JIT affects language design. And what I didn't do has arguably taught me even more! I simply needed to write up my thoughts about it.
+</p><h3>
+A Brief Tour of Vaiven</h3><p class="readability-styled" style="display: inline;" xmlns="">
+Vaiven has a very keyword-based syntax, and so defining a function looks like this:
+
+</p><pre class="prettyprint">fn foo is
+  0
+end
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+Typing that into the debug version of the JIT gives you a bunch of assembly output, shown below. At the moment, functions are eagerly compiled for the first optimization level (which is, almost none). This can be lazy in the future.
+
+</p><pre class="prettyprint">push rbp
+mov rbp, rsp
+mov eax, dword [+94810657183568]        ; mov v0, dword [+94810657183568]
+add eax, 1                              ; add v0, 1
+mov dword [+94810657183568], eax        ; mov dword [+94810657183568], v0
+cmp eax, 10                             ; cmp v0, 10
+je L2                                   ; je L2
+L10:
+mov rax, 281474976710656                ; mov v3, 281474976710656
+jmp L1
+L2:
+mov rdi, 140730010364832                ; mov v4, 140730010364832
+mov rsi, 94810657183664                 ; mov v5, 94810657183664
+call 94810634424347
+call rax
+L1:
+mov rsp, rbp
+pop rbp
+ret
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+Most of this code is going crazy with giant integers —&nbsp;these are magical addresses specific to the compilation of this function. Each function gets, in addition to assembly that can run it, an object that tracks the data types used and waits for the function to get “hot” to optimize it.
+</p><p>The first value, <code>94810657183568</code>, is the memory address of the call counter. You can see we get the value at that address in <code>dword</code> form (32 bit int). We add <code>1</code> to it to track the current function call, and we then store that 32 bit result back in memory.
+</p><p>We then <code>cmp eax, 10</code>. So on the 10th invocation, we <code>je</code> (jump on equal) to <code>L2</code>, which has more fancy big numbers!
+</p><p>These are addresses to the source code, and the profiling info object of that function. We call the optimizer function by address, with the other two pointers being arguments. Lastly, we <code>call rax</code>&nbsp;to execute the newly optimized assembly that we just produced!
+</p><p>In the "cold" case, we do not <code>je</code> (jump equal), so we execute the <code>L10</code> block. In this case, we load a special 64 bit value which represents the number <code>0</code> into the return register and then jump to <code>L1</code> which is the exit of the function (performs common stack cleanup).
+</p><p>The value 0 here is represented by a special 64 bit boxed value using a method described in <a href="https://www.tdcommons.org/dpubs_series/527/">this paper</a>. This allows us to store and differentiate 64 bit pointers, 64 bit floats, booleans, null, 32 bit integers, and more, all inside a single 64 bit register.
+</p><p>We can call this function from the interpreter by using the REPL:
+
+<br></p><pre class="prettyprint">foo()
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+which prints:
+
+</p><pre class="prettyprint">Int: 0
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+And after doing so 10 times, we trigger the optimizer:
+
+</p><pre class="prettyprint">var x = 0
+Int: 0
+
+for x &lt; 10 do foo(); x += 1; end
+
+L0:
+push rbp
+mov rbp, rsp
+L3:
+mov rax, 281474976710656                ; mov v0, 281474976710656
+jmp L1
+L2:
+L1:
+mov rsp, rbp
+pop rbp
+ret
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+You can see how the assembly we generate is not perfect; the </p><code>jmp L1</code><p class="readability-styled" style="display: inline;" xmlns=""> is useless, but the code isn't aware of that because it is trying to avoid executing the (empty) </p><code>L2</code><p class="readability-styled" style="display: inline;" xmlns=""> block.
+</p><p>But otherwise, all we do is save and store the base pointer (for GC purposes —&nbsp;in this case it could be optimized out by a smarter JIT) and move our special <code>0</code> value into the return register.
+</p><p>This looks like a huge improvement, but it’s not, because we had nothing to optimize. The only actual change is in the prolog and epilog of the function. But what if we throw a level of indirection at it, and add a parameter, as shown below:<br></p><pre class="prettyprint">fn bar of x is
+  if x == 0
+    print(foo())
+  end
+end
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+we get a much more significant amount of asm on the first pass:
+
+</p><pre class="prettyprint">L0:
+push rbp
+mov rbp, rsp
+push rbx
+sub rsp, 8
+mov eax, dword [+94775382205392]        ; mov v1, dword [+94775382205392]
+add eax, 1                              ; add v1, 1
+mov dword [+94775382205392], eax        ; mov dword [+94775382205392], v1
+cmp eax, 10                             ; cmp v1, 10
+je L2                                   ; je L2
+mov rax, 140737488355327                ; mov v2, 140737488355327
+cmp rdi, rax                            ; cmp v0, v2
+jae L4                                  ; jae L4
+mov rcx, [rdi]                          ; mov v3, [v0]
+shl rcx, 4                              ; shl v3, 4
+jmp L3                                  ; jmp L3
+L4:
+mov rax, 2251799813685247               ; mov v2, 2251799813685247
+mov rcx, 8                              ; mov v3, 8
+cmp rdi, rax                            ; cmp v0, v2
+jae L3                                  ; jae L3
+mov rcx, rdi                            ; mov v3, v0
+shr rcx, 48                             ; shr v3, 48
+L3:
+mov ax, word [+94775382205396]          ; mov v2, word [+94775382205396]
+or ax, cx                               ; or v2, v3
+mov word [+94775382205396], ax          ; mov word [+94775382205396], v2
+L12:
+L15:
+mov rsi, 281474976710656                ; mov v4, 281474976710656
+mov qword [rsp], rdi                    ; [Save] 
+call 94775360292932
+test eax, eax                           ; test v5, v5
+jz L14                                  ; jz L14
+L13:
+mov rbx, 94775382202000                 ; mov v11, 94775382202000
+call [rbx]
+mov rdi, rax                            ; [Move] 
+call 94775360285928
+L14:
+mov rax, 562949953421312                ; mov v9, 562949953421312
+jmp L1
+L2:
+mov qword [rsp], rdi                    ; [Spill] 
+mov rdi, 140730134516032                ; mov v12, 140730134516032
+mov rsi, 94775382205680                 ; mov v13, 94775382205680
+call 94775360237595
+mov rdi, qword [rsp]                    ; [Alloc] 
+call rax
+L1:
+lea rsp, [rbp-8]
+pop rbx
+pop rbp
+ret
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+I won't break all of this down, but I will say that this code tracks bits for the data type of </p><code>x</code><p class="readability-styled" style="display: inline;" xmlns=""> in its hardcoded metadata, it calls a function to compare </p><code>x</code><p class="readability-styled" style="display: inline;" xmlns=""> and </p><code>0</code><p class="readability-styled" style="display: inline;" xmlns=""> (because comparison is special-cased for Strings), and it looks up </p><code>foo()</code><p class="readability-styled" style="display: inline;" xmlns="">'s current compiled address to invoke it. The rest is the same.
+</p><p>Call this function 10 times, passing an int each time, and you get the following:
+<br></p><pre class="prettyprint">for x &lt; 10 do bar(x) ; x += 1 end
+
+L0:
+push rbp
+mov rbp, rsp
+sub rsp, 16
+L3:
+mov rax, rdi                            ; mov v5, v0
+shr rax, 32                             ; shr v5, 32
+cmp rax, 65536                          ; cmp v5, 65536
+jne L2                                  ; jne L2
+L13:
+cmp edi, 0                              ; cmp v0, 0
+jne L14                                 ; jne L5
+L4:
+mov qword [rsp], rdi                    ; [Spill] 
+mov rdi, 281474976710656                ; mov v2, 281474976710656
+call 93978509257960
+L5:
+mov rax, 562949953421312                ; mov v4, 562949953421312
+jmp L1
+L2:
+call 140676951605440
+L1:
+mov rsp, rbp
+pop rbp
+ret
+L14:
+mov qword [rsp], rdi                    ; [Spill] 
+short jmp L5
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+Obviously this code is shorter, but why?
+</p><p>Firstly, it checks to see that the value passed into <code>x</code> was actually an integer like it has seen before. If it’s wrong, it jumps to <code>L2</code> to call the deoptimized code which can handle this case. Otherwise it continues uninterrupted to <code>L13</code>.
+</p><p>That block then knows (thanks to the earlier invariant checks) that it can simply and safely run a 32 bit comparison on <code>x</code> against <code>0</code>, and jumps if not equal (<code>jne</code>) to the function exit. And when <code>x</code> does equal <code>0</code>, it continues to <code>L4</code> which is the code for <code>print(foo())</code>.
+</p><p>Note that the call to <code>foo()</code> is inlined (<code>foo</code> always returns <code>0</code>, remember?), and the special tagged <code>0</code> value is passed directly into the <code>print()</code> function, saving call overhead. Both cases (<code>x == 0</code> or not) load the return register with the special <code>void</code> value, <code>562949953421312</code>, before exiting.
+</p><p>Lastly, if we run a simple <code>fib.vvn</code> / <code>fib.js</code> comparison benchmark, Vaiven currently beats v8 by a hair and loses to Dart by a step:
+
+<br></p><pre class="prettyprint">[fibvvn] 12.676s
+[fibjs] 13.400s
+[fibdart] 10.956s
+:: fibvvn 0.86X faster than fibdart (10.956 / 12.676)
+:: fibvvn 1.06X faster than fibjs (13.400 / 12.676)
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+You should not be impressed by Vaiven beating v8 here, as it is over 5x slower in my other benchmark (lcf). Still, it shows that there are certain, very limited places where the Vaiven VM can act like a real JIT.
+</p><center><br><h3>
+Lesson 1: Deoptimization is the root of all awesome</h3><p class="readability-styled" style="display: inline;" xmlns="">
+Before creating Vaiven, I thought of JITs like V8 as optimization engines. And of course that's true, but there's a missing piece to that statement. JITs are actually phenomenal deoptimization engines.
+</p><p>One thing that I have not yet implemented in Vaiven is the ability to profile types across call sites. That means that this:
+
+<br></p><pre class="prettyprint">fn addOne of x is x + 1 end
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+can be optimized into native machine addition, and this:
+
+</p><pre class="prettyprint">fn addOneToResult is getNumber() + 1 end
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+can not. Why? Because a JIT VM has to go through a very crazy dance when </p><code>getNumber()</code><p class="readability-styled" style="display: inline;" xmlns=""> does the wrong thing and doesn't return an integer like before. The optimized code has some set of registers that mean certain things at different times during the function execution, and uses those values efficiently. The unoptimized code does too, but those registers and stack values mean completely different things.
+</p><p>When <code>getNumber()</code> returns a string, you are in the middle of one piece of assembly code, and need to hop across that barrier into a different piece of assembly code, and you need to dynamically fix up your registers to the right stuff in order to do it. This is a slow, expensive process, and one that I couldn't do because my assembler's register allocator simply doesn't track enough data (that aside, my assembler, <a href="https://github.com/asmjit/asmjit">asmjit</a>, was extremely nice to use).
+</p><p>This dance is incredibly important: without it, a JIT has no reason to exist. It’s only the ability to hop from here to there (in Vaiven's case, it can only do this hop before beginning the optimized code) that lets the machine run an efficient instruction set on your variables.
+</p><h3>
+Lesson 2: Inlining is awesome, too</h3><p class="readability-styled" style="display: inline;" xmlns="">
+In Vaiven I have gotten by so far without doing on-stack deoptimization because I wrote an inliner. While you can't inline everything, you really should not be afraid of splitting functions up for readability.
+</p><p>If I can write a VM that inlines half decently, then you bet V8 is doing an even better job. That's not to say that there won't be times where manual inlining speeds up your code, it just shows that you should stick to the common principle: premature optimization is the root of all evil. Don't manually inline anything without benchmarking, and don't keep your work (no matter how dear it is to you) if it doesn't give you a sizeable performance bump.
+</p><p>The same goes for constant folding. Please write this code:
+
+<br></p><pre class="prettyprint">var x = 2 * PI;
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+and not this code:
+
+</p><pre class="prettyprint">var x = 6.243.... // 2 * pi
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+The compiler can do this for you, even in a JIT. 
+</p><h3>
+Lesson 3: Be Leery of Micro-Benchmarks</h3><p class="readability-styled" style="display: inline;" xmlns="">
+The biggest example of this lesson is that Vaiven can beat V8 on certain benchmarks. Does this make Vaiven a faster language than JS? Absolutely not. No, its faster because I picked it, and I picked it because I knew Vaiven would be able to do it quickly.
+</p><p>Different versions of v8 will have certain bugs, and any optimization pass can get <a href="https://mrale.ph/blog/2013/04/29/performance-tuning-as-weather-forecast.html">confused by simple things</a>.&nbsp;This is especially true in a JIT, where optimization passes need to run quickly.
+</p><p>Related to lesson two, you never really know what you're testing. You may think that you're testing multiplication here:
+
+<br></p><pre class="prettyprint">for(var x = 0; x &lt; 100000; ++x) {
+  x * 2;
+}
+</pre><p class="readability-styled" style="display: inline;" xmlns="">
+but in reality a smart JIT will generate an empty loop, or no loop at all. You have to interfere with the optimizer to prevent this, and how to best interfere with it may be version specific to your JIT, or have certain limitations/caveats/tradeoffs. Any microbenchmark is likely to be fairly flawed.
+</p><p>If you really want to know what the overhead of X is in language Y, you should research the actual implementation. It may have some crazy worst case scenarios, or be very consistent. I know it’s not easy, but it’s better than learning the wrong lesson because a micro benchmark did something sneaky behind the scenes.
+</p><p>There is an optimization called on-stack-replacement which I didn't implement in Vaiven that handles this exact case. In Lesson 1 I talked about deoptimization being a hop from two completely different batches of assembly. On-stack-replacement is like the opposite of that, where a loop hops from the deoptimized version into the optimized version without waiting for a neat barrier like a function call site. Asking the Dart/V8 VM engineers about how hard it is to implement, they laughed. They asked me if I thought it was actually useful for real programs, and said the best reason for its existence is simply to speed up all the microbenchmarks people write, which otherwise would completely lose out on all the optimizations the JIT can provide. 
+</p><h3>
+Lesson 4: A lot depends on heuristics</h3><p class="readability-styled" style="display: inline;" xmlns="">
+In my VM, I have an optimization counter that detects "hot" code on the 10th run. I believe in Dart that counter is triggered on the third run. Why did I choose 10? Because it felt right at the time and I have no way of validating that any changes I make to that are a help or a hindrance.
+</p><p>I probably should have changed it to match the Dart VM, but there's an interesting thing about that as well: the integer three is not much granularity. Think about that. At some point, some engineer sat down and tried 2. They tried 4. They found 3 was better than the others, committed that, and then moved on to the next thing. Maybe they had lunch.
+</p><p>Now, Dart and V8 also have background threads optimizing code, and they have on-stack-replacement as I mentioned in lesson three. But still, it goes to show that the subtle science of picking what code is or isn't hot, at some point comes down to a meager handfull (or less!) of options. And the best option for one program may not be the best for others, though, one has to choose a single value for all.</p><p>This comes up in all sorts of places. Inliners need to guess the chances that a certain function is a good candidate or not; if it’s too eager, it will optimize the function in the current context only to have to throw it away. If it’s too cautious, it will skip long functions which would have been constant folded down into small ones and produced sizeable speed-ups to the program. This is speculative inlining, which I haven't even implemented yet in Vaiven. No, I instead have my own heuristic where I guess how much a function will get optimized. Choosing a candidate is a one-way street and my compiler has no safety mechanism to back out if the candidate leads to code explosion.
+</p><p>Part of why I was able to beat V8 in a fib benchmark is that I also tuned a heuristic for recursive inlining. By inlining a function into itself, I'm able to avoid the deoptimization checks on the way in and out. It’s similar to loop unrolling, and it can be a bad optimization that leads to code explosion. But I had fun implementing it, and it’s a heuristic that is valid as long as I have a benchmark telling me that it is.
+</p><p>The amount of heuristics here means that you should necessarily expect inconsistency across versions of your JIT. It means that any cross language benchmarks may be showing you the difference in how your program operates under a set of heuristic choices rather than measuring that language's "speed."
+</p><p>Even register allocation is a heuristic; by keeping data in registers rather than pushing them onto the stack, programs can run orders of magnitude faster. The problem of allocating a continually evolving set of live data into a fixed number of registers (and spilling the rest to the stack) is reducible to a Graph Coloring problem. Which is np hard. So you can be pretty sure that whatever V8 is doing is an approximation of that, with lots of shortcuts.
+</p><p>When everything that runs on the metal is so deeply affected by heuristics, it makes you wish you could write the assembly code yourself sometimes. There's definitely a part of me that wishes higher level languages like JavaScript and Dart offered ways to hint the inliner and register allocator and optimizer and such. However, the plethora of misguided microbenchmarks out there show that if any such options existed, that they'd be misused by people just trying to get work done, which would ultimately be a disservice. The effectiveness of such hints would be subject to all kinds of other wild factors. JITs are not simple machines.
+</p><h3>
+Lesson 5: Dynamic languages can be damn fast</h3><p class="readability-styled" style="display: inline;" xmlns="">
+Lastly, I learned that there really aren't that many limits on what a JIT can do. Vaiven as it exists is more like a C compiler than a JS interpreter. Most of the type checking code involves throwing errors, and I kept it that way because it lets me optimize more aggressively afterwards.
+</p><p>Things like bound checks and overflow checks are not inherently very expensive. Sure, they can be, but there are optimizations that JITs perform that move these checks into spare cycles of your CPU while it’s waiting to fetch or store data into or out of memory. Additionally, if you have a language where a function can stop returning numbers entirely (in order to trigger deoptimization), it's often possible to do sneaky tricks like checking that it returned an integer, and that the integer is within a certain range, at the same time. On that note, why not throw in some arbitrary precision? You're often already paying the cost for it, in an amazingly minimized way.
+</p><p>Switching to AOT compilation can in fact make things common in dynamic programming become suddenly very slow. See <a href="https://crystal-lang.org/2016/07/15/fibonacci-benchmark.html">this blog post</a> about what Ruby developers need to adapt to if they want to get the high performance promised by Crystal.
+</p><p>Sure, there are things that can be "poison pills" for performance, even in JITs. For example, another reason why my fib benchmark beats V8 is that V8 has to continually check if the fib function was redefined as a deoptimization check. I don't allow that in Vaiven, so I can produce faster code. Dart was designed to have fewer of these poison pills, for instance.
+</p><p>There will always be applications for bare metal programming, and C/C++/Rust/ASM will always have a niche to fill for those cases. Specifically, the ability to optimize data structures themselves, and offering the programmer ways to improve CPU cache performance by increasing memory locality, are the types of things that may never be optimizable by a JIT. I hope that one days JIT get us 99% of the way there, by improving our JITs or the languages we're JITting. We'll see, of course, as both of those things evolve over time.
+</p><h3>
+Closing thoughts</h3><p class="readability-styled" style="display: inline;" xmlns="">
+Making a JIT turned out to be much more similar to writing a C compiler than I had thought it would be. The amount of code dedicated to normal SSA optimization is much greater than the amount of code dedicated to logging type info, communicating between compilation strategies/phases, and handling code changing out from under you.
+</p><p>It was absolutely a fun experience, and I am hoping to continue making Vaiven a useful&nbsp; JIT so I can plug it into other things, or just leave it on a shelf with a pretty frame.
+</p><p>I encourage all readers who do or don't use JITed languages to trust them, even when it seems impossible that they could really be that good. They really are (or can be). Throw out your micro-optimizations, and choose a language that will make your code easy to work on and maintain. Focus on algorithmic performance instead of line counts.
+</p><p>In the end, this is just another blogpost backing the age old adage, coined by Donald Knuth, that premature optimization is the root of all evil.</p><p><i>Editing Credits: Dulce Flores Cruz, Wm Leler</i></p></center></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

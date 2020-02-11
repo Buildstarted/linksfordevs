@@ -5,372 +5,42 @@
 The Cliffs of Inanity -
 linksfor.dev(s)
     </title>
-	<link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
     <meta charset="utf-8">
     <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
     <meta name="google" value="notranslate">
     <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
 </head>
 <body>
     <div class="grid">
         
 <div class="readable">
-    <h1>The Cliffs of Inanity</h1>
-    <body id="page" class="home blog"> <p class="container"> <header id="page-header" class="row"> <hgroup id="site-title-description"> </hgroup> </header>
-<main id="content" class="home"> <div class="post-group default row"> <div class="nine columns post-group-content"> <article class="leftaside post-1035 post type-post status-publish format-standard hentry category-gdb category-software"> <div class="row"> <section class="post-content"> <p>One of my hobbies in GDB is cleaning things up. A lot of this is modernizing and C++-ifying the code, but I&#x2019;ve also enabled a number of warnings and other forms of code checking in the last year or two. I thought it might be interesting to look at the impact, on GDB, of these things.</p>
-<p>So, I went through my old warning and sanitizer patch series (some of which are still in progress) to see how many bugs were caught.</p>
-<p>This list is sorted by least effective first, with caveats.</p>
-<h2>-fsanitize=undefined; Score: 0 or 10</h2>
-<p>You can use <code>-fsanitize=undefined</code> when compiling to have GCC detect undefined behavior in your code.&#xA0; This series hasn&#x2019;t landed yet (it is pending some documentation updates).</p>
-<p>We have a caveat already!&#xA0; It&#x2019;s not completely fair to put UBsan at the top of the list &#x2014; the point of this is that it detects situations where the compiler <strong>might</strong> do something bad.&#xA0; As far as I know, none of the undefined behavior that was fixed in this series caused any visible problem (so from this point of view the score is zero); however, who knows what future compilers might do (and from this point of view it found 10 bugs).&#xA0; So maybe UBSan should be last on the list.</p>
-<p>Most of the bugs found were due to integer overflow, for example decoding ULEB128 in a signed type.&#xA0; There were also a couple cases of passing <code>NULL</code> to <code>memcpy</code> with a length of 0, which is undefined but should probably just be changed in the standard.</p>
-<h2>-Wsuggest-override; Score: 0</h2>
-<p>This warning will fire if you have a method that could have been marked <code>override</code>, but was not.&#xA0; This did not catch any gdb bugs.&#xA0; It does still have value, like everything on this list, because it may prevent a future bug.</p>
-<h2>-Wduplicated-cond; Score: 1</h2>
-<p>This warning detects duplicated conditions in an if-else chain.&#xA0; Normally, I suppose, these would arise from typos or copy/paste in similar conditions.&#xA0; The one bug this caught in GDB was of that form &#x2014; two identical conditions in an instruction decoder.</p>
-<p>GCC has a related <code>-Wduplicated-branches</code> warning, which warns when the arms of an if have identical code; but it turns out that there are some macro expansions in one of GDB&#x2019;s supporting libraries where this triggers, but where the code is in fact ok.</p>
-<h2>-Wunused-variable; Score: 2</h2>
-<p>When I added this warning to the build, I thought the impact would be removing some dead code, and perhaps a bit of fiddling with <code>#if</code>s.&#xA0; However, it caught a couple of real bugs: cases where a variable was unused, but should have been used.</p>
-<h2>-D_GLIBCXX_DEBUG; Score: 2</h2>
-<p>libstdc++ has a debug mode that enables extra checking in various parts of the C++ library.&#xA0; For example, enabling this will check the irreflexivity rule for <code>operator&lt;</code>.&#xA0; While the patch to enable this still hasn&#x2019;t gone in &#x2014; I think, actually, it is still pending some failure investigation on some builds &#x2014; enabling the flag locally has caught a couple of bugs.&#xA0; The fixes for these went in.</p>
-<h2>-Wimplicit-fallthrough; Score: 3</h2>
-<p>C made a bad choice in allowing switch cases to fall through by default.&#xA0; This warning rectifies this old error by requiring you to explicitly mark fall-through cases.</p>
-<p>Apparently I tried this twice; the first time didn&#x2019;t detect any bugs, but the second time &#x2014; and I don&#x2019;t recall what, if anything, changed &#x2014; this warning found three bugs: a missing break in the process recording code, and two in MI.</p>
-<h2 class="code">-Wshadow=local; Score: 3</h2>
-<p>Shadowing is when a variable in some inner scope has the same name as a variable in an outer scope.&#xA0; Often this is harmless, but sometimes it is confusing, and sometimes actively bad.</p>
-<p>For a long time, enabling a warning in this area was controversial in GDB, because GCC didn&#x2019;t offer enough control over exactly when to warn, the canonical example being that GCC would warn about a local variable named &#x201C;<code>index</code>&#x201C;, which shadowed a deprecated C library function.</p>
-<p>However, now GCC can warn about shadowing within a single function; so I wrote a series (still not checked in) to add <code>-Wshadow=local</code>.</p>
-<p>This found three bugs.&#xA0; One of the bugs was found by happenstance: it was in the vicinity of an otherwise innocuous shadowing problem.&#xA0; The other two bugs were cases where the shadowing variable caused incorrect behavior, and removing the inner declaration was enough to fix the problem.</p>
-<h2>-fsanitize=address; Score: 6</h2>
-<p>The <a href="https://en.wikipedia.org/wiki/AddressSanitizer">address sanitizer</a> checks various typical memory-related errors: buffer overflows, use-after-free, and the like.&#xA0; This series has not yet landed (I haven&#x2019;t even written the final fix yet), but meanwhile it has found 6 bugs in GDB.</p>
-<h2>Conclusion</h2>
-<p>I&#x2019;m generally a fan of turning on warnings, provided that they rarely have false positives.</p>
-<p>There&#x2019;s been a one-time cost for most warnings &#x2014; a lot of grunge work to fix up all the obvious spots.&#xA0; Once that is done, though, the cost seems small: GDB enables warnings by default when built from git (not when built from a release), and most regular developers use GCC, so build failures are caught quickly.</p>
-<p>The main surprise for me is how few bugs were caught.&#xA0; I suppose this is partly because the analysis done for new warnings is pretty shallow.&#xA0; In cases like the address sanitizer, more bugs were found; but at the same time there have already been passes done over GDB using Valgrind and memcheck, so perhaps the number of such bugs was already on the low side.</p> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-999 post type-post status-publish format-standard hentry category-emacs category-software"> <div class="row"> <section class="post-content"> <p>I&#x2019;ve been working a bit more on my <a href="http://tromey.com/blog/?p=982">Emacs JIT</a>, in particular on improving function calling.&#xA0; This has been a fun project so I thought I&#x2019;d talk about it a bit.</p>
-<h2>Background</h2>
-<p>Under the hood, the Emacs Lisp implementation has a few different ways to call functions.&#xA0; Calls to or from Lisp are dispatched depending on what is being called:</p>
-<ul>
-<li>For an interpreted function, the arguments are bound and then the interpreter is called;</li>
-<li>For a byte-compiled function using dynamic binding, the arguments are bound and then the bytecode interpreter is called;</li>
-<li>For a byte-compiled function using lexical binding, an array of arguments is passed to the bytecode interpreter;</li>
-<li>For a function implemented in C (called a &#x201C;<code>subr</code>&#x201D; internally), up to 8 arguments are supported directly &#x2014; as in, C functions of the form <code>f(arg,arg,...)</code>; for more than that, an array of arguments is passed and the function itself must decide which slot means what.&#xA0; That is, there are exactly 10 forms of <code>subr</code> (actually there are 11 but the one missing from this description is used for special forms, which we don&#x2019;t need to think about here).</li>
-</ul>
-<p>Oh, let&#x2019;s just show the definition so you can read for yourself:</p>
-<pre>union {
-Lisp_Object (*a0) (void);
-Lisp_Object (*a1) (Lisp_Object);
-Lisp_Object (*a2) (Lisp_Object, Lisp_Object);
-Lisp_Object (*a3) (Lisp_Object, Lisp_Object, Lisp_Object);
-Lisp_Object (*a4) (Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object);
-Lisp_Object (*a5) (Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object);
-Lisp_Object (*a6) (Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object);
-Lisp_Object (*a7) (Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object);
-Lisp_Object (*a8) (Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object);
-Lisp_Object (*aUNEVALLED) (Lisp_Object args);
-Lisp_Object (*aMANY) (ptrdiff_t, Lisp_Object *);
-} function;
-</pre>
-<h2>Initial Approach</h2>
-<p>Initially the JIT worked like a lexically-bound bytecode function: an array of arguments was passed to the JIT-compiled function.&#xA0; The JIT compiler emitted a bunch of code to decode the arguments.</p>
-<p>For Lisp functions taking a fixed number of arguments, this wasn&#x2019;t too bad &#x2014; just moving values from fixed slots in the array to fixed values in the IR.</p>
-<p>Handling optional arguments was a bit uglier, involving a series of checks and branches, so that un-bound arguments could correctly be set to nil.&#xA0; These were done something like:</p>
-<pre>if nargs &lt; 1 goto nope1
-arg0 = array[0]
-if nargs &lt; 2 goto nope2
-arg1 = array[1]
-goto first_bytecode
-nope1: arg0 = nil
-nope2: arg1 = nil
-first_bytecode: ...
-</pre>
-<p><code>&amp;rest</code> arguments were even a bit worse, requiring a call to create a list.&#xA0; (This, I think, can&#x2019;t be avoided without a much smarter compiler, one that would notice when reifying the list could be avoided.)</p>
-<p>Note that calling also has to use the fully generic approach: we make a temporary array of arguments, then call a C function (<code>Ffuncall</code>) that does the dispatching to the callee.&#xA0; This is also a source of inefficiency.</p>
-<h2>Today</h2>
-<p>Recently, I changed the JIT from this approach to use the equivalent of the subr calling convention.&#xA0; Now, any function with 8 or fewer (non-<code>&amp;rest</code>) arguments is simply an ordinary function of N arguments, and we let the already-existing C code deal with optional arguments.</p>
-<p>Although this often makes the generated assembly simpler, it won&#x2019;t actually perform any better &#x2014; the same work is still being done, just somewhere else.&#xA0; However, this approach does use a bit less memory (most JIT-compiled functions are shorter); and it opens the door to an even bigger improvement.</p>
-<h2>The Future</h2>
-<p>What I&#x2019;m implementing now is an approach to removing most of the overhead from JIT-compiled function calls.</p>
-<p>Now, ideally what I&#x2019;d like is to have every call site work &#x201C;like C&#x201D;: move the arguments to exactly where the callee expects them to be, and then call.&#xA0; However, while looking at this I found some problems that make it tricky:</p>
-<ul>
-<li>We still need to be able to call Lisp functions from C, so we&#x2019;re limited to, at best, <code>subr</code>-style calling conventions;</li>
-<li>While <code>&amp;rest</code> arguments are straightforward (in our simple compiler, somebody just has to make the list); <code>&amp;optional</code> arguments don&#x2019;t have a good C-like analog.&#xA0; The callee could push extra arguments, but&#x2026;</li>
-<li>In Lisp, a function can be redefined at any time, and it is fine to change the function&#x2019;s signature.</li>
-</ul>
-<p>Consider this example:</p>
-<pre>(defun callee (x &amp;optional y) (list x y))
-(defun caller (callee 23))
-(defun callee (x) (list x))
-</pre>
-<p>Now, if we compiled <code>caller</code> with a direct call, it would turn out like <code>(callee 23 nil)</code>.&#xA0; But then, after the redefinition, we&#x2019;d have to recompile <code>caller</code>.&#xA0; Note this can go the other way as well &#x2014; we could redefine <code>callee</code> to have more optional arguments, or even more fixed arguments (meaning that the call should now throw an exception).</p>
-<p>Recompiling isn&#x2019;t such a big deal, right?&#xA0; The compiler is set up very naively: it just compiles every function that is invoked, and in this mode &#x201C;recompilation&#x201D; is equivalent to &#x201C;just abandon the compiled code&#x201D;.</p>
-<p>Except&#x2026; what do you do if <code>caller</code> is being run when <code>callee</code> is redefined?&#xA0; Whoops!</p>
-<p>Actually, of course, this is a known issue in JIT compilation, and one possible solution is &#x201C;on-stack replacement&#x201D; (&#x201C;OSR&#x201D;) &#x2014; recompiling a function while it is running.</p>
-<p>This to me seemed like a lot of bookkeeping, though: keeping a list of which functions to compile when some function was redefined, and figuring out a decent way to implement OSR.</p>
-<h2>The Plan</h2>
-<p>Instead I came up a with a simpler approach, involving &#x2014; you guessed it &#x2014; indirection.</p>
-<p>On the callee side, I am going to keep the <code>subr</code> calling convention that is in place today.&#xA0; This isn&#x2019;t ideal in all cases, but it is reasonable for a lot of code.&#xA0; Instead, all the changes will take place at spots where the JIT emits a call.</p>
-<p>I am planning to have three kinds of function calls in the JIT:</p>
-<ol>
-<li>Indirect.&#xA0; If we see some code where we can&#x2019;t determine the callee, we&#x2019;ll emit a call via <code>Ffuncall</code> like we do today.</li>
-<li>Fully direct.&#xA0; There are some functions that are implemented in C, and that I think are unreasonable to redefine.&#xA0; For these, we&#x2019;ll just call the C function directly.&#xA0; Another fully-direct case is where the code dispatches to a byte-code vector coming from the function&#x2019;s constant pool &#x2014; here, there&#x2019;s no possibility to redefine the function, so we can simply always call the JIT-compiled form.</li>
-<li>Semi-direct.&#xA0; This will be the convention used when JIT-compiled code calls via a symbol.</li>
-</ol>
-<p>The core idea of a semi-direct call is to have multiple possible implementations of a function:</p>
-<ul>
-<li>One &#x201C;true&#x201D; implementation.&#xA0; If the function has 8 or fewer arguments (of any kind), it will simply have that many arguments.&#xA0; The JIT will simply pretend that an optional argument is fixed.&#xA0; If it has more than 8 arguments, following the <code>subr</code> convention it will just accept an array of arguments.</li>
-<li>If the function has optional or rest arguments, there will be trampoline implementations with fewer arguments, that simply supply the required number of additional arguments and then call the true implementation.</li>
-<li>Remember how there are exactly 10 relevant kinds of <code>subr</code>?&#xA0; Any forms not covered by the above can simply throw an exception.</li>
-</ul>
-<p>A vector of function pointers will be attached to each symbol, and so the JIT-compiled code can simply load the function pointer from the appropriate slot (a single load &#x2014; the nice thing about a JIT is we can simply hard-code the correct address).</p>
-<p>Then, when a function is redefined, we simply define any of the trampolines that are required as well.&#xA0; We won&#x2019;t even need to define all of them &#x2014; only the ones that some actually-existing call site has needed.</p>
-<p>Of course, no project like this is complete without a rathole, which is why instead of doing this I&#x2019;m actually working on writing a compiler pre-pass so that the compiler itself can have the appropriate information about the callee at the point of call.&#xA0; This sub-project turns out to feel a lot like writing a Java bytecode verifier&#x2026;</p>
-<h2>Further Future</h2>
-<p>Currently the JIT is only used for lexically-bound bytecode functions.&#xA0; That&#x2019;s a reasonable restriction, I think &#x2014; so one thing we should do is make sure that more of the Emacs core is using lexical binding.&#xA0; Currently, only about 1/3 of the Lisp files in Emacs enable this feature; but many more easily could.</p>
-<p>Once my current project is done, the JIT will have a decent calling convention by default.&#xA0; Since we&#x2019;ll have information about callees at points of call, I think it will be a good time to look into inlining.&#xA0; This will require tackling recompilation (and perhaps OSR) and having some sort of tiered optimization approach.&#xA0; There is still a lot for me to learn here &#x2014; when does it make sense to inline?&#xA0; And what metrics should I use to decide when some code is hot enough to optimize?&#xA0; So, good times head even once the current project is done; and BTW if you have a reading list for any of this I would love to hear about it.</p>
-<p>Once this is done, well, I have more ideas for even deeper JIT improvements.&#xA0; Those will have to wait for another post.</p> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-982 post type-post status-publish format-standard hentry category-emacs category-software"> <div class="row"> <section class="post-content"> <p>There have been a few efforts at writing an Emacs JIT &#x2014; <a href="http://www.mundell.ukfsn.org/native/">the original one</a>, <a href="https://github.com/burtonsamograd/emacs-jit">Burton Samograd&#x2019;s</a>, and also <a href="https://lists.gnu.org/archive/html/emacs-devel/2016-12/msg00425.html">Nick LLoyd&#x2019;s</a>. So, what else to do except write my own?</p>
-<p>Like the latter two, I based mine on <a href="https://www.gnu.org/software/libjit/">GNU libjit</a>. I did look at a few other JIT libraries: LLVM, gcc-jit, GNU Lightning, <a href="http://myjit.sourceforge.net/">MyJit</a>.&#xA0; libjit seemed like a nice middle ground between a JIT with heavy runtime costs (LLVM, GCC) and one that is too lightweight (Lightning).</p>
-<p>All of these Emacs JITs work by compiling bytecode to native code.&#xA0; Now, I don&#x2019;t actually think that is the best choice &#x2014; it&#x2019;s just the easiest &#x2014; but my other project to do a more complete job in this area isn&#x2019;t really ready to be released.&#xA0; So bytecode it is.</p>
-<p>Emacs implements a somewhat weird stack-based bytecode.&#xA0; Many ordinary things are there, but seemingly obvious stack operations like &#x201C;swap&#x201D; do not exist; and there are bytecodes for very specialized Emacs operations like <code>forward-char</code> or <code>point-max</code>.</p>
-<p>Samograd describes his implementation as &#x201C;compiling down the spine&#x201D;.&#xA0; What he means by this is that the body of each opcode is implemented by some C function, and the JIT compiler emits, essentially, a series of subroutine calls.&#xA0; This used to be called &#x201C;jsr threading&#x201D; in the olden days, though maybe it has some newer names by now.</p>
-<p>Of course, we can do better than this, and Lloyd&#x2019;s JIT does.&#xA0; His emits instructions for the bodies of most bytecodes, deferring only a few to helper functions.&#xA0; This is a better approach because many of these operations are only one or two instructions.</p>
-<p>However, his approach takes a wrong turn by deferring stack operations to the compiled code.&#xA0; For example, in this JIT, the <code>Bdiscard</code> opcode, which simply drops some items from the stack, is implemented as:</p>
-<pre> CASE (Bdiscard):
- {
-   JIT_NEED_STACK;
-   JIT_INC (ctxt.stack, -sizeof (Lisp_Object));
-   JIT_NEXT;
-   NEXT;
- }</pre>
-<p>It turns out, though, that this isn&#x2019;t needed &#x2014; at least, for the bytecode generated by the Emacs byte-compiler, the stack depth at any given PC is a constant.&#xA0; This means that the stack adjustments can be done at compile time, not runtime, leading to a performance boost.&#xA0; So, the above opcode doesn&#x2019;t need to emit code at all.</p>
-<p>(And, if you&#x2019;re worried about hand-crafted bytecode, it&#x2019;s easy to write a little bytecode verifier to avoid JIT-compiling invalid things.&#xA0; Though of course you shouldn&#x2019;t worry, since you can already crash Emacs with bad bytecode.)</p>
-<p>So, naturally, my implementation does not do this extra work.&#xA0; And, it inlines more operations besides.</p>
-<h2>Caveat</h2>
-<p>I&#x2019;ve only enabled the JIT for bytecode that uses lexical binding.&#xA0; There isn&#x2019;t any problem enabling it everywhere, I just figured it probably isn&#x2019;t that useful, and so I didn&#x2019;t bother.</p>
-<h2>Results</h2>
-<p>The results are pretty good.&#xA0; First of all, I have it set up to automatically JIT compile every function, and this doesn&#x2019;t seem any slower than ordinary Emacs, and it doesn&#x2019;t crash.</p>
-<p>Using the <a href="https://www.gnu.org/software/emacs/manual/html_node/elisp/Speed-of-Byte_002dCode.html">&#x201C;silly-loop&#x201D; example</a> from the Emacs Lisp manual, with lexical binding enabled, I get these results:</p>
-<table>
-<tbody>
-<tr>
-<th>Mode</th>
-<th>Time</th>
-</tr>
-<tr>
-<td>Interpreted</td>
-<td>4.48</td>
-</tr>
-<tr>
-<td>Byte compiled</td>
-<td>0.91</td>
-</tr>
-<tr>
-<td>JIT</td>
-<td>0.26</td>
-</tr>
-</tbody>
-</table>
-<p>This is essentially the best case for this JIT, though.</p>
-<h2>Future Directions</h2>
-<p>I have a few ideas for how to improve the performance of the generated code.&#xA0; One way to look at this is to look at Emacs&#x2019; own C code, to see what advantages it has over JIT-compiled code.&#xA0; There are really three: cheaper function calls, inlining, and unboxing.</p>
-<p>Calling a function in Emacs Lisp is quite expensive.&#xA0; A call from the JIT requires marshalling the arguments into an array, then calling <code>Ffuncall</code>; which then might dispatch to a C function (a &#x201C;subr&#x201D;), the bytecode interpreter, or the ordinary interpreter.&#xA0; In some cases this may require allocation.</p>
-<p>This overhead applies to nearly every call &#x2014; but the C implementation of Emacs is free to call various primitive functions directly, without using <code>Ffuncall</code> to indirect through some Lisp symbol.</p>
-<p>Now, these direct calls aren&#x2019;t without a cost: they prevent the modification of some functions from Lisp.&#xA0; Sometimes this is a pain (it might be handy to hack on load from Lisp), but in many cases it is unimportant.</p>
-<p>So, one idea for the JIT is to keep a list of such functions and then emit direct calls rather than indirect ones.</p>
-<p>Even better than this would be to improve the calling convention so that all calls are less expensive.&#xA0; However, because a function can be redefined with different arguments, it is tricky to see how to do this efficiently.</p>
-<p>In the Emacs C code, many things are inlined that still aren&#x2019;t inlined in the JIT &#x2014; just look through lisp.h for all the inline functions (and/or macros, lisp.h is &#x201C;unusual&#x201D;).&#xA0; Many of these things could be done in the JIT, though in some cases it might be more work than it is worth.</p>
-<p>Even better, but also even more difficult, would be inlining from one bytecode function into another.&#xA0; High-performance JITs do this when they notice a hot spot in the code.</p>
-<p>Finally, unboxing.&#xA0; In the Emacs C code, it&#x2019;s relatively normal to type-check Lisp objects and then work solely in terms of their C analogues after that point.&#xA0; This is more efficient because it hoists the tag manipulations.&#xA0; Some work like this could be done automatically, by writing optimization passes for libjit that work on libjit&#x2019;s internal representation of functions.</p>
-<h2>Getting the Code</h2>
-<p>The code is on the <a href="https://github.com/tromey/emacs/tree/libjit">libjit branch</a> in my Emacs repository on github.&#xA0; You&#x2019;ll have to build your own libjit, too, and if you want to avoid hacking on the Emacs Makefile, you will need my <a href="https://github.com/tromey/libjit/tree/pkg-config">fork of libjit</a> that adds pkg-config files.</p> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-979 post type-post status-publish format-standard hentry category-gdb category-rust category-software"> <div class="row"> <section class="post-content"> <p>I&#x2019;ve recently switched groups at Mozilla to start working full-time on improving Rust debugging.&#xA0; To kick this off and to meet people from the various projects I&#x2019;m working on &#x2014; the Rust compiler, lldb, llvm, gdb, and (eventually) the DWARF standard &#x2014; I will speak about this work at FOSDEM.&#xA0; If you&#x2019;re going and want to meet up, drop me a line.</p> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-927 post type-post status-publish format-standard hentry category-firefox category-gdb category-software"> <div class="row"> <section class="post-content"> <p>A year or so ago I was asked to debug a crash in the Firefox devtools.&#xA0; Crashes are easy!&#xA0; I fired up gdb and reproduced the crash&#x2026; which turned out to be in some code JITted by SpiderMonkey.&#xA0; I was immediately lost; even a simple <code>bt</code> did not work.&#xA0; Someone more familiar with the JIT &#x2014; hi Shu &#x2014; had to dig out the answer :-(.</p>
-<p>I did take the opportunity to get some information from him about how he found the result, though.&#xA0; He pointed me to the code responsible for laying out JIT stack frames.&#xA0; It turned out that gdb could not unwind through JIT frames, but it could be done by hand &#x2014; so I resolved then to eventually fix this.</p>
-<h2>Phase One</h2>
-<p>I knew from my gdb hacking that gdb has a JIT unwinding API.&#xA0; Actually &#x2014; and isn&#x2019;t this the way most programs end up working? &#x2014; it has two.</p>
-<p>The <a href="https://sourceware.org/gdb/onlinedocs/gdb/Registering-Code.html#Registering-Code">first JIT API</a> requires some extra work on the part of the JIT: it constructs an object file, typically ELF and DWARF, in memory, then calls a hook.&#xA0; GDB sets a breakpoint on this hook and, when hit, it reads the data from the inferior.&#xA0; This lets the JIT provide basically any kind of information &#x2014; but it&#x2019;s pretty heavy.</p>
-<p>So, I focused my attention on <a href="https://sourceware.org/gdb/onlinedocs/gdb/Custom-Debug-Info.html#Custom-Debug-Info">the second API</a>.&#xA0; In this mode, the JIT author would provide a shared library that used some callbacks to inform gdb of the details of what was going on.&#xA0; The set of callbacks was much more limited, but could at least describe how to unwind the registers.&#xA0; So, I figured that this is what I would do.</p>
-<p>But&#x2026; I didn&#x2019;t really want to write this in C.&#xA0; That would be a real pain!&#xA0; C is fiddly and hard to deal with, and it would mean constant rebuilding of the shared library while debugging, and SpiderMonkey already had a reasonable number of gdb-python scripts &#x2014; surely this could be done in Python.</p>
-<p>So I took the quixotic approach, namely writing a shared library that used the second gdb JIT API but only to expose this API to Python.</p>
-<p>Of course, this turned out to be Rube Goldbergian.&#xA0; Various parts of the gdb Python API could not be called from the JIT shared library, because those bits depended on other state in gdb, which wasn&#x2019;t set properly when the JIT library was being called.&#xA0; So, I had gdb calling into my shared library, which called my Python code, which then invoked a new gdb command (written in Python and supplied by my package) &#x2014; that existed solely for the purpose of setting this internal state properly &#x2014; and that in turn invoked the code I wanted to run, say to fetch memory or a register or something.</p>
-<p>Computer Science!</p>
-<p>Well, that took a while.&#xA0; But it sort of worked!&#xA0; And maybe I could just keep it in github and not put it in Mozilla Central and avoid learning about the Firefox build system and copying in some gdb header file and license review and whatnot.</p>
-<p>So I started writing the actual Python code&#x2026; OMG.&#xA0; And see below since you will totally want to know about this.&#xA0; But meanwhile&#x2026;</p>
-<p>&#x2026; while I was hacking away on this crazy idea, someone implemented the much more sane idea of just exposing gdb&#x2019;s unwinder API to gdb&#x2019;s Python layer.</p>
-<p>Hmm&#x2026; why didn&#x2019;t I do that?&#xA0; Well, I left gdb under a bit of a cloud, and didn&#x2019;t really want to be that involved at the time.&#xA0; Plus, you know, gdb is a high quality project; which means that if you write a giant patch to expose the unwinding API, you have to be prepared for 17 rounds of patch review (this really happened once), plus writing documentation and tests.&#xA0; Sometimes it&#x2019;s just easier to channel one&#x2019;s inner Rube.</p>
-<h2>Phase Two</h2>
-<p>The integrated Python API was a great development.&#xA0; Now I could delete my shared library and my insane trampoline hacks, and focus on my insane unwinding code.</p>
-<p>A lot of this work was straightforward, in the sense that the general outline was clear and just the details remained.&#xA0; The details amount to things like understanding the SpiderMonkey frame descriptor (which partly describes the previous frame and partly the new frame; there&#x2019;s one comment explaining this that somehow eluded me for quite a while); duplicating the SpiderMonkey JIT unwinding code in Python; and of course carefully reading the SpiderMonkey code that JITs the &#x201C;entry frame&#x201D; code to understand how registers are spilled.</p>
-<p>Naturally, while doing this it turned out that I was maybe the first person to use these gdb APIs in anger.&#xA0; I found some gdb crashes, oops!&#xA0; The docs would have been impenetrable, except I already knew the underlying C APIs on which they were based&#x2026; whew!&#xA0; The Python API was unexpectedly picky in other areas, too.</p>
-<p>But then there was also some funny business, one part in gdb, and one part in SpiderMonkey.</p>
-<p>GDB is probably more complicated than you realize.&#xA0; In this case, the complexity is that, in gdb, each stack frame can have its own architecture.&#xA0; This seemingly weird functionality is actually used; I think it was invented for the SPU, but some other chips have multiple modes as well.&#xA0; But what this means is that the question &#x201C;what architecture is this program?&#x201D; is not well-defined, and anyway gdb&#x2019;s Python layer doesn&#x2019;t provide you a way to find whatever approximation it is that would make sense in your specific case.&#xA0; However, when writing the SpiderMonkey unwinder, it kind of actually is well-defined and we&#x2019;d like to know the answer to know which unwinder to choose.</p>
-<p>For this problem I settled on the probably terrible idea of checking whether a given register is available.&#xA0; That is, if you see &#x201C;<code>$rip</code>&#x201C;, you can guess it&#x2019;s x86-64.</p>
-<p>The other problem here is that gdb thinks that, since you wrote an unwinder, it should get the first stab at unwinding.&#xA0; That&#x2019;s very polite!&#xA0; But for SpiderMonkey, deciding &#x201C;hey, is this PC in some code the JIT emitted?&#x201D; is actually a real pain, or at least outside the random bits of it I learned in order to make all this work.</p>
-<p>Aha!&#xA0; I know, there&#x2019;s probably a Python API to say &#x201C;is this address associated with some shared library?&#x201D;&#xA0; I remembered reading and/or reviewing a patch&#x2026; but no, <code>gdb.solib_name</code> is close but doesn&#x2019;t do the right thing for addresses in the main executable.&#xA0; WAT.</p>
-<p>I tried several tricks without success, and in the end I went with parsing <code>/proc/maps</code> to get the mappings to decide whether a given frame should be handled by this unwinder or by gdb.&#xA0; Horrible.&#xA0; And fails with remote debugging.</p>
-<p>Luckily, nobody does remote debugging.</p>
-<h2>Remote Debugging</h2>
-<p>Oh, wait, people do remote debugging at Mozilla all the time.&#xA0; They don&#x2019;t call it &#x201C;remote debugging&#x201D; though &#x2014; they call it &#x201C;<a href="http://rr-project.org/">using RR</a>&#x201C;, which while it runs locally, appears to be remote to gdb; and, importantly, during replay mode fakes the PID, and does other deep magic, though not deep enough to extend to making a fake map file that could be read via gdb&#x2019;s <code>remote get</code> command.</p>
-<p>By the way, you should be using RR.&#xA0; It&#x2019;s the best advance in debugging since, well, gdb.&#xA0; It&#x2019;s a process record-and-replay program, but unlike gdb&#x2019;s built-in reverse debugging, it handles threads properly and has decent performance.</p>
-<h2>Oh Well</h2>
-<p>Oh well.&#xA0; It just won&#x2019;t work remotely.&#xA0; Or at least not until fellow Mozillian (this always seems like it should be &#x201C;Mozillan&#x201D; to me, but it&#x2019;s not, there really is that extra &#x201C;i&#x201D;) and all-star Nicolas Pierron wrote some additional Python to read some SpiderMonkey tables to make the decision in a more principled way.&#xA0; Now it will all work!</p>
-<p>Though looking now I wonder if I dreamed this, because the code isn&#x2019;t checked in.&#xA0; I know he had a patch but my memory is a bit fuzzy &#x2014; maybe in the end it didn&#x2019;t work, because RR didn&#x2019;t implement the <code>qGetTLSAddr</code> packet, which gdb uses to read thread-local storage.&#xA0; Did I mention the thread-locals?</p>
-<h2>The Real Start of the Story</h2>
-<p>So, way back at the beginning, during my initial foray into this code, I found that a crucial bit of information &#x2014; the appropriately-named <code>TlsPerThreadData</code> &#x2014; was stashed away in a thread-local variable.&#xA0; Information stored here is needed by the unwinder in order to unwind from a C++ frame into a JIT frame.</p>
-<p>Only, Firefox didn&#x2019;t use &#x201C;real&#x201D; thread-local variables, the things that so many glibc and gcc hackers put so much effort into micro-optimizing.&#xA0; No, it just used a template class that wrapped <code>pthread_setspecific</code> and friends in a relatively ergonomic way.</p>
-<p>Naturally, for an unwinder this is a disaster.&#xA0; Why?&#xA0; Unwinding is basically the dissection of the stack; but in order to compute the value of one of these thread-local-storage objects, the unwinder would have to make some function calls in the inferior (in fact this prevents it from working on OSX).&#xA0; But these would affect the stack, and also potentially let other inferior code (in other threads &#x2014; remember, gdb is complicated and you can exert various unusual kinds of control like this) run as well.</p>
-<p>So I neglected to mention the very first step: changing Firefox to use <code>__thread</code>.&#xA0; (Ok, I didn&#x2019;t really neglect to mention it, I was just being lazy and anyway it&#x2019;s a shaggy dog story.)</p>
-<h2>Do Not Use libthread_db</h2>
-<p>RR did not implement <code>qGetTLSAddr</code>, which we needed, because&#xA0; lots of people at Mozilla use RR.&#xA0; So I set out to implement that.&#xA0; This meant a foray into the dangerous world of <code>libthread_db</code>.</p>
-<p>For reasons I do not know, and suspect that I do not want to know, glibc has historically followed many Solaris conventions.&#xA0; One such Solaris innovation was <code>libthread_db</code> &#x2014; a library that debuggers use to find certain information from libc, information like the address of a thread-local variable</p>
-<p>On the surface this seems like a great idea: don&#x2019;t bake the implementation details of the C library into the debugger.&#xA0; Instead, let the debugger use a debugging library that comes with the C library.&#xA0; And, if you designed it that way, it would be a good idea.</p>
-<p>Sadly, though, <code>libthread_db</code> was not designed that way.&#xA0; Oh no.</p>
-<p>For example, <code>libthread_db</code> has a callback interface.&#xA0; The calling program &#x2014; gdb or rr &#x2014; must provide some functions that <code>libthread_db</code> can call, to do some simple things like &#x201C;read some memory&#x201D;; or some very complicated things like &#x201C;find the address of a symbol given its name&#x201D;.&#xA0; Normal C programmers might implement these callbacks using a structure containing function pointers.&#xA0; But not <code>libthread_db</code>!&#xA0; Instead it uses fixed symbol names that must be provided by the calling application.&#xA0; Not all of these are required for it to work (you get to figure out which, yay!), but some definitely are.&#xA0; And, you have to <code>dlopen</code> a <code>libthread_db</code> that matches the <code>libc</code> of the inferior that you&#x2019;re debugging (or link against it, but that&#x2019;s also obviously bad).</p>
-<p>Wait, you say.&#xA0; Doesn&#x2019;t that mess up cross-debugging?&#xA0; Why yes!&#xA0; Yes it does!&#xA0; Which is why <code>qGetTLSAddr</code> has to be in the gdb remote serial protocol to start with.</p>
-<p>Hey, maybe the Linux vendors should fix this.&#xA0; They are &#x2014; see <a href="https://gbenson.net/?p=449">Gary Benson&#x2019;s Infinity project</a> &#x2014; but unfortunately that&#x2019;s still in development and I wanted RR to work sooner.</p>
-<p>Ok, so whew.&#xA0; I wrote <code>qGetTLSAddr</code> support for RR.&#xA0; This was a small patch in the end, but an unusual pain in an already painful series.&#xA0; Hopefully this won&#x2019;t spill out into other programs.</p>
-<h2>glibc</h2>
-<p>Hahaha, you are so funny.&#xA0; Of course it spills out: remember how you have to define a bunch of functions with specific names in your program in order to use <code>libthread_db</code>?&#xA0; Well, how do you know you got the types correct?</p>
-<p>Yeah, you include <code>&lt;proc_service.h&gt;</code> (a name deliberately chosen to confuse, I suppose, why not, it doesn&#x2019;t bear any obvious relationship to the library).&#xA0; Only, that was never installed by glibc.&#xA0; Instead, gdb just copied it into the source tree.</p>
-<p>So naturally I went and fixed this in glibc.&#xA0; And, even more naturally, this broke the gdb build, which was autoconf&#x2019;d to check for a file that never existed in the past.&#xA0; LOL.</p>
-<h2>Thank You Cthulhu</h2>
-<p>At this point I figured it was only a matter of time until I had to patch the kernel.&#xA0; Thankfully this hasn&#x2019;t been necessary yet.</p>
-<h2>It Says What</h2>
-<p>In gdb the actual unwinding and the display of frames are separate concerns.</p>
-<p>And let me digress here to say that gdb&#x2019;s unwinder design is excellent.&#xA0; I believe it was redone by Andrew Cagney (this was well before my active time in gdb, so apologies if you&#x2019;re reading this and you did it and I&#x2019;ve misattributed it).&#xA0; Like much of gdb, many of the details are bizarre and take one back to the byte-counting days of 1987; but the high level design is very solid and has endured with, I think, just one significant change (to support inline functions) in the intervening 15 or so years.&#xA0; I&#x2019;ve long thought that this is a remarkable accomplishment in the programming world.</p>
-<p>So, yes.&#xA0; It&#x2019;s not enough to just unwind.&#xA0; Simply having an unwinder yields backtraces with lines like:</p>
-<p><code>#5 0xfeefee ???</code></p>
-<p>Better than nothing!&#xA0; But not yet great.</p>
-<p>The second part of the SpiderMonkey unwinder is, therefore, a gdb &#x201C;frame filter&#x201D;.&#xA0; This is an object that takes raw frames and decorates them with information like a function name, or a file name, or arguments.</p>
-<p>Work to add this information is ongoing &#x2014; I landed one patch just yesterday, and another one, to add more information about interpreted frames, is still in the works.&#xA0; And there are two more bugs filed&#x2026; maybe this project, like this blog post, will never conclude.&#xA0; It will just scroll endlessly.</p>
-<p>But now, with all the code in place, <code>bt</code> can show something like:</p>
-<p><code>#6 0x00007ffff7ff20f3 in &lt;&lt;JitFrame_BaselineJS &quot;f1&quot;&gt;&gt; (this=JSVAL_VOID, arg1=$jsval(4700))</code></p>
-<p>This is the call <code>f1(4700)</code>.</p>
-<h2>Let&#x2019;s Just Have One More</h2>
-<p>Of course we still couldn&#x2019;t enable this unwinder by default.&#xA0; You have to enable it by hand.</p>
-<p>And by the way, in the first release of gdb&#x2019;s Python unwinder feature, enabling or disabling an unwinder didn&#x2019;t flush the frame cache, so it wouldn&#x2019;t actually take effect until some invisible-to-the-user state change took place.&#xA0; I fixed this bug, but here Pedro Alves also taught me the secret gdb command <code>flushregs</code>, which in fact just flushes the frame cache. (I&#x2019;m going to go out on a limb and guess that this command predates the already ancient <code>maint</code> prefix command, hence its weird name.)</p>
-<p>Anyway, you have to enable it by hand because the unwinder itself doesn&#x2019;t work properly if the outermost frame is in JIT code.&#xA0; The JIT, in the interest of performance, doesn&#x2019;t maintain a frame pointer.&#xA0; This means that in the outermost frame, there&#x2019;s no reliable way to find the object that describes this frame and links to the previous frame.</p>
-<p>Now, normally in this case gdb would either resort to debug info (not available here), or in extremis its encyclopedic suite of prologue analyzers (yes, gdb can analyze common function prologues for all architectures developed in the last 25 years to figure out stuff) &#x2014; but naturally JIT compilers go their own way here as well.</p>
-<p>Humans, like Shu back at the start of this story, can do this by dumping parts of the stack and guessing which bytes represent the frame header.</p>
-<p>But, I&#x2019;ve been reluctant and a bit afraid to hack a heuristic into the unwinder.</p>
-<p>To sum up &#x2014; in case you missed it &#x2014; this means that all the code written during this entire saga would still not have helped with my original bug.</p>
-<h2>The End</h2> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-911 post type-post status-publish format-standard hentry category-gcc category-java category-software"> <div class="row"> <section class="post-content"> <p>I originally posted this on G+ but I thought maybe I should expand it a little and archive it here.</p>
-<p>The patch to delete gcj went in recently.</p>
-<p>When I was put on the gcj project at Cygnus, I remember thinking that Java was just a fad and that this was just a temporary thing for me. I wasn&#x2019;t that interested in it. Then I ended up working on it for 10 years.</p>
-<p>In some ways it was the high point of my career.</p>
-<p>Socially it was fantastic, especially once we merged with the Classpath community &#x2014; I&#x2019;ve always considered Mark Wielaard&#x2019;s leadership in that community as the thing that made it so great.&#xA0; I worked with and met many great people while working on gcj and Classpath, but I especially wanted to mention Andrew Haley, who is the single best debugger I&#x2019;ve ever met, and who stayed in the Java world, now working on OpenJDK.</p>
-<p>We also did some cool technical things in gcj. The binary compatibility ABI was great, and the split verifier was very fun to come up with.&#xA0; Per Bothner&#x2019;s early vision for gcj drove us for quite a while, long after he left Cygnus and stopped working on it.</p>
-<p>On the downside, gcj was never quite up to spec with Java. I&#x2019;ve met Java developers even as recently as last year who harbor a grudge against gcj.</p>
-<p>I don&#x2019;t apologize for that, though. We were trying something difficult: to make a free Java with a relatively small team.</p>
-<p>When OpenJDK came out, the Sun folks at FOSDEM were very nice to say that gcj had influenced the opening of the JDK. Now, I never truly believed this &#x2014; I&#x2019;m doubtful that Sun ever felt any heat from our ragtag operation &#x2014; but it was very gracious of them to say so.</p>
-<p>Since the gcj days I&#x2019;ve been searching for basically the same combination that kept me hacking on gcj all those years: cool technology, great social environment, and a worthwhile mission.</p>
-<p>This turned out to be harder than I expected. I&#x2019;m still searching. I never thought it was possible to go back, though, and with this deletion, this is clearer than ever.</p>
-<p>There&#x2019;s a joy in deleting code (though in this case I didn&#x2019;t get to do the deletion&#x2026; grrr); but mainly this weekend I&#x2019;m feeling sad about the final close of this chapter of my life.</p> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-902 post type-post status-publish format-standard hentry category-gdb category-software"> <div class="row"> <section class="post-content"> <p>In firefox development, it&#x2019;s normal to do most development tasks via the <code>mach</code> command. Build? Use <code>mach</code>. Update UUIDs? Use <code>mach</code>. Run tests? Use <code>mach</code>. Debug tests? Yes, <code>mach mochitest --debugger gdb</code>.</p>
-<p>Now, normally I run gdb inside emacs, of course. But this is hard to do when I&#x2019;m also using mach to set up the environment and invoke gdb.</p>
-<p>This is really an Emacs bug. GUD, the Emacs interface to all kinds of debuggers, is written as its own mode, but there&#x2019;s no really great reason for this. It would be way cooler to have an adaptive shell mode, where running the debugger in the shell would magically change the shell-ish buffer into a gud-ish buffer. And somebody &#x2014; probably you! &#x2014; should work on this.</p>
-<p>But anyway this is hard and I am lazy. Well, sort of lazy and when I&#x2019;m not lazy, also unfocused, since I came up with three other approaches to the basic problem. Trying stuff out and all. And these are even the principled ways, not crazy stuff like <code>screenify</code>.</p>
-<p>Oh right, the basic problem.&#xA0; The basic problem with running gdb from mach is that then you&#x2019;re just stuck in the terminal. And unless you dig the TUI, which I don&#x2019;t, terminal gdb is not that great to use.</p>
-<p>One of the ideas, in fact the one this post is about, since this post isn&#x2019;t about the one that I couldn&#x2019;t get to work, or the one that is also pretty cool but that I&#x2019;m not ready to talk about, was: hey, can&#x2019;t I just attach gdb to the test firefox? Well, no, of course not, the test program runs too fast (sometimes) and racing to attach is no fun. What would be great is to be able to pre-attach &#x2014; tell gdb to attach to the next instance of a given program.</p>
-<p>This requires kernel support. Once upon a time there were some gdb and kernel patches (search for &#x201C;global breakpoints&#x201D;) to do this, but they were never merged. Though hmm! I can do some fun kernel stuff with SystemTap&#x2026;</p>
-<p>Specifically what I did was write a small SystemTap script to look for a specific <code>exec</code>, then deliver a <code>SIGSTOP</code> to the process. Then the script prints the PID of the process. On the gdb side, there&#x2019;s a new command written in Python that invokes the SystemTap script, reads the PID, and invokes <code>attach</code>. It&#x2019;s a bit hacky and a bit weird to use (the <code>SIGSTOP</code> appears in gdb to have been delivered multiple times or something like that). But it works!</p>
-<p>It would be better to have this functionality directly in the kernel. Somebody &#x2014; probably you! &#x2014; should write this. But meanwhile my hack is available, along with a few other gdb scxripts, in my <a href="https://github.com/tromey/gdb-helpers">gdb helpers github repository.</a></p> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-895 post type-post status-publish format-standard hentry category-emacs category-firefox category-software"> <div class="row"> <section class="post-content"> <p>I started hacking on firefox recently. And, of course, I&#x2019;ve configured emacs a bit to make hacking on it more pleasant.</p>
-<p>The first thing I did was create a <code>.dir-locals.el</code> file with some customizations. Most of the tree has local variable settings in the source files &#x2014; but some are missing and it is useful to set some globally. (Whether they are universally correct is another matter&#x2026;)</p>
-<p>Also, I like to use <code>bug-reference-url-mode</code>. What this does is automatically highlight references to bugs in the source code. That is, if you see &#x201C;bug #1050501&#x201D;, it will be buttonized and you can click (or C-RET) and open the bug in the browser. (The default regexp doesn&#x2019;t capture quite enough references so my settings hack this too; but I filed an Emacs bug for it.)</p>
-<p>I put my <code>.dir-locals.el</code> just above my git checkout, so I don&#x2019;t end up deleting it by mistake. It should probably just go directly in-tree, but I haven&#x2019;t tried to do that yet. Here&#x2019;s that code:</p>
-<pre>
-(
- ;; Generic settings.
- (nil .
-      ;; See C-h f bug-reference-prog-mode, e.g, for using this.
-      ((bug-reference-url-format . &quot;https://bugzilla.mozilla.org/show_bug.cgi?id=%s&quot;)
-       (bug-reference-bug-regexp . &quot;\\([Bb]ug ?#?\\|[Pp]atch ?#\\|RFE ?#\\|PR [a-z-+]+/\\)\\([0-9]+\\(?:#[0-9]+\\)?\\)&quot;)))
-
- ;; The built-in javascript mode.
- (js-mode .
-     ((indent-tabs-mode . nil)
-      (js-indent-level . 2)))
-
- (c++-mode .
-	   ((indent-tabs-mode . nil)
-	    (c-basic-offset . 2)))
-
- (idl-mode .
-	   ((indent-tabs-mode . nil)
-	    (c-basic-offset . 2)))
-
-)
-</pre>
-<p>In programming modes I enable <code>bug-reference-prog-mode</code>. This enables highlighting only in comments and strings. This would easily be done from <code>prog-mode-hook</code>, but I made my choice of minor modes depend on the major mode via <code>find-file-hook.</code></p>
-<p>I&#x2019;ve also found that it is nice to enable this minor mode in <code>diff-mode</code> and <code>log-view-mode</code>. This way you get bug references in diffs and when viewing git logs. The code ends up like:</p>
-<pre>
-(defun tromey-maybe-enable-bug-url-mode ()
-  (and (boundp &apos;bug-reference-url-format)
-       (stringp bug-reference-url-format)
-       (if (or (derived-mode-p &apos;prog-mode)
-	       (eq major-mode &apos;tcl-mode)	;emacs 23 bug
-	       (eq major-mode &apos;makefile-mode)) ;emacs 23 bug
-	   (bug-reference-prog-mode t)
-	 (bug-reference-mode t))))
-
-(add-hook &apos;find-file-hook #&apos;tromey-maybe-enable-bug-url-mode)
-(add-hook &apos;log-view-mode-hook #&apos;tromey-maybe-enable-bug-url-mode)
-(add-hook &apos;diff-mode-hook #&apos;tromey-maybe-enable-bug-url-mode)
-</pre> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-886 post type-post status-publish format-standard hentry category-emacs category-software"> <div class="row"> <section class="post-content"> <p>I&#x2019;ve been working on an odd Emacs package recently &#x2014; not ready for release &#x2014; which has turned into more than the usual morass of prefixed names and double hyphens.</p>
-<p>So, I took another look at <a href="http://nic.ferrier.me.uk/blog/2013_06/adding-namespaces-to-elisp">Nic Ferrier&#x2019;s namespace proposal</a>.</p>
-<p>Suddenly it didn&#x2019;t seem all that hard to implement something along these lines, and after a bit of poking around I wrote <a href="https://github.com/tromey/emacs-module">emacs-module</a>.</p>
-<p>The basic idea is to continue to follow the Emacs approach of prefixing symbol names &#x2014; but not to require you to actually write out the full names of everything.&#xA0; Instead, the module system intercepts <code>load</code> and friends to rewrite symbol names as lisp is loaded.</p>
-<p>The symbol renaming is done in a simple way, following existing Emacs conventions.&#xA0; This gives the nice result that existing code doesn&#x2019;t need to be updated to use the module system directly.&#xA0; That is, the module system recognizes name prefixes as &#x201C;implicit&#x201D; modules, based purely on the module name.</p>
-<p>I&#x2019;d say this is still a proof-of-concept.&#xA0; I haven&#x2019;t tried hairier cases, like <code>defclass</code>, and at least <code>declare-function</code> does not work but should.</p>
-<p>Here&#x2019;s the example from the docs:</p>
-<pre>
-(define-module testmodule :export (somevar))
-(defvar somevar nil)
-(defvar private nil)
-(provide &apos;testmodule)
-</pre>
-<p>This defines the public variable <code>testmodule-somevar</code> and the &#x201C;private&#x201D; function <code>testmodule--private</code>.</p> </section> <footer class="post-info"> </footer> </div>
-</article> <article class="leftaside post-878 post type-post status-publish format-standard hentry category-emacs category-software"> <div class="row"> <section class="post-content"> <p>Ages and ages I wrote about <a href="http://tromey.com/blog/?p=308">letting Emacs code access the notification area</a>.&#xA0; I have more to say about it now, but first I want to bore you with some rambling thoughts and some history.</p>
-<p>The &#x201C;notification area&#x201D; is also called the &#x201C;status icon area&#x201D; or the &#x201C;systray&#x201D; &#x2014; it is a spot that holds some icons that are under control of various applications.</p>
-<p>I was a fan of the notification area since it first showed up in Gnome.&#xA0; I recognized it instantly as the thing I wanted that I hadn&#x2019;t realized I wanted.</p>
-<p>Now, as you know, the notification area has fallen on hard times.&#xA0; It&#x2019;s been removed in Gnome 3&#x2026; I searched a bit for the rationale for this deletion, which as far as I can tell is just that some applications abused it, whatever that means; or that it was used inconsistently, which I think the web has conclusively proven is fine by users.&#xA0; Coming from the Emacs perspective, where one can customize the somewhat-equivalent of the status area (see those recent posts on diminishing minor-mode lighters in the mode line&#x2026;), and where a certain amount of per-mode idiosyncrasy is the norm, these seem like an inadequate reasons.</p>
-<p>However, the reason doesn&#x2019;t really matter.&#xA0; I love the notification area!&#xA0; When I moved more of my daily desktop use back into Emacs (the tides are strong but slow, and take years to come in or go out), I hooked Emacs up to it, and made it a part of my basic configuration.</p>
-<p>It&#x2019;s indispensable now.&#xA0; What I particularly like about it is that it is both noticeable and unobtrusive &#x2014; the former because I can have the icons blink on important events, and the latter because the icons don&#x2019;t move around or obscure other windows.</p>
-<p>Ok!&#xA0; You should use it!&#xA0; And I totally plan to tell you how, but first some boring history.</p>
-<p>My original post relied on a hacked version of the Gnome zenity utility.&#xA0; This turned out to be a real pain over time.&#xA0; I had to rebuild it periodically, adding hacks (once removing chunks), etc.&#xA0; Sharing it with others was hard.&#xA0; And, for whatever reason, the patches in Gnome bugzilla were completely ignored.&#xA0; Bah.</p>
-<p>A bit later I wrote a big patch to Emacs to put all this into the core.&#xA0; That patch was rejected, more or less.&#xA0; Bah two.</p>
-<p>Then even later I flirted with KDE for a bit.&#xA0; Yes.&#xA0; KDE had the nice idea to expose the notification area via dbus, and Emacs could talk dbus&#x2026; so I did the obvious thing in elisp.&#xA0; However the KDE notification area was pretty buggy and in the end I had to abandon it as well.</p>
-<p>So, it was back to zenity&#x2026; until this week, during my funemployment.&#xA0; I rewrote my hacks in Python.&#xA0; This was so easy I wish I&#x2019;d done it years and years ago.</p>
-<p>I&#x2019;m not sure what the moral of this story is.&#xA0; Maybe that my obsession is your gain.&#xA0; Or maybe that I have trouble letting go.</p>
-<p>Anyway, the result is here, on <a href="https://github.com/tromey/emacs-status">github</a>, or in <a href="http://marmalade-repo.org/">marmalade</a>.&#xA0; You&#x2019;ll need Python and the new (introspection-based) Python Gtk interfaces.&#xA0; This of course is no trouble to install.&#xA0; The package includes the base status icon API, plus basic UIs for ERC and EMMS.&#xA0; Try it out and let me know what you think.</p> </section> <footer class="post-info"> </footer> </div>
-</article> </div> </div> </main>
-</p> </body>
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>The Cliffs of Inanity</h1><div><div id="" class="post-content"><p>A year or so ago I was asked to debug a crash in the Firefox devtools.&nbsp; Crashes are easy!&nbsp; I fired up gdb and reproduced the crash… which turned out to be in some code JITted by SpiderMonkey.&nbsp; I was immediately lost; even a simple <code>bt</code> did not work.&nbsp; Someone more familiar with the JIT — hi Shu — had to dig out the answer :-(.</p><p>I did take the opportunity to get some information from him about how he found the result, though.&nbsp; He pointed me to the code responsible for laying out JIT stack frames.&nbsp; It turned out that gdb could not unwind through JIT frames, but it could be done by hand — so I resolved then to eventually fix this.</p><h1>Phase One</h1><p>I knew from my gdb hacking that gdb has a JIT unwinding API.&nbsp; Actually — and isn’t this the way most programs end up working? — it has two.</p><p>The <a href="https://sourceware.org/gdb/onlinedocs/gdb/Registering-Code.html#Registering-Code">first JIT API</a> requires some extra work on the part of the JIT: it constructs an object file, typically ELF and DWARF, in memory, then calls a hook.&nbsp; GDB sets a breakpoint on this hook and, when hit, it reads the data from the inferior.&nbsp; This lets the JIT provide basically any kind of information — but it’s pretty heavy.</p><p>So, I focused my attention on <a href="https://sourceware.org/gdb/onlinedocs/gdb/Custom-Debug-Info.html#Custom-Debug-Info">the second API</a>.&nbsp; In this mode, the JIT author would provide a shared library that used some callbacks to inform gdb of the details of what was going on.&nbsp; The set of callbacks was much more limited, but could at least describe how to unwind the registers.&nbsp; So, I figured that this is what I would do.</p><p>But… I didn’t really want to write this in C.&nbsp; That would be a real pain!&nbsp; C is fiddly and hard to deal with, and it would mean constant rebuilding of the shared library while debugging, and SpiderMonkey already had a reasonable number of gdb-python scripts — surely this could be done in Python.</p><p>So I took the quixotic approach, namely writing a shared library that used the second gdb JIT API but only to expose this API to Python.</p><p>Of course, this turned out to be Rube Goldbergian.&nbsp; Various parts of the gdb Python API could not be called from the JIT shared library, because those bits depended on other state in gdb, which wasn’t set properly when the JIT library was being called.&nbsp; So, I had gdb calling into my shared library, which called my Python code, which then invoked a new gdb command (written in Python and supplied by my package) — that existed solely for the purpose of setting this internal state properly — and that in turn invoked the code I wanted to run, say to fetch memory or a register or something.</p><p>Computer Science!</p><p>Well, that took a while.&nbsp; But it sort of worked!&nbsp; And maybe I could just keep it in github and not put it in Mozilla Central and avoid learning about the Firefox build system and copying in some gdb header file and license review and whatnot.</p><p>So I started writing the actual Python code… OMG.&nbsp; And see below since you will totally want to know about this.&nbsp; But meanwhile…</p><p>… while I was hacking away on this crazy idea, someone implemented the much more sane idea of just exposing gdb’s unwinder API to gdb’s Python layer.</p><p>Hmm… why didn’t I do that?&nbsp; Well, I left gdb under a bit of a cloud, and didn’t really want to be that involved at the time.&nbsp; Plus, you know, gdb is a high quality project; which means that if you write a giant patch to expose the unwinding API, you have to be prepared for 17 rounds of patch review (this really happened once), plus writing documentation and tests.&nbsp; Sometimes it’s just easier to channel one’s inner Rube.</p><h1>Phase Two</h1><p>The integrated Python API was a great development.&nbsp; Now I could delete my shared library and my insane trampoline hacks, and focus on my insane unwinding code.</p><p>A lot of this work was straightforward, in the sense that the general outline was clear and just the details remained.&nbsp; The details amount to things like understanding the SpiderMonkey frame descriptor (which partly describes the previous frame and partly the new frame; there’s one comment explaining this that somehow eluded me for quite a while); duplicating the SpiderMonkey JIT unwinding code in Python; and of course carefully reading the SpiderMonkey code that JITs the “entry frame” code to understand how registers are spilled.</p><p>Naturally, while doing this it turned out that I was maybe the first person to use these gdb APIs in anger.&nbsp; I found some gdb crashes, oops!&nbsp; The docs would have been impenetrable, except I already knew the underlying C APIs on which they were based… whew!&nbsp; The Python API was unexpectedly picky in other areas, too.</p><p>But then there was also some funny business, one part in gdb, and one part in SpiderMonkey.</p><p>GDB is probably more complicated than you realize.&nbsp; In this case, the complexity is that, in gdb, each stack frame can have its own architecture.&nbsp; This seemingly weird functionality is actually used; I think it was invented for the SPU, but some other chips have multiple modes as well.&nbsp; But what this means is that the question “what architecture is this program?” is not well-defined, and anyway gdb’s Python layer doesn’t provide you a way to find whatever approximation it is that would make sense in your specific case.&nbsp; However, when writing the SpiderMonkey unwinder, it kind of actually is well-defined and we’d like to know the answer to know which unwinder to choose.</p><p>For this problem I settled on the probably terrible idea of checking whether a given register is available.&nbsp; That is, if you see “<code>$rip</code>“, you can guess it’s x86-64.</p><p>The other problem here is that gdb thinks that, since you wrote an unwinder, it should get the first stab at unwinding.&nbsp; That’s very polite!&nbsp; But for SpiderMonkey, deciding “hey, is this PC in some code the JIT emitted?” is actually a real pain, or at least outside the random bits of it I learned in order to make all this work.</p><p>Aha!&nbsp; I know, there’s probably a Python API to say “is this address associated with some shared library?”&nbsp; I remembered reading and/or reviewing a patch… but no, <code>gdb.solib_name</code> is close but doesn’t do the right thing for addresses in the main executable.&nbsp; WAT.</p><p>I tried several tricks without success, and in the end I went with parsing <code>/proc/maps</code> to get the mappings to decide whether a given frame should be handled by this unwinder or by gdb.&nbsp; Horrible.&nbsp; And fails with remote debugging.</p><p>Luckily, nobody does remote debugging.</p><h1>Remote Debugging</h1><p>Oh, wait, people do remote debugging at Mozilla all the time.&nbsp; They don’t call it “remote debugging” though — they call it “<a href="http://rr-project.org/">using RR</a>“, which while it runs locally, appears to be remote to gdb; and, importantly, during replay mode fakes the PID, and does other deep magic, though not deep enough to extend to making a fake map file that could be read via gdb’s <code>remote get</code> command.</p><p>By the way, you should be using RR.&nbsp; It’s the best advance in debugging since, well, gdb.&nbsp; It’s a process record-and-replay program, but unlike gdb’s built-in reverse debugging, it handles threads properly and has decent performance.</p><h1>Oh Well</h1><p>Oh well.&nbsp; It just won’t work remotely.&nbsp; Or at least not until fellow Mozillian (this always seems like it should be “Mozillan” to me, but it’s not, there really is that extra “i”) and all-star Nicolas Pierron wrote some additional Python to read some SpiderMonkey tables to make the decision in a more principled way.&nbsp; Now it will all work!</p><p>Though looking now I wonder if I dreamed this, because the code isn’t checked in.&nbsp; I know he had a patch but my memory is a bit fuzzy — maybe in the end it didn’t work, because RR didn’t implement the <code>qGetTLSAddr</code> packet, which gdb uses to read thread-local storage.&nbsp; Did I mention the thread-locals?</p><h1>The Real Start of the Story</h1><p>So, way back at the beginning, during my initial foray into this code, I found that a crucial bit of information — the appropriately-named <code>TlsPerThreadData</code> — was stashed away in a thread-local variable.&nbsp; Information stored here is needed by the unwinder in order to unwind from a C++ frame into a JIT frame.</p><p>Only, Firefox didn’t use “real” thread-local variables, the things that so many glibc and gcc hackers put so much effort into micro-optimizing.&nbsp; No, it just used a template class that wrapped <code>pthread_setspecific</code> and friends in a relatively ergonomic way.</p><p>Naturally, for an unwinder this is a disaster.&nbsp; Why?&nbsp; Unwinding is basically the dissection of the stack; but in order to compute the value of one of these thread-local-storage objects, the unwinder would have to make some function calls in the inferior (in fact this prevents it from working on OSX).&nbsp; But these would affect the stack, and also potentially let other inferior code (in other threads — remember, gdb is complicated and you can exert various unusual kinds of control like this) run as well.</p><p>So I neglected to mention the very first step: changing Firefox to use <code>__thread</code>.&nbsp; (Ok, I didn’t really neglect to mention it, I was just being lazy and anyway it’s a shaggy dog story.)</p><h1>Do Not Use libthread_db</h1><p>RR did not implement <code>qGetTLSAddr</code>, which we needed, because&nbsp; lots of people at Mozilla use RR.&nbsp; So I set out to implement that.&nbsp; This meant a foray into the dangerous world of <code>libthread_db</code>.</p><p>For reasons I do not know, and suspect that I do not want to know, glibc has historically followed many Solaris conventions.&nbsp; One such Solaris innovation was <code>libthread_db</code> — a library that debuggers use to find certain information from libc, information like the address of a thread-local variable</p><p>On the surface this seems like a great idea: don’t bake the implementation details of the C library into the debugger.&nbsp; Instead, let the debugger use a debugging library that comes with the C library.&nbsp; And, if you designed it that way, it would be a good idea.</p><p>Sadly, though, <code>libthread_db</code> was not designed that way.&nbsp; Oh no.</p><p>For example, <code>libthread_db</code> has a callback interface.&nbsp; The calling program — gdb or rr — must provide some functions that <code>libthread_db</code> can call, to do some simple things like “read some memory”; or some very complicated things like “find the address of a symbol given its name”.&nbsp; Normal C programmers might implement these callbacks using a structure containing function pointers.&nbsp; But not <code>libthread_db</code>!&nbsp; Instead it uses fixed symbol names that must be provided by the calling application.&nbsp; Not all of these are required for it to work (you get to figure out which, yay!), but some definitely are.&nbsp; And, you have to <code>dlopen</code> a <code>libthread_db</code> that matches the <code>libc</code> of the inferior that you’re debugging (or link against it, but that’s also obviously bad).</p><p>Wait, you say.&nbsp; Doesn’t that mess up cross-debugging?&nbsp; Why yes!&nbsp; Yes it does!&nbsp; Which is why <code>qGetTLSAddr</code> has to be in the gdb remote serial protocol to start with.</p><p>Hey, maybe the Linux vendors should fix this.&nbsp; They are — see <a href="https://gbenson.net/?p=449">Gary Benson’s Infinity project</a> — but unfortunately that’s still in development and I wanted RR to work sooner.</p><p>Ok, so whew.&nbsp; I wrote <code>qGetTLSAddr</code> support for RR.&nbsp; This was a small patch in the end, but an unusual pain in an already painful series.&nbsp; Hopefully this won’t spill out into other programs.</p><h1>glibc</h1><p>Hahaha, you are so funny.&nbsp; Of course it spills out: remember how you have to define a bunch of functions with specific names in your program in order to use <code>libthread_db</code>?&nbsp; Well, how do you know you got the types correct?</p><p>Yeah, you include <code>&lt;proc_service.h&gt;</code> (a name deliberately chosen to confuse, I suppose, why not, it doesn’t bear any obvious relationship to the library).&nbsp; Only, that was never installed by glibc.&nbsp; Instead, gdb just copied it into the source tree.</p><p>So naturally I went and fixed this in glibc.&nbsp; And, even more naturally, this broke the gdb build, which was autoconf’d to check for a file that never existed in the past.&nbsp; LOL.</p><h1>Thank You Cthulhu</h1><p>At this point I figured it was only a matter of time until I had to patch the kernel.&nbsp; Thankfully this hasn’t been necessary yet.</p><h1>It Says What</h1><p>In gdb the actual unwinding and the display of frames are separate concerns.</p><p>And let me digress here to say that gdb’s unwinder design is excellent.&nbsp; I believe it was redone by Andrew Cagney (this was well before my active time in gdb, so apologies if you’re reading this and you did it and I’ve misattributed it).&nbsp; Like much of gdb, many of the details are bizarre and take one back to the byte-counting days of 1987; but the high level design is very solid and has endured with, I think, just one significant change (to support inline functions) in the intervening 15 or so years.&nbsp; I’ve long thought that this is a remarkable accomplishment in the programming world.</p><p>So, yes.&nbsp; It’s not enough to just unwind.&nbsp; Simply having an unwinder yields backtraces with lines like:</p><p><code>#5 0xfeefee ???</code></p><p>Better than nothing!&nbsp; But not yet great.</p><p>The second part of the SpiderMonkey unwinder is, therefore, a gdb “frame filter”.&nbsp; This is an object that takes raw frames and decorates them with information like a function name, or a file name, or arguments.</p><p>Work to add this information is ongoing — I landed one patch just yesterday, and another one, to add more information about interpreted frames, is still in the works.&nbsp; And there are two more bugs filed… maybe this project, like this blog post, will never conclude.&nbsp; It will just scroll endlessly.</p><p>But now, with all the code in place, <code>bt</code> can show something like:</p><p><code>#6 0x00007ffff7ff20f3 in &lt;&lt;JitFrame_BaselineJS "f1"&gt;&gt; (this=JSVAL_VOID, arg1=$jsval(4700))</code></p><p>This is the call <code>f1(4700)</code>.</p><h1>Let’s Just Have One More</h1><p>Of course we still couldn’t enable this unwinder by default.&nbsp; You have to enable it by hand.</p><p>And by the way, in the first release of gdb’s Python unwinder feature, enabling or disabling an unwinder didn’t flush the frame cache, so it wouldn’t actually take effect until some invisible-to-the-user state change took place.&nbsp; I fixed this bug, but here Pedro Alves also taught me the secret gdb command <code>flushregs</code>, which in fact just flushes the frame cache. (I’m going to go out on a limb and guess that this command predates the already ancient <code>maint</code> prefix command, hence its weird name.)</p><p>Anyway, you have to enable it by hand because the unwinder itself doesn’t work properly if the outermost frame is in JIT code.&nbsp; The JIT, in the interest of performance, doesn’t maintain a frame pointer.&nbsp; This means that in the outermost frame, there’s no reliable way to find the object that describes this frame and links to the previous frame.</p><p>Now, normally in this case gdb would either resort to debug info (not available here), or in extremis its encyclopedic suite of prologue analyzers (yes, gdb can analyze common function prologues for all architectures developed in the last 25 years to figure out stuff) — but naturally JIT compilers go their own way here as well.</p><p>Humans, like Shu back at the start of this story, can do this by dumping parts of the stack and guessing which bytes represent the frame header.</p><p>But, I’ve been reluctant and a bit afraid to hack a heuristic into the unwinder.</p><p>To sum up — in case you missed it — this means that all the code written during this entire saga would still not have helped with my original bug.</p><h1>The End</h1></div></div></div></div>
 </div>
     </div>
     <footer>
-        <div>created by buildstarted &copy; 2019 <a href="/about">about</a></div>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
         <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
     </footer>
     
     <script>
-        (function() {
+        (function () {
             var COLLECT_URL = "https://dna.buildstarted.com/t";
             var SITE_ID = "linksfor.devs";
             var GLOBAL_VAR_NAME = "__DNA__";
 
             window[GLOBAL_VAR_NAME] = {};
 
-            window[GLOBAL_VAR_NAME].sendPageView = function() {
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
                 var path = location.pathname;
                 var referrer = document.referrer;
 
                 var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
 
-                try { fetch(url, { method: "GET" }); } catch (e) {}
+                try { fetch(url, { method: "GET" }); } catch (e) { }
             };
 
             window[GLOBAL_VAR_NAME].sendPageView();

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Securing a Vue.js app using OpenID Connect Code Flow with PKCE and IdentityServer4 -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Securing a Vue.js app using OpenID Connect Code Flow with PKCE and IdentityServer4</h1><div><div class="entry-content"><p>This article shows how to setup a <a href="https://vuejs.org/">Vue.js</a> SPA application to authenticate and authorize using <a href="https://openid.net/connect/">OpenID Connect</a> Code flow with PKCE. This is good solution when implementing SPA apps requesting data from APIs on separate domains. The <a href="https://github.com/IdentityModel/oidc-client-js">oidc-client-js</a> npm package is used to implement the client side authentication logic and validation logic. <a href="https://github.com/IdentityServer/IdentityServer4">IdentityServer4</a> and <a href="https://docs.microsoft.com/en-us/aspnet/core/security/authentication/identity">ASP.NET Core Identity</a> are used to implement the secure token server.</p><p><strong>Code</strong><a href="https://github.com/damienbod/IdentityServer4VueJs" rel="nofollow">https://github.com/damienbod/IdentityServer4VueJs</a></p><p>Other posts in this series</p><p><a href="https://damienbod.com/2019/10/04/building-and-securing-an-asp-net-core-api-with-a-hosted-vue-js-ui/">Building and securing an ASP.NET Core API with a hosted Vue.js UI</a></p><p><strong>IdentityServer4 Client configuration</strong></p><p>The secure token server was implemented using IdentityServer4 with ASP.NET Core Identity and an Entity Framework Core database. A client configuration was added for the Vue.js application. This configures the code flow with PKCE and supports the callback and the silent-renew redirects. </p><pre class="brush: csharp; title: ; notranslate" title="">new Client
+{
+	ClientName = "vuejs_code_client",
+	ClientId = "vuejs_code_client",
+	AccessTokenType = AccessTokenType.Reference,
+	// RequireConsent = false,
+	AccessTokenLifetime = 330,// 330 seconds, default 60 minutes
+	IdentityTokenLifetime = 300,
+
+	RequireClientSecret = false,
+	AllowedGrantTypes = GrantTypes.Code,
+	RequirePkce = true,
+
+	AllowAccessTokensViaBrowser = true,
+	RedirectUris = new List&lt;string&gt;
+	{
+		"https://localhost:44357",
+		"https://localhost:44357/callback.html",
+		"https://localhost:44357/silent-renew.html"
+	},
+	PostLogoutRedirectUris = new List&lt;string&gt;
+	{
+		"https://localhost:44357/",
+		"https://localhost:44357"
+	},
+	AllowedCorsOrigins = new List&lt;string&gt;
+	{
+		"https://localhost:44357"
+	},
+	AllowedScopes = new List&lt;string&gt;
+	{
+		"openid",
+		"dataEventRecords",
+		"dataeventrecordsscope",
+		"role",
+		"profile",
+		"email"
+	}
+</pre><p><strong>Vue.js Client setup</strong></p><p>The Vue.js client is implemented using <a href="https://cli.vuejs.org/">Vue.js CLI </a>to create a new typescript application. The STS is configured to run with HTTPS. This needs to be configured in the Vue.js app.</p><p>This can be done in the package.json file. The serve script was changed to support HTTPS. The oidc-client and the <a href="https://github.com/axios/axios">axios</a> npm packages were added to the solution as well as the standard Vue.js npm packages.</p><p>axios is used for the API requests which uses the access token after a successful login.</p><pre class="brush: csharp; title: ; notranslate" title="">{
+  "name": "vue-js-oidc-client",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "serve": "vue-cli-service serve --https --port 44357",
+    "build": "vue-cli-service build",
+    "lint": "vue-cli-service lint"
+  },
+  "dependencies": {
+    "axios": "^0.18.0",
+    "oidc-client": "^1.6.1",
+    "vue": "^2.5.21",
+    "vue-class-component": "^6.0.0",
+    "vue-property-decorator": "^7.0.0",
+    "vue-router": "^3.0.1"
+  },
+  "devDependencies": {
+    "@vue/cli-plugin-babel": "^3.3.0",
+    "@vue/cli-plugin-typescript": "^3.3.0",
+    "@vue/cli-service": "^3.3.0",
+    "typescript": "^3.0.0",
+    "vue-template-compiler": "^2.5.21"
+  }
+}
+
+</pre><p>The authentication was implemented following the blog from <a href="https://www.jerriepelser.com/blog/using-auth0-with-vue-oidc-client-js/">Jerrie Pelser</a> and the samples from the oidc-client github repo.</p><p>An AuthService typescript class was implemented with the oidc-client settings. The code flow is configured here, as well as the silent renew. Then some functions were implemented for login, logout and getting an access token.</p><pre class="brush: csharp; title: ; notranslate" title="">import { UserManager, WebStorageStateStore, User } from 'oidc-client';
+
+export default class AuthService {
+    private userManager: UserManager;
+
+    constructor() {
+        const STS_DOMAIN: string = 'https://localhost:44356';
+
+        const settings: any = {
+            userStore: new WebStorageStateStore({ store: window.localStorage }),
+            authority: STS_DOMAIN,
+            client_id: 'vuejs_code_client',
+            redirect_uri: 'https://localhost:44357/callback.html',
+            automaticSilentRenew: true,
+            silent_redirect_uri: 'https://localhost:44357/silent-renew.html',
+            response_type: 'code',
+            scope: 'openid profile dataEventRecords',
+            post_logout_redirect_uri: 'https://localhost:44357/',
+            filterProtocolClaims: true,
+        };
+
+        this.userManager = new UserManager(settings);
+    }
+
+    public getUser(): Promise&lt;User&gt; {
+        return this.userManager.getUser();
+    }
+
+    public login(): Promise&lt;void&gt; {
+        return this.userManager.signinRedirect();
+    }
+
+    public logout(): Promise&lt;void&gt; {
+        return this.userManager.signoutRedirect();
+    }
+
+    public getAccessToken(): Promise&lt;string&gt; {
+        return this.userManager.getUser().then((data: any) =&gt; {
+            return data.access_token;
+        });
+    }
+}
+
+</pre><p>The AuthService was then used in the Home.vue file just like <a href="https://www.jerriepelser.com/blog/using-auth0-with-vue-oidc-client-js/">Jerrie Pelser</a> did it. Thanks for this blog. An API call was added to the component which gets the access token from the oidc lib, and requests data from a secure API. The data is then displayed in the UI.</p><pre class="brush: xml; title: ; notranslate" title="">&lt;template&gt;
+    &lt;div class="home"&gt;
+        &lt;img alt="Vue logo" src="../assets/logo.png"&gt;
+        &lt;div class="home"&gt;
+            &lt;p v-if="isLoggedIn"&gt;User: {{ username }}&lt;/p&gt;
+            &lt;button class="btn" @click="login" v-if="!isLoggedIn"&gt;Login&lt;/button&gt;
+            &lt;button class="btn" @click="logout" v-if="isLoggedIn"&gt;Logout&lt;/button&gt;
+            &lt;button class="btn" @click="getProtectedApiData" v-if="isLoggedIn"&gt;Get API data&lt;/button&gt;
+        &lt;/div&gt;
+
+        &lt;div v-if="dataEventRecordsItems &amp;&amp; dataEventRecordsItems.length"&gt;
+            &lt;div v-for="dataEventRecordsItem of dataEventRecordsItems"&gt;
+                &lt;p&gt;&lt;em&gt;Id:&lt;/em&gt; {{dataEventRecordsItem.Id}} &lt;em&gt;Details:&lt;/em&gt; {{dataEventRecordsItem.Name}}  - {{dataEventRecordsItem.Description}} - {{dataEventRecordsItem.Timestamp}}&lt;/p&gt;
+            &lt;/div&gt;
+            &lt;br /&gt;
+        &lt;/div&gt;
+
+    &lt;/div&gt;
+&lt;/template&gt;
+&lt;script lang="ts"&gt;
+    import { Component, Vue } from 'vue-property-decorator';
+    import AuthService from '@/services/auth.service';
+
+    import axios from 'axios';
+
+    const auth = new AuthService();
+
+    @Component({
+        components: {
+        },
+    })
+
+    export default class Home extends Vue {
+        public currentUser: string = '';
+        public accessTokenExpired: boolean | undefined = false;
+        public isLoggedIn: boolean = false;
+
+        public dataEventRecordsItems: [] = [];
+
+        get username(): string {
+            return this.currentUser;
+        }
+
+        public login() {
+            auth.login();
+        }
+
+        public logout() {
+            auth.logout();
+        }
+
+        public mounted() {
+            auth.getUser().then((user) =&gt; {
+                this.currentUser = user.profile.name;
+                this.accessTokenExpired = user.expired;
+
+                this.isLoggedIn = (user !== null &amp;&amp; !user.expired);
+            });
+        }
+
+        public getProtectedApiData() {
+
+            auth.getAccessToken().then((userToken: string) =&gt; {
+                axios.defaults.headers.common['Authorization'] = `Bearer ${userToken}`;
+
+                axios.get('https://localhost:44355/api/DataEventRecords/')
+                    .then((response: any) =&gt; {
+                        this.dataEventRecordsItems = response.data;
+                    })
+                    .catch((error: any) =&gt; {
+                        alert(error);
+                    });
+            });
+        }
+    }
+&lt;/script&gt;
+&lt;style&gt;
+
+    .btn {
+        color: #42b983;
+        font-weight: bold;
+        background-color: #007bff;
+        border-color: #007bff;
+        display: inline-block;
+        font-weight: 400;
+        text-align: center;
+        vertical-align: middle;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        background-color: transparent;
+        border: 1px solid #42b983;
+        padding: .375rem .75rem;
+        margin: 10px;
+        font-size: 1rem;
+        line-height: 1.5;
+        border-radius: .25rem;
+        transition: color .15s ease-in-out,background-color .15s ease-in-out,border-color .15s ease-in-out,box-shadow .15s ease-in-out;
+    }
+
+&lt;/style&gt;
+
+</pre><p>Two html files are required in the root web folder. In Vue.js, this is the public folder. A callback.html file is required to handle the code redirect.</p><pre class="brush: xml; title: ; notranslate" title="">&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+    &lt;meta charset="UTF-8"&gt;
+    &lt;title&gt;Waiting...&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;script src="js/oidc-client.min.js"&gt;&lt;/script&gt;
+    &lt;script&gt;
+
+        var mgr = new Oidc.UserManager({ response_mode: 'query', userStore: new Oidc.WebStorageStateStore() }).signinRedirectCallback().then(function (user) {
+            console.log("signin response success", user);
+            window.location.href = '../';
+        }).catch(function (err) {
+            console.log(err);
+            });
+
+    &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre><p>The silent-renew.html is used for the silent renew in the iframe.</p><pre class="brush: xml; title: ; notranslate" title="">&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+    &lt;meta charset="UTF-8"&gt;
+    &lt;title&gt;Waiting...&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;script src="js/oidc-client.min.js"&gt;&lt;/script&gt;
+    &lt;script&gt;
+
+        var mgr = new Oidc.UserManager().signinSilentCallback();
+    &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre><p>Both of these html files require a reference to the oidc-client.min.js which is copied to the js folder.</p><p>When the application is run, the user can login and get the secure data. Start the two dotnet core applications from Visual Studio and start the Vue.js application from the cmd using ‘npm run serve’</p><p>When the application starts login:</p><p><img data-attachment-id="11871" data-permalink="https://damienbod.com/2019/01/29/securing-a-vue-js-app-using-openid-connect-code-flow-with-pkce-and-identityserver4/vue-js-oidc-client_01/" data-orig-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png" data-orig-size="1061,871" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="vue-js-oidc-client_01" data-image-description="" data-medium-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=600" data-large-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=640" src="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=640&amp;h=525" alt="" width="640" height="525" class="alignnone size-full wp-image-11871" srcset="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=640&amp;h=525 640w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=150&amp;h=123 150w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=600&amp;h=493 600w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=768&amp;h=630 768w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png?w=1024&amp;h=841 1024w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_01.png 1061w" sizes="(max-width: 640px) 100vw, 640px"></p><p>Give your consent:</p><p><img data-attachment-id="11872" data-permalink="https://damienbod.com/2019/01/29/securing-a-vue-js-app-using-openid-connect-code-flow-with-pkce-and-identityserver4/vue-js-oidc-client_02/" data-orig-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png" data-orig-size="1090,1340" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="vue-js-oidc-client_02" data-image-description="" data-medium-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=488" data-large-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=640" src="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=640&amp;h=787" alt="" width="640" height="787" class="alignnone size-full wp-image-11872" srcset="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=640&amp;h=787 640w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=122&amp;h=150 122w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=488&amp;h=600 488w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=768&amp;h=944 768w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png?w=833&amp;h=1024 833w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_02.png 1090w" sizes="(max-width: 640px) 100vw, 640px"></p><p>request the API data:</p><p><img data-attachment-id="11873" data-permalink="https://damienbod.com/2019/01/29/securing-a-vue-js-app-using-openid-connect-code-flow-with-pkce-and-identityserver4/vue-js-oidc-client_03/" data-orig-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png" data-orig-size="976,978" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="vue-js-oidc-client_03" data-image-description="" data-medium-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png?w=600" data-large-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png?w=640" src="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png?w=640&amp;h=641" alt="" width="640" height="641" class="alignnone size-full wp-image-11873" srcset="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png?w=640&amp;h=641 640w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png?w=150&amp;h=150 150w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png?w=600&amp;h=600 600w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png?w=768&amp;h=770 768w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_03.png 976w" sizes="(max-width: 640px) 100vw, 640px"></p><p>And view the data:</p><p><img data-attachment-id="11874" data-permalink="https://damienbod.com/2019/01/29/securing-a-vue-js-app-using-openid-connect-code-flow-with-pkce-and-identityserver4/vue-js-oidc-client_04/" data-orig-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png" data-orig-size="886,940" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="vue-js-oidc-client_04" data-image-description="" data-medium-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png?w=566" data-large-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png?w=640" src="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png?w=640&amp;h=679" alt="" width="640" height="679" class="alignnone size-full wp-image-11874" srcset="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png?w=640&amp;h=679 640w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png?w=141&amp;h=150 141w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png?w=566&amp;h=600 566w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png?w=768&amp;h=815 768w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_04.png 886w" sizes="(max-width: 640px) 100vw, 640px"></p><p>Silent renew will also work using the iframe which has to be allowed on the server. This can be viewed in the F12 network tab in Chrome.</p><p><img data-attachment-id="11875" data-permalink="https://damienbod.com/2019/01/29/securing-a-vue-js-app-using-openid-connect-code-flow-with-pkce-and-identityserver4/vue-js-oidc-client_05/" data-orig-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png" data-orig-size="1083,325" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="vue-js-oidc-client_05" data-image-description="" data-medium-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=600" data-large-file="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=640" src="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=640&amp;h=192" alt="" width="640" height="192" class="alignnone size-full wp-image-11875" srcset="https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=640&amp;h=192 640w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=150&amp;h=45 150w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=600&amp;h=180 600w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=768&amp;h=230 768w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png?w=1024&amp;h=307 1024w, https://damienbod.files.wordpress.com/2019/01/vue-js-oidc-client_05.png 1083w" sizes="(max-width: 640px) 100vw, 640px"></p><p>It is pretty easy to setup a secure Vue.js application using OIDC code Flow with PKCE. </p><p><strong>Links</strong></p><p><a href="https://cli.vuejs.org" rel="nofollow">https://cli.vuejs.org</a></p><p><a href="https://www.jerriepelser.com/blog/using-auth0-with-vue-oidc-client-js/" rel="nofollow">https://www.jerriepelser.com/blog/using-auth0-with-vue-oidc-client-js/</a></p><p><a href="https://github.com/joaojosefilho/vuejsOidcClient" rel="nofollow">https://github.com/joaojosefilho/vuejsOidcClient</a></p><p><a href="https://www.scottbrady91.com/Angular/Migrating-oidc-client-js-to-use-the-OpenID-Connect-Authorization-Code-Flow-and-PKCE" rel="nofollow">https://www.scottbrady91.com/Angular/Migrating-oidc-client-js-to-use-the-OpenID-Connect-Authorization-Code-Flow-and-PKCE</a></p><p><a href="https://github.com/IdentityModel/oidc-client-js/" rel="nofollow">https://github.com/IdentityModel/oidc-client-js/</a></p><p><a href="https://tools.ietf.org/html/rfc7636" rel="nofollow">https://tools.ietf.org/html/rfc7636</a></p><p><a href="https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest" rel="nofollow">https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest</a></p><div id="jp-post-flair" class="sharedaddy sd-like-enabled sd-sharing-enabled"><h3 class="jp-relatedposts-headline"><em>Related</em></h3></div></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

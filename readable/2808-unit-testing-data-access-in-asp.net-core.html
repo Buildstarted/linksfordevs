@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Unit testing data access in ASP.&#x200B;NET Core -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>Unit testing data access in ASP.​NET Core</h1><div><div id="" class=""><header><p class="postdate">Jürgen Gutsch - 15 January, 2019</p></header><p>I really like to be in contact with the dear readers of my blog. I get a lot of positive feedback about my posts  via twitter or within the comments. That's awesome and that really pushed me forward to write more posts like this. Some folks also create PRs for my blog posts on GitHub to fix typos and other errors of my posts. You also can do this, by clicking the link to the related markdown file on GitHub at the end of every post.</p><p>Many thanks for this kind of feedback :-)</p><p>The reader Mohammad Reza recently asked me via twitter to write about unit testing an controller that connects to a database and to fake the data for the unit tests.</p><blockquote><p><a href="https://twitter.com/sharpcms">@sharpcms</a> Hello jurgen, thank you for your explanation of unit test :
+Unit Testing an ASP.NET Core Application.
+it's grate. can you please explain how to use real data from entity framwork and fake data for test in a controller?</p></blockquote><blockquote><p>@Mohammad: First of all: I'm glad you like this post and I would be proud to write about that. Here it is:</p></blockquote><h2>Setup the solution using the .NET CLI</h2><p>First of all, let's create the demo solution using the .NET CLI</p><pre><code class="language-shell">mkdir UnitTestingAspNetCoreWithData &amp; cd UnitTestingAspNetCoreWithData
+dotnet new mvc -n WebToTest -o WebToTest
+dotnet new xunit -n WebToTest.Tests -o WebToTest.Tests
+dotnet new sln -n UnitTestingAspNetCoreWithData
+
+dotnet sln add WebToTest
+dotnet sln add WebToTest.Tests
+</code></pre><p>This lines are creating a solution directory adding a web to test and a XUnit test project. Also a solution file gets added and the two projects will be added to the solution file.</p><pre><code class="language-shell">dotnet add WebToTest.Tests reference WebToTest
+</code></pre><p>This command won't work in the current version of the .NET Core, because the XUnit project still targets netcoreapp2.2. You cannot reference a higher target version. It should be equal or lower than the target version of the referencing project. You should change the the target to netcoreapp3.0 in the csproj of the test project before executing this command:</p><blockquote><pre><code class="language-xml">&lt;TargetFramework&gt;netcoreapp3.0&lt;/TargetFramework&gt;
+</code></pre></blockquote><p>Now we need to add some NuGet references:</p><pre><code class="language-shell">dotnet add WebToTest package GenFu
+dotnet add WebToTest.Tests package GenFu
+dotnet add WebToTest.Tests package moq
+</code></pre><p>At first we add <a href="http://genfu.io/">GenFu</a>, which is a dummy data generator. We need it in the web project to seed some dummy data initially to the database and we need it in the test project to generate test data. We also need <a href="https://github.com/moq/moq">Moq</a> to create fake objects, e.g. fake data access in the test project.</p><p>Because the web project is an empty web project it also doesn't contain any data access libraries. We need to add Enitity Framework Core to the project.</p><pre><code class="language-shell">dotnet add WebToTest package Microsoft.EntityFrameworkCore.Sqlite -v 3.0.0-preview.18572.1
+dotnet add WebToTest package Microsoft.EntityFrameworkCore.Tools -v 3.0.0-preview.18572.1
+dotnet add WebToTest package Microsoft.AspNetCore.Diagnostics.EntityFrameworkCore -v 3.0.0-preview.18572.1
+</code></pre><p>I'm currently using the preview version of .NET Core 3.0. The version number will change later on.</p><p>Now we can start Visual Studio Code</p><pre><code class="language-shell">code .
+</code></pre><p>In the same console window we can call the following command to execute the tests:</p><pre><code class="language-shell">dotnet test WebToTest.Tests
+</code></pre><h2>Creating the controller to test</h2><p>The Controller we want to test is an API controller that only includes two GET actions. It is only about the concepts. Testing additional actions, POST and PUT actions is almost the same. This is the complete controller to test.</p><pre><code class="language-csharp">using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+using WebToTest.Data.Entities;
+using WebToTest.Services;
+
+namespace WebToTest.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController()]
+    public class PersonController : Controller
+    {
+        private readonly IPersonService _personService;
+
+        public PersonController(IPersonService personService)
+        {
+            _personService = personService;
+        }
+        // GET: api/Person
+        [HttpGet]
+        public IEnumerable&lt;Person&gt; GetPersons()
+        {
+            return _personService.AllPersons();
+        }
+
+        // GET: api/Person/5
+        [HttpGet("{id}")]
+        public ActionResult&lt;Person&gt; GetPerson(int id)
+        {
+            var todoItem = _personService.FindPerson(id);
+
+            if (todoItem == null)
+            {
+                return NotFound();
+            }
+
+            return todoItem;
+        }
+    }
+}
+
+</code></pre><p>As you can see, we don't use entity framework directly in the controller. I would propose to encapsulate the data access in service classes, which prepare the data as you need it.</p><blockquote><p>Some developers prefer to encapsulate the actual data access in an additional repository layer. From my perspective this is not needed, if you use an OR mapper like Entity Framework. One reason is that EF already is the additional layer that encapsulates the actual data access. And the repository layer is also an additional layer to test and to maintain.</p></blockquote><p>So the service layer contains all the EF stuff and is used here. This also makes testing much easier because we don't need to mock the EF <code>DbContext</code>. The Service gets passed in via dependency injection.</p><p>Let's have a quick look into the <code>Startup.cs</code> where we need to configure the services:</p><pre><code class="language-csharp">public void ConfigureServices(IServiceCollection services)
+{
+    // [...]
+
+    services.AddDbContext&lt;ApplicationDbContext&gt;(options =&gt;
+        options.UseSqlite(Configuration.GetConnectionString("DefaultConnection")));
+
+    services.AddTransient&lt;IPersonService, PersonService&gt;();
+    
+    services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_2);
+}
+</code></pre><p>What I added to the <code>ConfigureServices</code> method is one line to register and configure the <code>DbContext</code> and one line to register the <code>PersonService</code> used in the controller.  Both types are not created yet. Before we create them we also need to add a few lines to the config file. Open the <code>appsettings.json</code> and add the connection string to the <a href="https://www.sqlite.org/">SQLite</a> database:</p><pre><code class="language-json">{
+  "ConnectionStrings": {
+    "DefaultConnection": "DataSource=app.db"
+  },
+  // [...]
+}
+</code></pre><p>That's all about the configuration. Let's go back to the implementation. The next step is the <code>DbContext</code>. To keep the demo simple, I just use one <code>Person</code> entity here:</p><pre><code class="language-csharp">using GenFu;
+using Microsoft.EntityFrameworkCore;
+using WebToTest.Data.Entities;
+
+namespace WebToTest.Data
+{
+    public class ApplicationDbContext : DbContext
+    {
+        public ApplicationDbContext(DbContextOptions&lt;ApplicationDbContext&gt; options)
+            : base(options)
+        {}
+        
+        public ApplicationDbContext() { }
+
+		protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            // seeding
+            var i = 1;
+            var personsToSeed = A.ListOf&lt;Person&gt;(26);
+            personsToSeed.ForEach(x =&gt; x.Id = i++);
+            modelBuilder.Entity&lt;Person&gt;().HasData(personsToSeed);
+        }
+
+        public virtual DbSet&lt;Person&gt; Persons { get; set; }
+    }
+}
+</code></pre><p>We only have one <code>DbSet of Person</code> here. In the <code>OneModelCreating</code> method we use the new seeding method <code>HasData()</code> to ensure we have some data in the database. Usually you would use real data to seed to the database. In this case I use <a href="http://genfu.io/">GenFu</a> do generate a list of 26 persons. Afterwards I need to ensure the IDs are unique, because by default <a href="http://genfu.io/">GenFu</a> generates random numbers for the ids which may result in a duplicate key exception.</p><p>The person entity is simple as well:</p><pre><code class="language-csharp">using System;
+
+namespace WebToTest.Data.Entities
+{
+    public class Person
+    {
+        public int Id { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public DateTime DateOfBirth { get; set; }
+        public string City { get; set; }
+        public string State { get; set; }
+        public string Address { get; set; }
+        public string Telephone { get; set; }
+        public string Email { get; set; }
+    }
+}
+</code></pre><p>Now let's add the <code>PersonService</code> which uses the <code>ApplicationDbContext</code> to fetch the data. Even the <code>DbContext</code> gets injected into the constructor via dependency injection:</p><pre><code class="language-csharp">using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
+using WebToTest.Data;
+using WebToTest.Data.Entities;
+
+namespace WebToTest.Services
+{
+    public class PersonService : IPersonService
+    {
+        private readonly ApplicationDbContext _dbContext;
+        public PersonService(ApplicationDbContext dbContext)
+        {
+            _dbContext = dbContext;
+        }
+
+        public IEnumerable&lt;Person&gt; AllPersons()
+        {
+            return _dbContext.Persons
+            	.OrderBy(x =&gt; x.DateOfBirth)
+            	.ToList();
+        }
+
+        public Person FindPerson(int id)
+        {
+            return _dbContext.Persons
+            	.FirstOrDefault(x =&gt; x.Id == id);
+        }
+    }
+
+    public interface IPersonService
+    {
+        IEnumerable&lt;Person&gt; AllPersons();
+        Person FindPerson(int id);
+    }
+}
+</code></pre><p>We need the interface to register the service using a contract and to create a mock service later on in the test project.</p><p>If this is done, don't forget to create an initial migration to create the database:</p><pre><code class="language-shell">dotnet ef migrations add Initial -p WebToTest -o Data\Migrations\
+</code></pre><p>This puts the migration into the <code>Data</code> folder in our web project. No we are able to create and seed the database:</p><pre><code class="language-shell">dotnet ef database update -p WebToTest
+</code></pre><p>In the console you will now see how the database gets created and seeded:</p><p><img src="https://asp.net-hacker.rocks/img/unit-test-data/seeding.png" alt=""></p><p>Now the web project is complete and should run. You can try it by calling the following command and calling the URL https://localhost:5001/api/person in the browser:</p><pre><code class="language-shell">dotnet run -p WebToTest
+</code></pre><p>You now should see the 26 persons as JSON in the browser:</p><p><img src="https://asp.net-hacker.rocks/img/unit-test-data/json.png" alt=""></p><h2>Testing the controller</h2><p>In the test project I renamed the initially scaffolded class to <code>PersonControllerTests</code>. After that I created a small method that creates the test data we'll return to the controller. This is exactly the same code we used to seed the database:</p><pre><code class="language-csharp">private IEnumerable&lt;Person&gt; GetFakeData()
+{
+    var i = 1;
+    var persons = A.ListOf&lt;Person&gt;(26);
+    persons.ForEach(x =&gt; x.Id = i++);
+    return persons.Select(_ =&gt; _);
+}
+</code></pre><p>We now can create out first test to test the controllers <code>GetPersons()</code> method:</p><pre><code class="language-csharp">[Fact]
+public void GetPersonsTest()
+{
+    // arrange
+    var service = new Mock&lt;IPersonService&gt;();
+
+    var persons = GetFakeData();
+    service.Setup(x =&gt; x.AllPersons()).Returns(persons);
+
+    var controller = new PersonController(service.Object);
+
+    // Act
+    var results = controller.GetPersons();
+
+    var count = results.Count();
+
+    // Assert
+    Assert.Equal(count, 26);
+}
+</code></pre><p>In the first line we use <code>Moq</code> to create a mock/fake object of our <code>PersonService</code>. This is why we need the interface of the service class. <code>Moq</code> creates proxy objects out of interfaces or abstract classes. Using <code>Moq</code> we are now able to setup the mock object, by telling <code>Moq</code> we want to return this specific list of persons every time we call the <code>AllPersons()</code> method.</p><p>If the setup is done we are able to inject the proxy object of the <code>IPersonService</code> into the controller. Our controller now works with a fake service instead using the original one. Inside the unit test we don't need a connection to the database now. That makes the test faster and more independent from any infrastructure outside the code to test</p><p>In the act section we call the <code>GetPersons()</code> method and will check the results afterwards in the assert section.</p><p>How does it look like with the <code>GetPerson()</code> method that returns one single item?</p><p>The second action to test returns an <code>ActionResult of Person</code>, so we only need to get the result a little bit different:</p><pre><code class="language-csharp">[Fact]
+public void GetPerson()
+{
+    // arrange
+    var service = new Mock&lt;IPersonService&gt;();
+
+    var persons = GetFakeData();
+   	var firstPerson = persons.First();
+    service.Setup(x =&gt; x.FindPerson(1)).Returns(firstPerson);
+
+    var controller = new PersonController(service.Object);
+
+    // act
+    var result = controller.GetPerson(1);
+    var person = result.Value;
+
+    // assert
+    Assert.Equal(1, person.Id);
+}
+</code></pre><p>Also the setup differs, because we setup another method that returns a single <code>Person</code> instead of a <code>IEnumerable of Person</code>.</p><p>To execute the tests run the next command in the console:</p><pre><code class="language-shell">dotnet test WebToTest.Tests
+</code></pre><p>This should result in the following output if all is done right:</p><p><img src="https://asp.net-hacker.rocks/img/unit-test-data/dotnetrun.png" alt=""></p><h2>Testing the service layer</h2><p>How does it look like to test the service layer? In that case we need to mock the <code>DbContext</code> to feed the service with fake data.</p><p>In the test project I created a new test class called <code>PersonServiceTests</code> and a test method that tests the <code>AllPersons()</code> method of the <code>PersonService</code>:</p><pre><code class="language-csharp">[Fact]
+public void AllPersonsTest()
+{
+    // arrange
+    var context = CreateDbContext();
+
+    var service = new PersonService(context.Object);
+
+    // act
+    var results = service.AllPersons();
+
+    var count = results.Count();
+
+    // assert
+    Assert.Equal(26, count);
+}
+</code></pre><p>This looks pretty simple at the first glance, but the magic is inside the method <code>CreateDbContext</code>, which created the mock object of the <code>DbContext</code>. I don't return the actual object, in case I need to extend the mock object in the current test method. Let's see how the <code>DbContext</code> is created:</p><pre><code class="language-csharp">private Mock&lt;ApplicationDbContext&gt; CreateDbContext()
+{
+    var persons = GetFakeData().AsQueryable();
+
+    var dbSet = new Mock&lt;DbSet&lt;Person&gt;&gt;();
+    dbSet.As&lt;IQueryable&lt;Person&gt;&gt;().Setup(m =&gt; m.Provider).Returns(persons.Provider);
+    dbSet.As&lt;IQueryable&lt;Person&gt;&gt;().Setup(m =&gt; m.Expression).Returns(persons.Expression);
+    dbSet.As&lt;IQueryable&lt;Person&gt;&gt;().Setup(m =&gt; m.ElementType).Returns(persons.ElementType);
+    dbSet.As&lt;IQueryable&lt;Person&gt;&gt;().Setup(m =&gt; m.GetEnumerator()).Returns(persons.GetEnumerator());
+
+    var context = new Mock&lt;ApplicationDbContext&gt;();
+    context.Setup(c =&gt; c.Persons).Returns(dbSet.Object);
+    return context;
+}
+</code></pre><p>The <code>DbSet</code> cannot be easily created, it is a bit special. This is why I need to mock the <code>DbSet</code> and to setup the Provider, the <code>Expression</code> the <code>ElementType</code> and the <code>Enumerator</code> using the values from the persons list. If this is done, I can create the <code>ApplicationDbContext</code> mock and setup the <code>DbSet</code> of Person on that mock. For every <code>DbSet</code> in your <code>DbContext</code> you need to add this four special setups on the mock <code>DbSet</code>. This seems to be a lot of overhead, but it is worth the trouble to test the service in an isolated way.</p><p>Sure you could use a in memory database with a real <code>DbContext</code>, but in this case the service isn't really isolated and and we anyway have a kind of a unit test.</p><p>The second test of the <code>PersonService</code> is pretty similar to the first one:</p><pre><code class="language-csharp">[Fact]
+public void FindPersonTest()
+{
+    // arrange
+    var context = CreateDbContext();
+
+    var service = new PersonService(context.Object);
+
+    // act
+    var person = service.FindPerson(1);
+
+    // assert
+    Assert.Equal(1, person.Id);
+}
+</code></pre><p>Let's run the tests and see if it's all working as expected:</p><pre><code class="language-shell">dotnet test WebToTest.Tests
+</code></pre><p><img src="/img/unit-test-data/dotnetrun2.png" alt=""></p><p>Also this four tests passed.</p><h2>Summary</h2><p>In this tutorial the setup took the biggest part, just to get a running API controller that we can use to test.</p><ul><li>We created the solution in the console using the .NET CLI.</li><li>We added a service layer to encapsulate the data access.</li><li>We added a EF DbContext to use in the service layer.</li><li>We registered the services and the DbContext in the DI.</li><li>We used the service in the controller to create two actions which return the data.</li><li>We started the application to be sure all is running fine.</li><li>We created one test on an action that doesn't return an ActionResult</li><li>We created another test on an action that returns an ActionResult</li><li>We ran the tests successfully in the console using the .NET CLI</li></ul><p>Not using the DbContext in the Controller directly makes it a lot easier to test the controller by passing in a mock service. Why? Because it is easier to fake the service instead of the DbContext. It also keeps the controller small which makes maintenance a lot easier later on.</p><p>Faking the DbContext is a bit more effort, but also possible as you saw in the last section.</p><p>Please find the complete code sample her on GitHub: <a href="https://github.com/JuergenGutsch/unit-testing-aspnetcore3">https://github.com/JuergenGutsch/unit-testing-aspnetcore3</a></p><h2>Conclusion</h2><blockquote><p>@Mohammad I hope this post will help you and answer your questions :-)</p></blockquote><p>Using ASP.NET Core there is no reason not to unit test the most important and critical parts of your application. If needed you are able to unit test almost all in your ASP.NET Core application.</p><p>Unit test is no magic but it is also not the general solution to ensure the quality of your app. To ensure that all tested units are working together you definitely need to have some some integration tests.</p><p>I'll do another post about integration tests using ASP.NET Core 3.0 soon.</p><footer id="articlefooter"><p><img src="/img/guj.png" alt="Jürgen Gutsch"><strong>Jürgen Gutsch</strong><br><a href="https://twitter.com/sharpcms/" target="_blank"><strong>@sharpcms</strong></a><br><span>.NET junkie, addicted to web and software development, clean coder, MVP for Visual Studio and Development Technologies</span></p></footer></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>

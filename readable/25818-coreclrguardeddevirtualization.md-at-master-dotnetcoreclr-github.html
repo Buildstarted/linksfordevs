@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+coreclr/GuardedDevirtualization.md at master &#xB7; dotnet/coreclr &#xB7; GitHub -
+linksfor.dev(s)
+    </title>
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta charset="utf-8">
+    <meta name="Description" content="A curated source of links that devs might find interesting. Updated around the clock." />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        
+<div class="readable">
+    <div id="readOverlay" class="style-ebook"><div id="readInner" class="margin-medium size-medium"><h1>coreclr/GuardedDevirtualization.md at master · dotnet/coreclr · GitHub</h1><div><div id="" class="markdown-body entry-content p-3 p-md-6"><h2><a id="user-content-overview" class="anchor" aria-hidden="true" href="#overview"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Overview</h2><p>Guarded devirtualization is a proposed new optimization for the JIT in .NET Core
+3.0. This document describes the motivation, initial design sketch, and highlights
+various issues needing further investigation.</p><h2><a id="user-content-motivation" class="anchor" aria-hidden="true" href="#motivation"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Motivation</h2><p>The .NET Core JIT is able to do a limited amount of devirtualization for virtual
+and interface calls. This ability was added in .NET Core 2.0. To devirtualize
+the JIT must be able to demonstrate one of two things: either that it knows the
+type of some reference exactly (say because it has seen a <code>newobj</code>) or that the
+declared type of the reference is a <code>final</code> class (aka <code>sealed</code>). For virtual
+calls the JIT can also devirtualize if it can prove the method is marked as <code>final</code>.</p><p>However, most of the time the JIT is unable to determine exactness or finalness
+and so devirtualization fails. Statistics show that currently only around 15% of
+virtual call sites can be devirtualized.  Result are even more pessimistic for
+interface calls, where success rates are around 5%.</p><p>There are a variety of reasons for this. The JIT analysis is somewhat weak.
+Historically all the JIT cared about was whether some location held <strong>a</strong> reference
+type, not a specific reference type. So the current type propagation has been
+retrofitted and there are places where types just get lost. The JIT analysis
+happens quite early (during importation) and there is only minimal ability to do
+data flow analysis at this stage. So for current devirtualization the source of
+the type information and the consumption must be fairly close in the code. A
+more detailed accounting of some of the shortcomings can be found in
+<a href="https://github.com/dotnet/coreclr/issues/9908">CoreCLR#9908</a>.</p><p>Resolution of these issues will improve the ability of the JIT to devirtualize,
+but even the best analysis possible will still miss out on many cases. Some call
+sites are truly polymorphic. Some others are truly monomorphic but proving this
+would require sophisticated interprocedural analyses that are not practical in
+the JIT or in a system as dynamic as the CLR. And some sites are monomorphic in
+practice but potentially polymorphic.</p><p>As an alternative, when devirtualization fails, the JIT can perform <em>guarded
+devirtualization</em>. Here the JIT creates an <code>if-then-else</code> block set in place of
+a virtual or interface call and inserts a runtime type test (or similar) into
+the <code>if</code> -- the "guard". If the guard test succeeds the JIT knows the type of
+the reference, so the <code>then</code> block can directly invoke the method corresponding
+to that type. If the test fails then the <code>else</code> block is executed and this
+contains the original virtual or interface call.</p><p>The upshot is that the JIT conditionally gains the benefit of devirtualization at
+the expense of increased code size, longer JIT times, and slightly longer code
+paths around the call. So long as the JIT's guess at the type is somewhat
+reasonable, this optimization can improve performance.</p><h2><a id="user-content-opportunity" class="anchor" aria-hidden="true" href="#opportunity"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Opportunity</h2><p>One might imagine that the JIT's guess about the type of the reference has to be
+pretty good for devirtualization to pay off. Somewhat surprisingly, at least based
+on our initial results, that is not the case.</p><h3><a id="user-content-virtual-calls-the-two-class-case" class="anchor" aria-hidden="true" href="#virtual-calls-the-two-class-case"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Virtual Calls: The Two-Class Case</h3><p>Given these class declarations:</p><div class="highlight highlight-source-cs"><pre><span class="pl-k">class</span><span class="pl-en">B</span>
+{
+   <span class="pl-k">public</span><span class="pl-k">virtual</span><span class="pl-k">int</span><span class="pl-en">F</span>() { <span class="pl-k">return</span><span class="pl-c1">33</span>;  }
+}
+
+<span class="pl-k">class</span><span class="pl-en">D</span> : <span class="pl-en">B</span>
+{
+    <span class="pl-k">public</span><span class="pl-k">override</span><span class="pl-k">int</span><span class="pl-en">F</span>() { <span class="pl-k">return</span><span class="pl-c1">44</span>; }
+}</pre></div><p>Suppose we have an array <code>B[]</code> that is randomly filled with instances of <code>B</code> and
+<code>D</code> and each element is class <code>B</code> with probability <code>p</code>.  We time how long
+it takes to invoke <code>F</code> on each member of the array (note the JIT will not ever
+be able to devirtualize these calls), and plot the times as a function of <code>p</code>.
+The result is something like the following:</p><p><a target="_blank" rel="noopener noreferrer" href="/dotnet/coreclr/blob/master/Documentation/design-docs/TwoClassesBaseline.JPG"><img src="/dotnet/coreclr/raw/master/Documentation/design-docs/TwoClassesBaseline.JPG" alt="two classes baseline perf"></a></p><p>Modern hardware includes an indirect branch target predictor and we can see it
+in action here. When the array element type is predictable (<code>p</code> very close to
+zero or very close to 1) performance is better. When the element type is
+unpredictable (<code>p</code> near 0.5) performance is quite a bit worse.</p><p>From this we can see that a correctly predicted virtual call requires about
+19 time units and worst case incorrect prediction around 55 time units. There is
+some timing overhead here too so the real costs are a bit lower.</p><p>Now imagine we update the JIT to do guarded devirtualization and check if the
+element is indeed type <code>B</code>. If so the JIT can call <code>B.F</code> directly and in our
+prototype the JIT will also inline the call. So we would expect that if the
+element types are mostly <code>B</code>s (that is if <code>p</code> is near 1.0) we'd see very good
+performance, and if the element type is mostly <code>D</code> (that is <code>p</code> near 0.0)
+performance should perhaps slightly worse than the un-optimized case as there is
+now extra code to run check before the call.</p><p><a target="_blank" rel="noopener noreferrer" href="/dotnet/coreclr/blob/master/Documentation/design-docs/TwoClassesDevirt.JPG"><img src="/dotnet/coreclr/raw/master/Documentation/design-docs/TwoClassesDevirt.JPG" alt="two classes devirt perf"></a></p><p>However as you can see the performance of devirtualized case (blue line) is as
+good or better than the un-optimized case for all values of <code>p</code>. This is perhaps
+unexpected and deserves some explanation.</p><p>Recall that modern hardware also includes a branch predictor. For small or large
+values of <code>p</code> this predictor will correctly guess whether the test added by the
+JIT will resolve to the <code>then</code> or <code>else</code> case. For small values of <code>p</code> the JIT
+guess will be wrong and control will flow to the <code>else</code> block. But unlike the
+original example, the indirect call here will only see instances of type <code>D</code> and
+so the indirect branch predictor will work extremely well. So the overhead for
+the small <code>p</code> case is similar to the well-predicted indirect case without guarded
+devirtualization. As <code>p</code> increases the branch predictor starts to mispredict and
+that costs some cycles. But when it mispredicts control reaches the <code>then</code> block
+which executes the inlined call. So the cost of misprediction is offset by the
+faster execution and the cost stays relatively flat.</p><p>As <code>p</code> passes 0.5 the branch predictor flips its prediction to prefer the <code>then</code>
+case. As before mispredicts are costly and send us down the <code>else</code> path but there
+we still execute a correctly predicted indirect call.</p><p>And as <code>p</code> approaches 1.0 the cost falls as the branch predictor is almost always
+correct and so the cost is simply that of the inlined call.</p><p>So oddly enough the guarded devirtualization case shown here does not require any
+sort of perf tradeoff. The JIT is better off guessing the more likely case but
+even guessing the less likely case can pay off and doesn't hurt performance.</p><p>One might suspect at this point that the two class case is a special case and that
+the results do not hold up in more complex cases. More on that shortly.</p><p>Before moving on, we should point out that virtual calls in the current
+CLR are a bit more expensive than in C++, because the CLR uses a two-level method
+table. That is, the indirect call sequence is something like:</p><div class="highlight highlight-source-assembly"><pre><span class="pl-c1">000095</span><span class="pl-en"></span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">rax</span><span class="pl-s1">,</span><span class="pl-en"> qword ptr </span><span class="pl-s1">[</span><span class="pl-v">rcx</span><span class="pl-s1">]</span><span class="pl-c">                 ; fetch method table</span><span class="pl-c1">000098</span><span class="pl-en"></span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">rax</span><span class="pl-s1">,</span><span class="pl-en"> qword ptr </span><span class="pl-s1">[</span><span class="pl-v">rax</span><span class="pl-s1">+</span><span class="pl-c1">72</span><span class="pl-s1">]</span><span class="pl-c">              ; fetch proper chunk</span><span class="pl-en">00009C </span><span class="pl-k">call</span><span class="pl-en">     qword ptr </span><span class="pl-s1">[</span><span class="pl-v">rax</span><span class="pl-s1">+</span><span class="pl-c1">32</span><span class="pl-s1">]</span><span class="pl-en">B:F():</span><span class="pl-k">int</span><span class="pl-en">:this</span><span class="pl-c">     ; call indirect</span></pre></div><p>This is a chain of 3 dependent loads and so best-case will require at least 3x
+the best cache latency (plus any indirect prediction overhead).</p><p>So the virtual call costs for the CLR are high. The chunked method table design
+was adopted to save space (chunks can be shared by different classes) at the
+expense of some performance. And this apparently makes guarded devirtualization
+pay off over a wider range of class distributions than one might expect.</p><p>And for completeness, the full guarded <code>if-then-else</code> sequence measured above is:</p><div class="highlight highlight-source-assembly"><pre><span class="pl-en">00007A </span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">rcx</span><span class="pl-s1">,</span><span class="pl-en"> gword ptr </span><span class="pl-s1">[</span><span class="pl-v">rsi</span><span class="pl-s1">+</span><span class="pl-c1">8</span><span class="pl-s1">*</span><span class="pl-v">rcx</span><span class="pl-s1">+</span><span class="pl-c1">16</span><span class="pl-s1">]</span><span class="pl-c">        ; fetch array element</span><span class="pl-en">00007F </span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">rax</span><span class="pl-s1">,</span><span class="pl-en"></span><span class="pl-c1">0x7FFC9CFB4A90</span><span class="pl-c">                  ; B's method table</span><span class="pl-c1">000089</span><span class="pl-en"></span><span class="pl-k">cmp</span><span class="pl-en">      qword ptr </span><span class="pl-s1">[</span><span class="pl-v">rcx</span><span class="pl-s1">],</span><span class="pl-en"></span><span class="pl-v">rax</span><span class="pl-c">                 ; method table test</span><span class="pl-en">00008C </span><span class="pl-k">jne</span><span class="pl-en">      SHORT G_M30756_IG06</span><span class="pl-c">                  ; jump if class is not B</span><span class="pl-en">00008E </span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">eax</span><span class="pl-s1">,</span><span class="pl-en"></span><span class="pl-c1">33</span><span class="pl-c">                              ; inlined B.F</span><span class="pl-c1">000093</span><span class="pl-en"></span><span class="pl-k">jmp</span><span class="pl-en">      SHORT G_M30756_IG07</span><span class="pl-en">G_M30756_IG06:</span><span class="pl-c1">000095</span><span class="pl-en"></span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">rax</span><span class="pl-s1">,</span><span class="pl-en"> qword ptr </span><span class="pl-s1">[</span><span class="pl-v">rcx</span><span class="pl-s1">]</span><span class="pl-c">                 ; fetch method table</span><span class="pl-c1">000098</span><span class="pl-en"></span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">rax</span><span class="pl-s1">,</span><span class="pl-en"> qword ptr </span><span class="pl-s1">[</span><span class="pl-v">rax</span><span class="pl-s1">+</span><span class="pl-c1">72</span><span class="pl-s1">]</span><span class="pl-c">              ; fetch proper chunk</span><span class="pl-en">00009C </span><span class="pl-k">call</span><span class="pl-en">     qword ptr </span><span class="pl-s1">[</span><span class="pl-v">rax</span><span class="pl-s1">+</span><span class="pl-c1">32</span><span class="pl-s1">]</span><span class="pl-en">B:F():</span><span class="pl-k">int</span><span class="pl-en">:this</span><span class="pl-c">     ; call indirect</span><span class="pl-en">G_M30756_IG07:</span></pre></div><p>Note there is a redundant load of the method table (hidden in the <code>cmp</code>) that
+could be eliminated with a bit more work on the prototype. So guarded
+devirtualization perf could potentially be even better than is shown above,
+especially for smaller values of <code>p</code>.</p><h3><a id="user-content-virtual-calls-the-three-class-case" class="anchor" aria-hidden="true" href="#virtual-calls-the-three-class-case"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Virtual Calls: The Three-Class Case</h3><p>Now to return to the question we asked above: is there something about the two
+class case that made guarded devirtualization especially attractive? Read on.</p><p>Suppose we introduce a third class into the mix and repeat the above measurement.
+There are now two probabilities in play: <code>p</code>, the probability that the element
+has class <code>B</code>, and <code>p1</code>, the probability that the element has class <code>D</code>, and
+there is a third class <code>E</code>. To avoid introducing a 3D plot we'll first simply
+average the results for the various values of <code>p1</code> and plot performance as a
+function of <code>p</code>:</p><p><a target="_blank" rel="noopener noreferrer" href="/dotnet/coreclr/blob/master/Documentation/design-docs/ThreeClassesDevirt.JPG"><img src="/dotnet/coreclr/raw/master/Documentation/design-docs/ThreeClassesDevirt.JPG" alt="three classes devirt perf"></a></p><p>The right-hand side (<code>p</code> near 1.0) looks a lot like the previous chart. This is
+not surprising as there are relatively few instances of that third class. But the
+middle and left hand side differ and are more costly.</p><p>For the un-optimized case (orange) the difference is directly attributable to
+the performance of the indirect ranch predictor. Even when <code>p</code> is small there
+are still two viable branch targets (on average) and some some degree of indirect
+misprediction.</p><p>For the optimized case we now see that guarded devirtualization performs worse
+than no optimization if the JIT's guess is completely wrong. The penalty is not
+that bad because the JIT-introduced branch is predictable. But even at very
+modest values of <code>p</code> guarded devirtualization starts to win out.</p><p>Because we've averaged over <code>p1</code> you might suspect that we're hiding something.
+The following chart shows the min and max values as well as the average, and also
+shows the two-class result (dashed lines).</p><p><a target="_blank" rel="noopener noreferrer" href="/dotnet/coreclr/blob/master/Documentation/design-docs/ThreeClassesDevirtFull.JPG"><img src="/dotnet/coreclr/raw/master/Documentation/design-docs/ThreeClassesDevirtFull.JPG" alt="three classes devirt perf ranges"></a></p><p>You can see the minimum values are very similar to the two class case; these
+are cases where the <code>p1</code> is close to 0 or close to 1. And that makes sense because
+if there really are only two classes despite the potential of there being three
+then we'd expect to see similar results as in the case where there only can be
+two classes.</p><p>And as noted above, if <code>p</code> is high enough then the curves also converge to the
+two class case, as the relative mixture of <code>D</code> and <code>E</code> is doesn't matter: the
+predominance of <code>B</code> wins out.</p><p>For low values of <code>p</code> the actual class at the call site is some mixture of <code>D</code>
+and <code>E</code>. Here's some detail (the x axis now shows <code>p1</code> and <code>p</code> as upper and
+lower values respectively).</p><p><a target="_blank" rel="noopener noreferrer" href="/dotnet/coreclr/blob/master/Documentation/design-docs/ThreeClassesDevirtDetail.JPG"><img src="/dotnet/coreclr/raw/master/Documentation/design-docs/ThreeClassesDevirtDetail.JPG" alt="three classes devirt perf detail"></a></p><p>The worst case for perf for both is when the mixture of <code>D</code> and <code>E</code> is
+unpredictably 50-50 and there are no <code>B</code>s. Once we mix in just 10% of <code>B</code> then
+guarded devirt performs better no matter what distribution we have for the other
+two classes. Worst case overhead -- where the JIT guesses a class that never
+appears, and the other classes are evenly distributed -- is around 20%.</p><p>So it seems reasonable to say that so long as the JIT can make a credible guess
+about the possible class -- say a guess that is right at least 10% of the time
+-- then there is quite likely a performance benefit to guarded
+devirtualization for virtual calls.</p><p>We'll need to verify this with more scenarios, but these initial results are
+certainly encouraging.</p><h3><a id="user-content-virtual-calls-testing-for-multiple-cases" class="anchor" aria-hidden="true" href="#virtual-calls-testing-for-multiple-cases"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Virtual Calls: Testing for Multiple Cases</h3><p>One might deduce from the above that if there are two likely candidates the JIT
+should test for each. This is certainly a possibility and in C++ compilers that
+do indirect call profiling there are cases where multiple tests are considered
+a good idea. But there's also additional code size and another branch.</p><p>This is something we'll look into further.</p><h3><a id="user-content-interface-calls-the-two-class-case" class="anchor" aria-hidden="true" href="#interface-calls-the-two-class-case"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Interface Calls: The Two Class Case</h3><p>Interface calls on the CLR are implemented via <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/virtual-stub-dispatch.md">Virtual Stub Dispatch</a>  (aka VSD). Calls are made through an indirection cell that initially points
+at a lookup stub. On the first call, the interface target is identified from the
+object's method table and the lookup stub is replaced with a dispatch stub that
+checks for that specific method table in a manner quite similar to guarded
+devirtualization.</p><p>If the method table check fails a counter is incremented, and once the counter
+reaches a threshold the dispatch stub is replaced with a resolve stub that looks
+up the right target in a process-wide hash table.</p><p>For interface call sites that are monomorphic, the VSD mechanism (via the dispatch
+stub) executes the following code sequence (here for x64)</p><div class="highlight highlight-source-assembly"><pre><span class="pl-c">; JIT-produced code</span><span class="pl-c">;</span><span class="pl-c">; set up R11 with interface target info</span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">R11</span><span class="pl-s1">,</span><span class="pl-en"> ...</span><span class="pl-c">         ; additional VSD info for call</span><span class="pl-k">mov</span><span class="pl-en"></span><span class="pl-v">RCX</span><span class="pl-s1">,</span><span class="pl-en"> ...</span><span class="pl-c">         ; dispatch target object</span><span class="pl-k">cmp</span><span class="pl-en"></span><span class="pl-s1">[</span><span class="pl-v">rcx</span><span class="pl-s1">],</span><span class="pl-en"></span><span class="pl-v">rcx</span><span class="pl-c">       ; null check (unnecessary)</span><span class="pl-k">call</span><span class="pl-en"></span><span class="pl-s1">[</span><span class="pl-en">addr</span><span class="pl-s1">]</span><span class="pl-c">          ; call indirect through indir cell</span><span class="pl-c">; dispatch stub</span><span class="pl-k">cmp</span><span class="pl-en"></span><span class="pl-s1">[</span><span class="pl-v">RCX</span><span class="pl-s1">],</span><span class="pl-en"> targetMT</span><span class="pl-c">  ; check for right method table</span><span class="pl-k">jne</span><span class="pl-en"> DISPATCH</span><span class="pl-s1">-</span><span class="pl-en">FAIL</span><span class="pl-c">    ; bail to resolve stub if check fails (uses R11 info)</span><span class="pl-k">jmp</span><span class="pl-en"> targetCode</span><span class="pl-c">       ; else "tail call" the right method</span></pre></div><p>At first glance it might appear that adding guarded devirtualization on top of
+VSD may not provide much benefit for monomorphic sites. However the guarded
+devirtualization test doesn't use an indirection cell and doesn't require R11
+setup, may be able to optimize away the null check, and opens the door for
+inlining. So it should be slightly cheaper on average and significantly cheaper
+in some cases.</p><p>(Note <a href="https://github.com/dotnet/coreclr/issues/14222">CoreCLR#1422</a> indicates
+we should be able to optimize away the null check in any case).</p><p>If the guarded tests fails we've filtered out one method table the dispatch cell
+now works well even if a call site alternates between two classes. So we'd expect
+the combination of guarded devirtualization and VSD to perform well on the two
+class test and only show limitations when faced with mixtures of three or more
+classes.</p><p>If the guard test always fails we have the up-front cost for the vtable fetch
+(which should amortize pretty well with the subsequent fetch in the) stub plus
+the predicted not taken branch. So we'd expect the cost for the two-class cases
+where the JIT's prediction is always wrong to be a bit higher).</p><p>The graph below shows the measured results. To makes sure we're not overly impacted
+by residual VSD state we use a fresh call site for each value of p. The solid
+orange line is the current cost. The dashed orange line is the corresponding cost
+for a virtual call with the same value of p. The solid blue line is the cost with
+an up-front guarded test. As noted there is some slowdown when the JIT always
+guesses the wrong class, but the break-even point (not shown) is at a relatively
+small probability of a correct guess.</p><p><a target="_blank" rel="noopener noreferrer" href="/dotnet/coreclr/blob/master/Documentation/design-docs/TwoClassesInterface.JPG"><img src="/dotnet/coreclr/raw/master/Documentation/design-docs/TwoClassesInterface.JPG" alt="two classes interface devirt"></a></p><h3><a id="user-content-interface-calls-the-three-class-case" class="anchor" aria-hidden="true" href="#interface-calls-the-three-class-case"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Interface Calls: The Three Class Case</h3><p>As with virtual calls you may strongly suspect the two class case for interface
+calls is special. And you'd be right.</p><p>If we mix a third class in as we did above, we see similar changes in the
+performance mix for interface calls, as seen below. But also as with virtual calls
+the JIT's guess doesn't have to be all that good to see payoffs. At around 10%
+correct, guessing wins on average, and around 30% correct guessing is always a
+perf win.</p><p><a target="_blank" rel="noopener noreferrer" href="/dotnet/coreclr/blob/master/Documentation/design-docs/ThreeClassesInterface.JPG"><img src="/dotnet/coreclr/raw/master/Documentation/design-docs/ThreeClassesInterface.JPG" alt="three classes interface devirt"></a></p><h3><a id="user-content-delegate-speculation" class="anchor" aria-hidden="true" href="#delegate-speculation"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Delegate Speculation</h3><p>While we have been discussing this topic in the context of virtual calls, the
+method is general and can be applied to indirect calls as well. Here the guard
+test may just test for a particular function rather than a type.</p><p><code>Delegate.Invoke</code> is a special method that can eventually turns into an indirect
+call. The JIT could speculate about the possible target of this call. Choosing
+a good target here would require some kind of indirect call profiling.</p><h3><a id="user-content-calli-speculation" class="anchor" aria-hidden="true" href="#calli-speculation"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Calli Speculation</h3><p>Indirect calls also arise via the <code>calli</code> opcode. As with delegates, choosing a
+target here likely requires specialized profiling.</p><h3><a id="user-content-costs" class="anchor" aria-hidden="true" href="#costs"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Costs</h3><p>Given the optimistic take on performance, it is important to remember that
+there are also some costs involved to guarded devirtualization: increased code
+size and increased JIT time. There may also be some second-order effects on
+the local code generation as we've introduced control flow into the method where
+it didn't exist previously.</p><p>A naive implementation that aggressively performs guarded devirtualization
+increases code size overall by about 5% as measured by PMI. JIT time increase
+was not measured but should be in that same ballpark. Some assemblies see code
+size increasing by as much as 12%.</p><p>However the guarded devirtualization only kicks in for about 15% of the methods.
+So the average relative size increase in a method with virtual calls is probably
+more like 33%.</p><p>There may be some inefficiencies in the current prototype that can be fixed to
+reduce the code size impact. Aside from the extra method table fetch noted above
+the duplicated calls have the same sets of arguments and so we might be able to
+amortize argument evaluation costs better. And there are some complexities around
+handling return values (especially for implicit by-reference structures) that
+likewise might be able to be tightened up.</p><p>Nevertheless, blindly optimizing all virtual calls with guarded devirtualization
+is not likely the right approach. Something more selective is almost certainly
+needed.</p><p>However we have done code-expanding optimizations somewhat blindly before, and
+we could contain the size growth risk by restricting this optimization to Tier1.
+Also PMI can overstate size impact seen in real scenarios as it may over-count
+the impact of changes in methods that are always inlined. So we should look at
+size increases from some actual scenarios.</p><p>And perhaps I'll look at the size impact of loop cloning as a precedent.</p><h2><a id="user-content-implementation-considerations" class="anchor" aria-hidden="true" href="#implementation-considerations"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Implementation Considerations</h2><p>To get the data above and a better feel for the challenges involved we have
+implemented a prototype. It is currently located on this branch:
+<a href="https://github.com/AndyAyersMS/coreclr/tree/GuardedDevirtFoundations">GuardedDevirtFoundations</a>.</p><p>The prototype can introduce guarded devirtualization for some virtual and
+interface calls. It supports inlining of the directly invoked method. It uses
+the JIT's "best known type" as the class to predict. It also anticipates being
+able to query the runtime for implementing classes of an interface.</p><h3><a id="user-content-phase-ordering" class="anchor" aria-hidden="true" href="#phase-ordering"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Phase Ordering</h3><p>For the most part, devirtualization is done very early on in the JIT, during
+importation. This allows devirtualized calls to subsequently be inlined, and for
+devirtualization of call sites in inlinees to take advantage of type information
+propagating down into the inlinee from inlined arguments.</p><p>We want those same properties to hold for guarded devirtualization candidates.
+So conceptually the transformation should happen in the same place. However it is
+not possible to introduce new control flow in the importer (ignoring for the moment
+the possibility of using question ops). So the actual transformation must be
+deferred until sometime after the importer runs and before the inliner runs.</p><p>This deferral is a bit problematic as some key bits of importer state are needed
+to query the runtime about the properties of a call target. So if we defer the
+transformation we need to somehow capture the data needed for these queries and
+make it available later. The current prototype uses (abuses?) the inline
+candidate information for this. As part of this we require that all speculative
+devirtualization sites be treated as inline candidates, at least initially.
+This has the side effect of hoisting the call to be a top level (statement)
+expression and introduces a return value placeholder.</p><p>We currently already have a similar transformation in the JIT, the "fat calli"
+transformation needed on CoreRT. This transformation runs at the right time --
+after the importer and before the inliner -- and introduces the right kind of
+<code>if-then-else</code> control flow structure. So the thought is to generalize this to
+handle guarded devirtualization as well.</p><h3><a id="user-content-recognition" class="anchor" aria-hidden="true" href="#recognition"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Recognition</h3><p>In the prototype, candidates are recognized during the initial importer driven
+call to <code>impDevirtualizeCall</code>. If the only reason devirtualization fails is lack
+of exactness, then the call is marked as a guarded devirtualization candidate.</p><h3><a id="user-content-devirtualization" class="anchor" aria-hidden="true" href="#devirtualization"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Devirtualization</h3><p>To produce the direct call the prototype updates the <code>this</code> passed in the <code>then</code>
+version of the call so it has the exact predicted type. It then re-invokes
+<code>impDevirtualizeCall</code> which should now succeed as the type is now exactly
+known. The benefit of reuse here is that certain special cases of devirtualization
+are now more likely to be handled.</p><h3><a id="user-content-inline-candidacy" class="anchor" aria-hidden="true" href="#inline-candidacy"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Inline Candidacy</h3><p>The prototype currently sets up all virtual and interface calls as potential
+inline candidates. One open question is whether it is worth doing guarded
+devirtualization simply to introduce a direct call. As an alternative we could
+insist that the directly called method also be something that is potentially
+inlineable. One can argue that call overhead matters much more for small methods
+that are also likely good inline candidates.</p><p>The inline candidate info is based on the apparent method invoked at the virtual
+site. This is the base method, the one that introduces the virtual slot. So if we
+speculatively check for some class and that class overrides, we need to somehow
+update the inline info. How to best do this is unclear.</p><h3><a id="user-content-return-values" class="anchor" aria-hidden="true" href="#return-values"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Return Values</h3><p>Because the candidate calls are handled as inline candidates, the JIT hoists the
+call to a top level expression (which is good) during importation and introduces
+a return value placeholder into the place the call occupied in its original tree.
+(Oddly we introduce return value placeholders for some calls that don't return a
+a value -- we should fix this). The placeholder points back at the call.</p><p>When we split the call into two calls we can't keep this structure intact as there
+needs to be a 1-1 relationship between call and placeholder. So the prototype
+needs to save the return value in a new local and then update the placeholder to
+refer to that local. This can be tricky because in some cases we haven't yet settled
+on what the actual type of the return value is.</p><p>The handling of return values in the early stages of the JIT (arguably, in the entire
+JIT) is quite messy. The ABI details bleed through quite early and do so somewhat
+unevenly. This mostly impacts methods that return structures as different ABIs have
+quite different conventions, and the IR is transformed to reflect those conventions
+at different times for un-inlined calls, inlineable calls that end up not getting
+inlined, and for calls that get inlined. In particular, structures that are small
+enough to be returned by value (in a register or set of registers) need careful
+handling.</p><p>The prototype skips over such by-value-returning struct methods today. Some of
+the logic found in <code>fgUpdateInlineReturnExpressionPlaceHolder</code> needs to be pulled
+in to properly type the call return value so we can properly type the temp. Or
+perhaps we could leverage some of importer-time transformations that are done for
+the fat calli cases.</p><p>For larger structs we should arrange so that the call(s) write their return values
+directly into the new temp, instead of copying the value from wherever they
+return it into a temp, to avoid one level of struct copy. Doing so may require
+upstream zero init of the return value struct and this should only happen in one
+place.</p><h2><a id="user-content-open-issues" class="anchor" aria-hidden="true" href="#open-issues"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Open Issues</h2><p>Here are some of the issues that need to be looked into more carefully.</p><h3><a id="user-content-policy" class="anchor" aria-hidden="true" href="#policy"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Policy</h3><ul><li>what is the best mechanism for guessing which class to test for?
+<ul><li>instrument Tier0 code?</li><li>look at types of arguments?</li><li>ask runtime for set of known classes?</li><li>harvest info from runtime caches (VSD)?</li><li>add instrumenting Tier1 to collect data and Tier2 to optimize?</li></ul></li><li>is there some efficient way to test for class ranges? Currently the JIT is
+doing an exact type test. But we really care more about what method is going to
+be invoked. So if there is a range of types <code>D1...DN</code> that all will invoke some
+particular method can we test for them all somehow?</li><li>or should we test the method after the method lookup (possibly worse tradeoff
+because of the chunked method table arrangement, also tricky as a method can
+have multiple addresses over time. Since many types can share a chunk this
+might allow devirtualization over a wider set of classes (good) but we'd lose
+knowledge of exact types (bad). Not clear how these tradeoffs play out.</li><li>interaction of guarded devirt with VSD? For interface calls we are sort of
+inlining the first level of the VSD into the JITted code.</li><li>revocation or reworking of the guard if the JIT's prediction turns out to bad?</li><li>improve regular devirtualization to reduce need for guarded
+devirtualization.</li><li>should we enable this for preJITted code? In preJITted code the target method
+table is not a JIT-time constant and must be looked up.</li><li>in the prototype, guarded devirtualization and late devirtualization sometimes
+conflict. Say we fail to devirtualize a site, and so expand via guarded devirtualization
+guessing some class X. The residual virtual call then may be optimizable via late
+devirtualization, and this may discover the actual class. In that case the guarded
+devirtualization is not needed. But currently it can't be undone.</li><li>we probably don't want to bother with guarded devirtualization if we can't also
+inline. But it takes us several evaluation steps to determine if a call can
+be inlined, some of these happening <em>after</em> we've done the guarded expansion.
+Again this expansion can't be undone.</li><li>so perhaps we need to build an undo capability for the cases where guarded
+devirtualization doesn't lead to inlining and/or where late devirtualization also
+applies.</li></ul><h3><a id="user-content-implementation" class="anchor" aria-hidden="true" href="#implementation"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Implementation</h3><ul><li>avoid re-fetching method table for latent virtual call (should reduce code
+size and improve overall perf win)</li><li>look at how effectively we are sharing argument setup (might reduce code size
+and JIT time impact) -- perhaps implement head merging?</li><li>handle return values in full generality</li><li>il offsets</li><li>flag residual calls as not needing null checks</li><li>properly establish inline candidacy</li><li>decide if the refactoring of <code>InlineCandidateInfo</code> is the right way to pass
+information from importer to the indirect transform phase</li></ul><h3><a id="user-content-futures" class="anchor" aria-hidden="true" href="#futures"><svg class="octicon octicon-link" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Futures</h3><ul><li>can we cover multiple calls with one test? This can happen already if the
+subsequent call is introduced via inlining of the directly called method, as we
+know the exact type along that path. But for back to back calls to virtual
+methods off of the same object it would be nice to do just one test.</li><li>should we test for multiple types? Once we've peeled off the "most likely" case
+if the conditional probability of the next most likely case is high it is probably
+worth testing for it too. I believe the C++ compiler will test up to 3 candidates
+this way... but that's a lot of code expansion.</li></ul></div></div></div></div>
+</div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        (function () {
+            var COLLECT_URL = "https://dna.buildstarted.com/t";
+            var SITE_ID = "linksfor.devs";
+            var GLOBAL_VAR_NAME = "__DNA__";
+
+            window[GLOBAL_VAR_NAME] = {};
+
+            window[GLOBAL_VAR_NAME].sendPageView = function () {
+                var path = location.pathname;
+                var referrer = document.referrer;
+
+                var url = COLLECT_URL + "?siteid=" + SITE_ID + "&p=" + encodeURIComponent(path) + "&r=" + encodeURIComponent(referrer);
+
+                try { fetch(url, { method: "GET" }); } catch (e) { }
+            };
+
+            window[GLOBAL_VAR_NAME].sendPageView();
+        })();
+    </script>
+</body>
+</html>
