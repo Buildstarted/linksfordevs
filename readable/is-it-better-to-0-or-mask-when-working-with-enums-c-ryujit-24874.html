@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>linksfor.dev(s)</title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        <h1>
+                <span style="cursor: default" title="linksfor.dev(s) has been running for 1 year! :partypopper:">🎉</span>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <div class="readable">
+        <h1>Is it better to &quot;!= 0&#x201D; or &#x201D;== mask&#x201D; when working with enums (C#, RyuJIT) | tabs &#x21B9; over &#x2423; &#x2423; &#x2423; spaces by Ji&#x159;&#xED; {x2} &#x10C;in&#x10D;ura</h1>
+        <p>
+Reading time: 4-5 minutes        </p>
+        <p><a href="https://www.tabsoverspaces.com/233785-is-it-better-to-not-equals-0-or-equals-mask-when-working-with-enums-csharp-ryujit">https://www.tabsoverspaces.com/233785-is-it-better-to-not-equals-0-or-equals-mask-when-working-with-enums-csharp-ryujit</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article>
+	<h3>Is it better to "!= 0” or ”== mask” when working with enums (C#, RyuJIT) <a href="https://www.tabsoverspaces.com/id/233785" rel="bookmark nofollow" title="Permalink"><span aria-label="Permalink"></span></a></h3>
+	<p>
+	<span aria-label="Published"></span> 20 May 2019
+	<span></span>
+	<span aria-label="Tags"></span> .NET Core, JIT, RyuJIT
+</p>
+<p>First thing first, I know there’s an <a href="https://docs.microsoft.com/en-us/dotnet/api/system.enum.hasflag" target="_blank" rel="noopener"><code>Enum.HasFlag</code> method</a>, yet I’m not interested in it (or optimizations around it). What I like to know is whether one of these two ways – <code>(EnumValue &amp; mask) != 0</code> and <code>(EnumValue &amp; mask) == mask</code> – to check for a (<strong>single value</strong>) flag in an enum is better.</p>
+<!-- excerpt -->
+<p>I’m writing <em>better</em>, because I don’t want to say faster, as other aspects of such primitive operation might affect the overall result (like code size, register usage, etc.).</p>
+<h4>Hypothesis</h4>
+<p>My guess is that the "!= 0” is going be the winner, because computers are good doing stuff around value zero (like <code>jnz</code> instruction).</p>
+<h4>Code</h4>
+<p>In all the code following, I’ll be using this enum I aptly named <code>MyEnum</code>. Nothing special.</p>
+<pre><code>[Flags]
+public enum MyEnum
+{
+    None = 0,
+    A = 0x01,
+    B = 0x02,
+    C = 0x04,
+    D = 0x08,
+}
+</code></pre>
+<p>And two simple methods (with x64/AMD64 assembly right below each).</p>
+<pre><code>public bool A(MyEnum myEnum)
+{
+    return (myEnum &amp; MyEnum.B) == MyEnum.B;
+}
+</code></pre>
+<pre><code>test dl, 0x2
+setnz al
+movzx eax, al
+ret
+</code></pre>
+<pre><code>public bool B(MyEnum myEnum)
+{
+    return (myEnum &amp; MyEnum.B) != 0;
+}
+</code></pre>
+<pre><code>test dl, 0x2
+setnz al
+movzx eax, al
+ret
+</code></pre>
+<p>Surprisingly both result in exactly the same assembly produced by 64-bit RyuJIT (on .NET Core 2.2.4). Although, it kind of makes sense, both are doing the same. I also learned about <code>setnz</code> and <code>movzx</code> instructions (the <code>movzx</code> strictly speaking is the for returning the value, not for the compare) along the way, as I wasn’t familiar with these.</p>
+<p>I could stop here and say that both are the same and use whatever I feel like using given the circumstances. But I like to look under.</p>
+<h4>Where’s the magic happening in RyuJIT</h4>
+<p>I’m nowhere familiar of internals of RyuJIT, thus I had no idea where is this happening. Time for little thinking. I’m working with enums, but enums are just numbers, hence maybe the same behavior works for numbers too. That way I know whether to keep <em>grepping</em> for something around enums or look for something more general.</p>
+<p>Sadly doing <code>(value &amp; 0x02) == 0x02</code> and <code>(value &amp; 0x02) != 0</code> (where <code>value</code> is plain <code>int</code>) shows same behavior. I’ll spare you my two hours of semi-methodically (read randomly 😃) walking through the RyuJIT’s code and I’ll jump right into the action.</p>
+<p>The first magic happens in <code>Lowering::OptimizeConstCompare</code>, where <a href="https://github.com/dotnet/coreclr/blob/c5a44f58952c5014f5e1c25b667dca3901fd84a7/src/jit/lower.cpp#L2644" target="_blank" rel="noopener">the “compare and” is transformed into “test”</a> and even <a href="https://github.com/dotnet/coreclr/blob/c5a44f58952c5014f5e1c25b667dca3901fd84a7/src/jit/lower.cpp#L2653-L2654" target="_blank" rel="noopener">“inventing” the <code>0</code> comparison if possible</a>. That covers transforming ”== mask” into "!= 0”. The other part of the puzzle can be found in <a href="https://github.com/dotnet/coreclr/blob/c5a44f58952c5014f5e1c25b667dca3901fd84a7/src/jit/codegenxarch.cpp#L6351-L6352" target="_blank" rel="noopener">the code generation itself</a>. The <code>test reg, reg</code> instruction is shorter than doing <code>cmp reg, 0</code>. And although the saving is not huge (1 byte), if you’re writing JIT, every byte and CPU cycle more than counts.</p>
+<p>Moreover, as I was researching, I learned about <a href="https://en.wikichip.org/wiki/macro-operation_fusion" target="_blank" rel="noopener">macro-fusing instructions</a> in certain architectures and <code>test</code> can (i.e. Intel Core 2, Intel Nehalem, …) macro-fuse with more conditional jump instructions, compared to <code>cmp</code>.</p>
+<h4>Real world usage</h4>
+<p>Above I said, that both are the same. But carefully looking into <code>Lowering::OptimizeConstCompare</code> at <a href="https://github.com/dotnet/coreclr/blob/c5a44f58952c5014f5e1c25b667dca3901fd84a7/src/jit/lower.cpp#L2657" target="_blank" rel="noopener">this line</a>, one can see the <code>0</code> comparison is “invented” only if the second operand is integral single bit mask constant. That means, if you have a code, where the “mask” is i.e. a variable, it’s better to use "!= 0” if you can, else you’re out of luck with RyuJIT’s smartness.</p>
+<pre><code>public bool A(MyEnum myEnum, MyEnum value)
+{
+    return (myEnum &amp; value) == value;
+}
+</code></pre>
+<pre><code>and edx, r8d
+cmp edx, r8d
+setz al
+movzx eax, al
+ret
+</code></pre>
+<pre><code>public bool B(MyEnum myEnum, MyEnum value)
+{
+    return (myEnum &amp; value) != 0;
+}
+</code></pre>
+<pre><code>test r8d, edx
+setnz al
+movzx eax, al
+ret
+</code></pre>
+<h4>Summary</h4>
+<p>Although my hypothesis with "!= 0” was correct, I learned the direct “compare” with <code>0</code> wasn’t really the reason. Quite the opposite. And finally, I spent time learning something new and it was fun.</p>
+<p><small>In case you’d ask; the <a href="https://github.com/dotnet/coreclr/blob/c5a44f58952c5014f5e1c25b667dca3901fd84a7/src/jit/gentree.cpp#L12862" target="_blank" rel="noopener"><code>Enum.HasFlag</code> is optimized and doing the same at the end</a>.</small></p>
+
+</article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+
+</body>
+</html>

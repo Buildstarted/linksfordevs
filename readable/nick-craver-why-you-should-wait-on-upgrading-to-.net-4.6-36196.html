@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>linksfor.dev(s)</title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="grid">
+        <h1>
+                <span style="cursor: default" title="linksfor.dev(s) has been running for 1 year! :partypopper:">🎉</span>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <div class="readable">
+        <h1>Nick Craver - Why you should wait on upgrading to .Net 4.6</h1>
+        <p>
+Reading time: 9-11 minutes        </p>
+        <p><a href="https://nickcraver.com/blog/2015/07/27/why-you-should-wait-on-dotnet-46/">https://nickcraver.com/blog/2015/07/27/why-you-should-wait-on-dotnet-46/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+      <div>
+        <main>
+        <div>
+          
+          <article>
+            <p><strong>Update (August 11th):</strong> A patch for this bug has been released by Microsoft. Here’s their update to the advisory:</p>
+
+<blockquote>
+  <p>We released an updated version of RyuJIT today, which resolves this advisory. The update was released as <a href="https://technet.microsoft.com/library/security/ms15-092.aspx">Microsoft Security Bulletin MS15-092</a> and is available on Windows Update or via direct download as <a href="https://support.microsoft.com/kb/3086251">KB3086251</a>. The update resolves: <a href="https://github.com/dotnet/coreclr/issues/1296">CoreCLR #1296</a>, <a href="https://github.com/dotnet/coreclr/issues/1299">CoreCLR #1299</a>, and <a href="https://github.com/Microsoft/visualfsharp/issues/536">VisualFSharp #536</a>. Major thanks to the developers who reported these issues. Thanks to everyone for their patience.</p>
+</blockquote>
+
+<h3 id="original-post"><a href="#original-post">Original Post</a></h3>
+<p>What follows is the work of several people: <a href="http://blog.marcgravell.com/">Marc Gravell</a> and I have taken lead on this at Stack Overflow and we continue to coordinate with Microsoft on a resolution. They have fixed the bug internally, but not for users. Given the severity, we can’t in good conscience let such a subtle yet high-impact bug linger silently. <strong>We are not upgrading Stack Overflow to .Net 4.6</strong>, and you shouldn’t upgrade yet either. You can find <a href="https://github.com/dotnet/coreclr/issues/1296">the issue we opened on GitHub (for public awareness) here</a>. <strong>A fix has been released, see Update 5 below</strong>.</p>
+
+<p><strong>Update #1 (July 27th):</strong> <a href="https://github.com/dotnet/coreclr/pull/1298">A pull request has been posted by Matt Michell (Microsoft)</a>.</p>
+
+<p><strong>Update #2 (July 28th):</strong> There are several smaller repros now (<a href="https://github.com/dotnet/coreclr/issues/1296#issuecomment-125568026">including a small console app</a>). Microsoft has confirmed they are working on an expedited hotfix release but we don’t have details yet.</p>
+
+<p><strong>Update #3 (July 28th):</strong> Microsoft’s Rich Lander has posted an update: <a href="https://blogs.msdn.microsoft.com/dotnet/2015/07/28/ryujit-bug-advisory-in-the-net-framework-4-6/">RyuJIT Bug Advisory in the .NET Framework 4.6</a>.</p>
+
+<p><strong>Update #4 (July 29th):</strong> There’s <a href="https://github.com/dotnet/coreclr/issues/1299">another subtle bug</a> found by Andrey Akinshin and the F# Engine Exception <a href="https://github.com/Microsoft/visualfsharp/issues/536#issuecomment-125384182">is confirmed to be a separate issue</a>. I still recommend disabling RyuJIT in production given <a href="https://github.com/dotnet/coreclr/issues?utf8=%E2%9C%93&amp;q=is%3Aissue+RyuJIT">the increasing bug count</a>.</p>
+
+<p><strong>Update #5 (August 11th):</strong> A patch for this bug has been released by Microsoft, see above.</p>
+
+<p>This critical bug is specific to .Net 4.6 and RyuJIT (64-bit). I’ll make this big and bold so we get to the point quickly:</p>
+
+<h3 id="the-methods-you-call-can-get-different-parameter-values-than-you-passed-in"><a href="#the-methods-you-call-can-get-different-parameter-values-than-you-passed-in">The methods you call can get different parameter values than you passed in.</a></h3>
+
+<p>The JIT (Just-in-Time compiler) in .Net (and many platforms) does something called Tail Call optimization. This happens to alleviate stack load on the last-called method in a chain. I won’t go into what a tail call is <a href="https://blogs.msdn.microsoft.com/davbr/2007/06/20/enter-leave-tailcall-hooks-part-2-tall-tales-of-tail-calls/">because there’s already an excellent write up by David Broman</a>.</p>
+
+<p>The issue here is a bug in how RyuJIT x64 implements this optimization in certain situations. <!--more-->Let’s look at the specific example we hit at Stack Overflow (<a href="https://github.com/StackExchange/RyuJIT-TailCallBug">we have uploaded a minimal version of this reproduction to GitHub</a>).</p>
+
+<p>We noticed that <a href="http://miniprofiler.com/">MiniProfiler</a> (which we use to track performance) was showing only on the first page load. The profiler then failed to show again until an application recycle. This turned out to be a caching bug based on the HTTP Cache usage locally. HTTP Cache is our “L1” cache at Stack Overflow; <a href="https://redis.io/">redis</a> is typically the “L2.” After over a day of debugging (and sanity checking), we tracked the crazy to here:</p>
+
+<figure>
+  <pre><code data-lang="csharp"><span>void</span> <span>Set</span><span>&lt;</span><span>T</span><span>&gt;(</span><span>string</span> <span>key</span><span>,</span> <span>T</span> <span>val</span><span>,</span> <span>int</span><span>?</span> <span>durationSecs</span><span>,</span> <span>bool</span> <span>sliding</span><span>,</span> <span>bool</span> <span>broadcastRemoveFromCache</span> <span>=</span> <span>false</span><span>)</span>
+<span>{</span>
+    <span>SetWithPriority</span><span>&lt;</span><span>T</span><span>&gt;(</span><span>key</span><span>,</span> <span>val</span><span>,</span> <span>durationSecs</span><span>,</span> <span>sliding</span><span>,</span> <span>CacheItemPriority</span><span>.</span><span>Default</span><span>);</span>
+<span>}</span>
+
+<span>void</span> <span>SetWithPriority</span><span>&lt;</span><span>T</span><span>&gt;(</span><span>string</span> <span>key</span><span>,</span> <span>T</span> <span>val</span><span>,</span> <span>int</span><span>?</span> <span>durationSecs</span><span>,</span> <span>bool</span> <span>isSliding</span><span>,</span> <span>CacheItemPriority</span> <span>priority</span><span>)</span>
+<span>{</span>
+    <span>key</span> <span>=</span> <span>KeyInContext</span><span>(</span><span>key</span><span>);</span>
+
+    <span>RawSet</span><span>(</span><span>key</span><span>,</span> <span>val</span><span>,</span> <span>durationSecs</span><span>,</span> <span>isSliding</span><span>,</span> <span>priority</span><span>);</span>
+<span>}</span>
+
+<span>void</span> <span>RawSet</span><span>(</span><span>string</span> <span>cacheKey</span><span>,</span> <span>object</span> <span>val</span><span>,</span> <span>int</span><span>?</span> <span>durationSecs</span><span>,</span> <span>bool</span> <span>isSliding</span><span>,</span> <span>CacheItemPriority</span> <span>priority</span><span>)</span>
+<span>{</span>
+    <span>var</span> <span>absolute</span> <span>=</span> <span>!</span><span>isSliding</span> <span>&amp;&amp;</span> <span>durationSecs</span><span>.</span><span>HasValue</span> 
+                   <span>?</span> <span>DateTime</span><span>.</span><span>UtcNow</span><span>.</span><span>AddSeconds</span><span>(</span><span>durationSecs</span><span>.</span><span>Value</span><span>)</span> 
+                   <span>:</span> <span>Cache</span><span>.</span><span>NoAbsoluteExpiration</span><span>;</span>
+    <span>var</span> <span>sliding</span> <span>=</span> <span>isSliding</span> <span>&amp;&amp;</span> <span>durationSecs</span><span>.</span><span>HasValue</span> 
+                  <span>?</span> <span>TimeSpan</span><span>.</span><span>FromSeconds</span><span>(</span><span>durationSecs</span><span>.</span><span>Value</span><span>)</span> 
+                  <span>:</span> <span>Cache</span><span>.</span><span>NoSlidingExpiration</span><span>;</span>
+
+    <span>HttpRuntime</span><span>.</span><span>Cache</span><span>.</span><span>Insert</span><span>(</span><span>cacheKey</span><span>,</span> <span>val</span><span>,</span> <span>null</span><span>,</span> <span>absolute</span><span>,</span> <span>sliding</span><span>,</span> <span>priority</span><span>,</span> <span>null</span><span>);</span>
+<span>}</span></code></pre>
+</figure>
+
+<p>What was happening? We were setting the MiniProfiler cache duration (passed to <code>Set&lt;T&gt;</code>) as 3600 seconds. But often (~98% of the time), we were seeing it immediately expire from HTTP cache. Next we narrowed this down to being a bug <strong>only when optimizations are enabled</strong> (the “Optimize Code” checkbox on your project’s build properties). At this point sanity is out the window and you debug <em>everything</em>.</p>
+
+<p>Here’s what that code looks like now. Note: I have slightly shortened it to fit this page. <a href="https://github.com/StackExchange/RyuJIT-TailCallBug/blob/master/StackRedis/Caches.Local.cs#L403">The unaltered code is on GitHub here</a>.</p>
+
+<figure>
+  <pre><code data-lang="csharp"><span>void</span> <span>Set</span><span>&lt;</span><span>T</span><span>&gt;(</span><span>string</span> <span>key</span><span>,</span> <span>T</span> <span>val</span><span>,</span> <span>int</span><span>?</span> <span>durationSecs</span><span>,</span> <span>bool</span> <span>sliding</span><span>,</span> <span>bool</span> <span>broadcastRemoveFromCache</span> <span>=</span> <span>false</span><span>)</span>
+<span>{</span>
+    <span>LocalCache</span><span>.</span><span>OnLogDuration</span><span>(</span><span>key</span><span>,</span> <span>durationSecs</span><span>,</span> <span>"LocalCache.Set"</span><span>);</span>
+    <span>SetWithPriority</span><span>&lt;</span><span>T</span><span>&gt;(</span><span>key</span><span>,</span> <span>val</span><span>,</span> <span>durationSecs</span><span>,</span> <span>sliding</span><span>,</span> <span>CacheItemPriority</span><span>.</span><span>Default</span><span>);</span>
+<span>}</span>
+
+<span>void</span> <span>SetWithPriority</span><span>&lt;</span><span>T</span><span>&gt;(</span><span>string</span> <span>key</span><span>,</span> <span>T</span> <span>val</span><span>,</span> <span>int</span><span>?</span> <span>durationSecs</span><span>,</span> <span>bool</span> <span>isSliding</span><span>,</span> <span>CacheItemPriority</span> <span>priority</span><span>)</span>
+<span>{</span>
+    <span>LocalCache</span><span>.</span><span>OnLogDuration</span><span>(</span><span>key</span><span>,</span> <span>durationSecs</span><span>,</span> <span>"LocalCache.SetWithPriority"</span><span>);</span>
+    <span>key</span> <span>=</span> <span>KeyInContext</span><span>(</span><span>key</span><span>);</span>
+
+    <span>RawSet</span><span>(</span><span>key</span><span>,</span> <span>val</span><span>,</span> <span>durationSecs</span><span>,</span> <span>isSliding</span><span>,</span> <span>priority</span><span>);</span>
+<span>}</span>
+
+<span>void</span> <span>RawSet</span><span>(</span><span>string</span> <span>cacheKey</span><span>,</span> <span>object</span> <span>value</span><span>,</span> <span>int</span><span>?</span> <span>durationSecs</span><span>,</span> <span>bool</span> <span>isSliding</span><span>,</span> <span>CacheItemPriority</span> <span>priority</span><span>)</span>
+<span>{</span>
+    <span>LocalCache</span><span>.</span><span>OnLogDuration</span><span>(</span><span>cacheKey</span><span>,</span> <span>durationSecs</span><span>,</span> <span>"RawSet"</span><span>);</span>
+    <span>var</span> <span>absolute</span> <span>=</span> <span>!</span><span>isSliding</span> <span>&amp;&amp;</span> <span>durationSecs</span><span>.</span><span>HasValue</span> 
+                   <span>?</span> <span>DateTime</span><span>.</span><span>UtcNow</span><span>.</span><span>AddSeconds</span><span>(</span><span>durationSecs</span><span>.</span><span>Value</span><span>)</span> 
+                   <span>:</span> <span>Cache</span><span>.</span><span>NoAbsoluteExpiration</span><span>;</span>
+    <span>var</span> <span>sliding</span> <span>=</span> <span>isSliding</span> <span>&amp;&amp;</span> <span>durationSecs</span><span>.</span><span>HasValue</span> 
+                  <span>?</span> <span>TimeSpan</span><span>.</span><span>FromSeconds</span><span>(</span><span>durationSecs</span><span>.</span><span>Value</span><span>)</span> 
+                  <span>:</span> <span>Cache</span><span>.</span><span>NoSlidingExpiration</span><span>;</span>
+
+    <span>HttpRuntime</span><span>.</span><span>Cache</span><span>.</span><span>Insert</span><span>(</span><span>cacheKey</span><span>,</span> <span>value</span><span>,</span> <span>null</span><span>,</span> <span>absolute</span><span>,</span> <span>sliding</span><span>,</span> <span>priority</span><span>,</span> <span>Removed</span><span>);</span>
+    <span>var</span> <span>evt</span> <span>=</span> <span>Added</span><span>;</span>
+    <span>if</span><span>(</span><span>evt</span> <span>!=</span> <span>null</span><span>)</span> <span>evt</span><span>(</span><span>cacheKey</span><span>,</span> <span>value</span><span>,</span> <span>absolute</span><span>,</span> <span>sliding</span><span>,</span> <span>priority</span><span>,</span> <span>durationSecs</span><span>,</span> <span>isSliding</span><span>);</span>
+<span>}</span></code></pre>
+</figure>
+
+<p>This is nothing fancy, all we have is some methods calling each other. Here’s the scary result of those <code>LocalCache.OnLogDuration</code> calls:</p>
+
+<ul>
+  <li>LocalCache.Set: 3600</li>
+  <li>LocalCache.SetWithPriority: 3600</li>
+  <li>RawSet: <em>null</em>, or 114, or 97, or some other seemingly random value</li>
+</ul>
+
+<p>Here’s an example test run from <a href="https://github.com/StackExchange/RyuJIT-TailCallBug">the GitHub repo</a>:
+ <a href="https://nickcraver.com/blog/content/Blog-RyuJIT-Results.png" target="_blank"><picture><source type="image/webp" srcset="/blog/content/Blog-RyuJIT-Results.webp"><source type="image/png" srcset="/blog/content/Blog-RyuJIT-Results.png"><img src="https://nickcraver.com/blog/content/Blog-RyuJIT-Results.png" loading="lazy" alt="RyuJIT Tail Tests"></picture></a></p>
+
+<p><strong>The method we called did not get the parameters we passed</strong>. That’s it. The net result of this is that local cache (which we use <em>very</em> heavily) is either unreliable or non-existent. This would add a tremendous amount of load to our entire infrastructure, making Stack Overflow much slower and likely leading to a full outage.</p>
+
+<p>That’s not why we’re telling you about this though. Let’s step back and look at the big picture. What are some other variable names we could use?</p>
+
+<ul>
+  <li><code>amountToWithdraw</code></li>
+  <li><code>qtyOfStockToBuy</code></li>
+  <li><code>carbonCopyToAccountId</code></li>
+  <li><code>voltage</code></li>
+  <li><code>targetAltitude</code></li>
+  <li><code>rotorVelocity</code></li>
+  <li><code>oxygenPressure</code></li>
+  <li><code>dosageMilliliters</code></li>
+</ul>
+
+<p>Does that help put things in perspective?</p>
+
+<p>This bug is not obvious for several reasons:</p>
+
+<ul>
+  <li>It only happens with optimizations enabled. For most developers and projects, that’s not in <code>DEBUG</code> and won’t show locally.
+    <ul>
+      <li>That means you’ll only see this in <code>RELEASE</code>, which for most people is <strong>only production</strong>.</li>
+    </ul>
+  </li>
+  <li>Attaching a debugger alters the behavior. This almost always hides the issue.</li>
+  <li>Adding a <code>Debug.WriteLine()</code> will often fix the issue because of the tail change.</li>
+  <li>It won’t reproduce in certain scenarios (e.g. we can’t repro this in a console application or VS hosting, only IIS).</li>
+  <li>Given the nature of the bug, as far as we can tell, it can equally affect any framework library as well.</li>
+  <li>It can happen in a NuGet library (most of which are <code>RELEASE</code>); the issue may not be in your code at all.</li>
+</ul>
+
+<p>To address an obvious question: is this a security issue? Answer: it can be. It’s not something you could actively exploit in almost all cases, since stack variables are the things being swapped around here. However, it can be an issue indirectly. For example, if your code makes an assumption with a <code>null</code> param like <code>if (user == null) { user = SystemUser; }</code>, then a <code>null</code> passed in will certainly be a problem, giving other users that access sporadically. A more common example of this would be a value for a <code>Role</code> enum being passed incorrectly.</p>
+
+<h2 id="recommendations"><a href="#recommendations">Recommendations</a></h2>
+<ol>
+  <li>Do not install .Net 4.6 in production.</li>
+  <li>If you have installed .Net 4.6, disable RyuJIT immediately (<strong>this is a temporary fix and should be removed when an update is released</strong>). You can disable RyuJIT via a registry setting (note: this requires an application pool recycle to take effect).
+    <ul>
+      <li>Under <code>HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\.NETFramework</code> add a <code>useLegacyJit</code> <code>DWORD</code> with a value of <code>1</code></li>
+      <li>Or via PowerShell:</li>
+    </ul>
+  </li>
+</ol>
+
+<figure>
+  <pre><code data-lang="powershell"><span>Set-ItemProperty</span><span> </span><span>-Path</span><span> </span><span>HKLM:\Software\Microsoft\.NETFramework</span><span> </span><span>-Name</span><span> </span><span>useLegacyJit</span><span> </span><span>-Type</span><span> </span><span>DWord</span><span> </span><span>-Value</span><span> </span><span>1</span></code></pre>
+</figure>
+
+<p>Be aware, <a href="https://github.com/Microsoft/dotnet/blob/master/docs/testing-with-ryujit.md">the <code>web.config</code> method (#3)</a> of disabling RyuJIT <strong>does not work</strong>. Outside of IIS hosting, applying this fix via <code>app.config</code> <em>does</em> work.</p>
+
+<p>We are talking with and pushing Microsoft to get a fix for this shipped ASAP. We recognize releasing a fix for .Net on the Microsoft side isn’t a small deal. Our disclosure is prompted by the reality that a fix cannot be released, distributed, and applied immediately.</p>
+
+
+          </article>
+          
+          
+          
+        </div>
+        </main>
+      </div>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+
+</body>
+</html>
