@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Trace .NET Core Applications on Linux with `strace` - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Trace .NET Core Applications on Linux with `strace` - linksfor.dev(s)"/>
+    <meta property="og:description" content="Trace .NET Core Applications on Linux with `strace` - strace-netcore.md"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://gist.github.com/ninjarobot/851564aaf82d1fe2ef0cd3d2bbedf430"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+                <span style="cursor: default" title="linksfor.dev(s) has been running for 1 year! :partypopper:">🎉</span>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Trace .NET Core Applications on Linux with `strace`</title>
+<div class="readable">
+        <h1>Trace .NET Core Applications on Linux with `strace`</h1>
+            <div>Watching time: 13-16 minutes</div>
+        <div>Posted here: 28 Mar 2019</div>
+        <p><a href="https://gist.github.com/ninjarobot/851564aaf82d1fe2ef0cd3d2bbedf430">https://gist.github.com/ninjarobot/851564aaf82d1fe2ef0cd3d2bbedf430</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+  <div id="file-strace-netcore-md">
+      
+    
+  <div id="file-strace-netcore-md-readme">
+    <article itemprop="text">
+<p>Troubleshooting a running application can be difficult, usually it starts around checking log output and then following through the likely code paths to get an idea of where a failure may occur.  In a development environment, you might attach a debugger a step through source, but troubleshooting isn't always that convenient.  There are several helpful tools that can assist, but one that gives the most comprehensive view of a running application is <code>strace</code>.  With <code>strace</code> you are able to see all of the system calls an application makes to get a detailed understanding of what is going on "under the hood" in order to troubleshoot an issue.</p>
+<p>Take a simple "hello world" F# application, the kind you get from <code>dotnet new console -lang F# -n strace-sample"</code>.  Build it with <code>dotnet build</code> and then launch it with <code>strace</code> to get a trace of all the system calls in a file called <code>trace.log</code>(adjusting for your build output path if on a different framework version):</p>
+<p><code>strace -o trace.log dotnet bin/Debug/netcoreapp2.2/strace-sample.dll</code></p>
+<p>Along with the expected console output, you'll also get a new file, <code>trace.log</code> - a huge one, mine came to almost 6,000 lines!  Here are the first 8 lines:</p>
+<pre><code>execve("/usr/bin/dotnet", ["dotnet", "bin/Debug/netcoreapp2.2/strace-s"...], 0x7ffd0da40d78 /* 57 vars */) = 0
+brk(NULL)                               = 0x24db000
+access("/etc/ld.so.nohwcap", F_OK)      = -1 ENOENT (No such file or directory)
+access("/etc/ld.so.preload", R_OK)      = -1 ENOENT (No such file or directory)
+openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+fstat(3, {st_mode=S_IFREG|0644, st_size=103259, ...}) = 0
+mmap(NULL, 103259, PROT_READ, MAP_PRIVATE, 3, 0) = 0x7f2e84896000
+close(3)                                = 0
+</code></pre>
+<p>And if you scroll 5000+ system calls later, you'll see this:</p>
+<pre><code>write(24, "Hello World from F#!", 20)
+</code></pre>
+<p>The <code>write</code> statement is a system call, the same statement would be output by compiling and tracing the system calls for this code:</p>
+<div><pre>#<span>include</span> <span><span>&lt;</span>unistd.h<span>&gt;</span></span>
+
+<span>void</span> <span>main</span> (<span>void</span>) {
+    <span>write</span> (STDOUT_FILENO, <span><span>"</span>Hello world from F#!<span>"</span></span>, <span>20</span>);
+}</pre></div>
+<p>Before you can say "what a bloated framework, I should write everything in C!", please keep in mind that no one outside of a demo ever ships a "hello world" console application.  Plan to take the time to understand all of those system calls, the various libraries that are loaded, garbage collection, and heap alignment so that you can make an informed decision.</p>
+<h3>Reading a trace</h3>
+<p>It's a good excercise to read through a few of these now, while the application is working as expected.  Protip: read some <code>strace</code> output for a few applications now to become familiar - when you're faced with an issue with an application, you don't want the added stress of learning how to read a trace so take the time now. You can get a quick reference for any of the system calls with <code>man</code>, for example <code>man openat</code>.</p>
+<ul>
+<li><code>execve</code> - this is followed by the path to <code>dotnet</code>, then its parameters, executing the entry point.</li>
+<li><code>brk</code> - this most likely called by <code>malloc</code> to allocate memory for a path string for the next few calls.</li>
+<li><code>access</code> - this checks if a file exists (F_OK), is readable (R_OK), writable (W_OK), or executable (X_OK).</li>
+<li><code>openat</code>- this open a file at the specified path, returning number, the file descriptor.</li>
+<li><code>fstat</code> - gets a <code>stats</code> structure for the file, which includes <code>st_size</code> for the size of the file in bytes.</li>
+<li><code>mmap</code> - the size from <code>fstat</code> is passed into this call along with the file descriptor from <code>openat</code>, loading the contents of this file into memory.</li>
+<li><code>close</code> - this closes the file descriptor from <code>openat</code></li>
+</ul>
+<p>There are thousands of lines of system calls for bootstrapping the CLR and loading all the dependencies.  The Linux system calls are very well documented, so no need to go through all of them here.  Now for actually troubleshooting an application.</p>
+<h2>Troubleshooting a Running Application</h2>
+<p>This is a simple application that creates a timer that does a DNS lookup every 5 seconds and then prints the address if found.  It looks fairly safe, checking that there is an item in the array of addresses before printing it.</p>
+<div><pre><span>[&lt;EntryPoint&gt;]</span>
+<span>let</span> <span>main</span> <span>argv</span> <span>=</span>
+    <span>use</span> timer <span>=</span> <span>new</span> System.Timers.Timer (<span>5000.</span>)
+    timer.Enabled <span>&lt;-</span> <span>true</span>
+    timer.AutoReset <span>&lt;-</span> <span>true</span>
+    timer.Elapsed.AddHandler (<span>fun</span> _ _ -<span>&gt;</span>
+        printfn <span><span>"</span>Looking up DNS address.<span>"</span></span>
+        <span>let</span> <span>addr</span> <span>=</span> System.Net.Dns.GetHostAddresses <span><span>"</span>example.com<span>"</span></span>
+        <span>match</span> addr <span>|&gt;</span> Array.tryHead <span>with</span>
+        <span>|</span> Some firstAddr <span>-&gt;</span> printfn <span><span>"</span>Address: %O<span>"</span></span> firstAddr
+        <span>|</span> None <span>-&gt;</span> printfn <span><span>"</span>No address found.<span>"</span></span>
+    )
+
+    <span>/// Run until we enter hit &lt;Return&gt;.</span>
+    stdin.ReadLine <span>()</span> <span>|&gt;</span> ignore
+
+    <span>0</span> <span>// return an integer exit code</span></pre></div>
+<p>Let's give it a try:</p>
+<pre><code>$ dotnet bin/Debug/netcoreapp2.2/strace-sample.dll
+
+Looking up DNS address.
+Looking up DNS address.
+Looking up DNS address.
+Looking up DNS address.
+Looking up DNS address.
+</code></pre>
+<p>It's not working properly.  There is no message about finding the address, nor is there an error that the address is not found.  That doesn't leave a lot to go on, unfortunately.  This isn't a big deal in a small example, but in a real application, maybe we only hit this case when we misconfigured some service address, and we don't realize until it's deployed.  Too late to attach a debugger.</p>
+<p>Let's attach with <code>strace</code> to see the system calls.  To do so, first get the process ID with <code>pgrep</code>.</p>
+<pre><code>$ pgrep -a dotnet
+
+6414 dotnet bin/Debug/netcoreapp2.2/strace-sample.dll
+</code></pre>
+<p>Now we can attach to process 6414, but need to have elevated privileges to do so:</p>
+<pre><code>sudo strace -f -p 6414 -o running.log
+</code></pre>
+<p>The <code>-f</code> option says to follow threads, <code>-p</code> specifies the process ID, and <code>-o</code> specifies the output file.</p>
+<p>Now the trace output goes to a file named <code>running.log</code> that we can view to see what is going on after.  There are multiple threads running handling the timer, and the system calls are interleaved.  The number in the first column is the thread ID, and you can see that 3266 is the thread of execution where the println and then the subsequent calls to perform the DNS lookup being, with a <code>stat</code> on <code>/etc/resolv.conf</code> to get the system's DNS resolvers.</p>
+<pre><code>3266  write(27, "Looking up DNS address.", 23 &lt;unfinished ...&gt;
+3264  &lt;... clone resumed&gt; child_stack=0x7feb24072fb0, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, parent_tidptr=0x7feb240739d0, tls=0x7feb24073700, child_tidptr=0x7feb240739d0) = 3311
+3311  &lt;... set_robust_list resumed&gt; )   = 0
+3266  &lt;... write resumed&gt; )             = 23
+3264  futex(0x7fea80003ac8, FUTEX_WAIT_PRIVATE, 0, NULL &lt;unfinished ...&gt;
+3311  sigaltstack(NULL,  &lt;unfinished ...&gt;
+3266  write(27, "\n", 1 &lt;unfinished ...&gt;
+3311  &lt;... sigaltstack resumed&gt; {ss_sp=NULL, ss_flags=SS_DISABLE, ss_size=0}) = 0
+3266  &lt;... write resumed&gt; )             = 1
+3311  mmap(NULL, 16384, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0 &lt;unfinished ...&gt;
+3266  stat("/etc/resolv.conf",  &lt;unfinished ...&gt;
+</code></pre>
+<p>With multithreaded code, there will be a lot of <code>futex</code> calls - these are where one thread typically will issue some operation, sleep, and then when that operation is completed, the other thread will wake it up.  Let's ignore those for now, filter out some noise and just follow that thread.</p>
+<p>It opens the <code>/etc/hosts</code> file to read, then closes it.  This is trying to resolve the domain locally.</p>
+<pre><code>3266  stat("/etc/resolv.conf",  &lt;unfinished ...&gt;
+3266  &lt;... stat resumed&gt; {st_mode=S_IFREG|0644, st_size=318, ...}) = 0
+3266  openat(AT_FDCWD, "/etc/hosts", O_RDONLY|O_CLOEXEC &lt;unfinished ...&gt;
+3266  &lt;... openat resumed&gt; )            = 41
+3266  fstat(41,  &lt;unfinished ...&gt;
+3266  &lt;... fstat resumed&gt; {st_mode=S_IFREG|0644, st_size=221, ...}) = 0
+3266  read(41,  &lt;unfinished ...&gt;
+3266  &lt;... read resumed&gt; "127.0.0.1\tlocalhost\n127.0.1.1\tub"..., 4096) = 221
+3266  read(41,  &lt;unfinished ...&gt;
+3266  &lt;... read resumed&gt; "", 4096)      = 0
+3266  close(41 &lt;unfinished ...&gt;
+3266  &lt;... close resumed&gt; )             = 0
+</code></pre>
+<p>Since it couldn't resolve locally, it creates a socket, then connects to the DNS server (from <code>/etc/resolv.conf</code> read earlier), and then sends a message to it.  You'll see the <code>example.com</code> domain sent here.  It's the DNS lookup.</p>
+<pre><code>3266  socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK, IPPROTO_IP &lt;unfinished ...&gt;
+3266  &lt;... socket resumed&gt; )            = 41
+3266  connect(41, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, 16 &lt;unfinished ...&gt;
+3266  &lt;... connect resumed&gt; )           = 0
+3266  poll([{fd=41, events=POLLOUT}], 1, 0) = 1 ([{fd=41, revents=POLLOUT}])
+3266  sendmmsg(41, [{msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\322\272\1\0\0\1\0\0\0\0\0\1\7example\3com\0\0\1\0\1\0\0)"..., iov_len=40}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, msg_len=40}, {msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="r\303\1\0\0\1\0\0\0\0\0\1\7example\3com\0\0\34\0\1\0\0)"..., iov_len=40}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, msg_len=40}], 2, MSG_NOSIGNAL) = 2
+</code></pre>
+<p>Then it makes the <code>poll</code> system call, which tells the OS to wait for an event, in this case <code>POLLIN</code> means waiting until there is data to read.  Then it calls <code>recvfrom</code> to read the message from the socket.  This is the DNS reply.</p>
+<pre><code>3266  poll([{fd=41, events=POLLIN}], 1, 5000) = 1 ([{fd=41, revents=POLLIN}])
+3266  ioctl(41, FIONREAD, [40])         = 0
+3266  recvfrom(41, "\322\272\201\203\0\1\0\0\0\0\0\1\7example\3com\0\0\1\0\1\0\0)"..., 2048, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, [28-&gt;16]) = 40
+3266  poll([{fd=41, events=POLLIN}], 1, 4990) = 1 ([{fd=41, revents=POLLIN}])
+3266  ioctl(41, FIONREAD, [40])         = 0
+3266  recvfrom(41, "r\303\201\203\0\1\0\0\0\0\0\1\7example\3com\0\0\34\0\1\0\0)"..., 65536, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, [28-&gt;16]) = 40
+3266  close(41)                         = 0
+</code></pre>
+<p>Next, the thread enters some code that it doesn't want any interruption, so it masks OS signals with <code>rt_sigprocmask</code>, then it makes a <code>uname</code> and then unblocks signals again, gets the thread ID with <code>gettid</code>, and calls a <code>futex</code> - the thread is done with what it needed to do here.  We never saw it go to either of the cases in the match statement, because both of them print.</p>
+<pre><code>3266  rt_sigprocmask(SIG_BLOCK, [HUP USR1 USR2 PIPE ALRM CHLD TSTP URG VTALRM PROF WINCH IO], [], 8) = 0
+3266  uname({sysname="Linux", nodename="ubuntu", ...}) = 0
+3266  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+3266  mprotect(0x7feb291b0000, 4096, PROT_READ|PROT_WRITE) = 0
+3266  mprotect(0x7feb291b0000, 4096, PROT_NONE) = 0
+3266  gettid()                          = 3266
+3266  futex(0x7fea7c02a700, FUTEX_WAKE_PRIVATE, 1 &lt;unfinished ...&gt;
+3266  &lt;... futex resumed&gt; )             = 1
+3266  futex(0x7fea7c02a6b0, FUTEX_WAKE_PRIVATE, 1 &lt;unfinished ...&gt;
+</code></pre>
+<p>Between the two <code>rt_sigprocmask</code> system calls, the code was unwinding the stack.  If you adjust the code to use a domain that will resolve, then you will find that the system calls to <code>rt_sigprocmask</code> and <code>uname</code> don't occur.  If you spot these, most likely some exception is occurring.  Thinking back to the code, <code>GetHostAddresses</code> can throw an exception, so let's catch it:</p>
+<div><pre>timer.Elapsed.AddHandler (<span>fun</span> _ _ -<span>&gt;</span>
+    <span>try</span>
+        printfn <span><span>"</span>Looking up DNS address.<span>"</span></span>
+        <span>let</span> <span>addr</span> <span>=</span> System.Net.Dns.GetHostAddresses <span><span>"</span>example.com<span>"</span></span>
+        <span>match</span> addr <span>|&gt;</span> Array.tryHead <span>with</span>
+        <span>|</span> Some firstAddr <span>-&gt;</span> printfn <span><span>"</span>Address: %O<span>"</span></span> firstAddr
+        <span>|</span> None <span>-&gt;</span> printfn <span><span>"</span>No address found.<span>"</span></span>
+    <span>with</span>
+    <span>|</span> ex <span>-&gt;</span> printfn <span><span>"</span>Failed: %O<span>"</span></span> ex
+)</pre></div>
+<p>Run it again using <code>strace -f dotnet bin/Debug/netcoreapp2.2/strace-sample.dll</code> to output directly to the console.</p>
+<p>Message received, socket closed, <code>rt_sigprocmask</code>, <code>uname</code>, <code>rt_sigprocmask</code> combination, but then <code>write</code> calls with the stack trace before it wraps up the thread.</p>
+<pre><code>[pid  9670] recvfrom(48, "\250\7\201\203\0\1\0\0\0\0\0\1\7example\3com\0\0\34\0\1\0\0)"..., 65536, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}, [28-&gt;16]) = 40
+[pid  9670] close(48)                   = 0
+[pid  9670] rt_sigprocmask(SIG_BLOCK, [HUP USR1 USR2 PIPE ALRM CHLD TSTP URG VTALRM PROF WINCH IO], [], 8) = 0
+[pid  9670] uname({sysname="Linux", nodename="ubuntu", ...}) = 0
+[pid  9670] rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+[pid  9670] write(27, "Failed: ", 8Failed: )    = 8
+[pid  9670] write(27, "System.Net.Internals.SocketExcep"..., 256System.Net.Internals.SocketExceptionFactory+ExtendedSocketException (00000005, 6): No such device or address
+   at System.Net.Dns.InternalGetHostByName(String hostName)
+   at System.Net.Dns.GetHostAddresses(String hostNameOrAddress)
+   at Program.main@6-4.) = 256
+[pid  9670] write(27, "Invoke(Object _arg2, ElapsedEven"..., 94Invoke(Object _arg2, ElapsedEventArgs _arg1) in /home/user/src/strace-sample/Program.fs:line 9) = 94
+[pid  9670] write(27, "\n", 1
+)          = 1
+[pid  9670] mprotect(0x7f74b42a9000, 4096, PROT_READ|PROT_WRITE) = 0
+[pid  9670] mprotect(0x7f74b42a9000, 4096, PROT_NONE) = 0
+[pid  9670] gettid()                    = 9670
+[pid  9670] futex(0x7f740c002e74, FUTEX_WAKE_PRIVATE, 1) = 1
+</code></pre>
+<p>Now the code is handling the exception, but more importantly, this shows how to trace through system calls to find where the system calls no longer match what you expect the application to do - the place in the code where there could be an issue.  Tracing code when it's working properly gives a great deal of insight into how the CoreCLR interacts with the operating system, and also helps to gain familiarity with reading traces and recognizing the types of system calls that occur when errors happen.</p>
+</article>
+  </div>
+
+  </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
