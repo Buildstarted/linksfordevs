@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+A Possible New Backend for Rust &#x2013; Jason Williams - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="A Possible New Backend for Rust &#x2013; Jason Williams - linksfor.dev(s)"/>
+    <meta property="og:description" content="Is that a compiler backend or frontend? Cranelift Bringing this together Benchmarks Footnotes LLVM originally stood for Low Level Virtual Machine but this was dropped as LLVM is no longer a virtual machine and more of a library of utilities. https://github.com/rust-lang/rust/tree/master/src/librustc_codegen_llvm https://blog.rust-lang.org/2016/04/19/MIR.html Rust Compile times have been brought up in both the 2017, 2018 and [&#x2026;]"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://jason-williams.co.uk/a-possible-new-backend-for-rust"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - A Possible New Backend for Rust &#x2013; Jason Williams</title>
+<div class="readable">
+        <h1>A Possible New Backend for Rust &#x2013; Jason Williams</h1>
+            <div>Reading time: 10-12 minutes</div>
+        <div>Posted here: 21 Apr 2020</div>
+        <p><a href="https://jason-williams.co.uk/a-possible-new-backend-for-rust">https://jason-williams.co.uk/a-possible-new-backend-for-rust</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div role="main">
+  
+  <div>
+      <div>            
+        <article>
+	
+
+	<p><time datetime="2020-04-14T14:00:00" pubdate="">April 14, 2020</time>
+	<span>boa</span><span>rust</span>	</p>
+
+ 
+<div><div>
+<p>So typically when you want to make your own compiled language you need a compiler to.. well.. compile it into something useful. Then making it work across a wide range of operating systems and CPU architectures is a huge effort, let alone having it be performant. This is where<a href="https://en.wikipedia.org/wiki/LLVM"> LLVM<sup>1</sup></a> comes in.</p>
+
+
+
+<p>You can scan through your source code, parse it into an Abstract Syntax Tree (AST) then generate some abstract language (let’s call this <strong>I</strong>ntermediate <strong>R</strong>epresentation) which LLVM can understand, LLVM says “Thanks! We’ll take it from here”.</p>
+
+
+
+<p>So as long as you can generate something LLVM understands, it can make fast binaries for you, and that’s the advantage; you focus on your syntactical analysis, they focus on generating fast executables.</p>
+
+
+
+<p>Rust, C, C++, Swift, Kotlin and many other languages do this and have been doing so for years. Often it’s achieved by having some component that generates LLVM IR.</p>
+</div></div>
+
+
+
+<h2>Is that a compiler backend or frontend?</h2>
+
+
+
+<div><div>
+<p>In Rust, rustc is the main compiler which your source code is fed into first, it does things a typical compiler would do like generate an AST (in this context we call a High-Level Representation, or HIR for short). Once in tree-form type checking and other tasks can be performed then it’s compiled down to another representation ready for whichever backend takes it. The default backend of rustc is called <em>rustc_codegen_llvm<sup>2 </sup> </em>(or cg_llvm) which itself also acts as a front end to LLVM<em>.</em></p>
+
+
+
+<p>To make the above more clear, I’ve taken the chart from the 2016 MIR blog post<sup>3</sup> and annotated the responsibilities over it.</p>
+
+
+
+<figure><img src="https://lh6.googleusercontent.com/xob_z12LF_FmlAhXOHpIapiphrpKJJU56Htlh67nohg0tMqoaukdunXJHH8TMn45Lk0jXHLQJdyOl-o0VDEQBGSe4o_N0ef-OIWfpk0A1jnbJUwq0Vubnau8ah157bqRg1Rq_Q8k" alt=""></figure>
+
+
+
+<p>From a high level that’s the architecture of Rust in 2020. I say “high level” because the space between LLVM IR and Machine Code alone has multiple steps of compilation and that’s where a chunk of time can go.</p>
+
+
+
+<p>Compared to Go, Rust hasn’t been the fastest to compile. Incremental compilation helped a lot but cold-cache builds suffer. </p>
+
+
+
+<p>Because LLVM is so efficient at making fast/optimised binaries it’s inefficient at making slow/cheap ones, even with optimisations turned off you still end up with a slow compile and a some-what fast executable. Apart from being a good problem to have it can be a <em>real</em> problem for development because while you’re fixing that bug or testing a function you want quick feedback, and this has irked seasoned rustaceans for some time plus put off new ones.<sup>4</sup></p>
+
+
+
+<blockquote><p>“<em>Compiling development builds at least as fast as Go would be table stakes for us to consider Rust</em>“</p><cite>Rust Survey 2019</cite></blockquote>
+
+
+
+<p>The dilemma starts to compound when you realise LLVM was also designed around compiling C/C++ more than anything else, even an IR needs to come from something and why not use an existing language to model it?<sup>5</sup></p>
+
+
+
+<blockquote><p><em>“There seems to be no accurate &amp; explicit specification of the semantics of infinite loops in LLVM IR. It aligns with the semantics of C++, most likely for historical reasons and for convenience” <sup>6</sup></em></p></blockquote>
+</div></div>
+
+
+
+<h2>Cranelift</h2>
+
+
+
+<div><div>
+<p>Meanwhile, there exists <a href="https://github.com/bytecodealliance/wasmtime/blob/master/cranelift/README.md">Cranelift<sup>7</sup></a>, a [machine] code generator written in Rust developed by the Bytecode Alliance<sup>8</sup>.&nbsp;</p>
+
+
+
+<p>It generates code for WebAssembly and replaces the optimizing compiler in Firefox. It was designed to generate code fast (using parallelism) but is generic enough to be a compile target, meaning just like LLVM you can compile any language to its IR and have it do the rest.</p>
+
+
+
+<p>The idea of using it for Rust has floated around for years<sup>9</sup>, and why not? It introduces some healthy competition on the backend, is defined for speedy compilation and the Rust team (plus Mozilla) would be able to help steer the design goals. There’s also the added bonus of giving rustaceans an all-rust compiler for the first time compared to the Rust/C++ hybrid that exists today.</p>
+
+
+
+<p>Of course, Cranelift may not be able to catch-up with LLVM’s optimizations and support for all those architectures, but using it for debug builds could prove useful.</p>
+
+
+
+<blockquote><p><em>“One of the things is that LLVM has several layers of IR while Cranelift has only one. Another is that Cranelift does use a graph coloring register allocator, but simply a dumber one, thus being faster.”</em></p></blockquote>
+
+
+
+<p>That’s Bjorn3, he decided to experiment in this area whilst on a summer vacation, and a year &amp; half later single-handedly (bar a couple of PRs) achieved a working Cranelift frontend. The effort here cannot be understated, this is usually the work of an entire team not a curious student in his spare time. There’s worry about the high bus-factor but I can imagine this made the initial development process faster.</p>
+
+
+
+<blockquote><p><em>“I have the freedom to change what I want whenever I want. Sometimes there are problems I can’t solve myself though as I am not familiar enough with the respective area. For example object files, linkers and DWARF debuginfo. Luckily I know people who do know a lot about those things.”</em>.</p></blockquote>
+
+
+
+<p>So <a href="https://github.com/bjorn3/rustc_codegen_cranelift">rustc_codegen_cranelift </a>(cg_clif for short) exists and has existed quietly in the background for some time, not only it proved worthwhile as a proof-of-concept, it exceeded expectations. In 2018 measurements showed it being 33% faster to compile.<sup>10</sup> In 2020 we’re seeing anything from 20-80% depending on the crate.<sup>11</sup> That’s an incredible feat considering there are more improvements in sight.</p>
+
+
+
+<p>There are bits and pieces missing, such as partial SIMD support, ABI Compatibility, unsized values and many more. There’s also lack of feature parity with Cranelift itself, such as cg_clif being blocked because Cranelift doesn’t support a feature LLVM does. However, these problems are shrinking and most crates do build today.</p>
+</div></div>
+
+
+
+<h2>Bringing this together</h2>
+
+
+
+<div><div>
+<p>In April 2020, the rust compiler team decided to catch up with bjorn3 and add cg_clif as a git subtree and “gate on builds”. This means the rust compiler will build against both the LLVM and Cranelift backends then fail the build should either of them not work properly.</p>
+
+
+
+<p>cg_clif can be worked on independently whilst having the wider team build against changes whenever they decide to pull in updates.</p>
+
+
+
+<p>Although this does not mean the Rust compiler team are officially supporting a Cranelift build, it does offer a step forward for the ecosystem to start thinking about an LLVM/Cranelift future. For instance, the compiler team tested some LLVM features directly, these obviously fail in the Cranelift build, now some thought is put into separating these tests out or at least marking them as “LLVM specific” so other backends can be tested properly.</p>
+
+
+
+<p>Below shows the ambition some rustaceans would like to get towards.</p>
+
+
+
+<figure><img src="https://lh5.googleusercontent.com/kzCRz0PN41zVrDeRkpK9H9PTlREnlMzhd32eNMBGspIDJhQIvu848By8yK9tdIXBLM4Cu4FYsqEMZygrZGSfsX1SA0S9JO3MEzAR5eGxAfxfhDnG-vLcWvekJE5Z5yr7nxhlt2Nh" alt=""></figure>
+</div></div>
+
+
+
+<h2>Benchmarks</h2>
+
+
+
+<div><div>
+<p>The corpus used for this benchmark is a checkout of Boa<sup>12</sup> specifically commit 8002a95, a built checkout of rustc_codegen_cranelift (8002a95) and rustc 1.44.0-nightly.</p>
+
+
+
+<p>This machine is an AMD Ryzen 7 2700X 3.70GHz, 16 CPUs, 32GB memory and an SSD, however, these are running in a container which only has access to 12 CPUs &amp; 12GB memory.</p>
+
+
+
+<p>Hyperfine was used with 10 runs of both backends, cargo cleaning between each run.&nbsp;</p>
+
+
+
+<p>This benchmark compares the time it takes to build Boa.</p>
+
+
+
+<h3>Builds times comparing cg_llvm &amp; cg_clif</h3>
+
+
+
+<figure><img src="https://lh4.googleusercontent.com/TVkj-jbw3x7ZMfxc5-Ikw9H9zKcWvS2SxFUQbQ_dqUCPcScCmS68XdzjQj9-hsLlZLbjc14GMKofex9tIxm8dIvT3RkkXji86KyWpgNacNnp8IVAoeQ8--Wafcpr7Vqwhvr-Y5EI" alt=""></figure>
+
+
+
+<p>The Cranelift backend is a clear winner, knocking off almost a whole minute of build times. I was expecting around 20-30s before running this, so a delta of 56s was quite significant.</p>
+
+
+
+<p>The next set of benchmarks were run on a laptop with an Intel® Core™ i3-7130U CPU @ 2.70GHz and an SSD. This gives a more broad view of some popular rust packages being compiled from an empty cache. We’re comparing the avg time to build compared to cg_llvm so 0% would mean they’re the same.</p>
+
+
+
+<h3>Builds times (cg_llvm baseline)</h3>
+
+
+
+<figure><img src="https://lh4.googleusercontent.com/dGn56oGBSP2BTWq1qrP6GISfwZJOqXUC-KGKaSWQ1dw3smBoXY5klW6rXoWSJQrnOvc2bEX7E2muojG_3YRXlpwK-9lWsHuS1QL4kDyQnHF0mQhp6IYyfVaK9Kfz_zjm0lvX-UTB" alt=""></figure>
+
+
+
+<p>SIMD support is only partial so that could explain packed-simd and deep-vector but we don’t know that for sure. However on the whole most packages will build faster than they do today. The average improvement today is still around 30% but I’m sure results will only improve as time goes on.</p>
+
+
+
+<h2>Conclusion</h2>
+
+
+
+<p>Overall, it’s quite exciting to have a new backend to help with debug builds by delivering much faster build times. The benchmark results look promising and its clear more communication between cg_clif, rustc and cranelift is now happening.</p>
+
+
+
+<p>Help is certainly needed. <a href="https://github.com/bjorn3/rustc_codegen_cranelift/issues">https://github.com/bjorn3/rustc_codegen_cranelift</a> is where the bulk of development is happening, the readme has improved since my first glance. You can run your own benchmarks using a tool like Hyperfine.</p>
+
+
+
+<p>The next step on from that would be filing an issue if you come across any problems, or diving into the issues that are already available.</p>
+
+
+
+<p>Cranelift parity is also important to unblocking cg_clif, so improvements there are still needed.</p>
+
+
+
+<p>With all that being said, a new backend could be one of the most interesting developments this year.</p>
+</div></div>
+
+
+
+<h2>Footnotes</h2>
+
+
+
+<ol><li>LLVM originally stood for <em>Low Level Virtual Machine</em> but this was dropped as LLVM is no longer a virtual machine and more of a library of utilities.</li><li><a href="https://github.com/rust-lang/rust/tree/master/src/librustc_codegen_llvm">https://github.com/rust-lang/rust/tree/master/src/librustc_codegen_llvm</a></li><li><a href="https://blog.rust-lang.org/2016/04/19/MIR.html">https://blog.rust-lang.org/2016/04/19/MIR.html</a></li><li>Rust Compile times have been brought up in both the 2017, 2018 and 2019 “Rust Survey” Results.</li><li>LLVM can’t “optimize” loop {} because it requires forward progress, this renders well-defined Rust programs unsound <a href="https://github.com/rust-lang/rust/issues/28728">https://github.com/rust-lang/rust/issues/28728</a></li><li><a href="https://github.com/rust-lang/rust/issues/28728#issuecomment-144880942">https://github.com/rust-lang/rust/issues/28728#issuecomment-144880942</a></li><li>Cranelift began life as Cretonne in 2016, a low-level retargetable code generator, created by Mozilla to replace the JIT in Firefox, but also to be used to optimize and compile web assembly.</li><li><a href="https://hacks.mozilla.org/2019/11/announcing-the-bytecode-alliance/">https://hacks.mozilla.org/2019/11/announcing-the-bytecode-alliance/</a></li><li><a href="https://internals.rust-lang.org/t/possible-alternative-compiler-backend-cretonne/4275">https://internals.rust-lang.org/t/possible-alternative-compiler-backend-cretonne/4275</a></li><li> <a href="https://github.com/bjorn3/rustc_codegen_cranelift/issues/133#issuecomment-439464399">https://github.com/bjorn3/rustc_codegen_cranelift/issues/133#issuecomment-439464399</a></li><li><a href="https://github.com/bjorn3/rustc_codegen_cranelift/issues/878#issuecomment-599271294">https://github.com/bjorn3/rustc_codegen_cranelift/issues/878#issuecomment-599271294</a></li><li>Boa is a JavaScript Engine written in Rust <a href="https://github.com/jasonwilliams/boa/">https://github.com/jasonwilliams/boa/</a></li></ol>
+
+</article><!-- /.blog-post -->
+
+
+      </div>
+      
+  </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
