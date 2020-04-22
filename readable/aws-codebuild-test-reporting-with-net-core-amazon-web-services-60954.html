@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+AWS CodeBuild Test Reporting with .NET Core | Amazon Web Services - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="AWS CodeBuild Test Reporting with .NET Core | Amazon Web Services - linksfor.dev(s)"/>
+    <meta property="og:description" content="At AWS re:Invent 2019, AWS CodeBuild announced a new test reporting feature which can help make diagnosing test failures in CodeBuild much easier. You can read more about it here. I wanted to use this feature for .NET and after a little research I was able to quickly add support for .NET tests to my [&#x2026;]"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://aws.amazon.com/blogs/developer/aws-codebuild-test-reporting-with-net-core/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - AWS CodeBuild Test Reporting with .NET Core | Amazon Web Services</title>
+<div class="readable">
+        <h1>AWS CodeBuild Test Reporting with .NET Core | Amazon Web Services</h1>
+            <div>Reading time: 5-6 minutes</div>
+        <div>Posted here: 22 Apr 2020</div>
+        <p><a href="https://aws.amazon.com/blogs/developer/aws-codebuild-test-reporting-with-net-core/">https://aws.amazon.com/blogs/developer/aws-codebuild-test-reporting-with-net-core/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section property="articleBody"> 
+       <p> At AWS re:Invent 2019, <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a> announced a new test reporting feature which can help make diagnosing test failures in CodeBuild much easier. You can read more about it <a href="https://aws.amazon.com/blogs/devops/test-reports-with-aws-codebuild/">here</a>. </p> 
+       <p> I wanted to use this feature for .NET and after a little research I was able to quickly add support for .NET tests to my CodeBuild projects. Let’s take a look at how I made this work. </p> 
+       <h2>Project Setup</h2> 
+       <p> For demonstration purposes I have a test project with the following tests. I admit these tests don’t really do anything but they will give me 3 passing tests and one failing test for a malformed Uri exception. </p> 
+       <pre data-language="C#"><code><span>using</span> System<span>;</span>
+<span>using</span> System<span>.</span>Net<span>;</span>
+<span>using</span> Xunit<span>;</span>
+
+<span>namespace</span> CodeBuildDotnetTestReportExample<span>.</span>Tests
+<span>{</span>
+    <span>public</span> <span>class</span> <span>ExampleTests</span>
+    <span>{</span>
+        <span>[</span>Fact<span>]</span>
+        <span>public</span> <span>void</span> <span>TestSuccess1</span><span>(</span><span>)</span>
+        <span>{</span>
+
+        <span>}</span>
+
+
+        <span>[</span>Fact<span>]</span>
+        <span>public</span> <span>void</span> <span>TestSuccess2</span><span>(</span><span>)</span>
+        <span>{</span>
+
+        <span>}</span>
+
+        <span>[</span>Theory<span>]</span>
+        <span>[</span><span>InlineData</span><span>(</span><span>"https://www.google.com"</span><span>)</span><span>]</span>
+        <span>[</span><span>InlineData</span><span>(</span><span>"fffaaa"</span><span>)</span><span>]</span>
+        <span>public</span> <span>void</span> <span>TestMalformedUri</span><span>(</span><span>string</span> uri<span>)</span>
+        <span>{</span>
+            <span>new</span> <span>Uri</span><span>(</span>uri<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+<span>}</span>
+</code></pre> 
+       <p> To run this project with CodeBuild I first started with a <b>buildspec.yml</b> file that built my project and ran my tests. </p> 
+       <pre data-language="YAML"><code>version<span>:</span> <span>0.2</span>
+
+<span>phases</span><span>:</span>
+    <span>install</span><span>:</span>
+        <span>runtime-versions</span><span>:</span>
+            <span>dotnet</span><span>:</span> <span>3.1</span>
+    <span>build</span><span>:</span>
+        <span>commands</span><span>:</span>
+            <span>-</span> dotnet build <span>-</span>c Release ./CodeBuildDotnetTestReportExample/CodeBuildDotnetTestReportExample.csproj
+            <span>-</span> dotnet test <span>-</span>c Release ./CodeBuildDotnetTestReportExample.Tests/CodeBuildDotnetTestReportExample.Tests.csproj
+</code></pre> 
+       <p> The first step to making my test reports was making sure the <code>dotnet test</code> command logged the test run. To do that I need to specify the logger format and where to put the logs. I changed the <code>dotnet test</code> command shown above to use the <b>trx</b> log format and to put the results in the <b>./testresults</b> directory. </p> 
+       <pre data-language="YAML"><code><span>-</span> dotnet test <span>-</span>c Release &lt;project<span>-</span>path<span>&gt;</span> <span>-</span><span>-</span>logger trx <span>-</span><span>-</span>results<span>-</span>directory ./testresults
+</code></pre> 
+       <h2>What to do with a <b>trx</b> format file?</h2> 
+       <p> To have CodeBuild use the trx files to create the test reports I needed to add a new <b>reports</b> section to the <b>buildspec.yml</b> file. This snippet below grabs all of the xml files in the <b>./testresults</b> directory to generate test reports under the <b>DotnetTestExamples</b> report group in CodeBuild. </p> 
+       <pre data-language="YAML"><code>    
+<span>reports</span><span>:</span>
+    <span>DotnetTestExamples</span><span>:</span>
+        <span>file-format</span><span>:</span> VisualStudioTrx
+        <span>files</span><span>:</span>
+            <span>-</span> <span>'**/*'</span>
+        <span>base-directory</span><span>:</span> <span>'./testresults'</span>
+</code></pre> 
+       <p> By default CodeBuild will assume the test log files to be in JUnit XML format. To make sure CodeBuild understands the trx xml files I needed to set the <code>file-format</code> field in my <b>buildspec.yml</b> file to <code>VisualStudioTrx</code>. </p> 
+       <p> Here is now the full version of my <b>buildspec.yml</b> that will run by my build, execute tests and collect the test logs for a CodeBuild test report. </p> 
+       <pre data-language="YAML"><code>
+<span>version</span><span>:</span> <span>0.2</span>
+
+<span>phases</span><span>:</span>
+    <span>install</span><span>:</span>
+        <span>runtime-versions</span><span>:</span>
+            <span>dotnet</span><span>:</span> <span>3.1</span>
+    <span>build</span><span>:</span>
+        <span>commands</span><span>:</span>
+            <span>-</span> dotnet build <span>-</span>c Release ./CodeBuildDotnetTestReportExample/CodeBuildDotnetTestReportExample.csproj
+            <span>-</span> dotnet test <span>-</span>c Release ./CodeBuildDotnetTestReportExample.Tests/CodeBuildDotnetTestReportExample.Tests.csproj <span>-</span><span>-</span>logger trx <span>-</span><span>-</span>results<span>-</span>directory ./testresults
+<span>reports</span><span>:</span>
+    <span>DotnetTestExamples</span><span>:</span>
+        <span>file-format</span><span>:</span> VisualStudioTrx
+        <span>files</span><span>:</span>
+            <span>-</span> <span>'**/*'</span>
+        <span>base-directory</span><span>:</span> <span>'./testresults'</span>
+</code></pre> 
+       <h2>Setting up the build project</h2> 
+       <p> A CodeBuild project can be configured with a variety of options, for example what source control provider should be used, or whether to run as a stand alone job, or run as part of a pipeline. For this post I’m going to keep it simple and create a standalone CodeBuild project pointing to a GitHub repository. Here are the steps I used to create the CodeBuild project. </p> 
+       <ul> 
+        <li>Sign in to the AWS Management Console and navigate to CodeBuild</li> 
+        <li>Click <b>Create build project</b></li> 
+        <li>Set a project name</li> 
+        <li>Select the GitHub repository</li> 
+        <li>Configure the Environment image 
+         <ul> 
+          <li>Operating System = Amazon Linux 2</li> 
+          <li>Runtime = Standard</li> 
+          <li>Image = aws/codebuild/amazonlinux2-x86_64-standard:3.0</li> 
+          <li>Service Role = New service role</li> 
+         </ul> </li> 
+        <li>Click <b>Create build project</b> to finish</li> 
+       </ul> 
+       <p><a href="https://d2908q01vomqb2.cloudfront.net/0716d9708d321ffb6a00818614779e779925365c/2020/04/21/build-setup.gif"><img src="https://d2908q01vomqb2.cloudfront.net/0716d9708d321ffb6a00818614779e779925365c/2020/04/21/build-setup.gif" alt="" width="850" height="455"></a></p> 
+       <p> Once the project is created we can start a build which will execute the <b>buildspec.yml</b> to build the project and run the tests. </p> 
+       <h2>View test report</h2> 
+       <p> CodeBuild will capture the test reports identified in the <b>reports</b> section of the <b>buildspec.yml</b> file as the builds execute, and we can view the test reports identified in the <b>report group</b> I named <b>DotnetTestExamples</b> in the CodeBuild console. The example below shows my 4 tests ran, and which one failed. Clicking the failed test will give more details about the failure. </p> 
+       <p><a href="https://d2908q01vomqb2.cloudfront.net/0716d9708d321ffb6a00818614779e779925365c/2020/04/21/report-overview.png"><img src="https://d2908q01vomqb2.cloudfront.net/0716d9708d321ffb6a00818614779e779925365c/2020/04/21/report-overview.png" alt="" width="900" height="603"></a></p> 
+       <h2>Conclusion</h2> 
+       <p> Adding test reports to your CodeBuild project makes it easier to diagnose CodeBuild jobs and you can see how, with just a few steps, you can add reporting to your .NET builds in <a href="https://aws.amazon.com/codebuild/">AWS CodeBuild</a>. </p> 
+       <p><a href="https://twitter.com/socketnorm" target="_blank" rel="noopener noreferrer">–Norm</a></p> 
+      </section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

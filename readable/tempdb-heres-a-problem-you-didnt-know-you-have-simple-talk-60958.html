@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Tempdb &#x2013; Here&#x2019;s a Problem You Didn&#x2019;t Know You Have - Simple Talk - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Tempdb &#x2013; Here&#x2019;s a Problem You Didn&#x2019;t Know You Have - Simple Talk - linksfor.dev(s)"/>
+    <meta property="article:author" content="Fabiano Amorim"/>
+    <meta property="og:description" content="Because of its many roles, tempdb is the source of performance issues in SQL Server, and there are recommended configuration changes to mitigate this. In this article, Fabiano Amorim demonstrates another issue with tempdb performance that you probably didn&#x2019;t know about."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.red-gate.com/simple-talk/sql/performance/tempdb-heres-a-problem-you-didnt-know-you-have/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Tempdb &#x2013; Here&#x2019;s a Problem You Didn&#x2019;t Know You Have - Simple Talk</title>
+<div class="readable">
+        <h1>Tempdb &#x2013; Here&#x2019;s a Problem You Didn&#x2019;t Know You Have - Simple Talk</h1>
+            <div>by Fabiano Amorim</div>
+            <div>Reading time: 16-20 minutes</div>
+        <div>Posted here: 22 Apr 2020</div>
+        <p><a href="https://www.red-gate.com/simple-talk/sql/performance/tempdb-heres-a-problem-you-didnt-know-you-have/">https://www.red-gate.com/simple-talk/sql/performance/tempdb-heres-a-problem-you-didnt-know-you-have/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><p>Because of its many roles, tempdb is the source of performance issues in SQL Server, and there are recommended configuration changes to mitigate this. In this article, Fabiano Amorim demonstrates another issue with tempdb performance that you probably didn’t know about. </p><div>
+				<p>Over the past few years, I’ve worked to maintain and optimize a database environment, and I’ve faced all sorts of problems, but one pain point common in almost all SQL Server environments is tempdb.</p>
+<p>The usage of <a href="https://docs.microsoft.com/en-us/sql/relational-databases/databases/tempdb-database?view=sql-server-ver15">tempdb</a> in SQL Server is well known, and I don’t want to explain the same list of issues and recommendations already covered very well in many articles all over the internet. Here are some of the known issues you could easily google to get more information about:</p>
+<ul>
+<li><strong><em>Object allocation contention</em></strong> on metadata pages used to manage space on tempdb data file</li>
+<li><strong><em>Metadata contention</em></strong> for pages that belong to system objects used to track the temporary object’s metadata (btw, this is <a href="https://sqlperformance.com/2019/08/tempdb/tempdb-enhancements-in-sql-server-2019">improved on SQL Server 2019</a>)</li>
+<li>Issues with codes that are not optimized to the benefit of tempdb cache of system metadata</li>
+<li>Spills of hash and <a href="https://www.red-gate.com/simple-talk/sql/performance/never-ignore-a-sort-warning-in-sql-server/">sorts</a></li>
+</ul>
+<p>In this article, I would not like to focus on those common things, but in other interesting problems I found while I was supporting my customers.</p>
+<h2>Some tempdb Problems You are Very Likely to Have</h2>
+<p>The following is a list of a few tempdb problems you are very likely to have in your SQL Server environment, that you may not know about.</p>
+<ul>
+<li>In versions prior to SQL Server 2014, eager writer is slowing down your inserts and wasting I/O when a flush operation is not needed.</li>
+<li>On SQL Server 2014 (backported to <a href="https://support.microsoft.com/en-us/help/2958012/fix-poor-performance-on-i-o-when-you-execute-select-into-temporary-tab?sd=rss&amp;spid=1044">SQL Server 2012 SP1+CU10 or SP2+CU1</a>), the eager writer was relaxed to not flush for tempdb; this fixed one problem and caused another one.</li>
+<li>Indirect checkpoint (target recovery time) enabled by default on tempdb for SQL Server 2016. The idea was to clean up dirty pages created by the change in SQL2014, but it doesn’t really do a good job fixing it as it doesn’t clean up dirty pages allocated on minimally logged operations.</li>
+</ul>
+<h2>Eager Writer and tempdb</h2>
+<p>One of many performance improvements that came with SQL Server 2014 is that it doesn’t flush dirty pages created in a minimally logged operation on tempdb. This gives you the benefit of having faster (compared to prior versions) inserts, but it caused another problem as those allocated pages may take a lot of time to be removed from the buffer pool data cache. Before discussing the problem, quickly look at the benefit and then understand some important concepts of flush dirty pages on tempdb.</p>
+<p>Use the following query which inserts around 520MB of data into a temp table:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b41980779728" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>USE</span><span> </span><span>tempdb</span></p><p><span>GO</span></p><p><span>IF</span><span> </span><span>OBJECT_ID</span><span>(</span><span>'#TabTest1'</span><span>)</span><span> </span><span>IS</span><span> </span><span>NOT</span><span> </span><span>NULL</span></p><p><span>&nbsp;&nbsp; </span><span>DROP</span><span> </span><span>TABLE</span><span> </span><span>#</span><span>TabTest1</span><span>;</span></p><p><span>CREATE</span><span> </span><span>TABLE</span><span> </span><span>#</span><span>TabTest1</span><span>(</span><span>Col1</span><span> </span><span>CHAR</span><span>(</span><span>500</span><span>)</span><span>)</span><span>;</span></p><p><span>INSERT</span><span> </span><span>INTO</span><span> </span><span>#</span><span>TabTest1</span></p><p><span>SELECT</span><span> </span><span>TOP</span><span> </span><span>1000000</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>CONVERT</span><span>(</span><span>CHAR</span><span>(</span><span>500</span><span>)</span><span>,</span><span> </span><span>A</span><span>.</span><span>name</span><span>)</span><span> </span><span>AS</span><span> </span><span>Col1</span></p><p><span>FROM</span><span> </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>A</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp; </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>B</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp; </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>C</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp; </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>D</span></p><p><span>OPTION</span><span> </span><span>(</span><span>MAXDOP</span><span> </span><span>1</span><span>)</span><span>;</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0008 seconds] -->
+
+<p>When I ran it on in my local instances with both tempdb configured with same details (same disk, initial sizes, Trace Flags, etc.), I see the following results:</p>
+<ul>
+<li>On SQL Server 2008 R2 (10.50.6220.0) it took <strong><em>32 seconds to run</em></strong>.</li>
+<li>On SQL Server 2017 (14.0.3238.1) it took <strong><em>1 second to run</em></strong>.</li>
+</ul>
+<p>As you can see, the difference is huge; this is pretty much because of the following:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b49529034860" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>SELECT</span><span> </span><span>Page_Status</span><span> </span><span>=</span><span> </span><span>CASE</span><span> </span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>WHEN</span><span> </span><span>is_modified</span><span> </span><span>=</span><span> </span><span>1</span><span> </span><span>THEN</span><span> </span><span>'Dirty'</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>ELSE</span><span> </span><span>'Clean'</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>END</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>DBName</span><span> </span><span>=</span><span> </span><span>DB_NAME</span><span>(</span><span>database_id</span><span>)</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>Pages</span><span> </span><span>=</span><span> </span><span>COUNT</span><span>(</span><span>1</span><span>)</span></p><p><span>FROM</span><span> </span><span>sys</span><span>.</span><span>dm_os_buffer_descriptors</span></p><p><span>WHERE</span><span> </span><span>database_id</span><span> </span><span>=</span><span> </span><span>DB_ID</span><span>(</span><span>'tempdb'</span><span>)</span></p><p><span>GROUP</span><span> </span><span>BY</span><span> </span><span>database_id</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>is_modified</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0005 seconds] -->
+
+<div><table>
+<tbody>
+<tr>
+<td>
+<p><strong>SQL Server 2008R2</strong></p>
+</td>
+<td>
+<p><strong>SQL Server 2017</strong></p>
+</td>
+</tr>
+<tr>
+<td>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAPAAAPLy8v///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==" data-src="https://www.red-gate.com/simple-talk/wp-content/uploads/2020/04/word-image-51.png" data-lazy-load=""></p>
+</td>
+<td>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAPAAAPLy8v///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==" data-src="https://www.red-gate.com/simple-talk/wp-content/uploads/2020/04/word-image-52.png" data-lazy-load=""></p>
+</td>
+</tr>
+</tbody>
+</table></div>
+<p>As you can see, checking the DMV <code>sys.dm_os_buffer_descriptors</code> shows that most of the allocated pages on SQL Server 2017 are dirty, and on SQL Server 2008R2 the eager writer process took time to clean and write the pages on the tempdb data file. This is where the time difference comes from. On SQL 2008R2, the command has to wait for the flush, and on SQL2017 it doesn’t.</p>
+<h2>What does Checkpoint do on tempdb?</h2>
+<p>Before moving forward, here’s a quick recap of some important concepts you need to know to understand the problems I’ll mention in this article.</p>
+<p>When you insert a row in a table, SQL Server does not immediately write it in the data (mdf) file. It has a control to write it on the log (ldf) and keep the row in a page in memory. The pages that are in memory and were not physically written to the data file are called dirty pages. A dirty page is written to the data file by one of the three processes: checkpoint, lazy writer or eager writer. These are the very basics of I/O writing on SQL Server, and you need to understand it to be able to troubleshoot and explain complex problems related to tempdb and the whole SQL engine.</p>
+<p>Rows may exist only on the log file and dirty pages in memory. If an unexpected crash happens and your SQL Server stops, once it is back, SQL engine must redo any transaction that was written to the transaction log file and apply those changes to the data (mdf) files. This whole thing doesn’t make sense for tempdb, right? Since tempdb is recreated on SQL Server start, there is no need for tempdb to recover transactions from the log file into the data file, therefore, there is no need to flush dirty tempdb pages to disk. Actually, this is why SQL Server doesn’t (there are exceptions, when the log reaches 70% of space, manual checkpoint…) do automatic checkpoints for tempdb.</p>
+<h2>Understanding Why the Change on SQL2014 Caused Another Issue</h2>
+<p>You may be wondering, considering the case we’re looking at, why this whole checkpoint thing is important? Well, let me answer this with another question.</p>
+<p>Using the query inserting data on #TabTest1 as a sample, consider that on SQL Server 2014+, dirty pages won’t be flushed by the eager writer; would this behavior cause another problem? In other words, what would be the impact of having many dirty pages on tempdb?</p>
+<p>Well, the problem is that you could have a scenario where tempdb dirty pages are using a lot of memory of your precious buffer pool. If you consider there are scenarios with heavy usage of temporary tables, this can quickly turn into memory pressure. The main problem of this memory pressure is that there will be no automatic checkpoint to flush those dirty pages, that means that lazy writer will be the one flushing those pages. After it flushes the pages, then it will free other buffers available by removing infrequently used pages from the buffer cache.</p>
+<p>As Bob Dorr mentioned in <a href="https://blogs.msdn.microsoft.com/psssql/2014/04/09/sql-server-2014-tempdb-hidden-performance-gem/">his blog post</a> on the improvement, “the pages used in these operations are marked so lazy writer will favor writing them to tempdb”. What he is saying here is that those pages will be written to tempdb data file by lazy writer. So far, so good. However, if there is any memory pressure, lazy writer will flush those pages and put them in the free list and will do it for all dirty pages. That includes pages that were allocated in a session that are not active anymore. Say you have a session that created a 10GB temporary table. Once you’re done, you can drop the table and close the session, but the allocated pages will still be there in memory. Right? All those nasty 10GB of dirty pages of a table that does not exist anymore. As soon as you have memory pressure and need to find space on buffer cache to put some data in memory, lazy writer will waste time to flush those useless dirty pages that will never be used. In my opinion, the correct concept should be that once the table is dropped or session is done, lazy writer should be able to put these pages on the free list to avoid using up precious buffer pool cache and triggering unnecessary write I/O operations on tempdb data file.</p>
+<p>Ok, Fabiano, I don’t get it, can you show me a sample on where this could be a problem? Yep, sure. Stay with me.</p>
+<p>Now to prepare the scenario to simulate the issue. First, set the instance (you could use any version equal to or greater than SQL Server 2014, I’m using a SQL Server 2017) to use only 8GB of memory:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b4f483052982" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>USE</span><span> </span><span>master</span></p><p><span>GO</span></p><p><span>-- Set MaxServerMemory to 8GB</span></p><p><span>EXEC</span><span> </span><span>sys</span><span>.</span><span>sp_configure</span><span> </span><span>N</span><span>'max server memory (MB)'</span><span>,</span><span> </span><span>N</span><span>'8192'</span></p><p><span>GO</span></p><p><span>RECONFIGURE</span><span> </span><span>WITH</span><span> </span><span>OVERRIDE</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0002 seconds] -->
+
+<p>Then, create a 5GB table to run the tests. For this demo, I’m using the <a href="https://docs.microsoft.com/en-us/sql/samples/adventureworks-install-configure?view=sql-server-ver15">AdventureWorks2017</a> database:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b53785109164" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>USE</span><span> </span><span>AdventureWorks2017</span></p><p><span>GO</span></p><p><span>DROP</span><span> </span><span>TABLE</span><span> </span><span>IF</span><span> </span><span>EXISTS</span><span> </span><span>AdventureWorks2017</span><span>.</span><span>Sales</span><span>.</span><span>SalesOrderDetailBig</span></p><p><span>GO</span></p><p><span>SELECT</span><span> </span><span>TOP</span><span> </span><span>50000000</span><span> </span><span>a</span><span>.</span><span>*</span><span> </span></p><p><span>&nbsp;&nbsp;</span><span>INTO</span><span> </span><span>AdventureWorks2017</span><span>.</span><span>Sales</span><span>.</span><span>SalesOrderDetailBig</span><span> </span></p><p><span>&nbsp;&nbsp;</span><span>FROM</span><span> </span><span>AdventureWorks2017</span><span>.</span><span>Sales</span><span>.</span><span>SalesOrderDetail</span><span> </span><span>a</span><span>,</span><span> </span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>AdventureWorks2017</span><span>.</span><span>Sales</span><span>.</span><span>SalesOrderDetail</span><span> </span><span>b</span></p><p><span>OPTION</span><span> </span><span>(</span><span>MAXDOP</span><span> </span><span>1</span><span>)</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0005 seconds] -->
+
+<p>Now, create a procedure that will insert 5GB of data into a temporary table using an INSERT + SELECT command.</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b55014809634" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p></div>
+				</td>
+						<td><div><p><span>USE</span><span> </span><span>AdventureWorks2017</span></p><p><span>GO</span></p><p><span>IF</span><span> </span><span>OBJECT_ID</span><span>(</span><span>'st_1'</span><span>)</span><span> </span><span>IS</span><span> </span><span>NOT</span><span> </span><span>NULL</span></p><p><span>&nbsp;&nbsp; </span><span>DROP</span><span> </span><span>PROC</span><span> </span><span>st_1</span><span>;</span></p><p><span>GO</span></p><p><span>CREATE</span><span> </span><span>PROC</span><span> </span><span>st_1</span></p><p><span>AS</span></p><p><span>&nbsp;&nbsp;</span><span>IF</span><span> </span><span>OBJECT_ID</span><span>(</span><span>'tempdb.dbo.#TabTest1'</span><span>)</span><span> </span><span>IS</span><span> </span><span>NOT</span><span> </span><span>NULL</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>DROP</span><span> </span><span>TABLE</span><span> </span><span>#</span><span>TabTest1</span><span>;</span></p><p><span>&nbsp;&nbsp;</span><span>CREATE</span><span> </span><span>TABLE</span><span> </span><span>#</span><span>TabTest1</span></p><p><span>&nbsp;&nbsp;</span><span>(</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Col1</span><span> </span><span>CHAR</span><span>(</span><span>500</span><span>)</span></p><p><span>&nbsp;&nbsp;</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;</span><span>INSERT</span><span> </span><span>INTO</span><span> </span><span>#</span><span>TabTest1</span></p><p><span>&nbsp;&nbsp;</span><span>SELECT</span><span> </span><span>TOP</span><span> </span><span>10000000</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>CONVERT</span><span>(</span><span>CHAR</span><span>(</span><span>500</span><span>)</span><span>,</span><span> </span><span>A</span><span>.</span><span>name</span><span>)</span><span> </span><span>AS</span><span> </span><span>Col1</span></p><p><span>&nbsp;&nbsp;</span><span>FROM</span><span> </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>A</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>B</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>C</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>master</span><span>.</span><span>dbo</span><span>.</span><span>sysobjects</span><span> </span><span>D</span></p><p><span>&nbsp;&nbsp;</span><span>OPTION</span><span> </span><span>(</span><span>MAXDOP</span><span> </span><span>1</span><span>)</span><span>;</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0010 seconds] -->
+
+<p>Now, before running <code>st_1</code> to populate the temporary table, make sure to run it using a cold cache:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b58019681692" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>-- Manual checkpoint on tempdb to flush pages and start with a cold env.</span></p><p><span>USE</span><span> </span><span>tempdb</span></p><p><span>GO</span></p><p><span>CHECKPOINT</span><span>;</span><span>DBCC</span><span> </span><span>DROPCLEANBUFFERS</span><span>(</span><span>)</span><span>;</span><span> </span><span>DBCC</span><span> </span><span>FREEPROCCACHE</span><span>(</span><span>)</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0002 seconds] -->
+
+<p>Now, open a new session and run the procedure <code>st_1</code> to allocate some pages on tempdb. Once you’re done you can close the session; I know that the temporary table is destroyed after sp execution, but just in case you think it is not, go ahead and close the session.</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b5a962075973" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>-- Should take about 15 seconds as long it has memory to keep </span></p><p><span>-- all 5GB of inserted data</span></p><p><span>EXEC</span><span> </span><span>AdventureWorks2017</span><span>.</span><span>dbo</span><span>.</span><span>st_1</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0001 seconds] -->
+
+<p>At this time, if you look at the <code>sys.dm_os_buffer_descriptors</code>, you’ll see that about 666k (scary number) of newly allocated pages are dirty:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b5c363101890" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>SELECT</span><span> </span><span>Page_Status</span><span> </span><span>=</span><span> </span><span>CASE</span><span> </span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>WHEN</span><span> </span><span>is_modified</span><span> </span><span>=</span><span> </span><span>1</span><span> </span><span>THEN</span><span> </span><span>'Dirty'</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>ELSE</span><span> </span><span>'Clean'</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>END</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>DBName</span><span> </span><span>=</span><span> </span><span>DB_NAME</span><span>(</span><span>database_id</span><span>)</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>Pages</span><span> </span><span>=</span><span> </span><span>COUNT</span><span>(</span><span>1</span><span>)</span></p><p><span>FROM</span><span> </span><span>sys</span><span>.</span><span>dm_os_buffer_descriptors</span></p><p><span>WHERE</span><span> </span><span>database_id</span><span> </span><span>=</span><span> </span><span>DB_ID</span><span>(</span><span>'tempdb'</span><span>)</span></p><p><span>GROUP</span><span> </span><span>BY</span><span> </span><span>database_id</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </span><span>is_modified</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0005 seconds] -->
+
+<p><img src="data:image/gif;base64,R0lGODlhAQABAPAAAPLy8v///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==" data-src="https://www.red-gate.com/simple-talk/wp-content/uploads/2020/04/word-image-53.png" data-lazy-load=""></p>
+<p>Now, here is the fun part. If you try to read the 5GB table (Sales.SalesOrderDetailBig) created on AdventureWorks2017 DB, what happens? Remember, it’s a 5GB temporary table. Pretty much all those pages are in memory and dirty. If you try to read another 5GB, there will not be enough memory available (max server memory is set to 8GB), and lazy writer will have to run and put some pages on the free list. Before it does that, it will flush all those dirty pages. While it is doing it, your query will be put to sleep and may take a long time to run.</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b5e548170716" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>SELECT</span><span> </span><span>COUNT</span><span>(</span><span>*</span><span>)</span><span> </span><span>FROM</span><span> </span><span>AdventureWorks2017</span><span>.</span><span>Sales</span><span>.</span><span>SalesOrderDetailBig</span></p><p><span>OPTION</span><span> </span><span>(</span><span>MAXDOP</span><span> </span><span>1</span><span>)</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0002 seconds] -->
+
+<p>While the query is running, this is what you can see:</p>
+<p>As expected, lazy writes/sec performance counter is showing lots of activity:</p>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAPAAAPLy8v///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==" data-src="https://www.red-gate.com/simple-talk/wp-content/uploads/2020/04/word-image-54.png" data-lazy-load=""></p>
+<p>The query is waiting on <code>SLEEP_TASK</code>, and there are several pending I/O requests.</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5e9fde0473b60711777845" data-settings=" minimize scroll-always">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>SELECT</span><span> </span><span>*</span><span> </span><span>FROM</span><span> </span><span>sys</span><span>.</span><span>dm_os_waiting_tasks</span></p><p><span>WHERE</span><span> </span><span>session_id</span><span> </span><span>=</span><span> </span><span>51</span></p><p><span>GO</span></p><p><span>SELECT</span><span> </span><span>*</span><span> </span><span>FROM</span><span> </span><span>sys</span><span>.</span><span>dm_io_pending_io_requests</span></p><p><span>GO</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0002 seconds] -->
+
+<p><img src="data:image/gif;base64,R0lGODlhAQABAPAAAPLy8v///yH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==" data-src="https://www.red-gate.com/simple-talk/wp-content/uploads/2020/04/word-image-55.png" data-lazy-load=""></p>
+<p>My point is that the query on Sales.SalesOrderDetailBig is taking <strong><em>3 minutes to run</em></strong>, and most of the time it is waiting for lazy writer to flush some of the dirty tempdb pages and put pages on the free list. If lazy writer didn’t have to flush those pages, the query should be able to run in just <strong><em>a few seconds</em></strong>.</p>
+<h2>But wait, SQL 2016+ indirect checkpoint on tempdb fixed this problem</h2>
+<p>On SQL Server 2016 indirect checkpoint, an outstanding feature initially introduced on SQL Server 2012, is enabled by default on model system database and set to 60 seconds. Since the tempdb database is derived from model during startup, it inherits this property and has indirect checkpoint enabled by default. (Note: TF3468 can be used to disable this)</p>
+<p>If you haven’t heard about indirect checkpoint, the following is a quick explanation of it from <a href="https://docs.microsoft.com/en-us/archive/blogs/sql_server_team/indirect-checkpoint-and-tempdb-the-good-the-bad-and-the-non-yielding-scheduler">this MS document</a>:</p>
+<p><em>“The conventional or automatic checkpoint algorithm assumes fixed time interval to recover each log record without accounting for the number of pages dirtied by a database transaction. In simpler terms, when (number of log records * fixed time interval to recover a log record) exceeds recovery interval set at the instance level, automatic checkpoint is triggered on the database. As automatic checkpoint doesn’t account for the dirty pages from each transaction (an important influencer of recovery time), it makes the recovery time less predictable. With indirect checkpoint, the engine maintains partitioned dirty page lists per database to track the number of dirty pages in the buffer pool for that database from each transaction. When the background recovery writer polling the dirty page manager detects the condition, where the number of dirty pages exceeds the dirty page threshold (calculated by heuristics), the recovery writer would trigger the flush of dirty pages to ensure database recovery would complete within the target_recovery_time set”</em></p>
+<p>As I mentioned before, there is no recovery need for tempdb as it is recreated on SQL service start, so indirect checkpoints on tempdb may not make much sense from a recovery perspective. However, the indirect checkpoint feature is still important to ensure the dirty pages in tempdb do not continue to take away buffer pool pages from user database workload as there is no automatic checkpoint to flush pages for tempdb.</p>
+<p>One of the reasons to enable indirect checkpoints on tempdb is to help scenarios with dirty tempdb pages take away the buffer pool data cache and cause pressure on lazy writer while it flushes dirty pages, the exact scenario we are analyzing.</p>
+<p>If indirect checkpoint had previously flushed dirty pages on tempdb, a query wouldn’t need to wait (<code>SLEEP_TASK</code>) for lazy writer to flush it.</p>
+<p>But, wait, don’t be happy yet; there is a small problem with indirect checkpoints on tempdb. Any non-logged “bulk” operation that qualifies for an “eager write” in tempdb <strong><em>is not</em></strong> a candidate to be flushed by the recovery writer (the internal thread that runs the indirect checkpoint).</p>
+<p>This raises an important question: which data load operation is minimally logged on tempdb? This is important to know because minimally logged operations on tempdb <strong><em>will not</em></strong> be flushed by the indirect checkpoint. The following list can be used to assist you in understanding which load operations on tempdb will be minimally logged and which will not.</p>
+<div><table>
+<tbody>
+<tr>
+<td>
+<p>Command</p>
+</td>
+<td>
+<p>Is minimally logged?</p>
+</td>
+</tr>
+<tr>
+<td>
+<p>INSERT INTO #TMP + SELECT</p>
+</td>
+<td>
+<p>Yes, since local temporary tables are private to the creating session, there is no need to use TABLOCK to get an ML operation.</p>
+</td>
+</tr>
+<tr>
+<td>
+<p>INSERT INTO #TMP WITH(TABLOCK) + SELECT</p>
+</td>
+<td>
+<p>Yes. Note that TABLOCK is required to get + SELECT an insert operator running in parallel on SQL2016+.</p>
+</td>
+</tr>
+<tr>
+<td>
+<p>SELECT INTO #TMP</p>
+</td>
+<td>
+<p>Yes. Since tempdb DB recovery model is always set to simple, a SELECT + INTO will be ML.</p>
+</td>
+</tr>
+<tr>
+<td>
+<p>SELECT INTO tempdb.dbo.TMP</p>
+</td>
+<td>
+<p>Yes.</p>
+</td>
+</tr>
+<tr>
+<td>
+<p>INSERT INTO tempdb.dbo.TMP WITH(TABLOCK) + SELECT</p>
+</td>
+<td>
+<p>Yes. Since this is a regular user table that can be accessed by any session, it requires a TABLOCK to be ML. Same applies for a global (##) temporary table.</p>
+</td>
+</tr>
+<tr>
+<td>
+<p>INSERT INTO tempdb.dbo.TMP + SELECT</p>
+</td>
+<td>
+<p>No. So, the only way to don’t qualify for a ML operation on tempdb is to use a regular or a global (##) temporary table and don’t specify the TABLOCK.</p>
+</td>
+</tr>
+</tbody>
+</table></div>
+<p>As you can see, pretty much all of the insert commands you can use on tempdb will be minimally logged, and pages won’t be flushed by the indirect checkpoint.</p>
+<h2>Summary</h2>
+<p>Tempdb troubleshooting can be very complex. It requires you to understand many components of the SQL Server engine. If you need an answer to the “why” question, make sure you took some time to study SQL Server internals.</p>
+<p>The current behavior of SQL Server is just “the way it works today.” I honestly expect it to improve on this area, as it is not rare for me to see an environment where tempdb is the TOP 1 database on data cache usage. I don’t want my environments to have my precious productions tables doing physical reads because someone ran a report that created a 20GB temporary table, or, in a worst-case scenario to wait for lazy writer to flush some “never will be used again” dirty pages. It would be good to have something like a “max buffer pool usage” setting on tempdb. What do you think?</p>
+			</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
