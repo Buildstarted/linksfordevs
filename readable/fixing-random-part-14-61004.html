@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Fixing Random, part 14 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Fixing Random, part 14 - linksfor.dev(s)"/>
+    <meta property="og:description" content="[Code is here.] Last time on FAIC we achieved two major results in our effort to build better probability tools. First, we demonstrated that the SelectMany implementation which applies a likelihood&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2019/03/18/fixing-random-part-14/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Fixing Random, part 14</title>
+<div class="readable">
+        <h1>Fixing Random, part 14</h1>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 23 Apr 2020</div>
+        <p><a href="https://ericlippert.com/2019/03/18/fixing-random-part-14/">https://ericlippert.com/2019/03/18/fixing-random-part-14/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p data-adtags-visited="true">[<a href="https://github.com/ericlippert/probability/tree/episode14">Code is here.</a>]</p>
+<hr>
+<p data-adtags-visited="true"><a href="https://ericlippert.com/2019/03/14/fixing-random-part-13/">Last time on FAIC</a> we achieved two major results in our effort to build better probability tools. First, we demonstrated that the <code>SelectMany</code> implementation which applies a likelihood function to a prior probability is the bind operation of the probability monad. Second, we gave an implementation of a wrapper object that implements it. It’s action can be summed up as:</p>
+<ul>
+<li>sample from the prior distribution</li>
+<li>use the likelihood function to get the conditional distribution</li>
+<li>sample from the conditional distribution</li>
+<li>run the projection on the pair of samples to get the result</li>
+</ul>
+<p data-adtags-visited="true">You probably recall though that I did not implement the <code>Weight</code> function. It’s a little tricky to do so, for two reasons. First, I made the (now somewhat questionable!) decision to make weights integers. If the weights are fractions between 0.0 and 1.0, you can just multiply the weight of the prior sample by the weight of the conditional sample. (And if the weights are logarithms, you can just add them.) It’s trickier with integers. And second, the projection at the end introduces once again the possibility that there will be “collisions”; the projection could pick non-unique values for unique combinations of the samples, that then have to be weighted as the sum.</p>
+<p data-adtags-visited="true">That’s all a little abstract, so let’s work an example.</p>
+<p data-adtags-visited="true">Suppose we have a population of people who have been diagnosed with Frob Syndrome, which seems to be linked with height. We’ll divide the population of Frob Syndrome patients into three categories:</p>
+<p data-adtags-visited="true"><span><span>enum</span><span>&nbsp;</span><span>Height</span><span>&nbsp;</span><span>{</span><span>&nbsp;</span><span>Tall</span><span>,</span><span>&nbsp;</span><span>Medium</span><span>,</span><span>&nbsp;</span><span>Short</span><span>&nbsp;</span><span>}</span></span></p>
+<p data-adtags-visited="true">and let’s suppose in our study population there are five tall people, two medium-height people, and one short person in every eight:</p>
+<p data-adtags-visited="true"><span> <span>var</span><span>&nbsp;</span><span>prior</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>new</span><span>&nbsp;</span><span>List</span><span>&lt;</span><span>Height</span><span>&gt;</span><span>()</span><span>&nbsp;</span><span>{&nbsp;</span><span>Tall</span><span>,&nbsp;</span><span>Medium</span><span>,&nbsp;</span><span>Short</span><span>&nbsp;</span><span>}<br>
+</span><span>&nbsp; .</span><span>ToWeighted</span><span>(</span><span>5</span><span>,</span><span>&nbsp;</span><span>2</span><span>,</span><span>&nbsp;</span><span>1</span><span>);</span></span></p>
+<p data-adtags-visited="true">(To keep the code short on the page, suppose I have <code>using static</code> directives for each.)</p>
+<p data-adtags-visited="true">Now let’s suppose we’ve done a survey of each of the tall, medium and short people to learn the severity of their symptoms:</p>
+<p data-adtags-visited="true"><span><span>enum</span><span>&nbsp;</span><span>Severity</span><span>&nbsp;</span><span>{</span><span>&nbsp;</span><span>Severe</span><span>,</span><span>&nbsp;</span><span>Moderate</span><span>,</span><span>&nbsp;</span><span>Mild</span><span>&nbsp;</span><span>}</span></span></p>
+<p data-adtags-visited="true">At this point I’m going to make the numbers a bit odd to illustrate the mathematics more clearly.&nbsp; What is the likelihood of a member of each group to report symptoms? Let’s say that 10 out of every 21 tall people report severe symptoms, and the remaining 11 report moderate symptoms. For the medium-height people, 12 out of 17 report moderate symptoms and 5 report mild symptoms. And all the short people report mild symptoms:</p>
+<p data-adtags-visited="true"><span><span>var</span><span>&nbsp;</span><span>severity</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>new</span><span>&nbsp;</span><span>List</span><span>&lt;</span><span>Severity</span><span>&gt;</span><span>&nbsp;</span></span><span><span>{&nbsp;</span><span>Severe</span><span>,&nbsp;</span><span>Moderate</span><span>,&nbsp;</span><span>Mild</span><span>&nbsp;</span><span>};</span><br>
+<span><br>
+IDiscreteDistribution</span><span>&lt;</span><span>Severity</span><span>&gt;</span><span>&nbsp;</span><span>likelihood</span><span>(</span><span>Height</span><span>&nbsp;</span><span>h</span><span>)</span><br>
+<span>{</span><br>
+<span>&nbsp; </span><span>switch</span><span>(</span><span>h</span><span>)</span><br>
+<span>&nbsp; </span><span>{</span><br>
+<span>&nbsp; &nbsp;&nbsp;</span><span>case&nbsp;</span><span>Tall</span><span>:</span><span>&nbsp;</span><span>return</span><span>&nbsp;</span><span>severity</span><span>.</span><span>ToWeighted</span><span>(</span><span>10</span><span>,</span><span>&nbsp;</span><span>11</span><span>,</span><span>&nbsp;</span><span>0</span><span>);</span><br>
+<span>&nbsp; &nbsp;&nbsp;</span><span>case&nbsp;</span><span>Medium</span><span>:</span><span>&nbsp;</span><span>return</span><span>&nbsp;</span><span>severity</span><span>.</span><span>ToWeighted</span><span>(</span><span>0</span><span>,</span><span>&nbsp;</span><span>12</span><span>,</span><span>&nbsp;</span><span>5</span><span>);</span><br>
+<span>&nbsp; &nbsp;&nbsp;</span><span>default</span><span>:</span><span>&nbsp;</span><span>return</span><span>&nbsp;</span><span>severity</span><span>.</span><span>ToWeighted</span><span>(</span><span>0</span><span>,</span><span>&nbsp;</span><span>0</span><span>,</span><span>&nbsp;</span><span>1</span><span>);</span><br>
+<span>&nbsp;&nbsp;</span><span>}</span><br>
+<span>}</span></span></p>
+<p data-adtags-visited="true">And now let’s suppose we have a recommended prescription level:</p>
+<p data-adtags-visited="true"><span> <span>enum</span><span>&nbsp;</span><span>Prescription</span><span>&nbsp;</span><span>{</span><span>&nbsp;</span><span>DoubleDose</span><span>,</span><span>&nbsp;</span><span>NormalDose</span><span>,</span><span>&nbsp;</span><span>HalfDose</span><span>&nbsp;</span><span>}</span></span></p>
+<p data-adtags-visited="true">Taller people or people with more severe symptoms get a higher dose; shorter people or people with mild symptoms get a smaller dose:</p>
+<p data-adtags-visited="true"><span><span>Prescription</span><span>&nbsp;</span><span>projection</span><span>(</span><span>Height</span><span>&nbsp;</span><span>h</span><span>,</span><span>&nbsp;</span><span>Severity</span><span>&nbsp;</span><span>s</span><span>)</span><br>
+<span>{</span><br>
+<span>&nbsp; </span><span>switch</span><span>&nbsp;</span><span>(</span><span>h</span><span>)</span><br>
+<span>&nbsp; </span><span>{</span><br>
+<span>&nbsp; &nbsp;&nbsp;</span><span>case</span><span>&nbsp;</span><span>Tall</span><span>:</span><span>&nbsp;</span><span>return</span><span>&nbsp;</span><span>s</span><span>&nbsp;</span><span>==</span><span>&nbsp;</span><span>Severe</span><span>&nbsp;</span><span>?</span><span>&nbsp;</span><span>DoubleDose</span><span>&nbsp;</span><span>:</span><span>&nbsp;</span><span>NormalDose</span><span>;</span><br>
+<span>&nbsp; &nbsp; </span><span>case</span><span>&nbsp;</span><span>Medium</span><span>:&nbsp;</span><span> <span>return</span>&nbsp;s&nbsp;==&nbsp;Mild&nbsp;?&nbsp;HalfDose&nbsp;:&nbsp;NormalDose;</span><br>
+<span>&nbsp; &nbsp; </span><span>default</span><span>:</span><span>&nbsp;</span><span>return</span><span>&nbsp;</span><span>HalfDose</span><span>;</span><br>
+<span>&nbsp;&nbsp;</span><span>}</span><br>
+<span>}</span><br>
+</span></p>
+<p data-adtags-visited="true">The question now is: <em>what is the probability distribution on prescriptions for this study population</em>?&nbsp; That is, if we picked a random member of this population, how likely is it that they’d have a double, normal or half dose prescription?</p>
+<p data-adtags-visited="true"><span><span>IDiscreteDistribution</span><span>&lt;</span><span>Prescription</span><span>&gt;</span><span>&nbsp;</span><span>doses</span><span>&nbsp;</span><span>=</span><span><br>
+</span><span>&nbsp; prior</span><span>.</span><span>SelectMany</span><span>(</span><span>likelihood</span><span>,</span><span>&nbsp;</span><span>projection</span><span>);</span></span></p>
+<p data-adtags-visited="true">The problem is to work out the weightings of the three possible outcomes.</p>
+<p data-adtags-visited="true">As I mentioned before, it’s easiest to do this when the weights are fractions because we can then just multiply them and then add them up:</p>
+<pre>Height        Severity           Prescription
+Tall   (5/8)  Severe   (10/21)   DoubleDose (25/84)
+Tall   (5/8)  Moderate (11/21)   NormalDose (55/168)
+Medium (2/8)  Moderate (12/17)   NormalDose  (3/17)
+Medium (2/8)  Mild      (5/17)   HalfDose    (5/68)
+Short  (1/8)  Mild      (1/1)    HalfDose    (1/8)
+</pre>
+<p data-adtags-visited="true">(To save space I’ve elided the zero rows.)</p>
+<p data-adtags-visited="true">So the probability of a member of this population getting a double dose is 25/84, getting a normal dose is 55/168 + 3/17 = 1439/2856, and getting a half dose is 5/68 + 1/8 = 27/136. Verifying that those add up to 1.0 is left as an exercise.</p>
+<p data-adtags-visited="true">But we’re going to grit our teeth here and do it all in integers! How might we do that?</p>
+<p data-adtags-visited="true">Well, we know how to eliminate fractions: multiply all the weights in the first column by 8, and all the weights in the second column by 21 * 17, and none of the proportions will change:</p>
+<pre>Height      Severity         Prescription
+Tall   (5)  Severe   (170)   DoubleDose (850)
+Tall   (5)  Moderate (187)   NormalDose (935)
+Medium (2)  Moderate (252)   NormalDose (504)
+Medium (2)  Mild     (105)   HalfDose   (210)
+Short  (1)  Mild     (357)   HalfDose   (357)
+</pre>
+<p data-adtags-visited="true">So the integer weights are: double dose is 850, normal dose is 935 + 504 = 1439, and half dose is 210 + 357 = 567.</p>
+<p data-adtags-visited="true">Let’s implement it!</p>
+<p data-adtags-visited="true">First off, oddly enough there is a <code>Sum()</code> extension method but no <code>Product()</code> extension method, so let’s implement that:</p>
+<p data-adtags-visited="true"><span><span>public</span><span>&nbsp;</span><span>static</span><span>&nbsp;</span><span>int</span><span>&nbsp;</span><span>Product</span><span>(</span><span>this</span><span>&nbsp;</span><span>IEnumerable</span><span>&lt;</span><span>int</span><span>&gt;</span><span>&nbsp;</span><span>items</span><span>)</span><span>&nbsp;</span><span>=&gt;</span><br>
+<span>&nbsp; </span><span>items</span><span>.</span><span>Aggregate</span><span>(</span><span>1</span><span>,</span><span>&nbsp;</span><span>(</span><span>a</span><span>,</span><span>&nbsp;</span><span>b</span><span>)</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>a</span><span>&nbsp;</span><span>*</span><span>&nbsp;</span><span>b</span><span>);</span></span></p>
+<p data-adtags-visited="true">And I also need to know the total weight of a distribution:</p>
+<p data-adtags-visited="true"><span><span>public</span><span>&nbsp;</span><span>static</span><span>&nbsp;</span><span>int</span><span>&nbsp;</span><span>TotalWeight</span><span>&lt;</span><span>T</span><span>&gt;(<br>
+</span><span>&nbsp; &nbsp; this</span><span>&nbsp;</span><span>IDiscreteDistribution</span><span>&lt;</span><span>T</span><span>&gt;</span><span>&nbsp;</span><span>d</span><span>)</span><span>&nbsp;</span><span>=&gt;</span><br>
+<span>&nbsp; d</span><span>.</span><span>Support</span><span>()</span><span>.</span><span>Select</span><span>(</span><span>t</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>d</span><span>.</span><span>Weight</span><span>(</span><span>t</span><span>))</span><span>.</span><span>Sum</span><span>();</span></span></p>
+<p data-adtags-visited="true">And now we can implement the algorithm I just sketched out:</p>
+<p data-adtags-visited="true"><span><span>int</span><span>&nbsp;</span><span>product</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>prior</span><span>.</span><span>Support</span><span>()<br>
+</span><span>&nbsp; .</span><span>Select</span><span>(</span><span>a</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>likelihood</span><span>(</span><span>a</span><span>)</span><span>.</span><span>TotalWeight</span><span>())<br>
+</span><span>&nbsp; .</span><span>Product</span><span>();</span><br>
+<span>var</span><span>&nbsp;</span><span>w</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>from</span><span>&nbsp;</span><span>h</span><span>&nbsp;</span><span>in</span><span>&nbsp;</span><span>prior</span><span>.</span><span>Support</span><span>()</span><br>
+<span>&nbsp; &nbsp; &nbsp; &nbsp;&nbsp;</span><span>let</span><span>&nbsp;</span><span>ps</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>likelihood</span><span>(h</span><span>)</span><br>
+<span><span>&nbsp; &nbsp; &nbsp; &nbsp;&nbsp;</span></span><span>from</span><span>&nbsp;s</span><span>&nbsp;</span><span>in&nbsp;</span><span>ps</span><span>.</span><span>Support</span><span>()</span><br>
+<span>&nbsp; &nbsp; &nbsp; &nbsp;&nbsp;</span><span>group</span><span>&nbsp;</span><span>prior</span><span>.</span><span>Weight</span><span>(h</span><span>)</span><span>&nbsp;</span><span>*&nbsp;</span><span>ps</span><span>.</span><span>Weight</span><span>(s</span><span>)</span><span>&nbsp;</span><span>*</span><span><br>
+</span><span>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; product</span><span>&nbsp;</span><span>/</span><span>&nbsp;</span><span>ps</span><span>.</span><span>TotalWeight</span><span>()</span><span><br>
+</span></span><span><span>&nbsp; &nbsp; &nbsp; &nbsp; by</span><span>&nbsp;</span><span>projection</span><span>(h</span><span>,</span><span>&nbsp;s</span><span>);<br>
+</span></span><span><span>var</span><span>&nbsp;</span><span>dict</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>w</span><span>.</span><span>ToDictionary</span><span>(</span><span>g</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>g</span><span>.</span><span>Key</span><span>,</span><span>&nbsp;</span><span>g</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>g</span><span>.</span><span>Sum</span><span>());</span><br>
+<span>var</span><span>&nbsp;doses</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>dict</span><span>.</span><span>Keys</span><span>.</span><span>ToList</span><span>();</span><br>
+<span>var</span><span>&nbsp;</span><span>weights</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>dict</span><span>.</span><span>Values.ToList()</span><span>;<br>
+</span><br>
+</span></p>
+<p data-adtags-visited="true">And sure enough, if we print those last two out:</p>
+<pre>DoubleDose, NormalDose, HalfDose
+850, 1439, 567
+</pre>
+<p data-adtags-visited="true">Super, we can now work out the weights in our implementation of <code>SelectMany</code>.</p>
+<p data-adtags-visited="true">But… wait a minute. Why do we have to?</p>
+<p data-adtags-visited="true">That is, why do we need a <code>Combined</code> wrapper class for <code>SelectMany</code> at all?</p>
+<p data-adtags-visited="true">We just worked out the weights of every member of the support, and we did so making no assumptions whatsoever about the prior or the likelihood function. We can delete our <code>Combined</code> wrapper class, and replace our implementation of <code>SelectMany</code> with:</p>
+<p data-adtags-visited="true"><span><span>public</span><span>&nbsp;</span><span>static</span><span>&nbsp;</span><span>IDiscreteDistribution</span><span>&lt;</span><span>C</span><span>&gt;</span><span>&nbsp;</span><span>SelectMany</span><span>&lt;</span><span>A</span><span>,</span><span>&nbsp;</span><span>B</span><span>,</span><span>&nbsp;</span><span>C</span><span>&gt;(</span><br>
+<span>&nbsp; </span><span>this</span><span>&nbsp;</span><span>IDiscreteDistribution</span><span>&lt;</span><span>A</span><span>&gt;</span><span>&nbsp;</span><span>prior</span><span>,</span><br>
+<span>&nbsp; </span><span>Func</span><span>&lt;</span><span>A</span><span>,</span><span>&nbsp;</span><span>IDiscreteDistribution</span><span>&lt;</span><span>B</span><span>&gt;&gt;</span><span>&nbsp;</span><span>likelihood</span><span>,</span><br>
+<span>&nbsp; </span><span>Func</span><span>&lt;</span><span>A</span><span>,</span><span>&nbsp;</span><span>B</span><span>,</span><span>&nbsp;</span><span>C</span><span>&gt;</span><span>&nbsp;</span><span>projection</span><span>)</span><br>
+<span>{</span><br>
+<span><span>&nbsp;&nbsp;</span></span><span>int</span><span>&nbsp;</span><span>product</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>prior</span><span>.</span><span>Support</span><span>()<br>
+</span></span><span><span>&nbsp; &nbsp; .</span><span>Select</span><span>(</span><span>a</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>likelihood</span><span>(</span><span>a</span><span>)</span><span>.</span><span>TotalWeight</span><span>())<br>
+</span><span>&nbsp; &nbsp; .</span><span>Product</span><span>();</span><br>
+<span>&nbsp;&nbsp;</span><span>var</span><span>&nbsp;</span><span>w</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>from</span><span>&nbsp;</span><span>a</span><span>&nbsp;</span><span>in</span><span>&nbsp;</span><span>prior</span><span>.</span><span>Support</span><span>()</span><br>
+<span>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;&nbsp;</span><span>let</span><span>&nbsp;</span><span>pb</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>likelihood</span><span>(</span><span>a</span><span>)</span><br>
+<span>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;&nbsp;</span><span>from</span><span>&nbsp;</span><span>b</span><span>&nbsp;</span><span>in</span><span>&nbsp;</span><span>pb</span><span>.</span><span>Support</span><span>()</span><br>
+<span>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;&nbsp;</span><span>group</span><span>&nbsp;</span><span>prior</span><span>.</span><span>Weight</span><span>(</span><span>a</span><span>)</span><span>&nbsp;</span><span>*</span><span>&nbsp;</span><span>pb</span><span>.</span><span>Weight</span><span>(</span><span>b</span><span>)</span><span>&nbsp;</span><span>*</span><span><br>
+</span><span>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; product</span><span>&nbsp;</span><span>/</span><span>&nbsp;</span><span>pb</span><span>.</span><span>TotalWeight</span><span>()</span><span><br>
+</span><span>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; by</span><span>&nbsp;</span><span>projection</span><span>(</span><span>a</span><span>,</span><span>&nbsp;</span><span>b</span><span>);</span><br>
+<span>&nbsp;&nbsp;</span><span>var</span><span>&nbsp;</span><span>dict</span><span>&nbsp;</span><span>=</span><span>&nbsp;</span><span>w</span><span>.</span><span>ToDictionary</span><span>(</span><span>g</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>g</span><span>.</span><span>Key</span><span>,</span><span>&nbsp;</span><span>g</span><span>&nbsp;</span><span>=&gt;</span><span>&nbsp;</span><span>g</span><span>.</span><span>Sum</span><span>());</span><br>
+<span>&nbsp;&nbsp;</span><span>return</span><span>&nbsp;</span><span>dict</span><span>.</span><span>Keys</span><span>.</span><span>ToWeighted</span><span>(</span><span>dict</span><span>.</span><span>Values</span><span>);</span><br>
+<span>}</span></span></p>
+<hr>
+<p data-adtags-visited="true"><strong>Exercise:</strong> Do you see any potential pitfalls in this implementation of computing the new weights? Give it some thought; I’ll give the answer in the next episode.</p>
+<hr>
+<p data-adtags-visited="true">We do a small amount of math up front, and in exchange, we have computed the <em>exact</em> resulting probability distribution, which we can sample from efficiently. <em>Just as we did with <code>Where</code> and <code>Select</code>​ in previous episodes.</em></p>
+<hr>
+<p data-adtags-visited="true"><strong>Aside:</strong>&nbsp;Once again, if you trace through all the logic I’ve written so far you will quickly see that it is hugely inefficient in terms of the amount of re-computation it does and garbage it produces. If we were writing this for production code, we’d be a lot more aggressive about finding code paths that do re-computation and eliminating them. The point of this exercise is that our code produces correct, efficient distribution objects out the other end, even if it is a bit wasteful to do so in this particular pedagogic implementation.</p>
+<hr>
+<p data-adtags-visited="true">Think about the power of this: you can write programs that treat discrete probability distributions over arbitrary types <em>as values</em>, the same way you’d treat integers, strings, sequences, or whatever, as values that obey a particular set of algebraic rules. We can project, condition and combine them together with the same ease that we do today with sequences, and sample from them to boot!</p>
+<p data-adtags-visited="true">The idea that we can describe a probabilistic workflow, and have as the output of that workflow a new distribution semantically equivalent to the effect of the workflow, but without any long-running sample-and-reject loops due to the conditions, is called <em>inference</em> by the probabilistic programming community.</p>
+<p data-adtags-visited="true">We’ve seen that <strong>we can do inference on arbitrary discrete distributions provided that the supports are small and the weights are small integers</strong>; as we’ll see throughout the rest of this series, the problem gets considerably harder as we abandon some of those simplifying assumptions.</p>
+<hr>
+<p data-adtags-visited="true"><strong>Next time on FAIC:</strong> I’m going to implement a minor optimization in our weighted integer distribution. After that, we’ll put it all together to show how what we’ve developed so far can be used for Bayesian inference.</p>
+
+			
+			
+						</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
