@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+SQL Server 2019 Aggressive Clustered Columnstore Cleanup - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="SQL Server 2019 Aggressive Clustered Columnstore Cleanup - linksfor.dev(s)"/>
+    <meta property="article:author" content="Taryn"/>
+    <meta property="og:description" content="In late March 2020, we upgraded our production SQL Servers to SQL Server 2019 with CU3. After finishing the upgrade, we hit an issue with clustered columnstore that we hadn&#x2019;t experienced in the previous version of SQL, SQL Server 2017. The issue also wasn&#x2019;t something we encountered during our extensive testing on various servers in development, which dated back to September 2019. The problem has been mitigated, but I wanted to share our experience."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.tarynpivots.com/post/aggressive-clustered-columnstore-cleanup/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - SQL Server 2019 Aggressive Clustered Columnstore Cleanup</title>
+<div class="readable">
+        <h1>SQL Server 2019 Aggressive Clustered Columnstore Cleanup</h1>
+            <div>by Taryn</div>
+            <div>Reading time: 15-19 minutes</div>
+        <div>Posted here: 24 Apr 2020</div>
+        <p><a href="https://www.tarynpivots.com/post/aggressive-clustered-columnstore-cleanup/">https://www.tarynpivots.com/post/aggressive-clustered-columnstore-cleanup/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+      
+
+<p>In late March 2020, we upgraded our production SQL Servers to <a href="https://www.microsoft.com/en-us/sql-server/sql-server-2019" target="_blank">SQL Server 2019</a> with CU3. After finishing the upgrade, we hit an issue with <a href="https://docs.microsoft.com/en-us/sql/relational-databases/indexes/columnstore-indexes-described?view=sql-server-2014" target="”_blank”">clustered columnstore</a> that we hadn’t experienced in the previous version of SQL, SQL Server 2017. The issue also wasn’t something we encountered during our extensive testing on various servers in development, which dated back to September 2019. The problem has been mitigated, but I wanted to share our experience.</p>
+
+<h2 id="background">Background<a href="#background"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>We have one database in production, called PRIZM, which is made up exclusively of tables with clustered columnstore indexes. PRIZM is used for event tracking, and it backs our A/B testing, feature funnels, etc. in hopes of improving most of what we do. Because we use PRIZM everywhere, it’s one of our larger databases with lots of tables. At the time of the upgrade, the database was approximately 500GB with about 1000 tables.</p>
+
+<p>There were various driving forces for it, but in early February we needed to purge data from PRIZM. Some of the reasons for doing so included:</p>
+
+<ul>
+<li>disk space being utilized</li>
+<li>general cleanup/removal of old events we no longer needed to maintain</li>
+<li>ease of GDPR compliance processing</li>
+</ul>
+
+<p>We, or I should say <a href="https://twitter.com/marcgravell" target="_blank">Marc Gravell</a>, deleted approximately 8 billion rows across 912 tables in the database. By doing this, we gained back drive space and removed data we no longer needed to keep.</p>
+
+<p>After performing the deletions, we did some of the recommended maintenance on columnstore indexes. While many of the smaller tables were rebuilt, a handful of tables (11 total) weren’t rebuilt due to their size. Since we don’t have maintenance windows, it would be high-impact to attempt these rebuilds on a very active production environment.</p>
+
+<p>The plan was to perform these table rebuilds after upgrading to 2019. SQL Server 2019 added the ability <a href="http://www.nikoport.com/2018/06/21/columnstore-indexes-part-123-clustered-columnstore-index-online-rebuild/" target="_blank">to rebuild clustered columnstore indexes online</a> and that feature was one of the main reasons we wanted to upgrade.</p>
+
+<h2 id="upgrade-day">Upgrade Day<a href="#upgrade-day"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>I’m not going to cover our full upgrade to 2019 - that will hopefully be a later post. At this point, let’s just assume everything went as planned and this is picking up after the main failovers of the servers that run Stack Overflow and the rest of the public network.</p>
+
+<p>After we finished the failovers for our public production servers, there was some behind the scenes work that needed to be done. This included patching and upgrading the former primary servers, and a failover of our reporting servers. The reporting cluster is a member of several <a href="https://docs.microsoft.com/en-us/sql/database-engine/availability-groups/windows/distributed-availability-groups?view=sql-server-ver15" target="_blank">distributed availability groups</a>. When we’re doing upgrades, we move the primary server from New York (NY-RPTSQL01) to Colorado (CO-RPTSQL01). Once all the upstream SQL Servers are upgraded, there’s one last failover to get the primary back to NY-RPTSQL01. I’m specifically mentioning these servers because they receive data from PRIZM, so they are impacted by any activity in that database.</p>
+
+<h2 id="transaction-logs-exponentially-growing">Transaction Logs Exponentially Growing<a href="#transaction-logs-exponentially-growing"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>As I was upgrading the former primaries, I noticed the transaction log files for PRIZM were growing. Initially, I just assumed it was normal and I went about finishing my other tasks.</p>
+
+<p>After about an hour, the log had grown again, and was growing rapidly. Like really rapidly, which was unusual. <strong>The logs were growing about 10GB every 5 minutes.</strong> We have lower traffic on the weekend so the amount of data being inserted into the database should not have been anywhere near this level.</p>
+
+<p>Normally large transaction logs might raise my eyebrows, but I wouldn’t be super concerned. However, I needed to perform the failover of the reporting cluster, and with the logs increasing at the rate they were, it was going to make that more difficult, if not impossible.</p>
+
+<p>If you’re not familiar with availability groups, the transaction logs from the primary server need to be written to the secondary servers. This same thing happens with distributed availability groups, but at a larger scale. In this case the transaction logs for the databases, including PRIZM which is on our primary server for Stack Overflow, needed to be flushed to the reporting cluster.</p>
+
+<p>As the logs were increasing in PRIZM, they needed to be written to the reporting servers and CO-RPTSQL01 had a huge <code>log send queue</code>, and NY-RPTSQL01 had a huge <code>recovery queue</code>. Both of those are defined in the <a href="https://docs.microsoft.com/en-us/previous-versions/sql/sql-server-2012/ff878356(v=sql.110)" target="_blank">Microsoft docs</a>, but I’ve included the definitions below:</p>
+
+<ul>
+<li><strong>Log send queue</strong> - Amount of log records in the log files of the primary database, in kilobytes, that has not yet been sent to the secondary replica. This value is sent to the secondary replica from the primary replica. Queue size does not include FILESTREAM files that are sent to a secondary.</li>
+<li><strong>Recovery queue</strong> - Amount of log records in the log files of the secondary replica that has not yet been redone.</li>
+</ul>
+
+<p>The <code>recovery queue</code> needs to be at zero to failover - when it’s zero it means the server is caught up to the primary. Since there were transaction logs that needed to be written to the secondary in the reporting cluster, NY-RPTSQL01, I couldn’t failover.</p>
+
+<h3 id="what-on-earth-is-happening">What on Earth is Happening?<a href="#what-on-earth-is-happening"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>When I first noticed the <code>log send queue</code> size, it was about 90GB. Within just a few hours it was at 320GB, and growing.</p>
+
+<p>We knew normal traffic wasn’t causing the increase. We also knew there wasn’t a delete job that would have triggered the massive growth of transaction logs, especially at the rate we were seeing. Now it was time to try and figure out what was causing the rapid growth.</p>
+
+<p>I looked at our instance of <a href="https://github.com/opserver/Opserver" target="_blank">OpServer</a> to see if it reported any queries running against PRIZM. Nothing.</p>
+
+<p>I executed <a href="http://whoisactive.com/" target="_blank"><code>sp_whoisactive</code></a>. Nothing.</p>
+
+<p>From what I was seeing it appeared “something” was crawling through our CCI tables and processing “something”. Like all the hand-wavy “something was doing something”? Yeah me too. We didn’t know what was happening and I was frantically trying to get it to stop.</p>
+
+<p>I then executed <code>sp_who2</code> and saw some PRIZM related things as background/system tasks, so I quickly wrote a script that would let me filter only for PRIZM:</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span><span>12
+</span><span>13
+</span><span>14
+</span><span>15
+</span><span>16
+</span><span>17
+</span><span>18
+</span><span>19
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>DECLARE</span> <span>@</span><span>Table</span> <span>TABLE</span><span>(</span>
+       <span>SPID</span> <span>INT</span><span>,</span>
+       <span>Status</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>LOGIN</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>HostName</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>BlkBy</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>DBName</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>Command</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>CPUTime</span> <span>INT</span><span>,</span>
+       <span>DiskIO</span> <span>INT</span><span>,</span>
+       <span>LastBatch</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>ProgramName</span> <span>VARCHAR</span><span>(</span><span>MAX</span><span>),</span>
+       <span>SPID_1</span> <span>INT</span><span>,</span>
+       <span>REQUESTID</span> <span>INT</span>
+<span>)</span>
+<span>INSERT</span> <span>INTO</span> <span>@</span><span>Table</span> <span>EXEC</span> <span>sp_who2</span>
+<span>SELECT</span>  <span>*</span>
+<span>FROM</span>    <span>@</span><span>Table</span>
+<span>WHERE</span> <span>DBName</span> <span>=</span> <span>'PRIZM'</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>The output of <code>sp_who2</code> was repeatedly showing <code>GHOST CLEANUP</code> and <code>CREATE INDEX</code>. Over and over and over again. To be clear, I’m not a clustered columnstore expert, I know enough to be able to maintain them as needed. I went to <a href="https://twitter.com/tarynpivots/status/1243984519314558976" target="_blank">Twitter</a> and mentioned what I was seeing. I was advised by <a href="https://twitter.com/sqL_handLe/status/1243988928484511746" target="_blank">@sqL_handLe</a> to try trace flag 661 which disables the ghost record removal process, and by Joe Obbish via <a href="https://twitter.com/erikdarlingdata/status/1244005847140884480%E2%80%9D" target="_blank">Erik Darling</a> to enable trace flag 634 to disable the tuple mover background task.</p>
+
+<p>Initially, we enabled trace flag 634, but the logs continued to grow. We disabled trace flag 634. Then we enabled trace flag 661, and the logs continued to grow, so we disabled it. Finally, we tried enabling both of the trace flags. The big jumps stopped, but we now had about 400GB of logs that needed to be written to the reporting cluster before we could perform the failover.</p>
+
+<p>While the logs were exploding we wondered if whatever was happening might have been caused by the deletions we did in early February. But why would they be triggered by the upgrade to SQL Server 2019?</p>
+
+<p>We figured we could just let whatever was running, keep running, and maybe it’d eventually stop. However remember I mentioned one of the reasons we deleted a bunch of data from PRIZM was due to disk space being utilized? Well, the t-log growth was rapidly taking that back. The morning of the upgrade we were at 83% being used, as the day went on we were approaching 90%. This became an urgent issue because the growth was not slowing down and honestly we were worried we’d run out of disk space if we just let it play out.</p>
+
+<p>It was time to open a support ticket. Hopefully support could help us.</p>
+
+<p>A brief side note, before we enabled the trace flags we were getting lots of exceptions across the network. Once we enabled them, the exceptions slowed. Coincidence?</p>
+
+<h2 id="time-to-investigate">Time to Investigate<a href="#time-to-investigate"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>The next morning we still had logs that were being written to the reporting cluster, 195GB to be exact. Yes I know that as ridiculously high still, but we have throughput issues between our two datacenters (that’s a whole different story). Due to the size of the recovery queue that meant no failover until that flushed.</p>
+
+<p>We heard back from support, so it was time to investigate. They requested that we take a full dump file, which is pretty difficult since we have 1.5TB of memory on the Stack Overflow SQL Server and the C: drive isn’t large enough to capture that, so we went with a smaller filtered dump and 3 minidumps. That meant <a href="https://twitter.com/tarynpivots/status/1244257820905627653" target="_blank">another public outage</a>, but we needed the files for them.</p>
+
+<p>When we took the dump files, we disabled both trace flags (634 and 661), during the <a href="https://twitter.com/tarynpivots/status/1244408854768578561" target="_blank">10 minutes the trace flags were off, the transaction logs increased another 25-30GB</a>.</p>
+
+<h3 id="we-re-being-haunted-by-ghosts">We’re Being Haunted by Ghosts<a href="#we-re-being-haunted-by-ghosts"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>After providing the dump files, they requested that we check the status of the ghost records in the database using and provide the results:</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>SELECT</span> 
+    <span>database_id</span><span>,</span> 
+    <span>object_name</span><span>(</span><span>object_id</span><span>)</span> <span>as</span> <span>Name</span><span>,</span> 
+    <span>index_id</span><span>,</span> 
+    <span>i</span><span>.</span><span>record_count</span><span>,</span> 
+    <span>GHOST_RECORD_COUNT</span><span>,</span>
+    <span>Version_ghost_record_count</span><span>,</span>
+    <span>INDEX_TYPE_DESC</span><span>,</span> 
+    <span>ALLOC_UNIT_TYPE_DESC</span>
+<span>FROM</span> <span>sys</span><span>.</span><span>dm_db_index_physical_stats</span> <span>(</span><span>DB_ID</span><span>(</span><span>N</span><span>'PRIZM'</span><span>),</span> <span>object_id</span><span>(</span><span>'&lt;TableName&gt;'</span><span>),</span> <span>NULL</span><span>,</span> <span>NULL</span> <span>,</span> <span>'DETAILED'</span><span>)</span> <span>i</span>
+<span>ORDER</span> <span>BY</span> <span>GHOST_RECORD_COUNT</span> <span>desc</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>The results of the query were:</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/ghost_records_original.png" alt="Total Ghost Records"></p>
+
+<p>After running the query, I performed another test for support, which involved:</p>
+
+<ul>
+<li>Taking a t-log backup</li>
+<li>Removing both trace flags 634 and 661 allowing the logs to increase</li>
+<li>Enabling the trace flags</li>
+<li>Taking another log backup</li>
+</ul>
+
+<p>Disabling the trace flags for just a few minutes resulted in the logs increasing rapidly, but in looking at the results from the query above, the total number of ghost records dropped.</p>
+
+<p>I decided to test further to see if disabling the trace flags would fully remove the <code>GHOST_RECORD_COUNT</code>. Each time both trace flags were disabled, the total ghost records would drop and the t-logs would explode in size, but we weren’t sure which trace flag we should keep enabled, so it was time for yet another test.</p>
+
+<p>I tried just disabling trace flag 661, which would allow the ghost record process to run. I wanted to see if the cleanup process would finish, and the logs would stop growing. Eventually, the total number of ghost records dropped to zero, and the logs seemed to stop growing. Problem partially solved.</p>
+
+<h3 id="oh-tuple-mover-what-are-you-doing">Oh, Tuple Mover what are you doing?<a href="#oh-tuple-mover-what-are-you-doing"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>Now that one of the trace flags was disabled, we had to deal with trace flag 634 which we did not have enabled on SQL Server 2017. I started querying the status of the rowgroups on each table and I found something that appeared odd. I ran the following query for a specific table in PRIZM:</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span><span>12
+</span><span>13
+</span><span>14
+</span><span>15
+</span><span>16
+</span><span>17
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>select</span>
+    <span>i</span><span>.</span><span>name</span><span>,</span>
+    <span>rg</span><span>.</span><span>object_id</span><span>,</span>
+    <span>rg</span><span>.</span><span>partition_number</span><span>,</span>
+    <span>rg</span><span>.</span><span>row_group_id</span><span>,</span>
+    <span>rg</span><span>.</span><span>delta_store_hobt_id</span><span>,</span>
+    <span>rg</span><span>.</span><span>state_desc</span><span>,</span>
+    <span>rg</span><span>.</span><span>total_rows</span><span>,</span>
+    <span>rg</span><span>.</span><span>deleted_rows</span><span>,</span>
+    <span>100</span><span>.</span><span>0</span><span>*</span><span>(</span><span>ISNULL</span><span>(</span><span>rg</span><span>.</span><span>deleted_rows</span><span>,</span><span>0</span><span>))</span><span>/</span><span>total_rows</span> <span>AS</span> <span>'Fragmentation'</span><span>,</span>
+    <span>rg</span><span>.</span><span>created_time</span><span>,</span>
+    <span>rg</span><span>.</span><span>closed_time</span>
+<span>from</span> <span>sys</span><span>.</span><span>dm_db_column_store_row_group_physical_stats</span> <span>rg</span>
+<span>inner</span> <span>join</span> <span>sys</span><span>.</span><span>indexes</span> <span>i</span>
+<span>on</span> <span>rg</span><span>.</span><span>object_id</span> <span>=</span> <span>i</span><span>.</span><span>object_id</span>
+<span>and</span> <span>rg</span><span>.</span><span>index_id</span> <span>=</span> <span>i</span><span>.</span><span>index_id</span>
+<span>order</span> <span>by</span> <span>i</span><span>.</span><span>name</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>The results showed a lot of rowgroups in a <code>TOMBSTONE</code> state:</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/rowgroups.png" alt="TOMBSTONES"></p>
+
+<p>This was curious to me because, in my limited experience with clustered columnstore, these older closed rowgroups in a <code>TOMBSTONE</code> state should have been cleaned up a long time ago, well before we upgraded to SQL Server 2019.</p>
+
+<p>On April 15th, I ran a test disabling trace flag 634. As soon as the trace flag was disabled, we experienced several things:</p>
+
+<ul>
+<li>transaction log growth</li>
+<li>a drop in the total number of <code>TOMBSTONE</code> rowgroups</li>
+<li>and, a dramatic increase in query timeouts on the server</li>
+</ul>
+
+<p>I left the trace flag disabled for several hours, all the while monitoring the 3 things above.</p>
+
+<p>About mid-day, I re-enabled the trace flag on the server. When I did that, the logs stopped growing, the total number of <code>TOMBSTONE</code> rowgroups stopping decreasing, and the flood of query timeouts we saw throughout the entire test slowed to a trickle. All of this information was passed along to support. They suggested that the <code>TUPLE_MOVER</code> doesn’t touch the <code>TOMBSTONE</code> rowgroups and that should only be handled by the ghost cleanup process, but that was not the behavior we were seeing. They requested another test, but this time they also wanted us to keep track of the <code>OPEN</code> and <code>CLOSED</code> rowgroups.</p>
+
+<p>The next day, it was time to try this again. Prior to disabling trace flag 634, we had the following rowgroup states in the PRIZM database:</p>
+
+<table>
+<thead>
+<tr>
+<th>Total</th>
+<th>State</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>581</td>
+<td>TOMBSTONE</td>
+</tr>
+
+<tr>
+<td>672</td>
+<td>OPEN</td>
+</tr>
+
+<tr>
+<td>167</td>
+<td>CLOSED</td>
+</tr>
+</tbody>
+</table>
+
+<p>I left the trace flag off for about 2 hours. While it was disabled, the transaction logs grew 136GB, and we also experienced significant <code>CXPACKET</code> waits across the server which resulted in a lot of queries timing out.</p>
+
+<p>The total number of <code>TOMBSTONE</code> row groups dropped during that time, eventually dropping to ~13 rowgroups. Once the <code>TOMBSTONE</code> totals bottomed out, the number of <code>CLOSED</code> rowgroups started to drop, and the total <code>TOMBSTONE</code> rowgroups started to increase again. When the test was complete, the rowgroup state totals were:</p>
+
+<table>
+<thead>
+<tr>
+<th>Total</th>
+<th>State</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td>48</td>
+<td>TOMBSTONE</td>
+</tr>
+
+<tr>
+<td>672</td>
+<td>OPEN</td>
+</tr>
+
+<tr>
+<td>131</td>
+<td>CLOSED</td>
+</tr>
+</tbody>
+</table>
+
+<p>I could only run the test for about 2 hours due to the amount of exceptions we saw. The curious thing is that when we enable the trace flag again, the number of queries that timeout on significantly decreases and the amount of <code>CXPACKET</code> waits we see also drops.</p>
+
+<h2 id="next-steps">Next Steps<a href="#next-steps"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>We’re still working with support on this, but we need to do one of a two choices:</p>
+
+<ol>
+<li><p>Disable trace flag 634 and let it just finish whatever it’s doing while monitoring the rowgroup states. Maybe it would eventually stop aggressively increasing the transaction logs, we’re not sure. We have not done this yet because having this backlog allows us to test other fixes, but it also just fixes the immediate issue, it doesn’t prevent us from hitting this issue again later if we need to perform another large delete in PRIZM.</p></li>
+
+<li><p>Manually rebuild the 11 tables that were never rebuilt. I tried to do this online several times now that we’re on SQL Server 2019, but it results in blocking of data being inserted to PRIZM, which is a shame since we were hoping to use that feature. In order for us to rebuild, we’ll need to disable any of the processes that use PRIZM first, then rebuild each table, so that will be done at a later date.</p></li>
+</ol>
+
+<p>We have some other issues in progress with SQL Server 2019, so I’m juggling those issues and this one. I’m hoping for a resolution soon on this, but before I forgot any of the details I wanted to share them.</p>
+
+<h3 id="final-thoughts">Final Thoughts<a href="#final-thoughts"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>We still have a lot of outstanding questions on this, the biggest one being, why did the upgrade to SQL Server 2019 trigger what appears to be a massive cleanup of these clustered columnstore indexes? We didn’t have either trace flag enabled on SQL Server 2017, so there shouldn’t have been anything preventing the clean-up of the ghost records or the <code>TOMBSTONE</code> rowgroups, so why did this happen immediately after we failed over to 2019? Is there something different about it being an in-place upgrade?</p>
+
+<p>If you have tested SQL Server 2019 and you use clustered columnstore indexes, have you seen this behavior? If so, what did you do to fix the issue? Did you just enable the trace flags and leave them on?</p>
+
+<p>And yes we were eventually able to failover the reporting cluster…I know you were worried. :)</p>
+
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
