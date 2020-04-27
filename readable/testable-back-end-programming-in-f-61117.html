@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Testable Back-end Programming in F# - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Testable Back-end Programming in F# - linksfor.dev(s)"/>
+    <meta property="article:author" content="Kasey Speakman"/>
+    <meta property="og:description" content="A way to write extremely testable code with side effects.  It has always been a challenge to write te..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://dev.to/kspeakman/testable-back-end-programming-in-f-41n5"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Testable Back-end Programming in F#</title>
+<div class="readable">
+        <h1>Testable Back-end Programming in F#</h1>
+            <div>by Kasey Speakman</div>
+            <div>Reading time: 18-23 minutes</div>
+        <div>Posted here: 27 Apr 2020</div>
+        <p><a href="https://dev.to/kspeakman/testable-back-end-programming-in-f-41n5">https://dev.to/kspeakman/testable-back-end-programming-in-f-41n5</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div data-article-id="204284" id="article-body">
+        <p><em><strong>A way to write extremely testable code with side effects.</strong></em></p>
+
+<p>It has always been a challenge to write testable back-end code. Deterministic code is stupidly testable and is the ultimate goal. But it seems most business workflows that execute on the back-end are dependent on the result of side effects. There has been many a framework and practice created to try to accomplish testability: dependency injection containers, mocking libraries, turning code inside-out with interfaces, etc. None of these have ever felt right to me because they require so much unrelated overhead or framework-dependency. And they are not idiomatic to functional programming.</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--caBI1clm--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/qmh6ibwcyxcmv3zdcupa.png"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--caBI1clm--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/qmh6ibwcyxcmv3zdcupa.png" alt="A person with a shovel standing over an unearthed treasure chest" loading="lazy"></a></p>
+
+<p>A few years ago, I stumbled upon the Model-View-Update pattern. It is a UI-specific pattern, but it quite powerfully separates decision from side effect. It made a drastic difference in our UIs. They became low overhead/risk to refactor and test -- something I had never experienced with any UI framework. Eventually I realized that its power is because it is a functional version of the  <a href="https://en.wikipedia.org/wiki/Interpreter_pattern">Interpreter pattern</a>. While my decision code has all the power and expressiveness of a full programming language, it can also run deterministically, and return decisions and side effects as simple data values. Those values then get interpreted and the results fed back into the decision code again.</p>
+
+<h2>
+  <a name="on-the-backend" href="#on-the-backend">
+  </a>
+  On the back-end
+</h2>
+
+<p>So I began to think about how to apply this pattern to the server-side to reap the same benefits. Of course MVU is tailored for UI, so some modifications were required.</p>
+
+<h3>
+  <a name="leaving-out-view" href="#leaving-out-view">
+  </a>
+  Leaving out View
+</h3>
+
+<p>UI programs display a visual to the user. For an API request there is no visual, so the View part of MVU can be dropped.</p>
+
+<h3>
+  <a name="changing-runtime-behavior" href="#changing-runtime-behavior">
+  </a>
+  Changing runtime behavior
+</h3>
+
+<p>UI programs are also designed to run indefinitely to accept spontaneous user input. On the back-end, there is no spontaneous user input while processing a request... it was all given up front in the request. Nor is it desirable to run the API request indefinitely. Instead, the back-end workflow should probably get a response back to the caller as soon as it can.</p>
+
+<p>Front-end MVU typically runs as 3 independent agents for processing messages, effects, and view changes. But the run-time behavior on the back-end should be more like a single task that runs to completion.</p>
+
+<h3>
+  <a name="adding-effects" href="#adding-effects">
+  </a>
+  Adding Effects
+</h3>
+
+<p>One part of the MVU pattern that seems to be conspicuously absent is side effects, which is a large part of the point to the back end. My original exposure to MVU was in Elm, a language that never allows you to implement your own side effects. If the provided effects were not enough, you had to write your own in Javascript and make a cumbersome interop call. That was not particularly great on the front-end, but it really is not going to cut it for the back-end.</p>
+
+<p>F# permits side effects in normal code, so I wanted to take advantage of that, but also designate a place where these should be performed. So I added a new type called <code>Effect</code>, then a corresponding function called <code>perform</code> which executes the Effect. Side effects are isolated into the perform function. The update function now deterministically returns Model and Effect list, making it testable. Put another way, you can test not only that the correct state change takes place but also that <em>the correct side effects are invoked</em>! No frameworks, no containers. Just provide values in and assert that output values equals expected values.</p>
+
+<blockquote>
+<p>I also use the perform / Effect pattern in my F#-based MVU front-ends. It only requires a couple of tiny adapter functions to integrate into the Elmish library.</p>
+</blockquote>
+
+<h3>
+  <a name="ump" href="#ump">
+  </a>
+  UMP
+</h3>
+
+<p>With these changes it might be more appropriate to call this pattern UMP: Update Model Perform.</p>
+
+
+<hr>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--UTq_otFU--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/0f5zr21hajcpzet6nm2r.png"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--UTq_otFU--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/0f5zr21hajcpzet6nm2r.png" alt="A person observing 3 components communicating" loading="lazy"></a></p>
+
+
+
+<p>The pattern looks and feels a lot like MVU. So if you use MVU on the front-end, it will feel natural to use on the back-end as well. Here is a basic example of decrementing a counter. First let's define the module and the types.</p>
+
+<h2>
+  <a name="types" href="#types">
+  </a>
+  Types
+</h2>
+
+<p>I usually name the module for the workflow it implements. Defining the types is where I spend some time thinking through the workflow. And looking at the types will often give you an idea of exactly what happens.<br>
+</p>
+
+<div><pre><code><span>module</span> <span>DecrementCounter</span>
+
+<span>open</span> <span>System</span>
+
+<span>type</span> <span>Effect</span> <span>=</span>
+    <span>|</span> <span>LoadState</span> <span>of</span> <span>counterId</span><span>:</span> <span>Guid</span>
+    <span>|</span> <span>SaveState</span> <span>of</span> <span>counterId</span><span>:</span> <span>Guid</span> <span>*</span> <span>count</span><span>:</span> <span>int</span>
+
+<span>type</span> <span>Msg</span> <span>=</span>
+    <span>|</span> <span>StateLoaded</span> <span>of</span> <span>Result</span><span>&lt;</span><span>int</span> <span>option</span><span>,</span> <span>string</span><span>&gt;</span>
+    <span>|</span> <span>StateSaved</span> <span>of</span> <span>Result</span><span>&lt;</span><span>unit</span><span>,</span> <span>string</span><span>&gt;</span>
+
+<span>type</span> <span>Model</span> <span>=</span>
+    <span>{</span>
+        <span>// request type defined elsewhere as</span>
+        <span>// { CounterId: Guid; Amount: int }</span>
+        <span>Request</span><span>:</span> <span>DecrementCounterRequest</span>
+    <span>}</span>
+</code></pre></div>
+
+
+<p>Nothing earth shattering here. The effects are stating that we are going to load and save state. The messages are stating that we will get the result of loading and saving, that those operations can fail (hence <code>Result</code>), and that load may not find the counter (hence <code>int option</code>). The failure cases will simply contain a string error.</p>
+<h2>
+  <a name="deterministic-functions" href="#deterministic-functions">
+  </a>
+  Deterministic functions
+</h2>
+
+<p>Next we define the two deterministic functions, <code>init</code> and <code>update</code>.</p>
+<h3>
+  <a name="-raw-init-endraw-" href="#-raw-init-endraw-">
+  </a>
+  <code>init</code>
+</h3>
+
+<p>Init really just gets things prepped and started for update. It converts an initial argument into the model that will be used by update. Usually I will do basic request validation in <code>init</code> if it is not done by some other part of the infrastructure.<br>
+</p>
+<div><pre><code><span>let</span> <span>init</span> <span>request</span> <span>=</span>
+    <span>Ok</span> <span>{</span> <span>Request</span> <span>=</span> <span>request</span> <span>}</span>
+    <span>,</span> <span>[</span><span>LoadState</span> <span>request</span><span>.</span><span>CounterId</span><span>]</span>
+</code></pre></div>
+
+<h3>
+  <a name="-raw-update-endraw-" href="#-raw-update-endraw-">
+  </a>
+  <code>update</code>
+</h3>
+
+<p>Update typically makes the big decisions.<br>
+</p>
+<div><pre><code><span>let</span> <span>update</span> <span>msg</span> <span>modelResult</span> <span>=</span>
+    <span>match</span> <span>modelResult</span> <span>with</span>
+    <span>|</span> <span>Error</span> <span>_</span> <span>-&gt;</span>
+        <span>modelResult</span><span>,</span> <span>[]</span> <span>// do nothing</span>
+    <span>|</span> <span>Ok</span> <span>model</span> <span>-&gt;</span>
+        <span>match</span> <span>msg</span> <span>with</span>
+        <span>|</span> <span>StateLoaded</span> <span>(</span><span>Error</span> <span>s</span><span>)</span> <span>-&gt;</span>
+            <span>Error</span> <span>(</span><span>"Load failed: "</span> <span>+</span> <span>s</span><span>),</span> <span>[]</span>
+        <span>|</span> <span>StateLoaded</span> <span>(</span><span>Ok</span> <span>None</span><span>)</span> <span>-&gt;</span>
+            <span>Error</span> <span>"Counter not found"</span><span>,</span> <span>[]</span>
+        <span>|</span> <span>StateLoaded</span> <span>(</span><span>Ok</span> <span>(</span><span>Some</span> <span>oldCount</span><span>))</span> <span>-&gt;</span>
+            <span>let</span> <span>count</span> <span>=</span> <span>oldCount</span> <span>-</span> <span>model</span><span>.</span><span>Request</span><span>.</span><span>Amount</span>
+            <span>if</span> <span>count</span> <span>&lt;</span> <span>0</span> <span>then</span>
+                <span>Error</span> <span>"Counter would go negative"</span><span>,</span> <span>[]</span>
+            <span>else</span>
+                <span>Ok</span> <span>{</span> <span>model</span> <span>with</span> <span>Count</span> <span>=</span> <span>count</span> <span>}</span>
+                <span>,</span> <span>[</span><span>SaveState</span> <span>(</span><span>model</span><span>.</span><span>Request</span><span>.</span><span>CounterId</span><span>,</span> <span>count</span><span>)]</span>
+        <span>|</span> <span>StateSaved</span> <span>(</span><span>Error</span> <span>s</span><span>)</span> <span>-&gt;</span>
+            <span>Error</span> <span>(</span><span>"Save failed: "</span> <span>+</span> <span>s</span><span>),</span> <span>[]</span>
+        <span>|</span> <span>StateSaved</span> <span>(</span><span>Ok</span> <span>()</span><span>)</span> <span>-&gt;</span>
+            <span>Ok</span> <span>model</span><span>,</span> <span>[]</span>
+</code></pre></div>
+
+
+<p>The first 4 lines of update are so common in workflow scenarios that I create a helper function and factor them out. So update would actually look like this.<br>
+</p>
+<div><pre><code><span>let</span> <span>update</span> <span>msg</span> <span>model</span> <span>=</span>
+    <span>match</span> <span>msg</span> <span>with</span>
+    <span>|</span> <span>StateLoaded</span> <span>(</span><span>Error</span> <span>s</span><span>)</span> <span>-&gt;</span>
+        <span>Error</span> <span>(</span><span>"Load failed: "</span> <span>+</span> <span>s</span><span>),</span> <span>[]</span>
+    <span>|</span> <span>StateLoaded</span> <span>(</span><span>Ok</span> <span>None</span><span>)</span> <span>-&gt;</span>
+        <span>Error</span> <span>"Counter not found"</span><span>,</span> <span>[]</span>
+    <span>|</span> <span>StateLoaded</span> <span>(</span><span>Ok</span> <span>(</span><span>Some</span> <span>oldCount</span><span>))</span> <span>-&gt;</span>
+        <span>let</span> <span>count</span> <span>=</span> <span>oldCount</span> <span>-</span> <span>model</span><span>.</span><span>Request</span><span>.</span><span>Amount</span>
+        <span>if</span> <span>count</span> <span>&lt;</span> <span>0</span> <span>then</span>
+            <span>Error</span> <span>"Counter would go negative"</span><span>,</span> <span>[]</span>
+        <span>else</span>
+            <span>Ok</span> <span>model</span>
+            <span>,</span> <span>[</span><span>SaveState</span> <span>(</span><span>model</span><span>.</span><span>Request</span><span>.</span><span>CounterId</span><span>,</span> <span>count</span><span>)]</span>
+    <span>|</span> <span>StateSaved</span> <span>(</span><span>Error</span> <span>s</span><span>)</span> <span>-&gt;</span>
+        <span>Error</span> <span>(</span><span>"Save failed: "</span> <span>+</span> <span>s</span><span>),</span> <span>[]</span>
+    <span>|</span> <span>StateSaved</span> <span>(</span><span>Ok</span> <span>()</span><span>)</span> <span>-&gt;</span>
+        <span>Ok</span> <span>model</span><span>,</span> <span>[]</span>
+</code></pre></div>
+
+
+<p>In this basic example, the model just keeps the original request. But in other scenarios, steps may return a changed model. Those changes are then used by subsequent steps.</p>
+<h2>
+  <a name="-raw-perform-endraw-" href="#-raw-perform-endraw-">
+  </a>
+  <code>perform</code>
+</h2>
+
+<p>Here begins the side-effect area of the code. I usually put <code>open</code>s here which are needed for side effects instead of placing them at the top. This makes it less likely to "accidentally" include side effects in init/update. I commonly create a Config type here that has configuration or resources which are needed by side effects. <code>perform</code> is where I do logging as well.<br>
+</p>
+<div><pre><code><span>// example open used only by side effects</span>
+<span>open</span> <span>Microsoft</span><span>.</span><span>Extensions</span><span>.</span><span>Logging</span>
+
+<span>type</span> <span>EffectConfig</span> <span>=</span>
+    <span>{</span>
+        <span>ExampleConfig</span><span>:</span> <span>string</span>
+        <span>// other items such as:</span>
+        <span>// connection strings</span>
+        <span>// endpoint URLs</span>
+        <span>// loggers</span>
+    <span>}</span>
+
+
+<span>let</span> <span>perform</span> <span>config</span> <span>effect</span> <span>=</span>
+    <span>match</span> <span>effect</span> <span>with</span>
+    <span>|</span> <span>LoadState</span> <span>counterId</span> <span>-&gt;</span>
+        <span>// simulate db call</span>
+        <span>async</span> <span>{</span>
+            <span>let</span> <span>rand</span> <span>=</span> <span>new</span> <span>Random</span><span>()</span>
+            <span>do</span><span>!</span> <span>Async</span><span>.</span><span>Sleep</span> <span>30</span>
+            <span>let</span> <span>count</span> <span>=</span> <span>rand</span><span>.</span><span>Next</span><span>(</span><span>0</span><span>,</span> <span>100</span><span>)</span>
+            <span>return</span> <span>StateLoaded</span> <span>(</span><span>Ok</span> <span>(</span><span>Some</span> <span>count</span><span>))</span>
+        <span>}</span>
+    <span>|</span> <span>SaveState</span> <span>(</span><span>counterId</span><span>,</span> <span>count</span><span>)</span> <span>-&gt;</span>
+        <span>async</span> <span>{</span>
+            <span>do</span><span>!</span> <span>Async</span><span>.</span><span>Sleep</span> <span>30</span>
+            <span>return</span> <span>StateSaved</span> <span>(</span><span>Ok</span> <span>()</span><span>)</span>
+        <span>}</span>
+</code></pre></div>
+
+
+<p>A couple of notes. This simple implementation will not error. But actual code might have try/catch, log exceptions, etc. Anything you might normally need to do when you call a side effect.</p>
+
+<p>I usually find that my API side effects are pretty common between all my workflows. So I will define a common Effects module and call its effect implementation, instead of implementing the effect inside the perform function. I also try to keep effects very focused to doing one single thing, with all the config and data needed as parameters, so that they can have the possibility of being reused. In the end, <code>perform</code> ends up looking more like this.<br>
+</p>
+<div><pre><code><span>let</span> <span>perform</span> <span>fxConfig</span> <span>effect</span> <span>=</span>
+    <span>match</span> <span>effect</span> <span>with</span>
+    <span>|</span> <span>LoadState</span> <span>counterId</span> <span>-&gt;</span>
+        <span>let</span> <span>query</span> <span>=</span> <span>Query</span><span>.</span><span>counterState</span> <span>counterId</span>
+        <span>Fx</span><span>.</span><span>Sql</span><span>.</span><span>readFirst</span><span>&lt;</span><span>int</span><span>&gt;</span> <span>fxConfig</span> <span>query</span> <span>StateLoaded</span>
+    <span>|</span> <span>SaveState</span> <span>(</span><span>counterId</span><span>,</span> <span>counter</span><span>)</span> <span>-&gt;</span>
+        <span>let</span> <span>stmt</span> <span>=</span> <span>Stmt</span><span>.</span><span>saveCounter</span> <span>counterId</span> <span>counter</span>
+        <span>Fx</span><span>.</span><span>Sql</span><span>.</span><span>write</span> <span>fxConfig</span> <span>stmt</span> <span>StateSaved</span>
+</code></pre></div>
+
+
+<blockquote>
+<p>Please forgive the cutesy abbreviation of Effects to Fx. The pragmatism of shortening the name won out.</p>
+</blockquote>
+
+<p>In the case where I centralize the effect implementations under an Fx namespace, I also use a common config. So there is no need to define a workflow-specific config. The Fx modules also know that the output will need to be tagged with a Msg case. So it accepts that as a parameter.</p>
+<h2>
+  <a name="final-pieces" href="#final-pieces">
+  </a>
+  Final pieces
+</h2>
+
+<p>Sometimes you will want the final return value of the workflow to be different from the Model that you used during the workflow steps. So there is an <code>output</code> function that will convert the model into the desired output value. The last steps are to create an <code>output</code> function. And then wrap everything up into a runnable UMP program.<br>
+</p>
+<div><pre><code><span>// Return Ok () or Error string</span>
+<span>let</span> <span>output</span> <span>result</span> <span>=</span>
+    <span>match</span> <span>result</span> <span>with</span>
+    <span>|</span> <span>Ok</span> <span>model</span> <span>-&gt;</span> <span>Ok</span> <span>()</span>
+    <span>|</span> <span>Error</span> <span>s</span> <span>-&gt;</span> <span>Error</span> <span>s</span>
+
+<span>// more concisely:</span>
+<span>// let output = Result.map ignore</span>
+
+<span>let</span> <span>toUmp</span> <span>config</span> <span>=</span>
+    <span>{</span>
+        <span>Init</span> <span>=</span> <span>init</span>
+        <span>Update</span> <span>=</span> <span>Result</span><span>.</span><span>bindUpdate</span> <span>update</span>
+        <span>Perform</span> <span>=</span> <span>perform</span> <span>config</span>
+        <span>Output</span> <span>=</span> <span>output</span>
+    <span>}</span>
+</code></pre></div>
+
+
+<p>If you want to return the Model as-is once the workflow completes, you can simply set <code>Output = id</code>. The F# built-in <code>id</code> function returns the same thing it is given.</p>
+
+<blockquote>
+<p><code>Result.bindUpdate</code> is an extension function that I define somewhere in my project. It is that helper I mentioned that simplifies the update statement to remove those first 4 lines.<br>
+</p>
+</blockquote>
+<div><pre><code><span>module</span> <span>Result</span> <span>=</span>
+    <span>let</span> <span>bindUpdate</span> <span>updatef</span> <span>msg</span> <span>result</span> <span>=</span>
+        <span>match</span> <span>result</span> <span>with</span>
+        <span>|</span> <span>Ok</span> <span>model</span> <span>-&gt;</span> <span>updatef</span> <span>msg</span> <span>model</span>
+        <span>|</span> <span>Error</span> <span>err</span> <span>-&gt;</span> <span>Error</span> <span>err</span><span>,</span> <span>[]</span>
+</code></pre></div>
+
+
+
+<p>You will want to provide the necessary config for effects, but aside from that you just run it with the initial argument.<br>
+</p>
+<div><pre><code>    <span>let</span> <span>program</span> <span>=</span>
+        <span>DecrementCounter</span><span>.</span><span>toUmp</span> <span>{</span> <span>ExampleConfig</span> <span>=</span> <span>"foo"</span> <span>}</span>
+
+    <span>...</span>
+
+    <span>async</span> <span>{</span>
+        <span>let</span> <span>request</span> <span>:</span> <span>DecrementCounterRequest</span> <span>=</span> <span>...</span>
+        <span>let</span><span>!</span> <span>result</span> <span>=</span> <span>Ump</span><span>.</span><span>run</span> <span>program</span> <span>request</span>
+        <span>...</span>
+    <span>}</span>
+<span>}</span>
+</code></pre></div>
+
+
+<p>Sometimes it is convenient to hide the UMP details. So I turn it into a normal async-returning function like this:<br>
+</p>
+<div><pre><code>    <span>// Request -&gt; Async&lt;Result&lt;unit, string&gt;&gt;</span>
+    <span>let</span> <span>decrementCounter</span> <span>request</span> <span>=</span>
+        <span>let</span> <span>prog</span> <span>=</span> <span>DecrementCounter</span><span>.</span><span>toUmp</span> <span>{</span> <span>ExampleConfig</span> <span>=</span> <span>"foo"</span> <span>}</span>
+        <span>Ump</span><span>.</span><span>run</span> <span>prog</span> <span>request</span>
+
+    <span>async</span> <span>{</span>
+        <span>// this code knows nothing of UMP</span>
+        <span>// it is just executing a side effect</span>
+        <span>let</span><span>!</span> <span>result</span> <span>=</span> <span>decrementCounter</span> <span>request</span>
+    <span>}</span>
+</code></pre></div>
+
+
+
+<p>Probably the most common way you want to test is providing the initial argument and all the Msgs (the results of side effects) that have occurred. Then you would assert that the return value matches what you expected.<br>
+</p>
+<div><pre><code>    <span>// test data</span>
+    <span>let</span> <span>counterId</span> <span>=</span> <span>new</span> <span>Guid</span><span>(</span><span>"9E6F6552-DEA9-4D56-AEAB-08EE5EBD54D3"</span><span>)</span>
+    <span>let</span> <span>request</span> <span>=</span>
+        <span>{</span>
+            <span>CounterId</span> <span>=</span> <span>counterId</span>
+            <span>Amount</span> <span>=</span> <span>12</span>
+        <span>}</span>
+    <span>let</span> <span>model</span> <span>=</span> <span>{</span> <span>Request</span> <span>=</span> <span>request</span> <span>}</span>
+
+    <span>[&lt;</span><span>TestMethod</span><span>&gt;]</span>
+    <span>member</span> <span>__.</span><span>``DecrementCounter - loads state``</span> <span>()</span> <span>=</span>
+        <span>let</span> <span>init</span><span>,</span> <span>msgs</span> <span>=</span> <span>request</span><span>,</span> <span>[]</span>
+        <span>let</span> <span>expected</span> <span>=</span> <span>Ok</span> <span>model</span><span>,</span> <span>[</span><span>LoadState</span> <span>counterId</span><span>]</span>
+        <span>expected</span> <span>|&gt;</span> <span>equals</span> <span>(</span><span>test</span> <span>init</span> <span>msgs</span><span>)</span>
+</code></pre></div>
+
+
+<p>It is not hard to see how you can run a lot of different tests at once by parameterizing the input and expected output.<br>
+</p>
+<div><pre><code>    <span>let</span> <span>tests</span> <span>=</span>
+        <span>[</span>   <span>// name, init, msgs, expected model, expected effects</span>
+            <span>(</span> <span>"loads state"</span>
+            <span>,</span> <span>request</span>
+            <span>,</span> <span>[]</span>
+            <span>,</span> <span>Ok</span> <span>model</span>
+            <span>,</span> <span>[</span><span>LoadState</span> <span>counterId</span><span>]</span>
+            <span>)</span>
+            <span>(</span> <span>"saves state"</span>
+            <span>,</span> <span>request</span>
+            <span>,</span> <span>[</span><span>StateLoaded</span> <span>(</span><span>Ok</span> <span>(</span><span>Some</span> <span>13</span><span>))]</span>
+            <span>,</span> <span>Ok</span> <span>model</span>
+            <span>,</span> <span>[</span><span>SaveState</span> <span>(</span><span>counterId</span><span>,</span> <span>1</span><span>)]</span>
+            <span>)</span>
+        <span>]</span>
+
+    <span>[&lt;</span><span>TestMethod</span><span>&gt;]</span>
+    <span>member</span> <span>__.</span><span>``DecrementCounter tests``</span> <span>()</span> <span>=</span>
+        <span>for</span> <span>(</span><span>name</span><span>,</span> <span>init</span><span>,</span> <span>msgs</span><span>,</span> <span>model</span><span>,</span> <span>effects</span><span>)</span> <span>in</span> <span>tests</span> <span>do</span>
+            <span>printfn</span> <span>"%s"</span> <span>name</span>
+            <span>let</span> <span>expected</span> <span>=</span> <span>model</span><span>,</span> <span>effects</span>
+            <span>expected</span> <span>|&gt;</span> <span>equals</span> <span>(</span><span>test</span> <span>init</span> <span>msgs</span><span>)</span>
+</code></pre></div>
+
+
+<p>You can also manually test one specific step by calling the update function directly.<br>
+</p>
+<div><pre><code>    <span>[&lt;</span><span>TestMethod</span><span>&gt;]</span>
+    <span>member</span> <span>__.</span><span>``DecrementCounter - prevent negative``</span> <span>()</span> <span>=</span>
+        <span>let</span> <span>msg</span> <span>=</span> <span>StateLoaded</span> <span>(</span><span>Ok</span> <span>(</span><span>Some</span> <span>0</span><span>))</span>
+        <span>let</span> <span>expected</span> <span>=</span> <span>Error</span> <span>"Counter would go negative"</span><span>,</span> <span>[]</span>
+        <span>expected</span> <span>|&gt;</span> <span>equals</span> <span>(</span><span>DecrementCounter</span><span>.</span><span>update</span> <span>msg</span> <span>model</span><span>)</span>
+</code></pre></div>
+
+
+
+<p>UMP is only valuable when you need to mix decisions and side effects. Further, it should be used for important business code that needs its decisions validated for correctness. If your code is does not require this, you pay the overhead cost of creating all the pattern's types and functions for no advantage. Below I have documented some indications of inappropriate usage that I found the hard way.</p>
+<h2>
+  <a name="passthrough-effect" href="#passthrough-effect">
+  </a>
+  Pass-through Effect
+</h2>
+
+<p>When you find yourself making an Effect that passes a value through directly to a Msg without performing any side effect, then it is likely that have tried to use an Effect to represent a logical (non-side-effect) decision step.</p>
+
+<p>This pattern is not designed to divide logical decision steps. It is designed to divide into steps around side effects. You can use normal <code>let</code> statements or pipelining with <code>|&gt;</code> to compose multiple logical steps. It is perfectly valid for one of the update cases to be more lines of code than other steps. If you do want to keep your update cases small for clarity, you can place your logic functions into a separate module and call them from <code>init</code> or <code>update</code>.<br>
+</p>
+<div><pre><code><span>module</span> <span>Logic</span> <span>=</span>
+    <span>let</span> <span>validate</span> <span>data</span> <span>=</span>
+        <span>...</span>
+
+
+<span>let</span> <span>init</span> <span>request</span> <span>=</span>
+    <span>Logic</span><span>.</span><span>validate</span> <span>request</span>
+    <span>...</span>
+</code></pre></div>
+
+<h2>
+  <a name="never-changing-the-model" href="#never-changing-the-model">
+  </a>
+  Never changing the model
+</h2>
+
+<p>When you find that your <code>update</code> code never updates the model, or it only updates the model to store values needed by later effects, this might indicate that the code is purely effectful. If it is not business critical, it is probably better to write a normal function that invokes side effects. Below is an example that could be written as UMP, but it is not solving a business problem only a technical one. So the overhead outweighs the benefit.<br>
+</p>
+<div><pre><code><span>module</span> <span>Sql</span> <span>=</span>
+    <span>...</span>
+
+    <span>let</span> <span>read</span><span>&lt;</span><span>'</span><span>T</span><span>&gt;</span> <span>(</span><span>config</span><span>:</span> <span>SqlConfig</span><span>)</span> <span>(</span><span>op</span><span>:</span> <span>SqlOperation</span><span>)</span> <span>=</span>
+        <span>async</span> <span>{</span>
+            <span>try</span>
+                <span>let</span> <span>cmd</span> <span>=</span> <span>SqlOperation</span><span>.</span><span>toCommandDefinition</span> <span>config</span> <span>op</span>
+                <span>use</span> <span>conn</span> <span>=</span> <span>new</span> <span>NpgsqlConnection</span><span>(</span><span>config</span><span>.</span><span>ConnectString</span><span>)</span>
+                <span>let</span><span>!</span> <span>resultSeq</span> <span>=</span> <span>conn</span><span>.</span><span>QueryAsync</span><span>&lt;</span><span>'</span><span>T</span><span>&gt;(</span><span>cmd</span><span>)</span> <span>|&gt;</span> <span>Async</span><span>.</span><span>AwaitTask</span>
+                <span>return</span> <span>Ok</span> <span>(</span><span>List</span><span>.</span><span>ofSeq</span> <span>resultSeq</span><span>)</span>
+            <span>with</span> <span>ex</span> <span>-&gt;</span>
+                <span>return</span> <span>Error</span> <span>ex</span>
+        <span>}</span>
+</code></pre></div>
+
+
+
+<p>Here is the full implementation of Ump functions with comments. It includes a function to create a test and the <code>Result.bindUpdate</code> helper.<br>
+</p>
+<div><pre><code><span>namespace</span> <span>Ump</span>
+
+<span>type</span> <span>Ump</span><span>&lt;</span><span>'</span><span>initArg</span><span>,</span> <span>'</span><span>Model</span><span>,</span> <span>'</span><span>Effect</span><span>,</span> <span>'</span><span>Msg</span><span>,</span> <span>'</span><span>Output</span><span>&gt;</span> <span>=</span>
+    <span>{</span>
+        <span>Init</span> <span>:</span> <span>'</span><span>initArg</span> <span>-&gt;</span> <span>'</span><span>Model</span> <span>*</span> <span>'</span><span>Effect</span> <span>list</span>
+        <span>Update</span> <span>:</span> <span>'</span><span>Msg</span> <span>-&gt;</span> <span>'</span><span>Model</span> <span>-&gt;</span> <span>'</span><span>Model</span> <span>*</span> <span>'</span><span>Effect</span> <span>list</span>
+        <span>Perform</span> <span>:</span> <span>'</span><span>Effect</span> <span>-&gt;</span> <span>Async</span><span>&lt;</span><span>'</span><span>Msg</span><span>&gt;</span>
+        <span>Output</span> <span>:</span> <span>'</span><span>Model</span> <span>-&gt;</span> <span>'</span><span>Output</span>
+    <span>}</span>
+
+
+<span>module</span> <span>Result</span> <span>=</span>
+
+    <span>let</span> <span>bindUpdate</span> <span>updatef</span> <span>msg</span> <span>result</span> <span>=</span>
+        <span>match</span> <span>result</span> <span>with</span>
+        <span>|</span> <span>Ok</span> <span>model</span> <span>-&gt;</span>
+            <span>updatef</span> <span>msg</span> <span>model</span>
+        <span>|</span> <span>Error</span> <span>err</span> <span>-&gt;</span>
+            <span>Error</span> <span>err</span><span>,</span> <span>[]</span>
+
+
+<span>module</span> <span>Ump</span> <span>=</span>
+
+    <span>[&lt;</span><span>AutoOpen</span><span>&gt;]</span>
+    <span>module</span> <span>Internal</span> <span>=</span>
+
+        <span>[&lt;</span><span>Struct</span><span>&gt;]</span>
+        <span>// struct - per iteration: 1 stack allocation + 1 frame copy</span>
+        <span>type</span> <span>ProgramState</span><span>&lt;</span><span>'</span><span>Model</span><span>,</span> <span>'</span><span>Effect</span><span>,</span> <span>'</span><span>Msg</span><span>&gt;</span> <span>=</span>
+            <span>{</span>
+                <span>Model</span> <span>:</span> <span>'</span><span>Model</span>
+                <span>Effects</span> <span>:</span> <span>'</span><span>Effect</span> <span>list</span>
+                <span>Msgs</span> <span>:</span> <span>'</span><span>Msg</span> <span>list</span>
+            <span>}</span>
+
+
+        <span>// Msgs are processed before Effects.</span>
+        <span>// Msgs are run sequentially.</span>
+        <span>// Effects are run in parallel.</span>
+        <span>// In practice, Program.Update will return</span>
+        <span>//  one Effect at a time when it needs sequential effects.</span>
+        <span>let</span> <span>rec</span> <span>runLoop</span> <span>program</span> <span>state</span> <span>=</span>
+            <span>match</span> <span>state</span><span>.</span><span>Effects</span><span>,</span> <span>state</span><span>.</span><span>Msgs</span> <span>with</span>
+            <span>|</span> <span>[]</span><span>,</span> <span>[]</span> <span>-&gt;</span>
+                <span>async</span><span>.</span><span>Return</span> <span>(</span><span>program</span><span>.</span><span>Output</span> <span>state</span><span>.</span><span>Model</span><span>)</span>
+            <span>|</span> <span>_,</span> <span>msg</span> <span>::</span> <span>nMsgs</span> <span>-&gt;</span>
+                <span>let</span> <span>(</span><span>nModel</span><span>,</span> <span>effects</span><span>)</span> <span>=</span> <span>program</span><span>.</span><span>Update</span> <span>msg</span> <span>state</span><span>.</span><span>Model</span>
+                <span>let</span> <span>nState</span> <span>=</span>
+                    <span>{</span>
+                        <span>Model</span> <span>=</span> <span>nModel</span>
+                        <span>Effects</span> <span>=</span> <span>List</span><span>.</span><span>append</span> <span>state</span><span>.</span><span>Effects</span> <span>effects</span>
+                        <span>Msgs</span> <span>=</span> <span>nMsgs</span>
+                    <span>}</span>
+                <span>runLoop</span> <span>program</span> <span>nState</span>
+            <span>|</span> <span>_,</span> <span>[]</span> <span>-&gt;</span>
+                <span>async</span> <span>{</span>
+                    <span>let</span> <span>effectsAsync</span> <span>=</span> <span>List</span><span>.</span><span>map</span> <span>program</span><span>.</span><span>Perform</span> <span>state</span><span>.</span><span>Effects</span>
+                    <span>let</span><span>!</span> <span>nMsgsArr</span> <span>=</span> <span>Async</span><span>.</span><span>Parallel</span> <span>effectsAsync</span>
+                    <span>let</span> <span>nState</span> <span>=</span>
+                        <span>{</span>
+                            <span>Model</span> <span>=</span> <span>state</span><span>.</span><span>Model</span>
+                            <span>Effects</span> <span>=</span> <span>[]</span>
+                            <span>Msgs</span> <span>=</span> <span>List</span><span>.</span><span>ofArray</span> <span>nMsgsArr</span>
+                        <span>}</span>
+                    <span>return</span><span>!</span> <span>runLoop</span> <span>program</span> <span>nState</span>
+                <span>}</span>
+
+
+    <span>/// Runs a program using the provided initial argument.</span>
+    <span>/// The returned Model is the final state of the Model when the program exited.</span>
+    <span>/// Infinite loops are possible when Update generates Effects on every iteration.</span>
+    <span>/// This allows the program to support interactive applications, for example.</span>
+    <span>let</span> <span>run</span> <span>(</span><span>program</span><span>:</span> <span>Ump</span><span>&lt;</span><span>'</span><span>initArg</span><span>,</span> <span>'</span><span>Model</span><span>,</span> <span>'</span><span>Effect</span><span>,</span> <span>'</span><span>Msg</span><span>,</span> <span>'</span><span>Output</span><span>&gt;)</span> <span>(</span><span>initArg</span><span>:</span> <span>'</span><span>initArg</span><span>)</span> <span>=</span>
+        <span>let</span> <span>(</span><span>model</span><span>,</span> <span>effects</span><span>)</span> <span>=</span> <span>program</span><span>.</span><span>Init</span> <span>initArg</span>
+        <span>let</span> <span>state</span> <span>=</span>
+            <span>{</span>
+                <span>Model</span> <span>=</span> <span>model</span>
+                <span>Msgs</span> <span>=</span> <span>[]</span>
+                <span>Effects</span> <span>=</span> <span>effects</span>
+            <span>}</span>
+        <span>runLoop</span> <span>program</span> <span>state</span>
+
+
+    <span>/// Creates a test function from the init and update functions.</span>
+    <span>/// The returned function takes initArg and msgs and returns</span>
+    <span>/// a model and effect list that you can test against expected values.</span>
+    <span>let</span> <span>createTest</span> <span>init</span> <span>update</span> <span>=</span>
+        <span>let</span> <span>test</span> <span>initArg</span> <span>msgs</span> <span>=</span>
+            <span>let</span> <span>init</span> <span>=</span> <span>init</span> <span>initArg</span>
+            <span>// ignore previous effects</span>
+            <span>let</span> <span>update</span> <span>(</span><span>model</span><span>,</span> <span>_)</span> <span>msg</span> <span>=</span>
+                <span>update</span> <span>msg</span> <span>model</span>
+            <span>msgs</span>
+            <span>|&gt;</span> <span>List</span><span>.</span><span>fold</span> <span>update</span> <span>init</span>
+        <span>test</span>
+</code></pre></div>
+
+
+<p>Here is a repo with this DecrementCounter example and tests. There is also a more advanced example of a rate-limited Emailer.</p>
+
+
+
+
+
+
+
+
+<p>This pattern is not meant to be used everywhere. It shines with effectful code that you want rigorously test. In other words, side-effect-infused workflows that are important to your business.</p>
+
+<p>And let's be honest, this pattern has boilerplate in how it is organized: Msg, Effect, Model, init, update, perform. It will not suit everyone's taste. But that same organization pattern also provides a testable structure. It happens to be quite nice if your team already uses MVU on the front-end -- it is much easier for the team to be cross-functional. Even if not, I think with some practice you will find that it makes just about any workflow quite testable.</p>
+
+<p>/∞</p>
+
+<p><em>Images courtesy of <a href="https://undraw.co/">Undraw</a>.</em></p>
+
+
+      </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
