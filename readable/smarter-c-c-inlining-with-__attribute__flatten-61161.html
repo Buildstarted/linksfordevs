@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Smarter C/C&#x2B;&#x2B; inlining with __attribute__((flatten)) - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Smarter C/C&#x2B;&#x2B; inlining with __attribute__((flatten)) - linksfor.dev(s)"/>
+    <meta property="article:author" content="Andreas Kling"/>
+    <meta property="og:description" content="This post describes a compile-time technique for getting the benefits of aggressive inlining in hot code while protecting cool code from its downsides.&#xA;&#xA;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://awesomekling.github.io/Smarter-C&#x2B;&#x2B;-inlining-with-attribute-flatten/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Smarter C/C&#x2B;&#x2B; inlining with __attribute__((flatten))</title>
+<div class="readable">
+        <h1>Smarter C/C&#x2B;&#x2B; inlining with __attribute__((flatten))</h1>
+            <div>by Andreas Kling</div>
+            <div>Reading time: 3-4 minutes</div>
+        <div>Posted here: 28 Apr 2020</div>
+        <p><a href="https://awesomekling.github.io/Smarter-C&#x2B;&#x2B;-inlining-with-attribute-flatten/">https://awesomekling.github.io/Smarter-C&#x2B;&#x2B;-inlining-with-attribute-flatten/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+    <p>This post describes a compile-time technique for getting the benefits of aggressive inlining in hot code while protecting cool code from its downsides.</p>
+
+<hr>
+
+<p>Hello friends!</p>
+
+<p>A common technique for improving performance of hot code in C/C++ is to inline the hottest functions called. While it often helps make things faster, there are some downsides to inlining. Let’s quickly review the pros &amp; cons:</p>
+
+<p><strong>Pros of inlining:</strong></p>
+
+<ul>
+  <li>Removes function call overhead (yay!)</li>
+  <li>May reveal additional optimization opportunities (sometimes yay!)</li>
+</ul>
+
+<p><strong>Cons of inlining:</strong></p>
+
+<ul>
+  <li>Increases program size (boo!)</li>
+  <li>May reduce cache locality (sometimes boo!)</li>
+  <li>May increase build times (boo!)</li>
+</ul>
+
+<p>When compiling with optimizations, the compiler usually makes pretty reasonable choices about which functions to inline. It uses a combination of heuristics, with function size being the most important one AFAIK.</p>
+
+<h2 id="manual-inlining-with-__attribute__always_inline">Manual inlining with <code>__attribute__((always_inline))</code></h2>
+
+<p>However, sometimes <em>you</em> know some code is <strong>hot</strong> and the compiler has no idea. This is usually when <code>__attribute__((always_inline))</code> comes in. If you add this attribute to a function, that function will now be inlined wherever it is called, even when the compiler would normally have dismissed it as too large or otherwise unsuitable.</p>
+
+<p>Here’s a contrived example of a very common scenario in larger codebases:</p>
+
+<div><div><pre><code><span>__attribute__</span><span>((</span><span>always_inline</span><span>))</span> <span>inline</span> <span>void</span> <span>do_thing</span><span>(</span><span>int</span> <span>input</span><span>)</span>
+<span>{</span>
+    <span>// this code is always inlined at the call site</span>
+<span>}</span>
+
+<span>void</span> <span>hot_code</span><span>()</span>
+<span>{</span>
+    <span>// the program spends &gt;80% of its runtime in this function</span>
+    <span>while</span> <span>(</span><span>condition</span><span>)</span> <span>{</span>
+        <span>...</span>
+        <span>do_thing</span><span>(</span><span>y</span><span>);</span>
+        <span>...</span>
+    <span>}</span>
+<span>}</span>
+</code></pre></div></div>
+
+<p>The above is all well and good, but what happens when <code>do_thing()</code> is a popular function that gets called a lot?</p>
+
+<div><div><pre><code><span>void</span> <span>cool_code</span><span>()</span>
+<span>{</span>
+    <span>// the program spends &lt;5% of its runtime in this function</span>
+    <span>...</span>
+    <span>do_thing</span><span>(</span><span>a</span><span>);</span>
+    <span>do_thing</span><span>(</span><span>b</span><span>);</span>
+    <span>do_thing</span><span>(</span><span>c</span><span>);</span>
+<span>}</span>
+</code></pre></div></div>
+
+<p>Now the <code>cool_code()</code> function gets three copies of <code>do_thing()</code> inlined into it, invoking all of the cons from the list we made above (larger program size, worse cache locality, longer build time.)</p>
+
+<h2 id="targeted-flattening-instead-of-global-inlining">Targeted flattening instead of global inlining</h2>
+
+<p>Now for the trick! Both GCC and Clang support <code>__attribute__((flatten))</code>. Putting it on a function causes all of its callees to be inlined into it. It’s dead simple.</p>
+
+<div><div><pre><code><span>void</span> <span>do_thing</span><span>(</span><span>int</span> <span>input</span><span>)</span>
+<span>{</span>
+    <span>// this code is not always inlined at the call site</span>
+<span>}</span>
+
+<span>__attribute__</span><span>((</span><span>flatten</span><span>))</span> <span>void</span> <span>hot_code</span><span>()</span>
+<span>{</span>
+    <span>// the program spends &gt;80% of its runtime in this function</span>
+    <span>while</span> <span>(</span><span>condition</span><span>)</span> <span>{</span>
+        <span>call_something</span><span>();</span>   <span>// inlined!</span>
+        <span>do_thing</span><span>(</span><span>y</span><span>);</span>        <span>// inlined!</span>
+        <span>other_thing</span><span>();</span>      <span>// also inlined!</span>
+    <span>}</span>
+<span>}</span>
+
+<span>void</span> <span>cool_code</span><span>()</span>
+<span>{</span>
+    <span>// the program spends &lt;5% of its runtime in this function</span>
+    <span>...</span>
+    <span>do_thing</span><span>(</span><span>a</span><span>);</span>            <span>// not inlined!</span>
+    <span>do_thing</span><span>(</span><span>b</span><span>);</span>            <span>// not inlined!</span>
+    <span>do_thing</span><span>(</span><span>c</span><span>);</span>            <span>// guess!</span>
+<span>}</span>
+</code></pre></div></div>
+
+<p><em>Note: Functions with <code>__attribute__((noinline))</code> will not be inlined. The same goes for functions where the compiler can’t see the body.</em></p>
+
+<h2 id="in-conclusion">In conclusion</h2>
+
+<p><code>__attribute__((flatten))</code> lets you opt in to the pros of aggressive inlining on a per-function basis, while protecting the rest of your program from the cons!</p>
+
+<p>Until next time! :^)</p>
+
+  </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
