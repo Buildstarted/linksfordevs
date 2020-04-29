@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+C# interop with C/C&#x2B;&#x2B; and Rust in WebAssembly - Uno Platform - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="C# interop with C/C&#x2B;&#x2B; and Rust in WebAssembly - Uno Platform - linksfor.dev(s)"/>
+    <meta property="og:description" content="Having the ability to call code written in other languages is increasingly important, as there are many very useful libraries that are getting ported over to WebAssembly. In .NET, the common defined way for doing interop is P/Invoke and DllImport, and .NET for WebAssembly has support for it in the form of static linking of LLVM Bitcode object files. In this article, I will walk through how to call some simple C/C&#x2B;&#x2B; and Rust code from C# in a WebAssembly app. In the general .NET sense, P/Invoke was built to perform dynamic linking with Windows PE Dlls, but has been extended in mono to allow for static linking. This technique is also used by mono on iOS to call native code, and allows for a single executable package to contain the code to execute the application. This is what is used for the demos in this article. Setting up the C# WebAssembly project First let&#x2019;s create create a .NET WebAssembly app, using the Uno WebAssembly Bootstrapper. Note that macOS is not yet supported for the static linking scenario, and that on Windows 10 you&#x2019;ll need to have WSL installed. Create a .NET Standard 2.0 Library in Visual Studio for Windows &#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://platform.uno/blog/c-interop-with-c-c-and-rust-in-webassembly/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - C# interop with C/C&#x2B;&#x2B; and Rust in WebAssembly - Uno Platform</title>
+<div class="readable">
+        <h1>C# interop with C/C&#x2B;&#x2B; and Rust in WebAssembly - Uno Platform</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 29 Apr 2020</div>
+        <p><a href="https://platform.uno/blog/c-interop-with-c-c-and-rust-in-webassembly/">https://platform.uno/blog/c-interop-with-c-c-and-rust-in-webassembly/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><!-- Google Tag Manager (noscript) -->
+
+<!-- End Google Tag Manager (noscript) -->
+
+
+	<div id="thz-body-box">
+    	<div id="thz-body-container">
+        	            <div id="thz-wrapper">
+                                <div>
+                                <header id="header_holder" itemscope="itemscope" itemtype="https://schema.org/WPHeader">
+		
+	
+</header>                                				                                                                <div id="thz-main-wrap"><div><div><div id="holder">
+		<main id="contentblock" itemprop="mainContentOfPage">
+		<div>
+			<div>
+            							<article id="post-2443">
+    <div>
+        <div>
+			                        <div>
+                <h2><a href="https://platform.uno/blog/c-interop-with-c-c-and-rust-in-webassembly/" rel="bookmark">C# interop with C/C++ and Rust in WebAssembly</a></h2>                <div>
+                    <p><img src="https://s3.amazonaws.com/uno-website-assets/wp-content/uploads/2020/04/14162920/Uno_banners_Header_codes-1200x311.png" alt="" width="1200" height="311"></p>
+<div itemprop="articleBody">
+<p>Having the ability to call code written in other languages is increasingly important, as there are many very useful libraries that are getting ported over to WebAssembly. In .NET, the common defined way for doing interop is <a href="https://docs.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke">P/Invoke and DllImport</a>, and .NET for WebAssembly has support for it in the form of static linking of LLVM Bitcode object files.</p>
+<p>In this article, I will walk through how to call some simple C/C++ and Rust code from C# in a WebAssembly app.</p>
+
+<p>In the general .NET sense, P/Invoke was built to perform dynamic linking with Windows PE Dlls, but has been extended in mono to allow for static linking. This technique is also <a href="https://github.com/mono/SkiaSharp/blob/d16fd524b0e4c8715fc89abaca3ccfd6fb103b93/binding/Binding/SkiaApi.cs#L10">used by mono on iOS to call native code</a>, and allows for a single executable package to contain the code to execute the application. This is what is used for the demos in this article.</p>
+<h2 id="setting-up-the-c-webassembly-project">Setting up the C# WebAssembly project</h2>
+<p>First let’s create create a .NET WebAssembly app, using the <a href="https://github.com/unoplatform/Uno.Wasm.Bootstrap">Uno WebAssembly Bootstrapper</a>.</p>
+<p><em>Note that macOS is not yet supported for the static linking scenario, and that on Windows 10 you’ll need to have <a href="https://platform.uno/blog/build-net-aot-for-webassembly-in-visual-studio-with-uno-platform">WSL installed</a>.</em></p>
+<ul>
+<li>Create a .NET Standard 2.0 Library in Visual Studio for Windows or using <code>dotnet new classlib</code> under linux.</li>
+<li>
+    Replace the content of the project with the following:
+<div>
+<div>
+<pre><code>  <span>&lt;Project</span> <span>Sdk=</span><span>"Microsoft.NET.Sdk.Web"</span><span>&gt;</span>
+
+      <span>&lt;PropertyGroup&gt;</span>
+          <span>&lt;OutputType&gt;</span>Exe<span>&lt;/OutputType&gt;</span>
+          <span>&lt;TargetFramework&gt;</span>netstandard2.0<span>&lt;/TargetFramework&gt;</span>
+          <span>&lt;MonoRuntimeDebuggerEnabled&gt;</span>false<span>&lt;/MonoRuntimeDebuggerEnabled&gt;</span>
+          <span>&lt;WasmShellMonoRuntimeExecutionMode&gt;</span>InterpreterAndAOT<span>&lt;/WasmShellMonoRuntimeExecutionMode&gt;</span>
+      <span>&lt;/PropertyGroup&gt;</span>
+
+      <span>&lt;ItemGroup&gt;</span>
+          <span>&lt;PackageReference</span> <span>Include=</span><span>"Uno.Wasm.Bootstrap"</span> <span>Version=</span><span>"1.1.0-dev.426"</span> <span>/&gt;</span>
+          <span>&lt;DotNetCliToolReference</span> <span>Include=</span><span>"Uno.Wasm.Bootstrap.Cli"</span> <span>Version=</span><span>"1.1.0-dev.426"</span> <span>/&gt;</span>
+      <span>&lt;/ItemGroup&gt;</span>
+
+      <span>&lt;ItemGroup&gt;</span>
+          <span>&lt;!-- This automatically includes any Bitcode file for static linking --&gt;</span>
+          <span>&lt;Content</span> <span>Include=</span><span>"*.bc"</span> <span>/&gt;</span>
+      <span>&lt;/ItemGroup&gt;</span>
+
+  <span>&lt;/Project&gt;</span>
+</code></pre>
+</div></div>
+</li>
+<li>Create a file named <code>Program.cs</code>
+<div>
+<div>
+<pre><code>  <span>using</span> <span>System</span><span>;</span>
+
+  <span>namespace</span> <span>MyApp</span>
+  <span>{</span>
+      <span>public</span> <span>class</span> <span>Program</span>
+      <span>{</span>
+          <span>static</span> <span>int</span> <span>Main</span><span>(</span><span>string</span><span>[]</span> <span>args</span><span>)</span>
+          <span>{</span>
+              <span>return</span> <span>0</span><span>;</span>
+          <span>}</span>
+      <span>}</span>
+  <span>}</span>
+</code></pre>
+</div></div>
+</li>
+<li>Build the app once. This will download the .NET WebAssembly SDK, and install emscripten for the app.</li>
+</ul>
+<h2 id="build-a-cc-library">Build a C/C++ library</h2>
+<p>To build a C/C++ library, we’ll need to create a simple file that contains an <code>extern "C"</code> exported function, in order to have a signature and calling convention that can be used properly with .NET P/Invoke.</p>
+<p>In the WebAssembly app, let’s create a folder named <code>myclib</code> and add a file named <code>mylib.cpp</code>:</p>
+<div>
+<div>
+<pre><code><span>#include &lt;stdio.h&gt;
+</span>
+<span>extern</span> <span>"C"</span> <span>{</span>
+    <span>int</span> <span>cpp_add</span><span>(</span><span>int</span> <span>a</span><span>,</span> <span>int</span> <span>b</span><span>)</span> <span>{</span>
+        <span>return</span> <span>a</span> <span>+</span> <span>b</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+</div>
+</div>
+<p>Save the file, and open a bash or WSL window.</p>
+<p>We can go the path containing the file using the great <code>wslpath</code> tool:</p>
+<div>
+<div>
+<pre><code><span>cd</span> <span>`</span>wslpath <span>"C:</span><span>\Y</span><span>ourPathToYourProject</span><span>\m</span><span>yclib"</span><span>`</span>
+</code></pre>
+</div>
+</div>
+<p>We’ll need to initialize emscripten:</p>
+<div>
+<div>
+<pre><code><span>source</span> ../obj/emsdk-<span>*</span>/emsdk/emsdk_env.sh
+</code></pre>
+</div>
+</div>
+<p>Then build the library:</p>
+<div>
+<div>
+<pre><code>emcc mylib.cpp <span>-r</span> <span>-o</span> ../myclib.bc <span>-s</span> <span>WASM</span><span>=</span>1
+</code></pre>
+</div>
+</div>
+<p>At this point, we’ve generated a Bitcode file that can be used by the .NET tool chain, and for which an <code>extern "C"</code> marked function can be called from C#.</p>
+<h2 id="call-the-c-function-from-c">Call the C++ function from C#</h2>
+<p>Now that we have our library built, we can update our C# program to make the C++ function callable:</p>
+<div>
+<div>
+<pre><code><span>using</span> <span>System.Runtime.InteropServices</span><span>;</span>
+
+<span>public</span> <span>class</span> <span>Program</span>
+<span>{</span>
+    <span>[</span><span>DllImport</span><span>(</span><span>"myclib"</span><span>)]</span>
+    <span>private</span> <span>static</span> <span>extern</span> <span>int</span> <span>cpp_add</span><span>(</span><span>int</span> <span>a</span><span>,</span> <span>int</span> <span>b</span><span>);</span>
+
+    <span>static</span> <span>int</span> <span>Main</span><span>(</span><span>string</span><span>[]</span> <span>args</span><span>)</span>
+    <span>{</span>
+        <span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>$"cpp_add: </span><span>{</span><span>cpp_add</span><span>(</span><span>21</span><span>,</span><span>21</span><span>)}</span><span>"</span><span>);</span>
+        <span>return</span> <span>0</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+</div>
+</div>
+<p>When building the app, and running it, this will appear in the browser’s console:</p>
+
+<h2 id="build-a-rust-static-library">Build a Rust static library</h2>
+<p>Following a similar path, to build a Rust static library we’ll need to create a simple file that contains a function marked with the <a href="https://doc.rust-lang.org/reference/abi.html#the-export_name-attribute"><code>#[export_name]</code> attribute</a>, so that it can be found via P/Invoke.</p>
+<p>In the WebAssembly app, let’s create a folder named <code>myrustlib</code> and add a file named <code>mylib.rs</code>:</p>
+<div>
+<div>
+<pre><code><span>mod</span> <span>tests</span> <span>{</span>
+    <span>#[export_name</span> <span>=</span> <span>"rust_add"</span><span>]</span>
+    <span>pub</span> <span>extern</span> <span>"C"</span> <span>fn</span> <span>rust_add</span><span>(</span><span>a</span><span>:</span> <span>u32</span><span>,</span> <span>b</span><span>:</span> <span>u32</span><span>)</span> <span>-&gt;</span> <span>u32</span> <span>{</span>
+        <span>return</span> <span>a</span> <span>+</span> <span>b</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+</div>
+</div>
+<p>Save the file, and open a bash window.</p>
+<p>Let’s <a href="https://www.rust-lang.org/tools/install">setup Rust</a>, <code>Rustup</code> and add <code>Cargo</code> to your path:</p>
+
+<p>Then setup WebAssembly support for Rust:</p>
+<div>
+<div>
+<pre><code>rustup <span>install </span>stable
+rustup default stable
+rustup target add wasm32-unknown-emscripten
+</code></pre>
+</div>
+</div>
+<p>We’ll need to initialize emscripten here as well, if not done previously:</p>
+<div>
+<div>
+<pre><code><span>source</span> ../obj/emsdk-<span>*</span>/emsdk/emsdk_env.sh
+</code></pre>
+</div>
+</div>
+<p>Now we can go the path containing the file:</p>
+<div>
+<div>
+<pre><code><span>cd</span> <span>`</span>wslpath <span>"C:</span><span>\Y</span><span>ourPathToYourProject</span><span>\m</span><span>yrustlib"</span><span>`</span>
+</code></pre>
+</div>
+</div>
+<p>Then build the library</p>
+<div>
+<div>
+<pre><code>rustc <span>--target</span><span>=</span>wasm32-unknown-emscripten mylib.rs <span>--crate-type</span><span>=</span>staticlib <span>-o</span> ../myrustlib.bc
+</code></pre>
+</div>
+</div>
+<p>In a similar way we’ve done this for C++, the Bitcode file is now available for the .NET tool chain to use. The <code>staticlib</code> parameter is important as it forces the rust compiler to create a standalone library, with all its internal support code included.</p>
+<h2 id="calling-the-c-function-from-c">Calling the C++ function from C#</h2>
+<p>With the Rust library built, we can update our C# program to make the Rust function callable:</p>
+<div>
+<div>
+<pre><code><span>using</span> <span>System.Runtime.InteropServices</span><span>;</span>
+
+<span>public</span> <span>class</span> <span>Program</span>
+<span>{</span>
+    <span>[</span><span>DllImport</span><span>(</span><span>"myclib"</span><span>)]</span>
+    <span>private</span> <span>static</span> <span>extern</span> <span>int</span> <span>cpp_add</span><span>(</span><span>int</span> <span>a</span><span>,</span> <span>int</span> <span>b</span><span>);</span>
+
+    <span>[</span><span>DllImport</span><span>(</span><span>"myrustlib"</span><span>)]</span>
+    <span>private</span> <span>static</span> <span>extern</span> <span>int</span> <span>rust_add</span><span>(</span><span>int</span> <span>a</span><span>,</span> <span>int</span> <span>b</span><span>);</span>
+
+    <span>static</span> <span>int</span> <span>Main</span><span>(</span><span>string</span><span>[]</span> <span>args</span><span>)</span>
+    <span>{</span>
+        <span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>$"cpp_add: </span><span>{</span><span>cpp_add</span><span>(</span><span>21</span><span>,</span><span>21</span><span>)}</span><span>"</span><span>);</span>
+        <span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>$"rust_add: </span><span>{</span><span>rust_add</span><span>(</span><span>21</span><span>,</span><span>22</span><span>)}</span><span>"</span><span>);</span>
+        <span>return</span> <span>0</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+</div>
+</div>
+<p>When building and run the app again, the following will appear in the browser’s console:</p>
+
+<h2 id="current-set-of-restrictions-for-pinvoke">Current set of restrictions for P/Invoke</h2>
+<p>Under the covers, mono is generating a table of methods marked DllImport, and <a href="https://github.com/mono/mono/blob/7038b1a4261f86dac2fda4f3894f397bddf88f2c/mcs/tools/wasm-tuner/tuner.cs#L180-L183">generates a set of callable methods</a> from referenced external libraries.</p>
+<p>The runtime needs to do so in order to determine what to call. Once a library and function has been found, the runtime <a href="https://github.com/mono/mono/blob/ac1a12f9971fc7ba4f8f675af020dc18fd9d35ee/mono/mini/wasm_m2n_invoke.g.h#L1021">has to determine the signature of the function</a> in a <a href="https://github.com/mono/mono/blob/6c0bfdc3f3d5855d27628112a505ba01bdfc4584/mono/mini/m2n-gen.cs#L30">pre-defined signatures list</a>.</p>
+<p>If the native function signature is not in the list, you may encounter the <code>CANNOT HANDLE COOKIE XXXX</code> assertion <a href="https://github.com/mono/mono/blob/ac1a12f9971fc7ba4f8f675af020dc18fd9d35ee/mono/mini/wasm_m2n_invoke.g.h#L1823">defined here</a>. If you’re facing this error, you may want to adjust your native function signature so it finds itself in the <a href="https://github.com/mono/mono/blob/6c0bfdc3f3d5855d27628112a505ba01bdfc4584/mono/mini/m2n-gen.cs#L30">pre-defined signatures list</a>.</p>
+<p>All of this is caused by the fact that, for security reasons, WebAssembly functions cannot be called with a set of parameters unknown at compile time; a technique the mono runtime has to use when calling functions through P/Invoke.</p>
+<p>If you’re wondering how to determine the cookie of a function, as an example this function:</p>
+<div>
+<div>
+<pre><code>static extern int cpp_add(int a, int b);
+</code></pre>
+</div>
+</div>
+<p>has the cookie <code>III</code>, where the first character defines the return type.</p>
+<p>Another example with this function:</p>
+<div>
+<div>
+<pre><code>static extern void OtherFunction(int a, double b, float c);
+</code></pre>
+</div>
+</div>
+<p>will have the <code>VIDF</code> cookie.</p>
+<h2 id="webassembly-validations">WebAssembly validations</h2>
+<p>Along with the restrictions of the P/Invoke list, making sure that the signature of the function tagged in the C# with <code>DllImport</code> matches the function defined in the other libraries. In case of a mismatch, browsers will raise an error such as <code>RuntimeError: function signature mismatch</code>.</p>
+<h2 id="next-up">Next up…</h2>
+<p>We’ll discuss how to use strings back and forth in both environments.</p>
+</div>
+                </div>
+            </div>
+        </div>
+    </div>
+        
+            	    
+		    <div>
+        <div>
+            <div>
+                <div itemprop="author" itemscope="itemscope" itemtype="https://schema.org/Person">
+		<div>
+	<img alt="" src="https://secure.gravatar.com/avatar/4739fc8af487120660986cdcece312fd?s=65&amp;d=mm&amp;r=g" srcset="https://secure.gravatar.com/avatar/4739fc8af487120660986cdcece312fd?s=130&amp;d=mm&amp;r=g 2x" height="65" width="65">	</div>
+		<div>
+		<h3 itemprop="name">
+		Uno Platform					
+		</h3>
+		<div>Uno Platform enables creation of single-source C# and XAML apps which run natively on iOS and Android, macOS, and Web via WebAssembly. Uno Platform is Open Source (Apache 2.0) and available on GitHub. To learn more about Uno Platform, see how it works, or create a small sample app.</div>
+		<a href="https://platform.uno/blog/author/unoplatform-team/">More posts by Uno Platform </a>	</div>
+</div>            </div>
+        </div>
+    </div>
+	        	
+        		<span itemscope="" itemtype="http://schema.org/BlogPosting"><meta itemprop="headline" content="C# interop with C/C++ and Rust in WebAssembly"><meta itemscope="" itemprop="mainEntityOfPage" itemtype="https://schema.org/WebPage" itemid="https://platform.uno/blog/c-interop-with-c-c-and-rust-in-webassembly/"><meta itemprop="url" content="https://platform.uno/blog/c-interop-with-c-c-and-rust-in-webassembly/"><span itemprop="image" itemscope="" itemtype="https://schema.org/ImageObject"><meta itemprop="url" content="https://s3.amazonaws.com/uno-website-assets/wp-content/uploads/2020/04/21163123/Uno_banners_blog_codes.png"><meta itemprop="width" content="3201"><meta itemprop="height" content="2147"></span><meta itemprop="author" content="https://platform.uno/blog/author/unoplatform-team/"><meta itemprop="description" content="Having the ability to call code written in other languages is increasingly important, as there are many very useful libraries that are getting ported over to WebAssembly...."><meta itemprop="datePublished" content="2020-04-27T08:00:33-04:00"><meta itemprop="dateModified" content="2020-04-27T13:55:42-04:00"><span itemprop="interactionStatistic" itemscope="" itemtype="http://schema.org/InteractionCounter"><meta itemprop="interactionType" content="http://schema.org/CommentAction"><meta itemprop="userInteractionCount" content="0"></span><span itemprop="publisher" itemscope="" itemtype="https://schema.org/Organization"><span itemprop="logo" itemscope="" itemtype="https://schema.org/ImageObject"><meta itemprop="url" content="//s3.amazonaws.com/uno-website-assets/wp-content/uploads/2018/08/22113759/UnoLogoSmall.png"></span><meta itemprop="name" content="Uno Platform"></span></span></article>
+			            			</div>
+		</div>
+	</main><!-- #contentblock -->
+	</div><!-- .holders -->
+			</div><!-- / .thz-main  --></div><!-- / .thz-container  --></div><!-- / #thz-main-wrap -->			                        						</div><!-- / .thz-wrapper-inner -->
+            			            						                        </div><!-- / .thz-wrapper -->
+         </div><!-- / .thz-body-container -->
+     </div><!-- / .thz-body-box -->
+        	 
+	<ins data-adsbygoogle-status="done"><ins id="aswift_0_expand"><ins id="aswift_0_anchor"></ins></ins></ins>
+
+
+
+
+
+
+
+
+
+
+
+	
+
+	
+
+<!-- Dynamic page generated in 1.973 seconds. -->
+<!-- Cached page generated by WP-Super-Cache on 2020-04-29 03:54:10 -->
+
+<!-- Compression = gzip --></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
