@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+The Dispose Pattern is Broken - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="The Dispose Pattern is Broken - linksfor.dev(s)"/>
+    <meta property="article:author" content="Paulo Zemek"/>
+    <meta property="og:description" content="SafeHandles came to solve the problem, but the MSDN documentation on them is also broken."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.codeproject.com/Articles/5266619/The-Dispose-Pattern-is-Broken"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - The Dispose Pattern is Broken</title>
+<div class="readable">
+        <h1>The Dispose Pattern is Broken</h1>
+            <div>by Paulo Zemek</div>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 30 Apr 2020</div>
+        <p><a href="https://www.codeproject.com/Articles/5266619/The-Dispose-Pattern-is-Broken">https://www.codeproject.com/Articles/5266619/The-Dispose-Pattern-is-Broken</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="contentdiv">
+						
+
+
+
+<h2>Introduction</h2>
+<p>Since .NET appeared, one of the most confusing things was the relationship between <code>Dispose()</code> (from the <code>IDisposable</code> interface) and finalizers.</p>
+
+<h3>Original Idea</h3>
+<p>The original idea was very simple: The <i>Garbage Collector</i> does the memory and resource cleanup for us, so we don't need to manage memory and resources manually.</p>
+<p>In practice, things got much more complicated. The <i>Garbage Collector</i> might not run when we need it to run (as it is said, it is "non-deterministic"). Also, <code>static</code> fields keep objects alive and our code can interact with <i>native</i> code, and we need more control on objects and memory lifetime.</p>
+
+<p>This justified having finalizers to release external resources when the <code>Garbage Collector</code> ran, and also <code>Dispose()</code> methods to release any resource "as soon as possible" without waiting for the <i>Garbage Collector</i> to run. And that created a snowball effect, where we change entire class hierarchies to implement a hard pattern, as usually we want to have control when resources are freed (the <code>Dispose()</code> method and the <code>IDisposable</code> interface) and also a finalizer, as any "unmanaged" data needs to be released even if we (or users of our code) don't invoke <code>Dispose()</code>.
+
+</p><h2>The Original Solution - Dispose Pattern</h2>
+<p>The original solution is the <i>Dispose pattern</i>. It is not really easy, as it consists on:</p>
+<ul>
+  <li>Having a finalizer (calling <code>Dispose(false);</code>);
+  </li><li>Having a <code>Dispose()</code> (calling <code>Dispose(true);</code> and <code>GC.SuppressFinalize(this);</code>);
+  </li><li>Having an overloaded <code>Dispose(bool disposing);</code> which decided what to really do according to <code>disposing</code>. This overload could be virtual or not, increasing the complexity of the pattern.</li></ul>
+
+<h2>The "Snowball" Effect of the Dispose Pattern</h2>
+<p>Having to decide if an object needs to be disposable or not is, on itself, problematic. And the <i>Dispose pattern</i> interacts really badly with base-classes and frameworks.</p>
+<p>If a framework object might ever need "predictable" destruction, that means we need a <code>Dispose()</code> or similar method. But, as a framework or base class, that also means objects from sub-classes might <b>possibly</b> have unmanaged data, meaning we "need" the finalizer.</p>
+<p>Now, the entire pattern needs to be used on any base class that can <i>possibly</i> have a sub-class dealing with unmanaged data.</p>
+
+<p>So, instead of having something as simple as:</p>
+
+<p><span id="prehide880990" onclick="processCodeBlocks.togglePre(880990);">Hide</span>  &nbsp; <span id="copycode880990" onclick="return processCodeBlocks.copyCode(880990);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre880990"><span>public</span> <span>abstract</span> <span>class</span> MyBaseClass:
+  IDisposable
+{
+  <span>public</span> <span>virtual</span> <span>void</span> Dispose()
+  {
+  }
+}</pre>
+
+<p>We need to have something like the following instead:</p>
+
+<p><span id="prehide699951" onclick="processCodeBlocks.togglePre(699951);">Hide</span>  &nbsp; <span id="copycode699951" onclick="return processCodeBlocks.copyCode(699951);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre699951"><span>public</span> <span>abstract</span> <span>class</span> MyBaseClass:
+  IDisposable
+{
+  ~MyBaseClass()
+  {
+    Dispose(<span>false</span>);
+  }
+
+  <span>public</span> <span>void</span> Dispose()
+  {
+    GC.SupressFinalize(<span>this</span>);
+    Dispose(<span>true</span>);
+  }
+
+  <span>protected</span> <span>virtual</span> <span>void</span> Dispose(<span>bool</span> disposing)
+  {
+  }
+}</pre>
+
+<p>It is important to notice that in the first block of code, <code>Dispose()</code> was <code>virtual</code>. In the second, <code>Dispose()</code> <b>isn't supposed</b> be <code>virtual</code> and, instead, <code>Dispose(bool disposing)</code> needs to be <code>virtual</code>... and also not-public, as it is not supposed to be invoked by user code.</p>
+
+<h3>What is "disposing"?</h3>
+<p>When I first saw <code>Dispose()</code> with a "disposing" parameter, I got really confused. What is "disposing" in a method already named "Dispose"?</p>
+<p>I really think that if the <i>Dispose pattern</i> was named <i>Release pattern</i> and we had an "isFromManualDispose" argument, things would be less confusing. It would still be a problematic pattern, but it would be a little easier to understand what the argument means.</p>
+
+<h2>Why is the pattern broken?</h2>
+<p>"Broken" is too strong, to be honest, but I wanted something that grabbed the reader's attention. It is <i>bad</i> because it depends on too many methods and concepts, and it's also confusing. Even if "it works" when implemented correctly, it:</p>
+<ul>
+  <li>Is hard for new developers;</li>  <li>Means any framework class needs to have a <code>Dispose(bool)</code> to deal with possibly "unsafe" data even when the entire framework doesn't use any unsafe code;</li>  <li>Means that anybody inheriting those classes needs to know what to do what that "hateful" <code>disposing</code> argument;</li>  <li>Means it breaks the <i>Single Responsibility Principle</i>. A framework class (or just any base class) is not supposed to deal with all of that "just in case" a sub-class needs it.</li></ul>
+
+<h2>The solution: SafeHandles</h2>
+<p>Sometime later, Microsoft noticed the bad pattern and tried to fix it. That's when we got <code>SafeHandle</code>s.</p>
+
+<p>The entire idea of having <code>SafeHandle</code>s is that, instead of having our own classes dealing with "managed and unmanaged memory", our classes should just deal with managed memory or, if really needed, deal with a "safe handle", which is the object that will have a finalizer and will really manage the lifetime of the unmanaged data.</p>
+
+<p>I really think Microsoft documented it right in the beginning, but when I tried to find their good example, I just found the latest document, which is completely "busted". They explain why <code>SafeHandle</code>s are good and help us avoid the bad <i>Disposable pattern</i> but then show a class that uses a <code>SafeHandle</code> and <b>also</b> implements the <i>Dispose pattern</i> for no real benefit!</p>
+
+<p>After reading the document, it seems that now we have a new pattern on top of the hard pattern. But that is just <b>plain wrong</b>. The new pattern came to replace the old, and hard, pattern. Not to add to it.</p>
+
+<p>For those curious, I am refering to this page: <a href="https://docs.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.safehandle?view=netframework-4.8">https://docs.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.safehandle?view=netframework-4.8</a></p>
+
+<p>In that page, on the source code, there's even this comment:</p>
+<p><span id="prehide960540" onclick="processCodeBlocks.togglePre(960540);">Hide</span>  &nbsp; <span id="copycode960540" onclick="return processCodeBlocks.copyCode(960540);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre960540">
+
+
+
+
+[SecurityPermission(SecurityAction.Demand, UnmanagedCode = <span>true</span>)]
+<span>protected</span> <span>virtual</span> <span>void</span> Dispose(<span>bool</span> disposing)</pre>
+
+<ul>
+  <li>The comment about a subclass introducing a finalizer is another issue with the <i>Dispose pattern</i>. Some people argue that we shouldn't add a finalizer until we need it, but then if the base class ever decides to use a finalizer, we might have double-disposes happening. We should avoid all that confusion.
+  </li></ul>
+
+<h2>The "new" Pattern</h2>
+<p><code>SafeHandle</code>s were created with the purpose of simplifying the pattern. When using <code>SafeHandle</code>s, we should not worry about the entire <i>Dispose pattern</i>. Instead, we should just need to know if we are implementing <code>Dispose()</code> or not. Just the simple <code>Dispose()</code>, not that weird <code>Dispose(bool disposing)</code>.</p>
+<p>Then, if we are dealing with <i>Windows Handles</i>, we use the appropriate safe-handles and, if an object is never disposed and gets <i>Garbage Collected</i>, the <code>SafeHandle</code>s do the work for us.</p>
+<p>This, actually, is the base for a new and improved pattern, even when we don't have <code>SafeHandle</code>s for the kind of unmanaged memory or data we are dealing with.</p>
+
+<h3>What exactly is the new pattern when not using SafeHandles?</h3>
+<p>Simple rules:</p>
+<ul>
+  <li>Public classes should not have a destructor or a <code>Dispose(bool)</code>. If they are disposable, they just implement <code>IDisposable</code> with the standard <code>Dispose()</code>;</li>  <li>If they use any data that might need a destructor, they should use a helper class to hold that data. That's exactly what <code>SafeHandle</code>s are: Helper classes that hold the data and deal with the destructor for you (and nothing else).</li></ul>
+
+<p>In a way, that's all.</p>
+
+<h4>How to implement one of the helper classes?</h4>
+<p>The helper classes will need to have a destructor, and possibly a <code>Dispose()</code> to allow for an early release of the resources. But those helper classes can possibly be sealed and avoid any logic to deal with managed + unmanaged data. They exist with the sole purpose of dealing with the release of unmanaged data, so there's no need to check for that. They should not do anything else, as that would be the work of the main class. They are just simple helpers.</p>
+
+<h2>Reanalyzing the Problem</h2>
+<ul>
+  <li><p>Disposable pattern:</p>
+<p>Class with <code>Dispose(bool)</code>, a finalizer that calls <code>Dispose(false)</code>, an overloaded <code>Dispose()</code> that calls <code>Dispose(true)</code>, and that <code>bool disposing</code> makes many developers wonder what is really going on, even if their classes never use unmanaged data.</p>
+  </li>  <li><p>New pattern:</p>
+<p>Just a simple implementation of the <code>IDisposable</code> interface if the class needs deterministic cleanup, which should be virtual if the class can be inherited. If any unmanaged data is used by the class, a helper class (which can be the same for all unmanaged data, like a <code>SafeHandle</code>) is used. That's all. No "<code>disposing</code>" argument and no odd implementations because of such an argument.</p>
+<p>By default base classes and sub-classes will be much simpler when they don't hold unmanaged data. They will still be able to hold unmanaged data if needed, but will delegate the "release" of that data to a helper class.</p>
+  </li></ul>
+
+
+						</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
