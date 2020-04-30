@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Create a .NET profiler with the Profiling API - Start of an unexpected journey - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Create a .NET profiler with the Profiling API - Start of an unexpected journey - linksfor.dev(s)"/>
+    <meta property="article:author" content="Josef Biehler"/>
+    <meta property="og:description" content="The Profiling API is a powerful beast that let&#x27;s you do magic things with a .NET application. This article gives you a first insight."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://dev.to/gabbersepp/create-a-net-profiler-with-the-profiling-api-start-of-an-unexpected-journey-198n"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Create a .NET profiler with the Profiling API - Start of an unexpected journey</title>
+<div class="readable">
+        <h1>Create a .NET profiler with the Profiling API - Start of an unexpected journey</h1>
+            <div>by Josef Biehler</div>
+            <div>Reading time: 22-28 minutes</div>
+        <div>Posted here: 30 Apr 2020</div>
+        <p><a href="https://dev.to/gabbersepp/create-a-net-profiler-with-the-profiling-api-start-of-an-unexpected-journey-198n">https://dev.to/gabbersepp/create-a-net-profiler-with-the-profiling-api-start-of-an-unexpected-journey-198n</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div data-article-id="322762" id="article-body">
+        <blockquote>
+<p><strong><a href="https://github.com/gabbersepp/dev.to-posts/tree/master/blog-posts/net-internals/write-net-profiler/code/DevToNetProfiler">Get the code for this tutorial</a></strong></p>
+</blockquote>
+
+
+
+<p>If you write an app in C# or VB you normally don't get an exe that contains machine code. Instead the binary is full of <code>IL</code> code. This <strong>I</strong>ntermediate <strong>L</strong>anguage is similar to machine code but is built solely for a stack based layout. It does not make any assumptions about the registers. The transformation of <code>IL Code</code> to machine code is done by the <code>CLR</code> which can be built for every hardware architecture.<br>
+Here now come the Profiling API into play. It can hook into several parts of the CLR to notify you if a function is going to be executed or if an exception is thrown and so on.</p>
+
+<blockquote>
+<p><strong>Note:</strong> In this blog post I show you what you need for a first runnable example. We will discuss the profiler in depths in subsequent blog posts. I just want to ensure that you have a runnable example before we start to understand everything. That makes experimenting a lot easier.</p>
+</blockquote>
+
+
+<p>If you reading about that topic you will often read something about a so called <code>ICorProfilerCallback</code> interface or a <code>ICorProfilerInfo</code> interface. And you also will see those names with a numeric suffix, e.g. <code>ICorProfilerCallback2</code>.<br>
+The <code>Profiling API</code> exists since version 1.x of the framework. Of course Microsoft sometimes added new functionality to those interfaces. So whenever you see a <code>2</code> or <code>3</code> ... this is a newer version of that interface.</p>
+
+<p>If you want to know if you can use version X for a specific target framework version, you can go to <a href="https://docs.microsoft.com/de-de/dotnet/framework/unmanaged-api/profiling/icorprofilercallback-interface">the Microsoft documentation</a> and then select the version you are interested in:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--9lwO8u5y--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/icorprofilercallback-docu.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--9lwO8u5y--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/icorprofilercallback-docu.jpg" alt="" loading="lazy"></a></p>
+
+<p>For example click onto <code>ICorProfilerCallback8</code>. The documentation will tell you which .NET version this interface requires:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--JLArxfCC--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/icorprofilercallback8.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--JLArxfCC--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/icorprofilercallback8.jpg" alt="" loading="lazy"></a></p>
+
+
+<p>OK. Let's talk about some real world use cases. With the <code>Profiling API</code> you can:</p>
+
+<ul>
+<li>measure the time between <code>function enter</code> and <code>function leave</code> which enables you to write a CPU profiler to track the total time of every function call</li>
+<li>notify you about every exception (except <code>StackOverflow</code>). Which sometimes may help when exceptions are caught somewhere and not logged</li>
+<li>maintain the depth of function calls to warn you if a <code>StackOverflow</code> may occur</li>
+<li>rewrite IL code to add functionality to an existing class. This enables you to override things that can't be overwritten in code. Some mocking frameworks use this approach</li>
+<li>.....</li>
+</ul>
+
+<p>You see, many things you can play with :-)</p>
+
+
+<p>You have to write the profiler with unmanaged code (mostly the people are using C++) because otherwise the profiler itself would trigger profiling events. As far as I know there is no possibility to write a profiler with managed code.</p>
+
+
+<p>You will see that we use an <code>ATL</code> project template. Do not expect some useful information about this kind of project. I just added as much code as required to get a runnable profiler. But you don't need to know any internals about an <code>ATL</code> project. Just ignore that stuff.</p>
+
+
+<p>Now it's getting dirty! My screenshots are partially in German. But the necessary parts should be clear, though.</p>
+<h2>
+  <a name="setup-visual-studio" href="#setup-visual-studio">
+  </a>
+  Setup Visual Studio
+</h2>
+
+<p>I am using <code>Visual Studio 2019</code> with these components installed:<br>
+<a href="https://res.cloudinary.com/practicaldev/image/fetch/s--R-9iSmZ9--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/vs2019-modify.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--R-9iSmZ9--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/vs2019-modify.jpg" alt="" loading="lazy"></a><br>
+I am not sure if you need all of them. I just used the default setting of the VS installer.</p>
+<h2>
+  <a name="create-a-project" href="#create-a-project">
+  </a>
+  Create a project
+</h2>
+
+<p>The first step towards your beautiful profiler is to create a project. Open Visual Studio and create a new project. Choose <code>ATL</code>:<br>
+<a href="https://res.cloudinary.com/practicaldev/image/fetch/s--z3Z39Qwl--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/choose-atl-project.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--z3Z39Qwl--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/choose-atl-project.jpg" alt="" loading="lazy"></a></p>
+
+<p>Just keep the default settings:<br>
+<a href="https://res.cloudinary.com/practicaldev/image/fetch/s--P1g5bzJr--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/atl-project-settings.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--P1g5bzJr--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/atl-project-settings.jpg" alt="" loading="lazy"></a></p>
+
+<p>VS creates two projects. Delete the second one whose name ends with <code>PS</code>. I don't know what's the purpose of that project. But my profiler compiles without it, too:<br>
+<a href="https://res.cloudinary.com/practicaldev/image/fetch/s--ZlMfJ5Df--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/created-projects.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--ZlMfJ5Df--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/created-projects.jpg" alt="" loading="lazy"></a></p>
+
+<p>Normally the project is configured to get automatically registered in the registry. We do not want this. Also VS will throw an exception if you compile the project without administration rights. So right click onto your project and go to the linker settings. Set <strong>Register output</strong> to <strong>No</strong>:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--__7Nakwm--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/linker-not-register.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--__7Nakwm--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/linker-not-register.jpg" alt="" loading="lazy"></a></p>
+
+<p>Also you must add additional dependencies to the linker. Right click onto the project, go to linker and set those dependencies: <code>corguids.lib;%(AdditionalDependencies)</code>. This is necessary that the linker can find the <code>ICorProfilerInfo</code> stuff.</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--shHIi_Lm--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/linker-add-deps.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--shHIi_Lm--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/linker-add-deps.jpg" alt="" loading="lazy"></a></p>
+<h2>
+  <a name="add-necessary-code" href="#add-necessary-code">
+  </a>
+  Add necessary code
+</h2>
+
+<p>Now we need some extra code to turn this project into a profiler. We go through every file that needs to be touched.</p>
+
+<ul>
+<li>
+<strong>framework.h:</strong> Add <code>using namespace ATL;</code> at the end of the file.</li>
+<li>
+<strong>Resource.h:</strong> Add <code>#define IDR_PROFILER    102</code> somewhere.</li>
+<li>
+<strong>DevToNetProfiler.cpp:</strong> Delete the function <code>STDAPI DllInstall(BOOL bInstall, _In_opt_  LPCWSTR pszCmdLine)</code>.</li>
+<li>
+<strong>DevToNetProfiler.def:</strong> Replace <code>LIBRARY</code> with <code>LIBRARY "DevToNetProfiler.dll"</code> and remove the line <code>DllInstall      PRIVATE</code>
+</li>
+<li>
+<strong>DevToNetProfiler.idl:</strong> replace the whole file with this code:
+</li>
+</ul>
+<div><pre><code><span>import</span> <span>"oaidl.idl"</span><span>;</span>
+<span>import</span> <span>"ocidl.idl"</span><span>;</span>
+
+<span>[</span>
+  <span>object</span><span>,</span>
+  <span>uuid</span><span>(</span><span>103</span><span>d660d</span><span>-</span><span>1</span><span>cb4</span><span>-</span><span>4410</span><span>-</span><span>85</span><span>dd</span><span>-</span><span>67</span><span>b3aa489626</span><span>),</span>
+  <span>helpstring</span><span>(</span><span>"INetProfiler Interface"</span><span>),</span>
+  <span>pointer_default</span><span>(</span><span>unique</span><span>)</span>
+<span>]</span>
+<span>interface</span> <span>INetProfiler</span> <span>:</span> <span>IUnknown</span> <span>{</span>
+<span>};</span>
+<span>[</span>
+  <span>uuid</span><span>(</span><span>e0145544</span><span>-</span><span>414</span><span>d</span><span>-</span><span>487e-9219</span><span>-</span><span>178</span><span>b87ff0aaa</span><span>),</span>
+  <span>version</span><span>(</span><span>1.0</span><span>),</span>
+  <span>helpstring</span><span>(</span><span>"NetProfiler 1.0 Type Library"</span><span>)</span>
+<span>]</span>
+<span>library</span> <span>DevToNetProfilerLib</span>
+<span>{</span>
+  <span>importlib</span><span>(</span><span>"stdole2.tlb"</span><span>);</span>
+  <span>[</span>
+    <span>uuid</span><span>(</span><span>b45048d5</span><span>-</span><span>6</span><span>f44</span><span>-</span><span>4</span><span>fbe</span><span>-</span><span>ae88</span><span>-</span><span>b468a5e4927a</span><span>),</span>
+    <span>helpstring</span><span>(</span><span>"Profiler Class"</span><span>)</span>
+  <span>]</span>
+  <span>coclass</span> <span>NetProfiler</span>
+  <span>{</span>
+    <span>[</span><span>default</span><span>]</span> <span>interface</span> <span>IUnknown</span><span>;</span>
+  <span>};</span>
+<span>};</span>
+</code></pre></div>
+
+
+<p>Now we must implement the ICorProfilerCallback. Don't be afraid. I will come back to this interface later on. <strong>So create a header file <code>ProfilerCallback.h</code></strong> and insert that code:<br>
+</p>
+
+<div><pre><code><span>// ./code/DevToNetProfiler/DevToNetProfiler/ProfilerCallback.h</span>
+
+<span>#pragma once
+</span>
+<span>#include "cor.h"
+#include "corprof.h"
+#include "framework.h"
+#include "DevToNetProfiler_i.h"
+</span>
+<span>class</span> <span>ATL_NO_VTABLE</span> <span>ProfilerCallback</span> <span>:</span>
+  <span>public</span> <span>CComObjectRootEx</span><span>&lt;</span><span>CComSingleThreadModel</span><span>&gt;</span><span>,</span>
+  <span>public</span> <span>CComCoClass</span><span>&lt;</span><span>ProfilerCallback</span><span>,</span> <span>&amp;</span><span>CLSID_NetProfiler</span><span>&gt;</span><span>,</span>
+  <span>public</span> <span>ICorProfilerCallback2</span>
+<span>{</span>
+<span>public:</span>
+  <span>ProfilerCallback</span><span>();</span>
+
+  <span>DECLARE_REGISTRY_RESOURCEID</span><span>(</span><span>IDR_PROFILER</span><span>)</span>
+  <span>BEGIN_COM_MAP</span><span>(</span><span>ProfilerCallback</span><span>)</span>
+    <span>COM_INTERFACE_ENTRY</span><span>(</span><span>ICorProfilerCallback</span><span>)</span>
+    <span>COM_INTERFACE_ENTRY</span><span>(</span><span>ICorProfilerCallback2</span><span>)</span>
+  <span>END_COM_MAP</span><span>()</span>
+  <span>DECLARE_PROTECT_FINAL_CONSTRUCT</span><span>()</span>
+
+  <span>HRESULT</span> <span>FinalConstruct</span><span>();</span>
+  <span>void</span> <span>FinalRelease</span><span>();</span>
+
+  <span>// ICorProfilerCallback interface implementation</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>Initialize</span><span>(</span><span>IUnknown</span><span>*</span> <span>pICorProfilerInfoUnk</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>Shutdown</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AppDomainCreationStarted</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AppDomainCreationFinished</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AppDomainShutdownStarted</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AppDomainShutdownFinished</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AssemblyLoadStarted</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AssemblyLoadFinished</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AssemblyUnloadStarted</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>AssemblyUnloadFinished</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ModuleLoadStarted</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ModuleLoadFinished</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ModuleUnloadStarted</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ModuleUnloadFinished</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ModuleAttachedToAssembly</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>,</span> <span>AssemblyID</span> <span>assemblyID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ClassLoadStarted</span><span>(</span><span>ClassID</span> <span>classID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ClassLoadFinished</span><span>(</span><span>ClassID</span> <span>classID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ClassUnloadStarted</span><span>(</span><span>ClassID</span> <span>classID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ClassUnloadFinished</span><span>(</span><span>ClassID</span> <span>classID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>FunctionUnloadStarted</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>JITCompilationStarted</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>BOOL</span> <span>fIsSafeToBlock</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>JITCompilationFinished</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>,</span> <span>BOOL</span> <span>fIsSafeToBlock</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>JITCachedFunctionSearchStarted</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>BOOL</span><span>*</span> <span>pbUseCachedFunction</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>JITCachedFunctionSearchFinished</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>COR_PRF_JIT_CACHE</span> <span>result</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>JITFunctionPitched</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>JITInlining</span><span>(</span><span>FunctionID</span> <span>callerID</span><span>,</span> <span>FunctionID</span> <span>calleeID</span><span>,</span> <span>BOOL</span><span>*</span> <span>pfShouldInline</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ThreadCreated</span><span>(</span><span>ThreadID</span> <span>threadID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ThreadDestroyed</span><span>(</span><span>ThreadID</span> <span>threadID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ThreadAssignedToOSThread</span><span>(</span><span>ThreadID</span> <span>managedThreadID</span><span>,</span> <span>DWORD</span> <span>osThreadID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingClientInvocationStarted</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingClientSendingMessage</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingClientReceivingReply</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingClientInvocationFinished</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingServerReceivingMessage</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingServerInvocationStarted</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingServerInvocationReturned</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RemotingServerSendingReply</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>UnmanagedToManagedTransition</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>COR_PRF_TRANSITION_REASON</span> <span>reason</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ManagedToUnmanagedTransition</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>COR_PRF_TRANSITION_REASON</span> <span>reason</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RuntimeSuspendStarted</span><span>(</span><span>COR_PRF_SUSPEND_REASON</span> <span>suspendReason</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RuntimeSuspendFinished</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RuntimeSuspendAborted</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RuntimeResumeStarted</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RuntimeResumeFinished</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RuntimeThreadSuspended</span><span>(</span><span>ThreadID</span> <span>threadid</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RuntimeThreadResumed</span><span>(</span><span>ThreadID</span> <span>threadid</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>MovedReferences</span><span>(</span><span>ULONG</span> <span>cmovedObjectIDRanges</span><span>,</span> <span>ObjectID</span> <span>oldObjectIDRangeStart</span><span>[],</span> <span>ObjectID</span> <span>newObjectIDRangeStart</span><span>[],</span> <span>ULONG</span> <span>cObjectIDRangeLength</span><span>[]);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ObjectAllocated</span><span>(</span><span>ObjectID</span> <span>objectID</span><span>,</span> <span>ClassID</span> <span>classID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ObjectsAllocatedByClass</span><span>(</span><span>ULONG</span> <span>classCount</span><span>,</span> <span>ClassID</span> <span>classIDs</span><span>[],</span> <span>ULONG</span> <span>objects</span><span>[]);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ObjectReferences</span><span>(</span><span>ObjectID</span> <span>objectID</span><span>,</span> <span>ClassID</span> <span>classID</span><span>,</span> <span>ULONG</span> <span>cObjectRefs</span><span>,</span> <span>ObjectID</span> <span>objectRefIDs</span><span>[]);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RootReferences</span><span>(</span><span>ULONG</span> <span>cRootRefs</span><span>,</span> <span>ObjectID</span> <span>rootRefIDs</span><span>[]);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionThrown</span><span>(</span><span>ObjectID</span> <span>thrownObjectID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionSearchFunctionEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionSearchFunctionLeave</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionSearchFilterEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionSearchFilterLeave</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionSearchCatcherFound</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionCLRCatcherFound</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionCLRCatcherExecute</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionOSHandlerEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionOSHandlerLeave</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionUnwindFunctionEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionUnwindFunctionLeave</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionUnwindFinallyEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionUnwindFinallyLeave</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionCatcherEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>ObjectID</span> <span>objectID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ExceptionCatcherLeave</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>COMClassicVTableCreated</span><span>(</span><span>ClassID</span> <span>wrappedClassID</span><span>,</span> <span>REFGUID</span> <span>implementedIID</span><span>,</span> <span>void</span><span>*</span> <span>pVTable</span><span>,</span> <span>ULONG</span> <span>cSlots</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>COMClassicVTableDestroyed</span><span>(</span><span>ClassID</span> <span>wrappedClassID</span><span>,</span> <span>REFGUID</span> <span>implementedIID</span><span>,</span> <span>void</span><span>*</span> <span>pVTable</span><span>);</span>
+
+  <span>// ICorProfilerCallback2 interface implementation</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>ThreadNameChanged</span><span>(</span><span>ThreadID</span> <span>threadId</span><span>,</span> <span>ULONG</span> <span>cchName</span><span>,</span> <span>WCHAR</span> <span>name</span><span>[]);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>GarbageCollectionStarted</span><span>(</span><span>int</span> <span>cGenerations</span><span>,</span> <span>BOOL</span> <span>generationCollected</span><span>[],</span> <span>COR_PRF_GC_REASON</span> <span>reason</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>SurvivingReferences</span><span>(</span><span>ULONG</span> <span>cSurvivingObjectIDRanges</span><span>,</span> <span>ObjectID</span> <span>objectIDRangeStart</span><span>[],</span> <span>ULONG</span> <span>cObjectIDRangeLength</span><span>[]);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>GarbageCollectionFinished</span><span>();</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>FinalizeableObjectQueued</span><span>(</span><span>DWORD</span> <span>finalizerFlags</span><span>,</span> <span>ObjectID</span> <span>objectID</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>RootReferences2</span><span>(</span><span>ULONG</span> <span>cRootRefs</span><span>,</span> <span>ObjectID</span> <span>rootRefIds</span><span>[],</span> <span>COR_PRF_GC_ROOT_KIND</span> <span>rootKinds</span><span>[],</span> <span>COR_PRF_GC_ROOT_FLAGS</span> <span>rootFlags</span><span>[],</span> <span>UINT_PTR</span> <span>rootIds</span><span>[]);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>HandleCreated</span><span>(</span><span>GCHandleID</span> <span>handleId</span><span>,</span> <span>ObjectID</span> <span>initialObjectId</span><span>);</span>
+  <span>virtual</span> <span>HRESULT</span> <span>__stdcall</span> <span>HandleDestroyed</span><span>(</span><span>GCHandleID</span> <span>handleId</span><span>);</span>
+<span>};</span>
+
+<span>OBJECT_ENTRY_AUTO</span><span>(</span><span>__uuidof</span><span>(</span><span>NetProfiler</span><span>),</span> <span>ProfilerCallback</span><span>)</span>
+
+</code></pre></div>
+
+
+
+<p>VS will now warn you that it can't find <code>CLSID_Netprofiler</code>. To fix this, compile the project. This will generate two files (<code>DevToNetProfiler_i.c</code> and <code>DevToNetProfiler_i.h</code>). The first now contains the CLSID. <br>
+Note the usage of <code>ICorProfilerCallback2</code> here. I tried to use only the first version of the interface but it failed. I was not able to attach it to any process. Maybe <code>ICorProfilerCallback</code> is too old for the current .NET framework versions. </p>
+
+<p><strong>Create <code>ProfilerCallback.cpp</code></strong> and add following content:<br>
+</p>
+
+<div><pre><code><span>// ./code/DevToNetProfiler/DevToNetProfiler/ProfilerCallback.cpp</span>
+
+<span>#include "pch.h"
+#include "ProfilerCallback.h"
+#include&lt;iostream&gt;
+</span>
+<span>ProfilerCallback</span><span>::</span><span>ProfilerCallback</span><span>()</span> <span>{</span>
+  <span>std</span><span>::</span><span>cout</span> <span>&lt;&lt;</span> <span>"constructor"</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>ProfilerCallback</span><span>::</span><span>FinalConstruct</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>void</span> <span>ProfilerCallback</span><span>::</span><span>FinalRelease</span><span>()</span>
+<span>{</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>Initialize</span><span>(</span><span>IUnknown</span><span>*</span> <span>pICorProfilerInfoUnk</span><span>)</span>
+<span>{</span>
+  <span>std</span><span>::</span><span>cout</span> <span>&lt;&lt;</span> <span>"init"</span><span>;</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>Shutdown</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AppDomainCreationStarted</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AppDomainCreationFinished</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AppDomainShutdownStarted</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AppDomainShutdownFinished</span><span>(</span><span>AppDomainID</span> <span>appDomainID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AssemblyLoadStarted</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AssemblyLoadFinished</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AssemblyUnloadStarted</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>AssemblyUnloadFinished</span><span>(</span><span>AssemblyID</span> <span>assemblyID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ModuleLoadStarted</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ModuleLoadFinished</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ModuleUnloadStarted</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ModuleUnloadFinished</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ModuleAttachedToAssembly</span><span>(</span><span>ModuleID</span> <span>moduleID</span><span>,</span> <span>AssemblyID</span> <span>assemblyID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ClassLoadStarted</span><span>(</span><span>ClassID</span> <span>classID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ClassLoadFinished</span><span>(</span><span>ClassID</span> <span>classID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ClassUnloadStarted</span><span>(</span><span>ClassID</span> <span>classID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ClassUnloadFinished</span><span>(</span><span>ClassID</span> <span>classID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>FunctionUnloadStarted</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>JITCompilationStarted</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>BOOL</span> <span>fIsSafeToBlock</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>JITCompilationFinished</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>HRESULT</span> <span>hrStatus</span><span>,</span> <span>BOOL</span> <span>fIsSafeToBlock</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>JITCachedFunctionSearchStarted</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>BOOL</span><span>*</span> <span>pbUseCachedFunction</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>JITCachedFunctionSearchFinished</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>COR_PRF_JIT_CACHE</span> <span>result</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>JITFunctionPitched</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>JITInlining</span><span>(</span><span>FunctionID</span> <span>callerID</span><span>,</span> <span>FunctionID</span> <span>calleeID</span><span>,</span> <span>BOOL</span><span>*</span> <span>pfShouldInline</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>UnmanagedToManagedTransition</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>COR_PRF_TRANSITION_REASON</span> <span>reason</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ManagedToUnmanagedTransition</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span> <span>COR_PRF_TRANSITION_REASON</span> <span>reason</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ThreadCreated</span><span>(</span><span>ThreadID</span> <span>threadID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ThreadDestroyed</span><span>(</span><span>ThreadID</span> <span>threadID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ThreadAssignedToOSThread</span><span>(</span><span>ThreadID</span> <span>managedThreadID</span><span>,</span> <span>DWORD</span> <span>osThreadID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingClientInvocationStarted</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingClientSendingMessage</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingClientReceivingReply</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingClientInvocationFinished</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingServerReceivingMessage</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingServerInvocationStarted</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingServerInvocationReturned</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RemotingServerSendingReply</span><span>(</span><span>GUID</span><span>*</span> <span>pCookie</span><span>,</span> <span>BOOL</span> <span>fIsAsync</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RuntimeSuspendStarted</span><span>(</span><span>COR_PRF_SUSPEND_REASON</span> <span>suspendReason</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RuntimeSuspendFinished</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RuntimeSuspendAborted</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RuntimeResumeStarted</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RuntimeResumeFinished</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RuntimeThreadSuspended</span><span>(</span><span>ThreadID</span> <span>threadID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RuntimeThreadResumed</span><span>(</span><span>ThreadID</span> <span>threadID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>MovedReferences</span><span>(</span><span>ULONG</span> <span>cmovedObjectIDRanges</span><span>,</span> <span>ObjectID</span> <span>oldObjectIDRangeStart</span><span>[],</span> <span>ObjectID</span> <span>newObjectIDRangeStart</span><span>[],</span> <span>ULONG</span> <span>cObjectIDRangeLength</span><span>[])</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ObjectAllocated</span><span>(</span><span>ObjectID</span> <span>objectID</span><span>,</span> <span>ClassID</span> <span>classID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ObjectsAllocatedByClass</span><span>(</span><span>ULONG</span> <span>classCount</span><span>,</span> <span>ClassID</span> <span>classIDs</span><span>[],</span> <span>ULONG</span> <span>objects</span><span>[])</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ObjectReferences</span><span>(</span><span>ObjectID</span> <span>objectID</span><span>,</span> <span>ClassID</span> <span>classID</span><span>,</span> <span>ULONG</span> <span>objectRefs</span><span>,</span> <span>ObjectID</span> <span>objectRefIDs</span><span>[])</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RootReferences</span><span>(</span><span>ULONG</span> <span>rootRefs</span><span>,</span> <span>ObjectID</span> <span>rootRefIDs</span><span>[])</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionThrown</span><span>(</span><span>ObjectID</span> <span>thrownObjectID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionUnwindFunctionEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionUnwindFunctionLeave</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionSearchFunctionEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionSearchFunctionLeave</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionSearchFilterEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionSearchFilterLeave</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionSearchCatcherFound</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionCLRCatcherFound</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionCLRCatcherExecute</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionOSHandlerEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionOSHandlerLeave</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionUnwindFinallyEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionUnwindFinallyLeave</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionCatcherEnter</span><span>(</span><span>FunctionID</span> <span>functionID</span><span>,</span>
+  <span>ObjectID</span> <span>objectID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionCatcherLeave</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>COMClassicVTableCreated</span><span>(</span><span>ClassID</span> <span>wrappedClassID</span><span>,</span> <span>REFGUID</span> <span>implementedIID</span><span>,</span> <span>void</span><span>*</span> <span>pVTable</span><span>,</span> <span>ULONG</span> <span>cSlots</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>COMClassicVTableDestroyed</span><span>(</span><span>ClassID</span> <span>wrappedClassID</span><span>,</span> <span>REFGUID</span> <span>implementedIID</span><span>,</span> <span>void</span><span>*</span> <span>pVTable</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ThreadNameChanged</span><span>(</span><span>ThreadID</span> <span>threadID</span><span>,</span> <span>ULONG</span> <span>cchName</span><span>,</span> <span>WCHAR</span> <span>name</span><span>[])</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>GarbageCollectionStarted</span><span>(</span><span>int</span> <span>cGenerations</span><span>,</span> <span>BOOL</span> <span>generationCollected</span><span>[],</span> <span>COR_PRF_GC_REASON</span> <span>reason</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>SurvivingReferences</span><span>(</span><span>ULONG</span> <span>cSurvivingObjectIDRanges</span><span>,</span> <span>ObjectID</span> <span>objectIDRangeStart</span><span>[],</span> <span>ULONG</span> <span>cObjectIDRangeLength</span><span>[])</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>GarbageCollectionFinished</span><span>()</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>FinalizeableObjectQueued</span><span>(</span><span>DWORD</span> <span>finalizerFlags</span><span>,</span> <span>ObjectID</span> <span>objectID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>RootReferences2</span><span>(</span><span>ULONG</span> <span>cRootRefs</span><span>,</span> <span>ObjectID</span> <span>rootRefIDs</span><span>[],</span> <span>COR_PRF_GC_ROOT_KIND</span> <span>rootKinds</span><span>[],</span> <span>COR_PRF_GC_ROOT_FLAGS</span> <span>rootFlags</span><span>[],</span> <span>UINT_PTR</span> <span>rootIDs</span><span>[])</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>HandleCreated</span><span>(</span><span>GCHandleID</span> <span>handleID</span><span>,</span> <span>ObjectID</span> <span>initialObjectID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>HandleDestroyed</span><span>(</span><span>GCHandleID</span> <span>handleID</span><span>)</span>
+<span>{</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+
+
+</code></pre></div>
+
+
+
+<p>Please note both <code>cout</code> statements within <code>Initialize</code> and the <code>constructor</code>. We should see those strings if the profiler was loaded successfully.</p>
+
+<h2>
+  <a name="create-c-test-app" href="#create-c-test-app">
+  </a>
+  Create C# test app
+</h2>
+
+<p>Now add a simple C# console app and add <code>Console.Read()</code> to keep the console open.</p>
+
+<h2>
+  <a name="starting-the-app-and-loading-the-profiler" href="#starting-the-app-and-loading-the-profiler">
+  </a>
+  Starting the app and loading the profiler
+</h2>
+
+<p>How does .NET know that it must load the profiler? Well you can register it globally in the registry. But I do not recommend that. Instead, use those four environment variables:<br>
+</p>
+
+<div><pre><code>SET COR_ENABLE_PROFILING=1
+SET COR_PROFILER={b45048d5-6f44-4fbe-ae88-b468a5e4927a}
+SET COR_PROFILER_PATH=Debug/DevToNetProfiler.dll
+SET COMPLUS_ProfAPI_ProfilerCompatibilitySetting=EnableV2Profiler
+
+START TestApp/bin/Debug/TestApp.exe
+</code></pre></div>
+
+
+
+<p>The first activates profiling, the second one passes the profiler ID. You can find it in the file <code>DevToNetProfiler.idl</code>. The third enables you to use <code>ICorProfilerCallback2</code> with .NET4. If you use the newest interface versions, that environment variable can be omitted. Save those lines as <code>start.bat</code> in the project root, execute it and you should get this result:<br>
+<a href="https://res.cloudinary.com/practicaldev/image/fetch/s--i7Lkv1E2--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/first-run.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--i7Lkv1E2--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/first-run.jpg" alt="" loading="lazy"></a></p>
+
+<p>Also you can check the windows event log:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--vKFaFXGU--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/event-log-success.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--vKFaFXGU--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/write-net-profiler/assets/event-log-success.jpg" alt="" loading="lazy"></a></p>
+
+<h2>
+  <a name="a-word-about-those-many-methods" href="#a-word-about-those-many-methods">
+  </a>
+  A word about those many methods
+</h2>
+
+<p>Don't be worried about those many functions. You just have to implement the interface thus you need to add those stubs here. Just ignore all of them that you do not need.</p>
+
+
+
+<p>OK. This was a lot of code. I will stop here and write another article for this series to keep the single posts very small. What have done so far? We created a profiler with just a minimum set of functionality. You can use this <em>template</em> from now on. I will also refer to it in the following articles.<br>
+And again: Don't think about those ATL things. They are completely irrelevant.</p>
+
+<p>I see you in the next blog post when we are discussing how the profiler works.</p>
+
+<p>If you haven't seen the download link yet: <a href="https://github.com/gabbersepp/dev.to-posts/tree/master/blog-posts/net-internals/write-net-profiler/code/DevToNetProfiler">The full runnable example is here</a></p>
+
+
+<hr>
+
+
+
+<p>As I am not a native English speaker, it is very likely that you will find an error. In this case, feel free to create a pull request here: <a href="https://github.com/gabbersepp/dev.to-posts">https://github.com/gabbersepp/dev.to-posts</a> . Also please open a PR for all other kind of errors.</p>
+
+<p>Do not worry about merge conflicts. I will resolve them on my own. </p>
+
+
+      </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
