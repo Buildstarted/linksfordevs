@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+How does a .NET profiler work? - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="How does a .NET profiler work? - linksfor.dev(s)"/>
+    <meta property="article:author" content="Josef Biehler"/>
+    <meta property="og:description" content="Before doing cool stuff with your .NET profiler, we should understand a few principles"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://dev.to/gabbersepp/how-does-a-net-profiler-work-49e5"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - How does a .NET profiler work?</title>
+<div class="readable">
+        <h1>How does a .NET profiler work?</h1>
+            <div>by Josef Biehler</div>
+            <div>Reading time: 6-8 minutes</div>
+        <div>Posted here: 02 May 2020</div>
+        <p><a href="https://dev.to/gabbersepp/how-does-a-net-profiler-work-49e5">https://dev.to/gabbersepp/how-does-a-net-profiler-work-49e5</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div data-article-id="322785" id="article-body">
+        <blockquote>
+<p><strong><a href="https://github.com/gabbersepp/dev.to-posts/tree/master/blog-posts/net-internals/how-does-profiler-work/code/DevToNetProfiler">Get the code for this tutorial</a></strong></p>
+</blockquote>
+
+
+
+<p>In the last article we built a small runnable example. To start just use the template we created there. If you don't have it yet, visit the article and download the base profiler project.</p>
+
+
+
+
+
+<blockquote>
+<p><strong>Attention!</strong> Most of the functions that are used to query information from the profiler return a <code>HRESULT</code>. You should check if this value is <code>0</code> (error) or not. For the sake of simplicity I will omit all those checks because they make the code harder to understand. This counts for all following blog posts about this topic.</p>
+</blockquote>
+
+
+
+<p>As mentioned in the first post, the profiler is loaded along with the application. If the profiler is called, it is called by the application's thread. If multiple threads are running in your app and every thread triggers events, all those events arrive "at the same time" at your profiler in different threads. So you have to ensure that your profiler is threadsafe.</p>
+
+<h2>
+  <a name="icorprofilercallback" href="#icorprofilercallback">
+  </a>
+  ICorProfilerCallback
+</h2>
+
+<p>Our profiler must implement that interface. Do you remember all those stubs we created? That are callbacks called by the CLR on certain events.</p>
+
+<h2>
+  <a name="icorprofilerinfo" href="#icorprofilerinfo">
+  </a>
+  ICorProfilerInfo
+</h2>
+
+<p>The profiler should request an instance of type <code>ICorProfilerInfo</code>. This object is a bridge between the profiler and the profiled app. You can request the function name for a given function id for example. We will see some of it's power in the next articles.</p>
+
+<h2>
+  <a name="lifecycle" href="#lifecycle">
+  </a>
+  Lifecycle
+</h2>
+
+<p>Well there are two functions that can somehow be identified as <code>Lifecyclefunctions</code>. </p>
+
+<ul>
+<li>
+<strong>Initialize()</strong> is called after the CLR has initialized and loaded up the profiler. This is a very important point in time because it is the only place where you can setup the profiler.</li>
+<li>
+<strong>Shutdown()</strong> is called when the application gets closed</li>
+</ul>
+
+<h2>
+  <a name="initialize" href="#initialize">
+  </a>
+  Initialize
+</h2>
+
+<p>We will focus on <strong>Initialize</strong> because as already said, you must setup your profiler. <br>
+What you must do:</p>
+
+<ul>
+<li>request an instance of type <code>ICorProfilerInfo</code> (or any newer version - you know, the numeric suffix)</li>
+<li>set flags to tell the CLR which events you want to receive</li>
+<li>maybe set some hooks (we will see this later)</li>
+</ul>
+
+<p><strong>Necessary steps:</strong></p>
+
+<ul>
+<li>add <code>include &lt;corprof.h&gt;</code> </li>
+<li>add <code>CComQIPtr&lt;ICorProfilerInfo2&gt; iCorProfilerInfo;</code> variable to the outside of the class. </li>
+<li>add <code>pICorProfilerInfoUnk-&gt;QueryInterface(IID_ICorProfilerInfo2, (LPVOID*)&amp;iCorProfilerInfo);</code> to <code>Initialize()</code>
+</li>
+</ul>
+
+<p>The <code>include</code> is required because it contains the definition of <code>IID_ICorProfilerInfo2</code>. The <code>iCorProfilerInfo</code> variable should not be an instance variable. This makes it much easier to handle. We need it later on to request metadata about the application.</p>
+
+<p><strong>Flags:</strong></p>
+
+<p><code>ICorProfilerInfo</code> has a method <code>SetEventMask()</code>. You must pass a <code>DWORD</code> that reflects the events you want to be notified. A full list of all flags can be found <a href="https://docs.microsoft.com/de-de/dotnet/framework/unmanaged-api/profiling/cor-prf-monitor-enumeration">here</a>. In this example I choose <code>COR_PRF_MONITOR_EXCEPTIONS</code> because I want to monitor all exceptions that occur:<br>
+</p>
+
+<div><pre><code>  <span>iCorProfilerInfo</span><span>-&gt;</span><span>SetEventMask</span><span>(</span><span>COR_PRF_MONITOR_EXCEPTIONS</span><span>);</span>
+</code></pre></div>
+
+
+<p><strong>The function now looks like this:</strong><br>
+</p>
+<div><pre><code><span>CComQIPtr</span><span>&lt;</span><span>ICorProfilerInfo2</span><span>&gt;</span> <span>iCorProfilerInfo</span><span>;</span>
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>Initialize</span><span>(</span><span>IUnknown</span><span>*</span> <span>pICorProfilerInfoUnk</span><span>)</span>
+<span>{</span>
+  <span>pICorProfilerInfoUnk</span><span>-&gt;</span><span>QueryInterface</span><span>(</span><span>IID_ICorProfilerInfo2</span><span>,</span> <span>(</span><span>LPVOID</span><span>*</span><span>)</span><span>&amp;</span><span>iCorProfilerInfo</span><span>);</span>
+  <span>iCorProfilerInfo</span><span>-&gt;</span><span>SetEventMask</span><span>(</span><span>COR_PRF_MONITOR_EXCEPTIONS</span><span>);</span>
+
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+</code></pre></div>
+
+
+<p>Depending on the flags you set you can use different callback methods (that are all those stubs we created in <code>ProfilerCallback.cpp</code>). In order to know which one you need, go the <a href="https://docs.microsoft.com/de-de/dotnet/framework/unmanaged-api/profiling/cor-prf-monitor-enumeration">the documentation</a> and search for <code>COR_PRF_MONITOR_EXCEPTIONS</code>:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--56qu0O1e--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/COR_PRF_MONITOR_EXCEPTIONS.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--56qu0O1e--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/COR_PRF_MONITOR_EXCEPTIONS.jpg" alt="" loading="lazy"></a></p>
+<h2>
+  <a name="exceptionthrown-callback" href="#exceptionthrown-callback">
+  </a>
+  ExceptionThrown Callback
+</h2>
+
+<p>We focus on the <code>ExceptionThrown</code> callback and fill it with some stupid logic:<br>
+</p>
+<div><pre><code><span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionThrown</span><span>(</span><span>ObjectID</span> <span>thrownObjectID</span><span>)</span>
+<span>{</span>
+  <span>cout</span> <span>&lt;&lt;</span> <span>"from profiler: </span><span>			</span><span>exception thrown</span><span>
+</span><span>"</span><span>;</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+</code></pre></div>
+
+
+<p>Adjust the <code>Program.cs</code> of the test app and throw an exception:<br>
+</p>
+<div><pre><code><span>static</span> <span>void</span> <span>Main</span><span>(</span><span>string</span><span>[]</span> <span>args</span><span>)</span>
+<span>{</span>
+  <span>try</span>
+  <span>{</span>
+    <span>throw</span> <span>new</span> <span>Exception</span><span>();</span>
+  <span>}</span>
+  <span>catch</span>
+  <span>{</span>
+
+  <span>}</span>
+
+  <span>Console</span><span>.</span><span>Read</span><span>();</span>
+<span>}</span>
+</code></pre></div>
+
+
+<p>Now compile everything and execute <code>start.bat</code>:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--tyCstjiI--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/first-exception.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--tyCstjiI--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/first-exception.jpg" alt="" loading="lazy"></a></p>
+
+<p>Congratulations, you created your first profiler!</p>
+
+
+<p>Let's see in which thread a profiler is executed. We keep the code from the sections above but adjust the <code>ExceptionThrown</code> callback a bit. I suggest to print the current thread id. This can be done by including <code>&lt;thread&gt;</code> and adjusting the message:<br>
+</p>
+<div><pre><code><span>// ./code/DevToNetProfiler/DevToNetProfiler/ProfilerCallback.cpp#L31-L35</span>
+
+<span>HRESULT</span> <span>__stdcall</span> <span>ProfilerCallback</span><span>::</span><span>ExceptionThrown</span><span>(</span><span>ObjectID</span> <span>thrownObjectID</span><span>)</span>
+<span>{</span>
+  <span>cout</span> <span>&lt;&lt;</span> <span>"from profiler: </span><span>			</span><span>exception thrown in thread "</span> <span>&lt;&lt;</span> <span>this_thread</span><span>::</span><span>get_id</span><span>()</span> <span>&lt;&lt;</span> <span>"</span><span>
+</span><span>"</span><span>;</span>
+  <span>return</span> <span>S_OK</span><span>;</span>
+<span>}</span>
+</code></pre></div>
+
+
+<p>Also you should print the thread id in your <code>C#</code> app:<br>
+</p>
+<div><pre><code><span>// ./code/DevToNetProfiler/TestApp/Program.cs#L8-L21</span>
+
+<span>static</span> <span>void</span> <span>Main</span><span>(</span><span>string</span><span>[]</span> <span>args</span><span>)</span>
+<span>{</span>
+  <span>try</span>
+  <span>{</span>
+    <span>throw</span> <span>new</span> <span>Exception</span><span>();</span>
+  <span>}</span>
+  <span>catch</span>
+  <span>{</span>
+
+  <span>}</span>
+
+  <span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>$"from app:	thread id: </span><span>{</span><span>AppDomain</span><span>.</span><span>GetCurrentThreadId</span><span>()}</span><span>"</span><span>);</span>
+  <span>Console</span><span>.</span><span>Read</span><span>();</span>
+<span>}</span>
+</code></pre></div>
+
+
+<p>And this should be the result:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--Xsvp9hDu--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/thread-id.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--Xsvp9hDu--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/thread-id.jpg" alt="" loading="lazy"></a></p>
+
+<p>Both components have the same thread id.</p>
+
+
+<p>As always when dealing with native code, you must take the bitness into consideration. This is especially true if you want to use <code>FunctionEnter/Leave</code> callbacks. <br>
+The simple rule is: If the .NET app runs as 32Bit app, your profiler must be compiled as 32Bit profiler and vice-versa.</p>
+<h2>
+  <a name="net-and-bitness" href="#net-and-bitness">
+  </a>
+  .NET and bitness
+</h2>
+
+<p>Read this article, if you want to read more about bitness in .NET and <code>Visual Studio</code>:<br>
+</p>
+
+
+
+
+<h2>
+  <a name="what-happens-if-we-ignore-the-bitness" href="#what-happens-if-we-ignore-the-bitness">
+  </a>
+  What happens if we ignore the bitness?
+</h2>
+
+<p>Let the profiler being compiled to 32Bit and set the TestApp to 64Bit. The message from the profiler is missing now:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--kkCwy_-U--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/wrong-bitness-output.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--kkCwy_-U--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/wrong-bitness-output.jpg" alt="" loading="lazy"></a></p>
+
+<p>Additionally we can find an error message in the windows event viewer:</p>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--_7v_Zq8N--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/wrong-bitness-event.jpg"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--_7v_Zq8N--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://raw.githubusercontent.com/gabbersepp/dev.to-posts/master/blog-posts/net-internals/how-does-profiler-work/assets/wrong-bitness-event.jpg" alt="" loading="lazy"></a></p>
+
+
+
+<p>This article showed the basics of a profiler. I think this is enough to get an insight. Do you miss some information that seems relevant to you? Let me know!</p>
+
+<p>In the next articles I want to focus on some use cases. Stay tuned if you want to see some assembler code! </p>
+
+
+<hr>
+
+
+
+<p>As I am not a native English speaker, it is very likely that you will find an error. In this case, feel free to create a pull request here: <a href="https://github.com/gabbersepp/dev.to-posts">https://github.com/gabbersepp/dev.to-posts</a> . Also please open a PR for all other kind of errors.</p>
+
+<p>Do not worry about merge conflicts. I will resolve them on my own. </p>
+
+
+      </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
