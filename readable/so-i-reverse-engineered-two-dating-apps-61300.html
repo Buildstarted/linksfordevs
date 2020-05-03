@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+So I reverse engineered two dating apps... - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="So I reverse engineered two dating apps... - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I show some of my findings during the reverse engineering of the apps Coffee Meets Bagel and The League. I have identified several critical vulnerabilities during the research, all of which have been reported to the affected vendors.&#xA;Introduction In these unprecedented times, more and more people are escaping into the digital world to cope with social distancing. During these times cyber-security is more important than ever. From my limited experience, very few startups are mindful of security best practices."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://push32.com/post/dating-app-fail/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - So I reverse engineered two dating apps...</title>
+<div class="readable">
+        <h1>So I reverse engineered two dating apps...</h1>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 03 May 2020</div>
+        <p><a href="https://push32.com/post/dating-app-fail/">https://push32.com/post/dating-app-fail/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+			<p>In this post I show some of my findings during the reverse engineering of the apps <em>Coffee Meets Bagel</em> and <em>The League</em>. I have identified several critical vulnerabilities during the research, all of which have been reported to the affected vendors.</p>
+<h2 id="introduction">Introduction</h2>
+<p>In these unprecedented times, more and more people are escaping into the digital world to cope with social distancing. During these times cyber-security is more important than ever. From my limited experience, very few startups are mindful of security best practices. The companies responsible for a large range of dating apps are no exception. I started this little research project to see how secure the latest dating apps are.</p>
+<h3 id="responsible-disclosure">Responsible disclosure</h3>
+<p>All high severity vulnerabilities disclosed in this post have been reported to the vendors. By the time of publishing, corresponding patches have been released, and I have independently verified that the fixes are in place.</p>
+<p>I will not provide details into their proprietary APIs unless relevant.</p>
+<h3 id="the-candidate-apps">The candidate apps</h3>
+<p>I picked two popular dating apps available on iOS and Android.</p>
+<h4 id="coffee-meets-bagel">Coffee Meets Bagel</h4>
+<p><em>Coffee Meets Bagel</em> or CMB for short, launched in 2012, is known for showing users a limited number of matches every day. They have been hacked once in 2019, with 6 million accounts stolen. Leaked information included a full name, email address, age, registration date, and gender. CMB has been gaining popularity in recent years, and makes a good candidate for this project.</p>
+<h4 id="the-league">The League</h4>
+<p>The tagline for <em>The League</em> app is “date intelligently”. Launched some time in 2015, it is a members-only app, with acceptance and matches based on LinkedIn and Facebook profiles. The app is more expensive and selective than its alternatives, but is security on par with the price?</p>
+<h3 id="testing-methodologies">Testing methodologies</h3>
+<p>I use a combination of static analysis and dynamic analysis for reverse engineering. For static analysis I decompile the APK, mostly using <em>apktool</em> and <em>jadx</em>. For dynamic analysis I use an MITM network proxy with SSL proxy capabilities.</p>
+<p>The majority of the testing is done inside a rooted Android emulator running Android 8 Oreo. Tests that require more capabilities are done on a real Android device running Lineage OS 16 (based on Android Pie), rooted with Magisk.</p>
+<h2 id="findings-on-cmb">Findings on CMB</h2>
+<p>Both apps have a lot of trackers and telemetry, but I guess that is just the state of the industry. CMB has more trackers than <em>The League</em> though.</p>
+<h3 id="see-who-disliked-you-on-cmb-with-this-one-simple-trick">See who disliked you on CMB with this one simple trick</h3>
+<p>The API includes a <code>pair_action</code> field in every <code>bagel</code> object and it is an enum with the following values:</p>
+<pre><code>ACTION_NOT_CHECKED = 0
+ACTION_LIKED = 1
+ACTION_PASSED = 2
+ACTION_CHECKED = 3
+</code></pre><p>There exists an API that given a bagel ID returns the bagel object. The bagel ID is shown in the batch of daily bagels. So if you want to see if someone has rejected you, you could try the following:</p>
+<ul>
+<li>After the call to get daily suggested bagels, save the bagel ID of someone you liked.</li>
+<li>Wait until your profile is shown to your match.</li>
+<li>Call the API to get bagel, using the bagel ID.</li>
+<li>If you see the <code>pair_action</code> changes from <code>0</code> (unseen) to <code>2</code>.</li>
+</ul>
+<p>This is a harmless vulnerability, but it is funny that this field is exposed through the API but is not available through the app.</p>
+<h3 id="geolocation-data-leak-but-not-really">Geolocation data leak, but not really</h3>
+<p>CMB shows other users’ longitude and latitude up to 2 decimal places, which is around 1 square mile. Fortunately this information <strong>is not real-time</strong>, and it is only updated when a user chooses to update their location. (I imagine this must be used by the app for matchmaking purposes. I have not verified this hypothesis.)</p>
+<p>However, I do think this field could be hidden from the response.</p>
+<h2 id="findings-on-the-league">Findings on The League</h2>
+<h3 id="client-side-generated-authentication-tokens">Client-side generated authentication tokens</h3>
+<p><em>The League</em> does something pretty unusual in their login flow:</p>
+<ul>
+<li>The app sends a POST request with user’s phone number</li>
+<li>User receives the one-time password (OTP) via SMS and punches it into the app</li>
+<li>The app sends a POST request with the phone number, the OTP, and a <code>bearer</code> value, which is a 16 byte UUID.</li>
+<li>Server receives the request, and if the OTP matches the phone number, the <code>bearer</code> becomes user’s login token.</li>
+<li>From this point, subsequent requests to endpoints that require authentication would include the header <code>authorization: bearer sms:{the_uuid}</code></li>
+</ul>
+<p>The UUID that becomes the <code>bearer</code> is entirely client-side generated. Worse, the server does not verify that the <code>bearer</code> value is an actual valid UUID. It might cause collisions and other problems.</p>
+<p>I recommend changing the login model so the bearer token is generated server-side and sent to the client once the server receives the correct OTP from the client.</p>
+<h3 id="phone-number-leak-through-an-unauthenticated-api">Phone number leak through an unauthenticated API</h3>
+<p>In <em>The League</em> there exists an unauthenticated API that accepts a phone number as query parameter. The API leaks information in HTTP response code. When the phone number is registered, it returns <code>200 OK</code>, but when the number is not registered, it returns <code>418 I'm a teapot</code>. It could be abused in a few ways, e.g. mapping all the numbers under an area code to see who is on <em>The League</em> and who is not. Or it can lead to potential embarrassment when your coworker finds out you are on the app.</p>
+<p>This has since been fixed when the bug was reported to the vendor. Now the API simply returns 200 for all requests.</p>
+<h3 id="linkedin-job-details">LinkedIn job details</h3>
+<p><em>The League</em> integrates with LinkedIn to show a user’s employer and job title on their profile. Sometimes it goes a bit overboard gathering information. The profile API returns detailed job position information scraped from LinkedIn, like the start year, end year, etc.</p>
+<div><pre><code data-lang="json"><span>"title"</span>: <span>"Something something intern"</span>,
+<span>"end_year"</span>: <span>2014</span>,
+<span>"end_month"</span>: <span>8</span>,
+<span>"is_current"</span>: <span>false</span>,
+<span>"start_year"</span>: <span>2014</span>,
+<span>"start_month"</span>: <span>6</span>,
+<span>"identity_provider"</span>: <span>"linkedin"</span>
+</code></pre></div><p>While the app does ask user permission to read LinkedIn profile, the user probably does not expect the detailed position information to be included in their profile for everyone else to view. I do not think that kind of information is necessary for the app to function, and it can probably be excluded from profile data.</p>
+<h3 id="picture-and-video-leak-through-misconfigured-s3-buckets">Picture and video leak through misconfigured S3 buckets</h3>
+<p>Typically for pictures or other asserts, some type of Access Control List (ACL) would be in place. For assets such as profile pictures, a common way of implementing ALC would be:</p>
+<ul>
+<li>User uploads an image</li>
+<li>Server generates a random key
+<ul>
+<li>It is essential that the key has high entropy and is difficult to guess</li>
+</ul>
+</li>
+<li>Server uploads the image under the key to the storage service</li>
+<li>Server puts the URL to the image with the key in user’s profile</li>
+</ul>
+<p>The key would serve as a “password” to access the file, and the password would only be given users who need access to the image. In the case of a dating app, it will be whoever the profile is presented to.</p>
+<p>I have identified several misconfigured S3 buckets on <em>The League</em> during the research. <strong>All pictures and videos are accidentally made public</strong>, with metadata such as which user uploaded them and when. Normally the app would get the images through Cloudfront, a CDN on top of the S3 buckets. Unfortunately the underlying S3 buckets are severely misconfigured.</p>
+<p>The photo and video buckets are unauthenticated and <strong>even allow ListObjects</strong>. The keys in the bucket are in the format <code>{profile_uuid}-{timestamp}-{filename}</code>, so there is plenty of abuse potential. For one, a competitor can dump the keys and find out the exact number of users on the app. Or an attacker can see all the photos uploaded by a victim once the profile UUID is known.</p>
+<blockquote>
+<p>Side note: As far as I can tell, the profile UUID is randomly generated server-side when the profile is created. So that part is unlikely to be so easy to guess. The filename is controlled by the client; the server accepts any filename. However in the client app it is hardcoded to <code>upload.jpg</code>.</p>
+</blockquote>
+<p>The vendor has since disabled public ListObjects. However, I still think there should be some randomness in the key. A timestamp cannot serve as secret.</p>
+<h3 id="ip-doxing-through-link-previews">IP doxing through link previews</h3>
+<p>Link preview is one thing that is hard to get right in a lot of messaging apps. There are typically three strategies for link previews:</p>
+<ul>
+<li>Sender-side link previews
+<ul>
+<li>When a message is composed, the link preview is generated under the sender’s context.</li>
+<li>The sent message will include the preview.</li>
+<li>Recipient sees the preview generated by sender.</li>
+<li>Note that this method could allow sender to craft fake previews.</li>
+<li>This strategy is typically implemented in end-to-end encrypted messaging systems such as <em>Signal</em>.</li>
+</ul>
+</li>
+<li>Recipient-side link previews
+<ul>
+<li>When a message is sent, only the link is included.</li>
+<li>Recipient will fetch the link client-side and the app will show the preview.</li>
+<li>Note that this method could leak some context about the recipient, such as the IP address, user agent, and other headers.</li>
+</ul>
+</li>
+<li>Server-side link previews
+<ul>
+<li>In this strategy the preview is generated server-side.</li>
+<li>Sender simply sends the link. Recipient gets the preview from server.</li>
+<li>Server can fetch the link for preview either on message sent, or when message is opened.</li>
+<li>An attacker controlled external server could return a different response if the request comes from the link preview server, thus sending a fake preview to recipient.</li>
+</ul>
+</li>
+</ul>
+<p><em>The League</em> uses <strong>recipient-side link previews</strong>. When a message includes a link to an external image, the link is fetched on user’s device when the message is viewed. This would effectively allow a malicious sender to send an external image URL pointing to an attacker controlled server, obtaining recipient’s IP address when the message is opened.</p>
+<p>A better solution might be just to attach the image in the message when it is sent (sender-side preview), or have the server fetch the image and put it in the message (server-side preview). Server-side previews will allow additional anti-abuse scanning. It might be a better option, but still not bulletproof.</p>
+<h3 id="zero-click-session-hijacking-through-chat">Zero-click session hijacking through chat</h3>
+<p>The app will sometimes attach the authorization header to requests that do not require authentication, such as Cloudfront GET requests. It will also gladly give out the bearer token in requests to <strong>external domains</strong> in some cases.</p>
+<p>One of those cases is the external image link in chat messages. We already know the app uses recipient-side link previews, and the request to the external resource is executed in recipient’s context. The authorization header is included in the GET request to the external image URL. So the bearer token gets leaked to the external domain. When a malicious sender sends an image link pointing to an attacker controlled server, not only do they get recipient’s IP, but they also get their victim’s session token. This is a critical vulnerability as it allows session hijacking.</p>
+<p>Note that unlike phishing, this attack <strong>does not require the victim to click on the link</strong>. When the message containing the image link is viewed, the app automatically leaks the session token to the attacker.</p>
+<p>It seems to be a bug related to the reuse of a global OkHttp client object. It would be best if the developers make sure the app only attaches authorization bearer header in requests to <em>The League</em> API.</p>
+<h2 id="conclusions">Conclusions</h2>
+<p>I did not find any particularly interesting vulnerabilities in CMB, but that does not mean CMB is more secure than <em>The League</em>. (See <em>Limitations and future research</em>). I did find a few security issues in <em>The League</em>, none of which were particularly difficult to discover or exploit. I guess it really is the common mistakes people make over and over. OWASP top ten anyone?</p>
+<p>As consumers we need to be mindful with which companies we trust with our data.</p>
+<h3 id="vendors-response">Vendor’s response</h3>
+<p>I did receive a prompt response from <em>The League</em> after sending them an email alerting them of the findings. The S3 bucket configuration was swiftly fixed. The other vulnerabilities were patched or at least mitigated within a few weeks.</p>
+<p>I think startups could certainly offer bug bounties. It is a nice gesture, and more importantly, platforms like HackerOne provide researchers a legal path to the disclosure of vulnerabilities. Unfortunately neither of the two apps in the post has such program.</p>
+<h3 id="limitations-and-future-research">Limitations and future research</h3>
+<p>This research is not comprehensive, and <strong>should not be seen as a security audit</strong>. Most of the tests in this post were done on the network IO level, and very little on the client itself. Notably, I did not test for remote code execution or buffer overflow type vulnerabilities. In future research, we could look more into the security of the client applications.</p>
+<p>This could be done with dynamic analysis, using methods such as:</p>
+<ul>
+<li>Hooking Android APIs to see what functions the app is calling (with <em>Xposed framework</em>)</li>
+<li>Attaching a debugger to the app (Android Studio can do this)</li>
+<li>Scanning memory for interesting stuff (using tools such as <em>scanmem</em>)</li>
+</ul>
+<h2 id="appendix">Appendix</h2>
+<h3 id="special-thanks-to">Special thanks to…</h3>
+<ul>
+<li>XDA-Developers and the open source Android community, for the amazing tools.</li>
+<li>David Siu, VP of Engineering at <em>The League</em>, for the quick turnaround when the vulnerabilities were reported.</li>
+</ul>
+<h2 id="references">References</h2>
+<ol>
+<li><a href="https://coffeemeetsbagel.com/">Coffee Meets Bagel</a>. coffeemeetsbagel.com.</li>
+<li>Williams, Chris. <a href="https://www.theregister.co.uk/2019/02/11/620_million_hacked_accounts_dark_web/">620 million accounts stolen from 16 hacked websites now for sale on dark web, seller boasts</a>. <em>The Register</em>.</li>
+<li>Ha, Anthony. <a href="https://techcrunch.com/2017/01/26/the-league-brings-its-picky-dating-app-to-android/">The League brings its picky dating app to Android</a>. <em>Tech Crunch</em>.</li>
+<li><a href="https://www.xda-developers.com/xposed-framework-hub/">Xposed Framework Hub</a>. <em>XDA-Developers</em>.</li>
+<li><a href="https://www.hackerone.com/">Hacker One</a>. hackerone.com.</li>
+<li><a href="https://developer.android.com/training/articles/security-config">Network security configuration</a>. <em>Android Developers</em>.</li>
+</ol>
+
+		</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
