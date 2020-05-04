@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+ It&#x27;s better to .Take() | Codejack - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content=" It&#x27;s better to .Take() | Codejack - linksfor.dev(s)"/>
+    <meta property="article:author" content="feech"/>
+    <meta property="og:description" content="Given a EFCore entity object that has a navigation property, and the schema is built for a one-to-many relationship, but you want a navigation property to represent a single record based on a specific filter."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://codejack.com/2020/05/sql-linq-efcore-and-sub-select/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) -  It&#x27;s better to .Take() | Codejack</title>
+<div class="readable">
+        <h1> It&#x27;s better to .Take() | Codejack</h1>
+            <div>by feech</div>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 04 May 2020</div>
+        <p><a href="https://codejack.com/2020/05/sql-linq-efcore-and-sub-select/">https://codejack.com/2020/05/sql-linq-efcore-and-sub-select/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody">
+								
+<h2>Challenge</h2>
+
+
+
+<p>Given <a rel="noreferrer noopener" href="https://docs.microsoft.com/en-us/ef/" target="_blank">EFCore </a>entity objects with a one-to-many relationship, lets discuss how to best retrieve the parent record along with a single record of the child property based on a specific filter.</p>
+
+
+
+<p>In our example we have a Component entity, and a ComponentStatus entity.  ComponentStatus is a history of records providing the status of the component at any point in time.</p>
+
+
+
+<div><div><div><p><span>    </span><span>public</span><span> </span><span>int</span><span> Id </span><span>{</span><span> get; set; </span><span>}</span><span></span></p></div><div><p><span>    </span><span>public</span><span> </span><span>virtual</span><span> ComponentStatus LatestComponentStatus </span><span>{</span><span> get; set; </span><span>}</span><span></span></p></div><div><p><span></span><span>public</span><span> </span><span>class</span><span> ComponentStatus </span><span>{</span><span></span></p></div><div><p><span>    </span><span>public</span><span> </span><span>int</span><span> Id </span><span>{</span><span> get; set; </span><span>}</span><span></span></p></div><div><p><span>    </span><span>public</span><span> DateChanged </span><span>{</span><span> get; set; </span><span>}</span><span></span></p></div><div><p><span>    </span><span>public</span><span> StatusEnum Status </span><span>{</span><span> get; set; </span><span>}</span><span></span></p></div><div><p><span>    </span><span>public</span><span> </span><span>in</span><span> ComponentId </span><span>{</span><span> get; set; </span><span>}</span><span></span></p></div></div><p>public class Component
+{
+    public int Id { get; set; }
+    public virtual ComponentStatus LatestComponentStatus { get; set; }
+}
+
+public class ComponentStatus {
+    public int Id { get; set; }
+    public DateChanged { get; set; }
+    public StatusEnum Status { get; set; }
+    public in ComponentId { get; set; }
+}</p></div><pre data-enlighter-language="csharp" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">public class Component
+{
+    public int Id { get; set; }
+    public virtual ComponentStatus LatestComponentStatus { get; set; }
+}
+
+public class ComponentStatus {
+    public int Id { get; set; }
+    public DateChanged { get; set; }
+    public StatusEnum Status { get; set; }
+    public in ComponentId { get; set; }
+}</pre>
+
+
+
+<p>The final result should be a list of components, with the LatestComponentStatus property containing the most recent ComponentStatus record for each component.</p>
+
+
+
+<p>In our situation, these tables may be massive with tens of thousands of components and millions of ComponentStatus records to sift through.</p>
+
+
+
+<h2>Solution 1 (not good)</h2>
+
+
+
+<p>My first query looked pretty basic:</p>
+
+
+
+<div><div><div><p><span>var</span><span> query = from c </span><span>in</span><span> Components</span></p></div><div><p><span>       componentstatus=</span><span>(</span><span>from cs </span><span>in</span><span> ComponentStatus </span></p></div><div><p><span>                   where cs.</span><span>ComponentId</span><span>==c.</span><span>Id</span><span> &amp;&amp; cs.</span><span>DateChanged</span><span>&lt;</span><span>DateTime.</span><span>UtcNow</span><span></span></p></div><div><p><span>                select cs</span><span>)</span><span>.</span><span>OrderBy</span><span>(</span><span>cs=</span><span>&gt;</span><span>cs.</span><span>Id</span><span>)</span><span>.</span><span>FirstOrDefault</span><span>()</span><span></span></p></div></div><p>var query = from c in Components
+    select new  {
+       component=c,
+       componentstatus=(from cs in ComponentStatus 
+                   where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+                select cs).OrderBy(cs=&gt;cs.Id).FirstOrDefault()
+    };</p></div><pre data-enlighter-language="csharp" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">var query = from c in Components
+	select new  {
+	   component=c,
+	   componentstatus=(from cs in ComponentStatus 
+	   			where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+				select cs).OrderBy(cs=&gt;cs.Id).FirstOrDefault()
+	};</pre>
+
+
+
+<p>This <strong>seemingly</strong> works great, but as with all LINQ statements that aren’t straight SELECT’s, if you aren’t looking under the hood, you aren’t doing yourself any favors.   There is no tool better for this investigation than <a rel="noreferrer noopener" href="https://linqpad.net/" target="_blank">LinqPad</a>.  If you don’t have a paid license for this wonderful tool, stop what you are doing and get it now.</p>
+
+
+
+<p>The above query generates the seemingly harmless SQL code:</p>
+
+
+
+<div><div><div><p><span>SELECT</span><span> [s].[Id], [t0].[</span><span>ID</span><span>], [t0].[ComponentId],  [t0].[DateChanged], [t0].[Status]</span></p></div><div><p><span>    </span><span>SELECT</span><span> [t].[</span><span>ID</span><span>], [t].[ComponentId], [t].[DateChanged], [t].[Status]</span></p></div><div><p><span>        </span><span>SELECT</span><span> [c].[</span><span>ID</span><span>], [c].[ComponentId], [c].[DateChanged], [c].[Status], ROW_NUMBER() </span><span>OVER</span><span>(</span><span>PARTITION</span><span> </span><span>BY</span><span> [c].[ComponentId] </span><span>ORDER BY</span><span> [c].[</span><span>ID</span><span>]) </span><span>AS</span><span> [row]</span></p></div><div><p><span>        </span><span>FROM</span><span> [ComponentStatus] </span><span>AS</span><span> [c]</span></p></div><div><p><span>        </span><span>WHERE</span><span> [c].[DateChanged] &lt; </span><span>GETUTCDATE</span><span>()</span></p></div><div><p><span>) </span><span>AS</span><span> [t0] </span><span>ON</span><span> [s].[Id] = [t0].[ComponentId]</span></p></div></div><p>SELECT [s].[Id], [t0].[ID], [t0].[ComponentId],  [t0].[DateChanged], [t0].[Status]
+FROM [Component] AS [s]
+LEFT JOIN (
+    SELECT [t].[ID], [t].[ComponentId], [t].[DateChanged], [t].[Status]
+    FROM (
+        SELECT [c].[ID], [c].[ComponentId], [c].[DateChanged], [c].[Status], ROW_NUMBER() OVER(PARTITION BY [c].[ComponentId] ORDER BY [c].[ID]) AS [row]
+        FROM [ComponentStatus] AS [c]
+        WHERE [c].[DateChanged] &lt; GETUTCDATE()
+    ) AS [t]
+    WHERE [t].[row] &lt;= 1
+) AS [t0] ON [s].[Id] = [t0].[ComponentId]</p></div><pre data-enlighter-language="sql" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">SELECT [s].[Id], [t0].[ID], [t0].[ComponentId],  [t0].[DateChanged], [t0].[Status]
+FROM [Component] AS [s]
+LEFT JOIN (
+    SELECT [t].[ID], [t].[ComponentId], [t].[DateChanged], [t].[Status]
+    FROM (
+        SELECT [c].[ID], [c].[ComponentId], [c].[DateChanged], [c].[Status], ROW_NUMBER() OVER(PARTITION BY [c].[ComponentId] ORDER BY [c].[ID]) AS [row]
+        FROM [ComponentStatus] AS [c]
+        WHERE [c].[DateChanged] &lt; GETUTCDATE()
+    ) AS [t]
+    WHERE [t].[row] &lt;= 1
+) AS [t0] ON [s].[Id] = [t0].[ComponentId]</pre>
+
+
+
+<p>After running the above query directly in SQL Manager and applying the recommended indices, a database with approximately 20,000 components and over 225,000 component status records took 6 seconds.  Not great.  <a rel="noreferrer noopener" href="https://www.microsoft.com/en-us/sql-server/sql-server-2019" target="_blank">SQL Server</a> has to do a lot of work to make it happen:</p>
+
+
+
+<figure><img src="https://codejack.com/wp-content/uploads/2020/04/image-5-1024x275.png" alt="" srcset="https://codejack.com/wp-content/uploads/2020/04/image-5-1024x275.png 1024w, https://codejack.com/wp-content/uploads/2020/04/image-5-300x81.png 300w, https://codejack.com/wp-content/uploads/2020/04/image-5-768x206.png 768w, https://codejack.com/wp-content/uploads/2020/04/image-5.png 1390w" sizes="(max-width: 1024px) 100vw, 1024px" height=""></figure>
+
+
+
+
+
+
+
+<p>I recommend taking your generated SQL from LINQ statements and running it through Microsoft SQL Manager so you can see these statistics.  They tell 99% of the story.</p>
+
+
+
+<p>Even with proper indexing, SQL still had to do a lot of heavy lifting to get the proper result.</p>
+
+
+
+<h2>Solution 2 (much better)</h2>
+
+
+
+<p>By chance (unfortunate how often this happens in my development life) I decided to slightly modify the query, not expecting much change:</p>
+
+
+
+<div><div><div><p><span>var</span><span> query = from c </span><span>in</span><span> Components</span></p></div><div><p><span>       componentstatus=</span><span>(</span><span>from cs </span><span>in</span><span> ComponentStatus </span></p></div><div><p><span>                   where cs.</span><span>ComponentId</span><span>==c.</span><span>Id</span><span> &amp;&amp; cs.</span><span>DateChanged</span><span>&lt;</span><span>DateTime.</span><span>UtcNow</span><span></span></p></div><div><p><span>                select cs</span><span>)</span><span>.</span><span>OrderBy</span><span>(</span><span>cs=</span><span>&gt;</span><span>cs.</span><span>Id</span><span>)</span><span>.</span><span>Take</span><span>(</span><span>1</span><span>)</span><span>.</span><span>FirstOrDefault</span><span>()</span><span></span></p></div></div><p>var query = from c in Components
+    select new  {
+       component=c,
+       componentstatus=(from cs in ComponentStatus 
+                   where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+                select cs).OrderBy(cs=&gt;cs.Id).Take(1).FirstOrDefault()
+    };</p></div><pre data-enlighter-language="csharp" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">var query = from c in Components
+	select new  {
+	   component=c,
+	   componentstatus=(from cs in ComponentStatus 
+	   			where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+				select cs).OrderBy(cs=&gt;cs.Id).Take(1).FirstOrDefault()
+	};</pre>
+
+
+
+<p>This query looks essentially the same, the only difference is the addition of  .Take(1)  Oddly (more analysis at the end), that statement fundamentally changed how EFCore built the resulting SQL:</p>
+
+
+
+<div><div><div><p><span>SELECT</span><span> [s].[Id], [t0].[</span><span>ID</span><span>], [t0].[ComponentId], [t0].[DateChanged], [t0].[Status]</span></p></div><div><p><span>    </span><span>SELECT</span><span> </span><span>TOP</span><span>(</span><span>1</span><span>) [t].[</span><span>ID</span><span>], [t].[ComponentId],[t].[DateChanged], [t].[Status]</span></p></div><div><p><span>        </span><span>SELECT</span><span> </span><span>TOP</span><span>(</span><span>1</span><span>) [c].[</span><span>ID</span><span>], [c].[ComponentId], [c].[DateChanged],  [c].[Status]</span></p></div><div><p><span>        </span><span>FROM</span><span> [ComponentStatus] </span><span>AS</span><span> [c]</span></p></div><div><p><span>        </span><span>WHERE</span><span> ([c].[ComponentId] = [s].[Id]) </span><span>AND</span><span> ([c].[DateChanged] &lt; </span><span>GETUTCDATE</span><span>())</span></p></div></div><p>SELECT [s].[Id], [t0].[ID], [t0].[ComponentId], [t0].[DateChanged], [t0].[Status]
+FROM [Component] AS [s]
+OUTER APPLY (
+    SELECT TOP(1) [t].[ID], [t].[ComponentId],[t].[DateChanged], [t].[Status]
+    FROM (
+        SELECT TOP(1) [c].[ID], [c].[ComponentId], [c].[DateChanged],  [c].[Status]
+        FROM [ComponentStatus] AS [c]
+        WHERE ([c].[ComponentId] = [s].[Id]) AND ([c].[DateChanged] &lt; GETUTCDATE())
+        ORDER BY [c].[ID]
+    ) AS [t]
+    ORDER BY [t].[ID]
+) AS [t0]</p></div><pre data-enlighter-language="sql" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">SELECT [s].[Id], [t0].[ID], [t0].[ComponentId], [t0].[DateChanged], [t0].[Status]
+FROM [Component] AS [s]
+OUTER APPLY (
+    SELECT TOP(1) [t].[ID], [t].[ComponentId],[t].[DateChanged], [t].[Status]
+    FROM (
+        SELECT TOP(1) [c].[ID], [c].[ComponentId], [c].[DateChanged],  [c].[Status]
+        FROM [ComponentStatus] AS [c]
+        WHERE ([c].[ComponentId] = [s].[Id]) AND ([c].[DateChanged] &lt; GETUTCDATE())
+        ORDER BY [c].[ID]
+    ) AS [t]
+    ORDER BY [t].[ID]
+) AS [t0]</pre>
+
+
+
+<p>Rather than a simple LEFT JOIN, EFCore now chose to implement an OUTER APPLY.  </p>
+
+
+
+<p>….. interesting.</p>
+
+
+
+<p>….. and lucky.</p>
+
+
+
+<p>The above query executes in less than 2 seconds (a 3x improvement), and generates the following workload in SQL Server:</p>
+
+
+
+<figure><img src="https://codejack.com/wp-content/uploads/2020/04/image-7-1024x187.png" alt="" srcset="https://codejack.com/wp-content/uploads/2020/04/image-7-1024x187.png 1024w, https://codejack.com/wp-content/uploads/2020/04/image-7-300x55.png 300w, https://codejack.com/wp-content/uploads/2020/04/image-7-768x140.png 768w, https://codejack.com/wp-content/uploads/2020/04/image-7.png 1417w" sizes="(max-width: 1024px) 100vw, 1024px" height=""></figure>
+
+
+
+
+
+
+
+<h2>Observations</h2>
+
+
+
+<h3>Why .Take?</h3>
+
+
+
+<p>I’m sure some of this is obvious to EntityFramework wonks, but to the masses this seems a little strange.  When you consider the following two LINQ statements:</p>
+
+
+
+<div><div><div><p><span>var</span><span> query1 = ComponentStatus</span></p></div><div><p><span>        .</span><span>Where</span><span>(</span><span>cs=</span><span>&gt;</span><span>cs.</span><span>DateChanged</span><span>&lt;</span><span>DateTime.</span><span>UtcNow</span><span>)</span><span></span></p></div><div><p><span></span><span>var</span><span> query2 = ComponentStatus</span></p></div><div><p><span>        .</span><span>Where</span><span>(</span><span>cs=</span><span>&gt;</span><span>cs.</span><span>DateChanged</span><span>&lt;</span><span>DateTime.</span><span>UtcNow</span><span>)</span><span></span></p></div></div><p>var query1 = ComponentStatus
+        .Where(cs=&gt;cs.DateChanged&lt;DateTime.UtcNow)
+        .Select(cs=&gt;cs.Id)
+        .OrderBy(cs=&gt;cs)                
+        .FirstOrDefault();
+    
+var query2 = ComponentStatus
+        .Where(cs=&gt;cs.DateChanged&lt;DateTime.UtcNow)
+        .Select(cs=&gt;cs.Id)
+        .OrderBy(cs=&gt;cs)
+        .Take(1)
+        .FirstOrDefault();</p></div><pre data-enlighter-language="csharp" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">var query1 = ComponentStatus
+		.Where(cs=&gt;cs.DateChanged&lt;DateTime.UtcNow)
+		.Select(cs=&gt;cs.Id)
+		.OrderBy(cs=&gt;cs)				
+		.FirstOrDefault();
+	
+var query2 = ComponentStatus
+		.Where(cs=&gt;cs.DateChanged&lt;DateTime.UtcNow)
+		.Select(cs=&gt;cs.Id)
+		.OrderBy(cs=&gt;cs)
+		.Take(1)
+		.FirstOrDefault();</pre>
+
+
+
+<p>Generate fundamentally the same SQL:</p>
+
+
+
+<div><div><div><p><span></span><span>FROM</span><span> [ComponentStatus] </span><span>AS</span><span> [c]</span></p></div><div><p><span></span><span>WHERE</span><span> [c].[DateChanged] &lt; </span><span>GETUTCDATE</span><span>()</span></p></div><div><p><span>    </span><span>FROM</span><span> [ComponentStatus] </span><span>AS</span><span> [c]</span></p></div><div><p><span>    </span><span>WHERE</span><span> [c].[DateChanged] &lt; </span><span>GETUTCDATE</span><span>()</span></p></div></div><p>SELECT TOP(1) [c].[ID]
+FROM [ComponentStatus] AS [c]
+WHERE [c].[DateChanged] &lt; GETUTCDATE()
+ORDER BY [c].[ID]
+GO
+
+SELECT TOP(1) [t].[ID]
+FROM (
+    SELECT TOP(1) [c].[ID]
+    FROM [ComponentStatus] AS [c]
+    WHERE [c].[DateChanged] &lt; GETUTCDATE()
+    ORDER BY [c].[ID]
+) AS [t]
+ORDER BY [t].[ID]
+GO</p></div><pre data-enlighter-language="sql" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">SELECT TOP(1) [c].[ID]
+FROM [ComponentStatus] AS [c]
+WHERE [c].[DateChanged] &lt; GETUTCDATE()
+ORDER BY [c].[ID]
+GO
+
+SELECT TOP(1) [t].[ID]
+FROM (
+    SELECT TOP(1) [c].[ID]
+    FROM [ComponentStatus] AS [c]
+    WHERE [c].[DateChanged] &lt; GETUTCDATE()
+    ORDER BY [c].[ID]
+) AS [t]
+ORDER BY [t].[ID]
+GO</pre>
+
+
+
+<p>Why then, when .Take is included in a sub-query does it magically change the higher order SQL?</p>
+
+
+
+<h3>Projection Just Doesn’t Work</h3>
+
+
+
+<p>Our original requirement was to return a single list of Component objects with a faux-navigation property containing the current ComponentStatus record.  Our current LINQ statement returns two objects that have to be merged:</p>
+
+
+
+<div><div><div><p><span>var</span><span> query = from c </span><span>in</span><span> Components</span></p></div><div><p><span>       componentstatus=</span><span>(</span><span>from cs </span><span>in</span><span> ComponentStatus </span></p></div><div><p><span>                   where cs.</span><span>ComponentId</span><span>==c.</span><span>Id</span><span> &amp;&amp; cs.</span><span>DateChanged</span><span>&lt;</span><span>DateTime.</span><span>UtcNow</span><span></span></p></div><div><p><span>                select cs</span><span>)</span><span>.</span><span>OrderBy</span><span>(</span><span>cs=</span><span>&gt;</span><span>cs.</span><span>Id</span><span>)</span><span>.</span><span>Take</span><span>(</span><span>1</span><span>)</span><span>.</span><span>FirstOrDefault</span><span>()</span><span></span></p></div><div><p><span></span><span>var</span><span> results = await query.</span><span>ToListAsync</span><span>()</span><span>;</span></p></div><div><p><span>results.</span><span>forEach</span><span>(</span><span>x=</span><span>&gt;</span><span>x.</span><span>component</span><span>.</span><span>CurrentComponentStatus</span><span> = x.</span><span>componentstatus</span><span>)</span><span>;</span></p></div></div><p>var query = from c in Components
+    select new  {
+       component=c,
+       componentstatus=(from cs in ComponentStatus 
+                   where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+                select cs).OrderBy(cs=&gt;cs.Id).Take(1).FirstOrDefault()
+    };
+
+var results = await query.ToListAsync();
+results.forEach(x=&gt;x.component.CurrentComponentStatus = x.componentstatus);</p></div><pre data-enlighter-language="csharp" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">var query = from c in Components
+	select new  {
+	   component=c,
+	   componentstatus=(from cs in ComponentStatus 
+	   			where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+				select cs).OrderBy(cs=&gt;cs.Id).Take(1).FirstOrDefault()
+	};
+
+var results = await query.ToListAsync();
+results.forEach(x=&gt;x.component.CurrentComponentStatus = x.componentstatus);</pre>
+
+
+
+<p>Wouldn’t it be nice if we did not have to do any post-processing to merge the object?   I tried the following code:</p>
+
+
+
+<div><div><div><p><span>var</span><span> query5 = from c </span><span>in</span><span> Components</span></p></div><div><p><span>       ComponentStatus=</span><span>(</span><span>from cs </span><span>in</span><span> ComponentStatus </span></p></div><div><p><span>                   where cs.</span><span>ComponentId</span><span>==c.</span><span>Id</span><span> &amp;&amp; cs.</span><span>DateChanged</span><span>&lt;</span><span>DateTime.</span><span>UtcNow</span><span></span></p></div><div><p><span>                select </span><span>new</span><span> </span><span>{</span><span> cs.</span><span>Status</span><span>, cs.</span><span>Id</span><span> </span><span>})</span><span>.</span><span>OrderBy</span><span>(</span><span>cs=</span><span>&gt;</span><span>cs.</span><span>Id</span><span>)</span><span>.</span><span>Take</span><span>(</span><span>1</span><span>)</span><span>.</span><span>FirstOrDefault</span><span>()</span><span></span></p></div></div><p>var query5 = from c in Components
+    select new Component  {
+       Id=c.Id,
+       ComponentStatus=(from cs in ComponentStatus 
+                   where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+                select new { cs.Status, cs.Id }).OrderBy(cs=&gt;cs.Id).Take(1).FirstOrDefault()
+    };</p></div><pre data-enlighter-language="csharp" data-enlighter-theme="" data-enlighter-highlight="" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-title="" data-enlighter-group="">var query5 = from c in Components
+	select new Component  {
+	   Id=c.Id,
+	   ComponentStatus=(from cs in ComponentStatus 
+	   			where cs.ComponentId==c.Id &amp;&amp; cs.DateChanged&lt;DateTime.UtcNow
+				select new { cs.Status, cs.Id }).OrderBy(cs=&gt;cs.Id).Take(1).FirstOrDefault()
+	};</pre>
+
+
+
+<p>Unfortunately, I could not get EFCore to run this projection successfully.  I kept getting an error:</p>
+
+
+
+<p><em>EFCore Linq “Data is Null. This method or property cannot be called on Null values”</em></p>
+
+
+
+<p>My assumption was that was happening because inevitably, some Component records didn’t have any Component Status records.  My attempt to add .DefaultIfEmpty() to the sub-select generated a more horrifying error:</p>
+
+
+
+<p><em>Processing of the LINQ expression …. This may indicate either a bug or a limitation in EF Core.</em></p>
+
+
+
+<p>By this point, I gave up.  It wasn’t worth further research when throwing a 1 line post-processing statement dealt with it just as efficiently.</p>
+
+
+
+<h2>The Lesson</h2>
+
+
+
+<p>Watch how your LINQ statements are transformed in to SQL.  Small, seemingly innocuous alterations can have drastic effects.</p>
+
+
+
+<h2>Anything better?</h2>
+
+
+
+<p>I feel like there may be some magic JOIN solution that may present a third option and give me the best of both world:  A single result set with the navigation property set immediately in the result.</p>
+
+															</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
