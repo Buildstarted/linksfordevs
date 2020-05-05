@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Auto Saving Form Data in Blazor - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Auto Saving Form Data in Blazor - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post, I show you how I designed a new form component which saves and retrieves form data to and from local storage automatically - until the form is successfully submitted."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://chrissainty.com/auto-saving-form-data-in-blazor/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Auto Saving Form Data in Blazor</title>
+<div class="readable">
+        <h1>Auto Saving Form Data in Blazor</h1>
+            <div>Reading time: 19-24 minutes</div>
+        <div>Posted here: 05 May 2020</div>
+        <p><a href="https://chrissainty.com/auto-saving-form-data-in-blazor/">https://chrissainty.com/auto-saving-form-data-in-blazor/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+                        <p>I got tagged in a thread on Twitter last week by <a href="https://twitter.com/RockyLhotka">Mr Rockford Lhotka</a>. I've embedded the thread below so you can read it for yourself, but essentially he was voicing his frustration at losing data when an error/timeout/server error/etc occur in web applications. </p><figure><twitter-widget id="twitter-widget-0" data-tweet-id="1255347828852953089"></twitter-widget>
+
+</figure><p>Now, this type of situation very much depends on the application and how it's been developed, but, none the less, I agree. There is nothing worse than spending ages filling in a form and then for something to blow up and lose everything you've entered.</p><p>He and <a href="https://twitter.com/DanWahlin">Dan Wahlin</a> were discussing the idea of a form auto saving data so it could be recovered if something went wrong with the application. I got tagged by Rockford suggesting it would be a great addition to <a href="https://github.com/Blazored">Blazored</a> – Challenge accepted! 😃</p><figure><twitter-widget id="twitter-widget-1" data-tweet-id="1255360086974873606"></twitter-widget>
+
+</figure><p>In this post, I'm going to show you a solution I've come up with for auto saving and rehydrating form data in Blazor. I'm going to start by outlining the goals and boundaries I set for this project. Then I'm going to tell you about some options I decided not to go with and why I didn't pursue them. Then I'll get into the meat of things and step through the solution I developed. I'll show how I satisfied each goal set out at the start. Then I'll finish by showing you how using the solution compares to the existing <code>EditForm</code> experience.</p><p>I want to be clear this is by no means a bullet proof, cover all bases solution. It's more an MVP to be built on. I'm hoping to release this as a new package under Blazored after a bit more development and refinement. If you want to help out with that then I've included a link to the new repo at the <a href="#blazored-autosaveeditform">end of the post</a>.</p><h2 id="defining-the-goals">Defining the Goals</h2><p>To give myself some focus and boundaries I made a list of four things that needed to be achieved in order for this to be considered useful.</p><ol><li>Save data to local storage when it's entered into each form controls</li><li>Rehydrate data from local storage when the user returns to the page</li><li>Clear saved data from local storage when it's successfully submitted by the form</li><li>Try to keep things as close to the current experience with <code>EditForm</code> as possible for developers</li></ol><p>There were also some things that I wanted to rule out for now.</p><ul><li>Only persist to local storage</li><li>Don't worry about complex forms with nested complex objects</li></ul><p>Now I had a defined scope for the work, I could start playing around with some ideas and see what I could come up with.</p><h2 id="the-cutting-room-floor">The Cutting Room Floor</h2><p>As you would expect, I went though many failed ideas before I settled on a solution I was happy with. I thought it might be interesting to briefly highlight what they were and why I didn't pursue them.</p><h3 id="first-attempt">First attempt</h3><p>I started with the idea of creating a new component which could be nested inside an <code>EditForm</code>, similar to the <code>DataAnnotationValidator</code>. I quickly got something in-place which used the cascaded <code>EditContext</code>, provided by <code>EditForm</code>, to hook into the <code>OnFieldChanged</code> event. From here I could intercept model updates and persist the model to local storage. </p><p>The problem came when trying to rehydrate the form. Due to where my component sat in the component tree, the UI wasn't updating to show the values in the textboxes. I needed a <code>StateHasChanged</code> call higher in the tree and I just couldn't get that to work in a nice way.</p><p>I also would need to know when the form had been submitted so I could achieve number 3 on my goals list, clearing the saved values on a successful form post. There was no way I could reliably do that using the <code>EditContext</code> alone.</p><h3 id="second-attempt">Second attempt</h3><p>After some hacking about I came to the conclusion that the best option was going to be a new form component, replacing <code>EditForm</code>. I wanted to save duplicating all of the code from <code>EditForm</code> and just inherit from it. I could then add some additional functionality to save and load the form values.</p><p>Unfortunately, that was a short lived hope. I needed access to some members which were private. I got round that with some reflection foo, but the show stopper was needing to add some additional logic in the <code>HandleSubmitAsync</code> method, there was no way to hack this.</p><h3 id="conclusion">Conclusion</h3><p>In the end, I concluded that I would need to duplicate the <code>EditForm</code> component and use it as a starting point for my new form component. It wasn't the end of the world, after my experimenting I was happy with the fact I had to change the behaviour of the original component enough that just extending it wasn't going to work.</p><p>With this decision made I then moved on to what became the solution I ended up with.</p><h2 id="building-the-autosaveeditform-component">Building the AutoSaveEditForm Component</h2><p>The starting point for the new component was the existing <code>EditForm</code> component produced by the Blazor team. If you want to see this in its unaltered state you can find it <a href="https://github.com/dotnet/aspnetcore/blob/master/src/Components/Web/src/Forms/EditForm.cs">here</a>. Let's go through each of the changes I made and why.</p><h3 id="integrating-with-local-storage">Integrating with Local Storage</h3><p>The first thing I did was to add the functionality to persist and retrieve the form to and from local storage. This required injecting <code>IJSRuntime</code> into the component and then adding the following two methods.</p><!--kg-card-begin: markdown--><pre><code><span><span>private</span> <span>async</span> <span>void</span> <span>SaveToLocalStorage</span>(<span><span>object</span> sender, FieldChangedEventArgs args</span>)</span>
+{
+    <span>var</span> model = Model ?? _fixedEditContext.Model;
+    <span>var</span> serializedData = JsonSerializer.Serialize(model);
+    <span>await</span> _jsRuntime.InvokeVoidAsync(<span>"localStorage.setItem"</span>, Id, serializedData);
+}
+
+<span><span>private</span> <span>async</span> Task&lt;<span>object</span>&gt; <span>LoadFromLocalStorage</span>(<span></span>)</span>
+{
+    <span>var</span> serialisedData = <span>await</span> _jsRuntime.InvokeAsync&lt;<span>string</span>&gt;(<span>"localStorage.getItem"</span>, Id);
+    <span>if</span> (serialisedData == <span>null</span>) <span>return</span> <span>null</span>;
+    <span>var</span> modelType = EditContext?.Model.GetType() ?? Model.GetType();
+
+    <span>return</span> JsonSerializer.Deserialize(serialisedData, modelType);
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>Both of these methods do exactly what they say on the tin. <code>SaveToLocalStorage</code> persists the current form model and <code>LoadFromLocalStorage</code> retrieves the form model.</p><p>In order to identify a particular form, I added an <code>Id</code> parameter to the component which you can see used in the code above. It's worth pointing out that this is definitely something which will need to be improved before the component could be used in a real app – this method won't be enough to guarantee uniqueness across an application.</p><h3 id="hooking-into-field-changes">Hooking into Field Changes</h3><p>With the local storage interfaces in place I moved on to saving the form when fields were updated. This required making some changes to the existing <code>OnParametersSet</code> method. There's an <code>if</code> statement at the end of the original method which looks like this.</p><!--kg-card-begin: markdown--><pre><code><span>if</span> (_fixedEditContext == <span>null</span> || EditContext != <span>null</span> || Model != _fixedEditContext.Model)
+{
+    _fixedEditContext = EditContext ?? <span>new</span> EditContext(Model);
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>I updated it to this.</p><!--kg-card-begin: markdown--><pre><code><span>if</span> (_fixedEditContext == <span>null</span> || EditContext != <span>null</span> || Model != _fixedEditContext.Model)
+{
+    _fixedEditContext = EditContext ?? <span>new</span> EditContext(Model);
+    _fixedEditContext.OnFieldChanged += SaveToLocalStorage;
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>I added an extra line which registers a handler for the <code>EditContext</code>s <code>OnFieldChanged</code> event. Now, whenever a field on the form model is updated the <code>SaveToLocalStorage</code> method will be called and the form will be persisted to local storage.</p><p>With the above changes I'd satisfied number 1 on my goals list:</p><ol><li><s>Save data to local storage when it's entered into each form controls</s></li><li>Rehydrate data from local storage when the user returns to the page</li><li>Clear saved data from local storage when it's successfully submitted by the form</li><li>Try to keep things as close to the current experience with <code>EditForm</code> as possible for developers</li></ol><h3 id="rehydrating-the-form-model">Rehydrating the Form Model</h3><p>I played around with a lot of ideas for this and ended up settling on the use of reflection. This was because I needed to update the specific instance of the model passed in, anything else I tried ultimately ended up overwriting that instance with a new one.</p><p>I came up with the following method which is used to copy the values from the form model retrieved from local storage, to the active form model.</p><!--kg-card-begin: markdown--><pre><code><span><span>public</span> <span>void</span> <span>Copy</span>(<span><span>object</span> savedFormModel, <span>object</span> currentFormModel</span>)</span>
+{
+    <span>var</span> savedFormModelProperties = savedFormModel.GetType().GetProperties();
+    <span>var</span> currentFormModelProperties = currentFormModel.GetType().GetProperties();
+
+    <span>foreach</span> (<span>var</span> savedFormModelProperty <span>in</span> savedFormModelProperties)
+    {
+        <span>foreach</span> (<span>var</span> currentFormModelProperty <span>in</span> currentFormModelProperties)
+        {
+            <span>if</span> (savedFormModelProperty.Name == currentFormModelProperty.Name &amp;&amp; savedFormModelProperty.PropertyType == currentFormModelProperty.PropertyType)
+            {
+                <span>var</span> childValue = currentFormModelProperty.GetValue(currentFormModel);
+                <span>var</span> parentValue = savedFormModelProperty.GetValue(savedFormModel);
+
+                <span>if</span> (childValue == <span>null</span> &amp;&amp; parentValue == <span>null</span>) <span>continue</span>;
+
+                currentFormModelProperty.SetValue(currentFormModel, parentValue);
+                
+                <span>var</span> fieldIdentifier = <span>new</span> FieldIdentifier(currentFormModel, currentFormModelProperty.Name);
+                _fixedEditContext.NotifyFieldChanged(fieldIdentifier);
+                
+                <span>break</span>;
+            }
+        }
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>In a nutshell, this code is looping over each property on the saved form model and then finding that same property on the current form model and transferring the value. </p><p>A key thing to note is the call to <code>_fixedEditContext.NotifyFieldChanged(fieldIdentifier);</code>. This lets the current edit context know that the value has been updated and triggers all the right events, a key one being any validation for that field.</p><p>With that method in placed I overrode the <code>OnAfterRender</code> lifecycle method and added the following code.</p><!--kg-card-begin: markdown--><pre><code><span><span>protected</span> <span>override</span> <span>async</span> Task <span>OnAfterRenderAsync</span>(<span><span>bool</span> firstRender</span>)</span>
+{
+    <span>if</span> (firstRender)
+    {
+        <span>var</span> savedModel = <span>await</span> LoadFromLocalStorage();
+
+        <span>if</span> (Model <span>is</span> <span>object</span> &amp;&amp; savedModel <span>is</span> <span>object</span>)
+        {
+            Copy(savedModel, Model);
+            StateHasChanged();
+        }
+        <span>else</span> <span>if</span> (savedModel <span>is</span> <span>object</span>)
+        {
+            Copy(savedModel, _fixedEditContext.Model);
+            StateHasChanged();
+        }
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>When the component first renders, this code will check local storage for an existing saved form model. If one is found then it will use the <code>Copy</code> method we just looked at to copy values from the saved form model to the current one. Once this has been done it will call <code>StateHasChanged</code>, this is important as it will refresh the UI and show the newly copied values in the form controls. </p><p>This was number 2 ticked off the list of goals, form values were now being reloaded from local storage when a user revisited a page.</p><ol><li><s>Save data to local storage when it's entered into each form controls</s></li><li><s>Rehydrate data from local storage when the user returns to the page</s></li><li>Clear saved data from local storage when it's successfully submitted by the form</li><li>Try to keep things as close to the current experience with <code>EditForm</code> as possible for developers</li></ol><h3 id="clearing-saved-form-data-on-a-successful-submit">Clearing saved form data on a successful submit</h3><p>This one took me a bit of time to get working and for a very specific reason. If I wanted to honour number 4 on my goals list, keep things close to the current developer experience, I wanted to allow developers to still use the same form events <code>OnSubmit</code>, <code>OnValidSubmit</code> and <code>OnInvalidSubmit</code>.</p><p>The original method which handles the submit events is called <code>HandleSubmitAsync</code> and looks like this.</p><!--kg-card-begin: markdown--><pre><code><span><span>private</span> <span>async</span> Task <span>HandleSubmitAsync</span>(<span></span>)</span>
+{
+    <span>if</span> (OnSubmit.HasDelegate)
+    {
+        <span>await</span> OnSubmit.InvokeAsync(_fixedEditContext);
+    }
+    <span>else</span>
+    {
+        <span>if</span> (isValid &amp;&amp; OnValidSubmit.HasDelegate)
+        {
+            <span>await</span> OnValidSubmit.InvokeAsync(_fixedEditContext);
+        }
+
+        <span>if</span> (!isValid &amp;&amp; OnInvalidSubmit.HasDelegate)
+        {
+            <span>await</span> OnInvalidSubmit.InvokeAsync(_fixedEditContext);
+        }
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>Keeping <code>OnInvalidSubmit</code> doesn't require any action in terms of the saved form model. For <code>OnValidSubmit</code> I only had to make the following change to clear local storage after the <code>OnValidSubmit</code> event has been invoked.</p><!--kg-card-begin: markdown--><pre><code><span>if</span> (isValid &amp;&amp; OnValidSubmit.HasDelegate)
+{
+    <span>await</span> OnValidSubmit.InvokeAsync(_fixedEditContext);
+
+    
+    <span>await</span> _jsRuntime.InvokeVoidAsync(<span>"localStorage.removeItem"</span>, Id);
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>The headache came when trying to keep the <code>OnSubmit</code> event. This event requires the developer to handle the validation of the form manually and then submit it. With the existing design, there is no way for me to know if the form had been submitted and that the saved form model could be removed.</p><p>After some back and fourth I came up with the following design which does require some extra steps from the consumer but I think is worth the trade off. </p><p>The original <code>OnSubmit</code> event is typed as an <code>EventCallback&lt;EditContext&gt;</code> as follows.</p><!--kg-card-begin: markdown--><pre><code>[<span>Parameter</span>] <span>public</span> EventCallback&lt;EditContext&gt; OnSubmit { <span>get</span>; <span>set</span>; }
+</code></pre>
+<!--kg-card-end: markdown--><p>I updated the definition of the <code>OnSubmit</code> parameter to this.</p><!--kg-card-begin: markdown--><pre><code>[<span>Parameter</span>] <span>public</span> Func&lt;EditContext, Task&lt;<span>bool</span>&gt;&gt; OnSubmit { <span>get</span>; <span>set</span>; }
+</code></pre>
+<!--kg-card-end: markdown--><p>I'm now requiring the developer to register a method which returns a <code>bool</code> to let me know if the form was submitted successfully or not. Making this change did break a check performed in <code>OnParametersSet</code>.</p><!--kg-card-begin: markdown--><pre><code><span>if</span> (OnSubmit.HasDelegate &amp;&amp; (OnValidSubmit.HasDelegate || OnInvalidSubmit.HasDelegate))
+</code></pre>
+<!--kg-card-end: markdown--><p>This just required a simple update.</p><!--kg-card-begin: markdown--><pre><code><span>if</span> (OnSubmit <span>is</span> <span>object</span> &amp;&amp; (OnValidSubmit.HasDelegate || OnInvalidSubmit.HasDelegate))
+</code></pre>
+<!--kg-card-end: markdown--><p>Once that was fixed I could then update the code in <code>HandleSubmitAsync</code> to this.</p><!--kg-card-begin: markdown--><pre><code><span>if</span> (OnSubmit <span>is</span> <span>object</span>)
+{
+    <span>var</span> submitSuccess = <span>await</span> OnSubmit.Invoke(_fixedEditContext);
+    <span>if</span> (submitSuccess)
+    {
+        <span>await</span> _jsRuntime.InvokeVoidAsync(<span>"localStorage.removeItem"</span>, Id);
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>I could now await the bool value from the consumer code and if it's <code>true</code> the saved form model is removed form local storage. The complete updated <code>HandleSubmitAsync</code> method looks like this.</p><!--kg-card-begin: markdown--><pre><code><span><span>private</span> <span>async</span> Task <span>HandleSubmitAsync</span>(<span></span>)</span>
+{
+    <span>if</span> (OnSubmit <span>is</span> <span>object</span>)
+    {
+        <span>var</span> submitSuccess = <span>await</span> OnSubmit.Invoke();
+        <span>if</span> (submitSuccess)
+        {
+            <span>await</span> _jsRuntime.InvokeVoidAsync(<span>"localStorage.removeItem"</span>, Id);
+        }
+    }
+    <span>else</span>
+    {
+        <span>if</span> (isValid &amp;&amp; OnValidSubmit.HasDelegate)
+        {
+            <span>await</span> OnValidSubmit.InvokeAsync(_fixedEditContext);
+            <span>await</span> _jsRuntime.InvokeVoidAsync(<span>"localStorage.removeItem"</span>, Id);
+        }
+
+        <span>if</span> (!isValid &amp;&amp; OnInvalidSubmit.HasDelegate)
+        {
+            <span>await</span> OnInvalidSubmit.InvokeAsync(_fixedEditContext);
+        }
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>At this point I was happy to tick off number 3 on my goals list.</p><ol><li><s>Save data to local storage when it's entered into each form controls</s></li><li><s>Rehydrate data from local storage when the user returns to the page</s></li><li><s>Clear saved data from local storage when it's successfully submitted by the form</s></li><li>Try to keep things as close to the current experience with <code>EditForm</code> as possible for developers</li></ol><p>The only remaining goal was number 4, and the only way to tick that off is to check a few things from the consuming developers point of view and see how it compares to the original <code>EditForm</code> component.</p><h2 id="using-the-autosaveeditform-component">Using the AutoSaveEditForm Component</h2><p>Let's look at a simple example of form usage first. We'll use a model which contains two fields, <code>FirstName</code> and <code>LastName</code>. To make sure validation is working we'll also make the <code>LastName</code> required.</p><!--kg-card-begin: markdown--><pre><code><span>public</span> <span>class</span> <span>MyFormModel</span>
+{
+    <span>public</span> <span>string</span> FirstName { <span>get</span>; <span>set</span>; }
+    
+    [<span>Required</span>]
+    <span>public</span> <span>string</span> LastName { <span>get</span>; <span>set</span>; }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>First we'll look at using <code>EditForm</code> and its <code>OnValidSubmit</code> event. The code is as follows.</p><!--kg-card-begin: markdown--><pre><code><span>&lt;<span>EditForm</span> <span>Model</span>=<span>"myFormModel"</span> <span>OnValidSubmit</span>=<span>"HandleValidSubmit"</span>&gt;</span>
+    <span>&lt;<span>DataAnnotationsValidator</span> /&gt;</span>
+
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.FirstName"</span> /&gt;</span>
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.LastName"</span> /&gt;</span>
+
+    <span>&lt;<span>button</span> <span>type</span>=<span>"submit"</span>&gt;</span>Submit<span>&lt;/<span>button</span>&gt;</span>
+<span>&lt;/<span>EditForm</span>&gt;</span>
+
+@code {
+    private MyFormModel myFormModel = new MyFormModel();
+
+    private void HandleValidSubmit()
+    {
+        Console.WriteLine($"Form Submitted For: {myFormModel.FirstName} {myFormModel.LastName}");
+        myFormModel = new MyFormModel();
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>So how does this compare with <code>AutoSaveEditForm</code>?</p><!--kg-card-begin: markdown--><pre><code><span>&lt;<span>AutoSaveEditForm</span> <span>Id</span>=<span>"form-one"</span> <span>Model</span>=<span>"myFormModel"</span> <span>OnValidSubmit</span>=<span>"HandleValidSubmit"</span>&gt;</span>
+    <span>&lt;<span>DataAnnotationsValidator</span> /&gt;</span>
+
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.FirstName"</span> /&gt;</span>
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.LastName"</span> /&gt;</span>
+
+    <span>&lt;<span>button</span> <span>type</span>=<span>"submit"</span>&gt;</span>Submit<span>&lt;/<span>button</span>&gt;</span>
+<span>&lt;/<span>AutoSaveEditForm</span>&gt;</span>
+
+@code {
+    private MyFormModel myFormModel = new MyFormModel();
+
+    private void HandleValidSubmit()
+    {
+        Console.WriteLine($"Form Submitted For: {myFormModel.FirstName} {myFormModel.LastName}");
+        myFormModel = new MyFormModel();
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>The only changes needed were the name of the component and the addition of the <code>Id</code> parameter. That's pretty cool, really minimal changes for existing developers. But what about a slightly more complex example?</p><p>Let's look at the scenario where the developer is using the <code>OnSubmit</code> event and manually validating. This is what the code looks like with the <code>EditForm</code> component.</p><!--kg-card-begin: markdown--><pre><code><span>&lt;<span>EditForm</span> <span>Model</span>=<span>"myFormModel"</span> <span>OnSubmit</span>=<span>"HandleSubmit"</span>&gt;</span>
+    <span>&lt;<span>DataAnnotationsValidator</span> /&gt;</span>
+
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.FirstName"</span> /&gt;</span>
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.LastName"</span> /&gt;</span>
+
+    <span>&lt;<span>button</span> <span>type</span>=<span>"submit"</span>&gt;</span>Submit<span>&lt;/<span>button</span>&gt;</span>
+<span>&lt;/<span>EditForm</span>&gt;</span>
+
+@code {
+    private MyFormModel myFormModel = new MyFormModel();
+
+    private void HandleSubmit(EditContext editContext)
+    {
+        var isValid = editContext.Validate();
+
+        if (isValid)
+        {
+            Console.WriteLine($"Form Submitted For: {myFormModel.FirstName} {myFormModel.LastName}");
+            myFormModel = new MyFormModel();
+        }
+        else
+        {
+            Console.WriteLine($"Form Invalid");
+        }
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>Here's the code with auto save.</p><!--kg-card-begin: markdown--><pre><code><span>&lt;<span>AutoSaveEditForm</span> <span>Id</span>=<span>"form-one"</span> <span>Model</span>=<span>"myFormModel"</span> <span>OnSubmit</span>=<span>"HandleSubmit"</span>&gt;</span>
+    <span>&lt;<span>DataAnnotationsValidator</span> /&gt;</span>
+
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.FirstName"</span> /&gt;</span>
+    <span>&lt;<span>InputText</span> @<span>bind-Value</span>=<span>"myFormModel.LastName"</span> /&gt;</span>
+
+    <span>&lt;<span>button</span> <span>type</span>=<span>"submit"</span>&gt;</span>Submit<span>&lt;/<span>button</span>&gt;</span>
+<span>&lt;/<span>AutoSaveEditForm</span>&gt;</span>
+
+@code {
+    private MyFormModel myFormModel = new MyFormModel();
+
+    private async Task<span>&lt;<span>bool</span>&gt;</span> HandleSubmit(EditContext editContext)
+    {
+        var isValid = editContext.Validate();
+
+        if (isValid)
+        {
+            Console.WriteLine($"Form Submitted For: {myFormModel.FirstName} {myFormModel.LastName}");
+            myFormModel = new MyFormModel();
+        
+            return true;
+        }
+        else
+        {
+            Console.WriteLine($"Form Invalid");
+            StateHasChanged();
+            return false;
+        }
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>I think you'll agree, that's not bad and sticks pretty close to the original developer experience.</p><p>While I appreciate these are simple examples, I'm happy to take that as a win and tick off number 4 on the goals list.</p><ol><li><s>Save data to local storage when it's entered into each form controls</s></li><li><s>Rehydrate data from local storage when the user returns to the page</s></li><li><s>Clear saved data from local storage when it's successfully submitted by the form</s></li><li><s>Try to keep things as close to the current experience with <code>EditForm</code> as possible for developers</s></li></ol><p>I've created a gif to show what this looks like from the users perspective when using the component in an application.</p><figure><img src="https://chrissainty.com/content/images/2020/05/auto-save-in-blazor.gif"></figure><p>I just want to reiterate again, this is <strong>not</strong> a fool-proof and complete solution. It's just a starting point. I do think it's really awesome that all this has been possible using just C# code. As you may have noticed, I've not had to write any JavaScript to achieve this.</p><h2 id="blazored-autosaveeditform">Blazored AutoSaveEditForm</h2><p>As I mentioned at the start, this is the starting point for a new component I'm adding to <a href="https://github.com/Blazored">Blazored</a> – you can find the <a href="https://github.com/Blazored/AutoSaveEditForm">repo here</a>. It contains the complete code from this post and any suggestions are welcome, just open an issue. Also if anyone wants to help out with getting the component to a state where it's ready for public use, please let me know. </p><h2 id="summary">Summary</h2><p>If you've made it this far, well done! For those looking for the complete source code I haven't published this yet as what you've just read about is the starting point for a new component which is going to be added to Blazored very soon.</p><p>In this post I've walked you though my design for a new form component which will persist form values to local storage until the form is submitted successfully. I started by showing why I was attempting this and the goals and boundaries for this work. </p><p>Then I talked about some of the brain storming I did and some other options I decided not to go with for the end design. Before taking you through the design for the end component which is based on the original <code>EditForm</code> component produced by the Blazor team. </p>
+                        <hr>
+                        
+                        <hr>
+                        
+                    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
