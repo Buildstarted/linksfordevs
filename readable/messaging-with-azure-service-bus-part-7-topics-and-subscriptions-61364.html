@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Messaging with Azure Service Bus - Part 7 - Topics and Subscriptions - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Messaging with Azure Service Bus - Part 7 - Topics and Subscriptions - linksfor.dev(s)"/>
+    <meta property="article:author" content="Copyright &#xA9; 2020 Mark Heath"/>
+    <meta property="og:description" content="Mark Heath&#x27;s Development Blog"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://markheath.net/post/azure-service-bus-messaging-7"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Messaging with Azure Service Bus - Part 7 - Topics and Subscriptions</title>
+<div class="readable">
+        <h1>Messaging with Azure Service Bus - Part 7 - Topics and Subscriptions</h1>
+            <div>by Copyright &#xA9; 2020 Mark Heath</div>
+            <div>Reading time: 6-8 minutes</div>
+        <div>Posted here: 05 May 2020</div>
+        <p><a href="https://markheath.net/post/azure-service-bus-messaging-7">https://markheath.net/post/azure-service-bus-messaging-7</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div> <div itemprop="articleBody"><p>In this series:</p> <ul><li><a href="https://markheath.net/post/azure-service-bus-messaging-1">Part 1 - Why Use Messaging?</a></li> <li><a href="https://markheath.net/post/azure-service-bus-messaging-2">Part 2 - The Challenges of Messaging</a></li> <li><a href="https://markheath.net/post/azure-service-bus-messaging-3">Part 3 - Introducing Azure Service Bus</a></li> <li><a href="https://markheath.net/post/azure-service-bus-messaging-4">Part 4 - Sending and Receiving Messages</a></li> <li><a href="https://markheath.net/post/azure-service-bus-messaging-5">Part 5 - Message Sending Options</a></li> <li><a href="https://markheath.net/post/azure-service-bus-messaging-6">Part 6 - Message Receiving Options</a></li> <li><a href="https://markheath.net/post/azure-service-bus-messaging-7">Part 7 - Topics and Subscriptions</a></li></ul> <p>So far in this series I've mostly focused on <strong>queues</strong> which are relatively straightforward to understand. The sender sends a message to the queue, and then listeners can connect to the queue and ask for messages. In this diagram, we send one message to a queue, but there are two listeners (this is called the <a href="https://docs.microsoft.com/en-us/azure/architecture/patterns/competing-consumers">"competing consumers" pattern</a>). Only one of the two listeners will receive and process the queue message.</p> <p><img src="https://markheath.net/posts/2020/azure-service-bus-messaging-7-1.png" alt="queues"></p> <h3>Topics and Subscriptions</h3> <p>Azure Service Bus allows you to post messages to a <strong>topic</strong> rather than a queue. The difference is that a topic doesn't store messages. It simply forwards messages onto any <strong>subscriptions</strong> on that topic. If a topic has no subscriptions, then posting messages to it essentially results in messages being lost.</p> <blockquote> <p>Note: this means its really important that you create all necessary subscriptions <em>before</em> posting messages to your topic.</p> </blockquote> <p>If a topic has two subscriptions, then when we post a message to the topic, a copy of that message is placed on both subscriptions. That means in this example, the single message will be received by listener 3, and by <em>either</em> listener 1 or listener 2 (since they are "competing consumers" on subscription 1).</p> <p><img src="https://markheath.net/posts/2020/azure-service-bus-messaging-7-2.png" alt="topics"></p> <h3>Pub-sub</h3> <p>The type of messaging that topics and subscriptions enable is often called <a href="https://docs.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber">"pub-sub"</a>, or "publish and subscribe". It's a great fit when your messages are essentially "events" - in other words, the message simply announces that something has happened.</p> <p>This allows a single message to result in multiple actions. With this architecture, the sender of the message doesn't usually care what those actions are. It just wants to let other parts of the system that something has happened. We'll talk more about messages as "events" later in this series as this is a very common pattern for event-driven architectures.</p> <h3>Creating a topic and subscription</h3> <p><a href="https://markheath.net/post/azure-service-bus-messaging-7">Earlier in this series</a> we saw how to use the Azure CLI to create an Azure Service Bus namespace and created a queue. Let's also create a topic called <code>topic1</code> and create two subscriptions for that topic (<code>subscription1</code> and <code>subscription2</code>):</p> <pre><code><span>$topicName</span> = <span>"topic1"</span>
+az servicebus topic create -g <span>$resourceGroup</span> `
+    --namespace-name <span>$namespaceName</span> -n <span>$topicName</span>
+
+az servicebus topic subscription create -g <span>$resourceGroup</span> `
+    --namespace-name <span>$namespaceName</span> `
+    --topic-name <span>$topicName</span> -n <span>"subscription1"</span>
+
+az servicebus topic subscription create -g <span>$resourceGroup</span> `
+    --namespace-name <span>$namespaceName</span> `
+    --topic-name <span>$topicName</span> -n <span>"subscription2"</span>
+</code></pre> <h3>Posting a Message to a Topic</h3> <p>For this demo, I've updated my <code>Sender</code> application in GitHub to do some basic command line parsing, allowing us to specify not just the Service Bus connection string, and message contents, but to specify either a queue name or a topic name to send to. You can <a href="https://github.com/markheath/azure-service-bus-demos">look at the code on GitHub</a> to see how that works.</p> <p>The more interesting part is that now, instead of using a <code>QueueClient</code>, we use a <code>TopicClient</code> to post the message. Both classes implement implement the <code>ISenderClient</code> interface allowing us to use the same code to send a message whichever option we choose:</p> <pre><code>ISenderClient senderClient;
+<span>if</span>(topicName != <span>null</span>)
+    senderClient = <span>new</span> TopicClient(connectionString, topicName);
+<span>else</span> 
+    senderClient = <span>new</span> QueueClient(connectionString, queueName);
+
+<span>var</span> body = Encoding.UTF8.GetBytes(messageText);
+<span>var</span> message = <span>new</span> Message(body);
+
+<span>await</span> senderClient.SendAsync(message);
+Console.WriteLine(<span>$"Sent message to <span>{senderClient.Path}</span>"</span>);
+<span>await</span> senderClient.CloseAsync();
+</code></pre> <p>With these changes, we can run our application with <code>dotnet run</code> and pass our own command line arguments (after <code>--</code> to ensure they are interpreted as application arguments) like this:</p> <pre><code>dotnet run -- -c $connectionString -t "topic1" -m "OrderReceived"
+</code></pre> <p>If all has gone well, the "OrderReceived" message we sent will have been forwarded by the topic onto <strong>both</strong> <code>subscription1</code> and <code>subscription2</code>. Let's see how to receive the messages next.</p> <h3>Receiving Messages on a Subscription</h3> <p>I made a similar change to the Receiver application in the <a href="https://github.com/markheath/azure-service-bus-demos">demo project</a>, allowing the user to choose between listening on a queue or a subscription.</p> <p>To listen on a subscription we need to use a <code>SubscriptionClient</code> instead of a <code>QueueClient</code>, and the <code>SubscriptionClient</code> needs to know both the name of the topic and subscription it should be listening on. But apart from that, everything remains the same, and we can take advantage of the <code>IReceiverClient</code> interface that both clients implement.</p> <pre><code>IReceiverClient listenerClient;
+<span>if</span> (topicName != <span>null</span>)
+{
+    listenerClient = <span>new</span> SubscriptionClient(connectionString, topicName, subscriptionName);
+}
+<span>else</span>
+{
+    listenerClient = <span>new</span> QueueClient(connectionString, queueName);
+}
+<span>var</span> messageHandlerOptions = <span>new</span> MessageHandlerOptions(OnException);
+listenerClient.RegisterMessageHandler(OnMessage, messageHandlerOptions);
+Console.WriteLine(<span>$"Listening on <span>{listenerClient.Path}</span>, press any key"</span>);
+Console.ReadKey();
+<span>await</span> listenerClient.CloseAsync();
+</code></pre> <p>Now we can run our application and listen to <code>subscription1</code> on <code>topic1</code> and we'll get the <code>OrderReceived</code> message we sent earlier.</p> <pre><code>dotnet run -- -c <span>$connectionString</span> -t <span>"topic1"</span> -s <span>"subscription1"</span>
+</code></pre> <p>And if we run again listening on <code>subscription2</code>, we'll see that this subscription <em>also</em> picks up a copy of the <code>OrderReceived</code> message. This essentially allows us to have to separate message handlers, each performing an important task - e.g. one might take payment for the order, and the other might send the customer an order confirmation email.</p> <pre><code>dotnet run -- -c <span>$connectionString</span> -t <span>"topic1"</span> -s <span>"subscription2"</span>
+</code></pre> <h3>Summary</h3> <p>Topics and subscriptions offer a powerful alternative to queues, allowing us to create more than one handler for the same message. But we haven't said too much yet about <em>why</em> this functionality is so useful. Next up we'll talk about two of the most important types of message - commands and events.</p> </div> </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
