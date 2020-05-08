@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Create a .NET Core Deamon app that calls MSGraph with a certificate - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Create a .NET Core Deamon app that calls MSGraph with a certificate - linksfor.dev(s)"/>
+    <meta property="og:description" content="A couple of days ago I blogged about pulling OneDrive data with MS Graph in .NET Core. I wrote all the code in a console app because it was the simplest way to get me what I needed. Mind you, a console app is not the best way when it"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://cmatskas.azurewebsites.net/create-a-net-core-deamon-app-that-calls-msgraph-with-a-certificate/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Create a .NET Core Deamon app that calls MSGraph with a certificate</title>
+<div class="readable">
+        <h1>Create a .NET Core Deamon app that calls MSGraph with a certificate</h1>
+            <div>Reading time: 18-23 minutes</div>
+        <div>Posted here: 08 May 2020</div>
+        <p><a href="https://cmatskas.azurewebsites.net/create-a-net-core-deamon-app-that-calls-msgraph-with-a-certificate/">https://cmatskas.azurewebsites.net/create-a-net-core-deamon-app-that-calls-msgraph-with-a-certificate/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section>
+                    <p>A couple of days ago I blogged about pulling OneDrive data with MS Graph in .NET Core. I wrote all the code in a console app because it was the simplest way to get me what I needed. Mind you, a console app is not the best way when it comes to creating user interactive apps but it's convenient. However, convenience comes with a price: I ended up writing a console app that needs user interaction for authenticating the app. So what is the right way to do this? How can we create a headless app/daemon that can still call into MS Graph securely and efficiently?</p><p>With a bit of research I found what I needed. Azure AD allows apps to run without user interaction using the Client Credential flow. To achieve this, we need to register an app in Azure AD and configure either a Client Secret or a Certificate that we can use to authenticate and query MS Graph.</p><p>There are 3 distinct components in this project:</p><ol><li>Create the certificate to use for authentication</li><li>Register the app in Azure AD and configure the appropriate API Permissions</li><li>Implement the code to do the magic</li></ol><h3 id="create-a-self-signed-certificate">Create a self-signed certificate</h3><p>As I mentioned earlier, the Client Credentials flow allows us to speak with Azure AD using a Client ID and either a Client Secret or a certificate. The tricky bit with the Client Secret is storing and managing the plain-text value securely. Developers tend to focus on building things and security is regularly overlooked. Therefore, it shouldn't come as a surprise that we find client secrets scattered in places that they should never be like: checked in source code, environment variables or config files. This can significantly compromise the security of your data. Certificates, on the other hand, tend to be managed better by enterprises so they should be preferred over Client Secrets. </p><p>Not all is lost for Client Secrets though. For example, we could use a combination of Managed Identities, Azure AD and Azure Key Vault to securely store and retrieve Client Secrets without compromising the integrity and security of your app. I <a href="https://cmatskas.com/secure-app-development-with-azure-ad-key-vault-and-managed-identities/">wrote before</a> how to achieve this tight security loop so feel free to take a look if you still want to go down this route. </p><p>Now let's get back to the task at hand. We need a certificate! If you already have one, you're sorted. Just follow the commands below to export it - assuming you have the certificate thumbprint at hand (looks like this: <code>483219ae06a1f8a85b1e500b94575559feab3f3b</code>)</p><pre><code>$cert = Get-ChildItem -Path Cert:\CurrentUser\My\&lt;Certificate Thumbprint&gt;
+Export-Certificate -Cert $cert -FilePath c:\users\cmatskas\certWithKey.cer</code></pre><p>If you don't have a certificate, we can create one using PowerShell before exporting for use in the AAD portal.</p><pre><code>$cert=New-SelfSignedCertificate -Subject "CN=ConsoleAppCert" -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable
+Export-Certificate -Cert $cert -FilePath c:\users\cmatskas\certWithKey_2.cer</code></pre><p>Note that we need to export the key as a <code>*.cer</code> as this is the format expected by Azure AD. Also, we are using the <code>Export-Certificate</code> cmdlet instead of the <code>Export-PfxCertificate</code> one because we don't need to export the private key.</p><p>We now have a certificate in the personal store and exported, ready to be configured in our Azure AD app, which is the next step.</p><h3 id="create-and-configure-the-azure-ad-app">Create and configure the Azure AD App</h3><p>Our daemon will use an Azure AD app to authenticate and retrieve the appropriate permissions to call into the Graph API. Head to the Azure AD Portal &gt; App Registrations and click on the <strong>New Registration</strong>:</p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-6.png"></figure><p>Give it a meaningful name, select accounts in my Org only and click on Register. Leave all other options empty.</p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-7.png"></figure><p>Next, we need to navigate to the Certificates &amp; Secrets section to add our exported certificate. </p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-8.png"></figure><p>Finally, we need to configure the API permissions. Because, unlike my previous examples, in this case we know that there will be no user to authenticate against Azure AD at runtime. Therefore, we need to declare in advance and approve the app permissions to ensure that there are no access issues. Head over to API Permissions, click on <strong>Add a permission</strong></p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-9.png"></figure><p>Select <strong>Microsfot Graph, </strong>choose <strong>Application Permissions</strong> and search for the <code>Users.Read.All</code> permission. Make sure to click on the <strong>Add permissions</strong> at the bottom of the page. </p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-10.png"></figure><p>Almost there, one more small, but very important, step. Our app registration now has a certificate for authentication and the necessary permissions to read users' data from the directory. However, if we were to try to retrieve the data now, (I use Postman to test Graph calls) we would get a 403 error message like this</p><pre><code>{
+  "error": {
+    "code": "Authorization_RequestDenied",
+    "message": "Insufficient privileges to complete the operation.",
+    "innerError": {
+      "request-id": "d1b49a31-dd42-415b-b36e-3c2959881411",
+      "date": "2020-05-07T21:57:57"
+    }
+  }
+}</code></pre><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-11.png"></figure><p>That's because the app permissions need to be granted consent by an admin. Let's go ahead and do this (if you don't have admin permissions, you will need to ask your AD admin to consent these for you). In the API Permissions tab, press the <strong>Grant admin consent for &lt;your tenant name&gt;</strong></p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-12.png"></figure><p>Now we are good to rock 'n roll!</p><h3 id="create-the-daemon-app">Create the daemon app</h3><p>For this example I decided to use a .NET Core console app to be my headless "daemon" that grabs a list of all the users in my test AD tenant. Although the example is fairly basic, once you wire up all the components, the full Graph API functionality is at your disposal to implement the solution that meets your needs.</p><p>In Visual Studio 2019, create a new console app that targets .NET Core 3.1. Next we need to add the necessary NuGet packages for Graph, Auth and config settings:</p><ul><li>Microsoft.Graph.Beta</li><li>Microsoft.Identity.Client</li><li>Microsoft.Extensions.Configuration</li><li>Microsoft.Extensions.Configuration.Binder</li><li>Microsoft.Extensions.Configuration.Json</li></ul><p>Add an <code>appsettings.json</code> file and populate the appropriate values</p><pre><code>  "Scopes": "https://graph.microsoft.com/.default",
+  "Tenant": "&lt;Your Tenant Id&gt;",
+  "ClientId": "&lt;Your Client Id&gt;",
+  "CertificateName": "CN=ConsoleAppCert"</code></pre><p>The <code>CertificateName</code> value should be different as it's likely that the name of your certificate is different, unless you followed my instructions verbatim earlier. </p><blockquote>Unlike in apps with UI where the users are expected to log in and consent to permissions, when we create daemon apps the permisions have to be pre-declared and pre-approved for the application to work . However, we still have to provide a scope. The scope for MS Graph is always <a href="https://graph.microsoft.com/.default"><code>https://graph.microsoft.com/.default</code></a></blockquote><p>Next, add a new class named <code>AuthenticationConfig.cs</code> and add the following code:</p><pre><code> public class AuthenticationConfig
+    {
+        public string Scopes { get; set; } = "https://graph.microsoft.com/.default";
+        public string Tenant { get; set; }
+        public string ClientId { get; set; }
+        public string CertificateName { get; set; }
+    }</code></pre><p>We now need to add a new class to handle the authentication process for us. Create a new class <code>ClientCredentialsAuthProvider</code> and add the following code:</p><!--kg-card-begin: html--><div id="gist102911878">
+    <div>
+      <div>
+        <div>
+  <div id="file-clientcredentialsauthprovider-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-clientcredentialsauthprovider-cs-L1" data-line-number="1"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC1"><span>using</span> <span>Microsoft</span>.<span>Graph</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L2" data-line-number="2"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC2"><span>using</span> <span>Microsoft</span>.<span>Identity</span>.<span>Client</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L3" data-line-number="3"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC3"><span>using</span> <span>System</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L4" data-line-number="4"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC4"><span>using</span> <span>System</span>.<span>Linq</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L5" data-line-number="5"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC5"><span>using</span> <span>System</span>.<span>Net</span>.<span>Http</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L6" data-line-number="6"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC6"><span>using</span> <span>System</span>.<span>Net</span>.<span>Http</span>.<span>Headers</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L7" data-line-number="7"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC7"><span>using</span> <span>System</span>.<span>Security</span>.<span>Cryptography</span>.<span>X509Certificates</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L8" data-line-number="8"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC8"><span>using</span> <span>System</span>.<span>Threading</span>.<span>Tasks</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L9" data-line-number="9"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC9">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L10" data-line-number="10"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC10"><span>namespace</span> <span>DaemonConsole</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L11" data-line-number="11"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC11">{</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L12" data-line-number="12"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC12">    <span>public</span> <span>class</span> <span>ClientCredentialsAuthProvider</span> : <span>IAuthenticationProvider</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L13" data-line-number="13"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC13">    {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L14" data-line-number="14"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC14">        <span>private</span> <span>readonly</span> <span>IConfidentialClientApplication</span> <span>msalClient</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L15" data-line-number="15"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC15">        <span>private</span> <span>readonly</span> <span>string</span>[] <span>scopes</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L16" data-line-number="16"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC16">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L17" data-line-number="17"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC17">        <span>public</span> <span>ClientCredentialsAuthProvider</span>(<span>AuthenticationConfig</span> <span>config</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L18" data-line-number="18"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC18">        {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L19" data-line-number="19"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC19">            <span>scopes</span> <span>=</span> <span>new</span> <span>string</span>[] { <span>config</span>.<span>Scopes</span> };</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L20" data-line-number="20"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC20">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L21" data-line-number="21"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC21">            <span>msalClient</span> <span>=</span> <span>ConfidentialClientApplicationBuilder</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L22" data-line-number="22"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC22">                .<span>Create</span>(<span>config</span>.<span>ClientId</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L23" data-line-number="23"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC23">                .<span>WithCertificate</span>(<span>ReadCertificateLocal</span>(<span>config</span>.<span>CertificateName</span>))</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L24" data-line-number="24"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC24">                .<span>WithAuthority</span>(<span>AadAuthorityAudience</span>.<span>AzureAdMyOrg</span>, <span>true</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L25" data-line-number="25"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC25">                .<span>WithTenantId</span>(<span>config</span>.<span>Tenant</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L26" data-line-number="26"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC26">                .<span>Build</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L27" data-line-number="27"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC27">        }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L28" data-line-number="28"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC28">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L29" data-line-number="29"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC29">        <span>public</span> <span>async</span> <span>Task</span>&lt;<span>string</span>&gt; <span>GetAccessTokenAsync</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L30" data-line-number="30"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC30">        {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L31" data-line-number="31"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC31">            <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L32" data-line-number="32"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC32">            {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L33" data-line-number="33"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC33">                <span>var</span> <span>result</span> <span>=</span> <span>await</span> <span>msalClient</span>.<span>AcquireTokenForClient</span>(<span>scopes</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L34" data-line-number="34"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC34">                    .<span>ExecuteAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L35" data-line-number="35"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC35">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L36" data-line-number="36"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC36">                <span>return</span> <span>result</span>.<span>AccessToken</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L37" data-line-number="37"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC37">            }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L38" data-line-number="38"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC38">            <span>catch</span> (<span>Exception</span> <span>exception</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L39" data-line-number="39"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC39">            {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L40" data-line-number="40"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC40">                <span>Console</span>.<span>WriteLine</span>(<span><span>$"</span>Error getting access token: {<span>exception</span>.<span>Message</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L41" data-line-number="41"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC41">                <span>return</span> <span>null</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L42" data-line-number="42"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC42">            }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L43" data-line-number="43"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC43">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L44" data-line-number="44"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC44">        }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L45" data-line-number="45"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC45">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L46" data-line-number="46"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC46">        <span><span>//</span> This is the required function to implement IAuthenticationProvider</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L47" data-line-number="47"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC47">        <span><span>//</span> The Graph SDK will call this function each time it makes a Graph</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L48" data-line-number="48"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC48">        <span><span>//</span> call.</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L49" data-line-number="49"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC49">        <span>public</span> <span>async</span> <span>Task</span> <span>AuthenticateRequestAsync</span>(<span>HttpRequestMessage</span> <span>requestMessage</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L50" data-line-number="50"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC50">        {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L51" data-line-number="51"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC51">            <span>requestMessage</span>.<span>Headers</span>.<span>Authorization</span> <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L52" data-line-number="52"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC52">                <span>new</span> <span>AuthenticationHeaderValue</span>(<span><span>"</span>bearer<span>"</span></span>, <span>await</span> <span>GetAccessTokenAsync</span>());</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L53" data-line-number="53"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC53">        }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L54" data-line-number="54"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC54">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L55" data-line-number="55"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC55">        <span>private</span> <span>X509Certificate2</span> <span>ReadCertificateLocal</span>(<span>string</span> <span>certificateName</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L56" data-line-number="56"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC56">        {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L57" data-line-number="57"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC57">            <span>X509Certificate2</span> <span>cert</span> <span>=</span> <span>null</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L58" data-line-number="58"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC58">
+</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L59" data-line-number="59"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC59">            <span>using</span> (<span>X509Store</span> <span>store</span> <span>=</span> <span>new</span> <span>X509Store</span>(<span>StoreName</span>.<span>My</span>, <span>StoreLocation</span>.<span>CurrentUser</span>))</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L60" data-line-number="60"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC60">            {</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L61" data-line-number="61"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC61">                <span>store</span>.<span>Open</span>(<span>OpenFlags</span>.<span>ReadOnly</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L62" data-line-number="62"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC62">                <span>X509Certificate2Collection</span> <span>certCollection</span> <span>=</span> <span>store</span>.<span>Certificates</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L63" data-line-number="63"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC63">                <span>X509Certificate2Collection</span> <span>currentCerts</span> <span>=</span> <span>certCollection</span>.<span>Find</span>(<span>X509FindType</span>.<span>FindByTimeValid</span>, <span>DateTime</span>.<span>Now</span>, <span>false</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L64" data-line-number="64"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC64">                <span>X509Certificate2Collection</span> <span>signingCert</span> <span>=</span> <span>currentCerts</span>.<span>Find</span>(<span>X509FindType</span>.<span>FindBySubjectDistinguishedName</span>, <span>certificateName</span>, <span>false</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L65" data-line-number="65"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC65">                <span>cert</span> <span>=</span> <span>signingCert</span>.<span>OfType</span>&lt;<span>X509Certificate2</span>&gt;().<span>OrderByDescending</span>(<span>c</span> <span>=&gt;</span> <span>c</span>.<span>NotBefore</span>).<span>FirstOrDefault</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L66" data-line-number="66"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC66">            }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L67" data-line-number="67"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC67">            <span>return</span> <span>cert</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L68" data-line-number="68"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC68">        }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L69" data-line-number="69"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC69">    }</td>
+      </tr>
+      <tr>
+        <td id="file-clientcredentialsauthprovider-cs-L70" data-line-number="70"></td>
+        <td id="file-clientcredentialsauthprovider-cs-LC70">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<!--kg-card-end: html--><p>This class gets the authentication token. It also retrieves the necessary certificate so that we can securely identify against Azure AD.</p><p>For the next step, we are adding an MS Graph helper class to do the necessary call(s) to the Graph API. Create a new class <code>GraphHelper.cs</code> and add the following code: </p><!--kg-card-begin: html--><div id="gist102911951">
+    <div>
+      <div>
+        <div>
+  <div id="file-graphhelper-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-graphhelper-cs-L1" data-line-number="1"></td>
+        <td id="file-graphhelper-cs-LC1"> <span>public</span> <span>class</span> <span>GraphHelper</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L2" data-line-number="2"></td>
+        <td id="file-graphhelper-cs-LC2">  {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L3" data-line-number="3"></td>
+        <td id="file-graphhelper-cs-LC3">      <span>private</span> <span>static</span> <span>GraphServiceClient</span> <span>graphClient</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L4" data-line-number="4"></td>
+        <td id="file-graphhelper-cs-LC4">      <span>public</span> <span>static</span> <span>void</span> <span>Initialize</span>(<span>IAuthenticationProvider</span> <span>authProvider</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L5" data-line-number="5"></td>
+        <td id="file-graphhelper-cs-LC5">      {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L6" data-line-number="6"></td>
+        <td id="file-graphhelper-cs-LC6">          <span>graphClient</span> <span>=</span> <span>new</span> <span>GraphServiceClient</span>(<span>authProvider</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L7" data-line-number="7"></td>
+        <td id="file-graphhelper-cs-LC7">      }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L8" data-line-number="8"></td>
+        <td id="file-graphhelper-cs-LC8">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L9" data-line-number="9"></td>
+        <td id="file-graphhelper-cs-LC9">      <span>public</span> <span>static</span> <span>async</span> <span>Task</span>&lt;<span>IEnumerable</span>&lt;<span>User</span>&gt;&gt; <span>GetUsersAsync</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L10" data-line-number="10"></td>
+        <td id="file-graphhelper-cs-LC10">      {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L11" data-line-number="11"></td>
+        <td id="file-graphhelper-cs-LC11">          <span><span>//</span> GET /users</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L12" data-line-number="12"></td>
+        <td id="file-graphhelper-cs-LC12">          <span>return</span> <span>await</span> <span>graphClient</span>.<span>Users</span>.<span>Request</span>().<span>GetAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L13" data-line-number="13"></td>
+        <td id="file-graphhelper-cs-LC13">      }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L14" data-line-number="14"></td>
+        <td id="file-graphhelper-cs-LC14">  }</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<!--kg-card-end: html--><p>Finally, we are going to wire everything up in the <code>Program.cs</code>. The final code shoud look like this:</p><!--kg-card-begin: html--><div id="gist102911958">
+    <div>
+      <div>
+        <div>
+  <div id="file-program-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-program-cs-L1" data-line-number="1"></td>
+        <td id="file-program-cs-LC1"><span>using</span> <span>Microsoft</span>.<span>Extensions</span>.<span>Configuration</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L2" data-line-number="2"></td>
+        <td id="file-program-cs-LC2"><span>using</span> <span>Microsoft</span>.<span>Graph</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L3" data-line-number="3"></td>
+        <td id="file-program-cs-LC3"><span>using</span> <span>Microsoft</span>.<span>Identity</span>.<span>Client</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L4" data-line-number="4"></td>
+        <td id="file-program-cs-LC4"><span>using</span> <span>System</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L5" data-line-number="5"></td>
+        <td id="file-program-cs-LC5"><span>using</span> <span>System</span>.<span>Threading</span>.<span>Tasks</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L6" data-line-number="6"></td>
+        <td id="file-program-cs-LC6">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L7" data-line-number="7"></td>
+        <td id="file-program-cs-LC7"><span>namespace</span> <span>DaemonConsole</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L8" data-line-number="8"></td>
+        <td id="file-program-cs-LC8">{</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L9" data-line-number="9"></td>
+        <td id="file-program-cs-LC9">    <span>class</span> <span>Program</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L10" data-line-number="10"></td>
+        <td id="file-program-cs-LC10">    {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L11" data-line-number="11"></td>
+        <td id="file-program-cs-LC11">        <span>private</span> <span>const</span> <span>string</span> <span>AppSettingsFile</span> <span>=</span> <span><span>"</span>appsettings.json<span>"</span></span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L12" data-line-number="12"></td>
+        <td id="file-program-cs-LC12">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L13" data-line-number="13"></td>
+        <td id="file-program-cs-LC13">        <span>static</span> <span>async</span> <span>Task</span> <span>Main</span>(<span>string</span>[] <span>args</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L14" data-line-number="14"></td>
+        <td id="file-program-cs-LC14">        {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L15" data-line-number="15"></td>
+        <td id="file-program-cs-LC15">            <span>var</span> <span>config</span> <span>=</span> <span>LoadAppSettings</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L16" data-line-number="16"></td>
+        <td id="file-program-cs-LC16">            <span>var</span> <span>authProvider</span> <span>=</span> <span>new</span> <span>ClientCredentialsAuthProvider</span>(<span>config</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L17" data-line-number="17"></td>
+        <td id="file-program-cs-LC17">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L18" data-line-number="18"></td>
+        <td id="file-program-cs-LC18">            <span><span>//</span>authenticate</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L19" data-line-number="19"></td>
+        <td id="file-program-cs-LC19">            <span>await</span> <span>GetAccessToken</span>(<span>authProvider</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L20" data-line-number="20"></td>
+        <td id="file-program-cs-LC20">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L21" data-line-number="21"></td>
+        <td id="file-program-cs-LC21">            <span><span>//</span>grab the Graph data</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L22" data-line-number="22"></td>
+        <td id="file-program-cs-LC22">            <span>await</span> <span>GetDirectoryUsers</span>(<span>authProvider</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L23" data-line-number="23"></td>
+        <td id="file-program-cs-LC23">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L24" data-line-number="24"></td>
+        <td id="file-program-cs-LC24">            <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Press any key to exit<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L25" data-line-number="25"></td>
+        <td id="file-program-cs-LC25">            <span>Console</span>.<span>ReadKey</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L26" data-line-number="26"></td>
+        <td id="file-program-cs-LC26">        }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L27" data-line-number="27"></td>
+        <td id="file-program-cs-LC27">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L28" data-line-number="28"></td>
+        <td id="file-program-cs-LC28">        <span>private</span> <span>static</span> <span>AuthenticationConfig</span> <span>LoadAppSettings</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L29" data-line-number="29"></td>
+        <td id="file-program-cs-LC29">        {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L30" data-line-number="30"></td>
+        <td id="file-program-cs-LC30">            <span>var</span> <span>config</span> <span>=</span> <span>new</span> <span>ConfigurationBuilder</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L31" data-line-number="31"></td>
+        <td id="file-program-cs-LC31">                                .<span>SetBasePath</span>(<span>System</span>.<span>IO</span>.<span>Directory</span>.<span>GetCurrentDirectory</span>())</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L32" data-line-number="32"></td>
+        <td id="file-program-cs-LC32">                                .<span>AddJsonFile</span>(<span>AppSettingsFile</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L33" data-line-number="33"></td>
+        <td id="file-program-cs-LC33">                                .<span>Build</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L34" data-line-number="34"></td>
+        <td id="file-program-cs-LC34">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L35" data-line-number="35"></td>
+        <td id="file-program-cs-LC35">            <span>return</span> <span>config</span>.<span>Get</span>&lt;<span>AuthenticationConfig</span>&gt;();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L36" data-line-number="36"></td>
+        <td id="file-program-cs-LC36">        }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L37" data-line-number="37"></td>
+        <td id="file-program-cs-LC37">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L38" data-line-number="38"></td>
+        <td id="file-program-cs-LC38">        <span>private</span> <span>static</span> <span>async</span> <span>Task</span> <span>GetDirectoryUsers</span>(<span>IAuthenticationProvider</span> <span>authProvider</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L39" data-line-number="39"></td>
+        <td id="file-program-cs-LC39">        {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L40" data-line-number="40"></td>
+        <td id="file-program-cs-LC40">            <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Acquiring directory users...<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L41" data-line-number="41"></td>
+        <td id="file-program-cs-LC41">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L42" data-line-number="42"></td>
+        <td id="file-program-cs-LC42">            <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L43" data-line-number="43"></td>
+        <td id="file-program-cs-LC43">            {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L44" data-line-number="44"></td>
+        <td id="file-program-cs-LC44">                <span>GraphHelper</span>.<span>Initialize</span>(<span>authProvider</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L45" data-line-number="45"></td>
+        <td id="file-program-cs-LC45">                <span>var</span> <span>users</span> <span>=</span> <span>await</span> <span>GraphHelper</span>.<span>GetUsersAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L46" data-line-number="46"></td>
+        <td id="file-program-cs-LC46">                <span>if</span>(<span>users</span> <span>==</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L47" data-line-number="47"></td>
+        <td id="file-program-cs-LC47">                {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L48" data-line-number="48"></td>
+        <td id="file-program-cs-LC48">                    <span>return</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L49" data-line-number="49"></td>
+        <td id="file-program-cs-LC49">                }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L50" data-line-number="50"></td>
+        <td id="file-program-cs-LC50">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L51" data-line-number="51"></td>
+        <td id="file-program-cs-LC51">                <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>DarkBlue</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L52" data-line-number="52"></td>
+        <td id="file-program-cs-LC52">                <span>foreach</span> (<span>var</span> <span>user</span> <span>in</span> <span>users</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L53" data-line-number="53"></td>
+        <td id="file-program-cs-LC53">                {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L54" data-line-number="54"></td>
+        <td id="file-program-cs-LC54">                    <span>Console</span>.<span>WriteLine</span>(<span><span>$"</span>Found user {<span>user</span>.<span>DisplayName</span>} with email address: {<span>user</span>.<span>Mail</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L55" data-line-number="55"></td>
+        <td id="file-program-cs-LC55">                }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L56" data-line-number="56"></td>
+        <td id="file-program-cs-LC56">            }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L57" data-line-number="57"></td>
+        <td id="file-program-cs-LC57">            <span>catch</span>(<span>Exception</span> <span>ex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L58" data-line-number="58"></td>
+        <td id="file-program-cs-LC58">            {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L59" data-line-number="59"></td>
+        <td id="file-program-cs-LC59">                <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>Red</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L60" data-line-number="60"></td>
+        <td id="file-program-cs-LC60">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Unable to retrieve directory data...<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L61" data-line-number="61"></td>
+        <td id="file-program-cs-LC61">                <span>Console</span>.<span>WriteLine</span>(<span>ex</span>.<span>Message</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L62" data-line-number="62"></td>
+        <td id="file-program-cs-LC62">            }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L63" data-line-number="63"></td>
+        <td id="file-program-cs-LC63">            </td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L64" data-line-number="64"></td>
+        <td id="file-program-cs-LC64">            <span>Console</span>.<span>ResetColor</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L65" data-line-number="65"></td>
+        <td id="file-program-cs-LC65">        }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L66" data-line-number="66"></td>
+        <td id="file-program-cs-LC66">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L67" data-line-number="67"></td>
+        <td id="file-program-cs-LC67">        <span>private</span> <span>static</span> <span>async</span> <span>Task</span> <span>GetAccessToken</span>(<span>ClientCredentialsAuthProvider</span> <span>authProvider</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L68" data-line-number="68"></td>
+        <td id="file-program-cs-LC68">        {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L69" data-line-number="69"></td>
+        <td id="file-program-cs-LC69">            <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L70" data-line-number="70"></td>
+        <td id="file-program-cs-LC70">            {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L71" data-line-number="71"></td>
+        <td id="file-program-cs-LC71">                <span>var</span> <span>result</span> <span>=</span> <span>await</span> <span>authProvider</span>.<span>GetAccessTokenAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L72" data-line-number="72"></td>
+        <td id="file-program-cs-LC72">                <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>Green</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L73" data-line-number="73"></td>
+        <td id="file-program-cs-LC73">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Auth token acquired :)<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L74" data-line-number="74"></td>
+        <td id="file-program-cs-LC74">                <span>Console</span>.<span>WriteLine</span>(<span>result</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L75" data-line-number="75"></td>
+        <td id="file-program-cs-LC75">                <span>Console</span>.<span>WriteLine</span>(<span>string</span>.<span>Empty</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L76" data-line-number="76"></td>
+        <td id="file-program-cs-LC76">            }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L77" data-line-number="77"></td>
+        <td id="file-program-cs-LC77">            <span>catch</span> (<span>MsalServiceException</span> <span>ex</span>) <span>when</span> (<span>ex</span>.<span>Message</span>.<span>Contains</span>(<span><span>"</span>AADSTS70011<span>"</span></span>))</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L78" data-line-number="78"></td>
+        <td id="file-program-cs-LC78">            {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L79" data-line-number="79"></td>
+        <td id="file-program-cs-LC79">                <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>Red</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L80" data-line-number="80"></td>
+        <td id="file-program-cs-LC80">                <span>Console</span>.<span>WriteLine</span>(<span>ex</span>.<span>Message</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L81" data-line-number="81"></td>
+        <td id="file-program-cs-LC81">            }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L82" data-line-number="82"></td>
+        <td id="file-program-cs-LC82">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L83" data-line-number="83"></td>
+        <td id="file-program-cs-LC83">            <span>Console</span>.<span>ResetColor</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L84" data-line-number="84"></td>
+        <td id="file-program-cs-LC84">        }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L85" data-line-number="85"></td>
+        <td id="file-program-cs-LC85">    }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L86" data-line-number="86"></td>
+        <td id="file-program-cs-LC86">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<!--kg-card-end: html--><p>Let's run the app and see the magic happen:</p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-13.png"></figure><p>The code successfully authenticates in Azure AD and then pulls all the users in my test tenant. It's great to see everything working as expected, without any user interaction. </p><p>If you get an error like the one below, make sure that you have added and consented to the appropriate Graph API permissions in the Azure AD App Registration:</p><figure><img src="https://cmatskas.azurewebsites.net/content/images/2020/05/image-14.png"></figure><h3 id="conclusion">Conclusion</h3><p>If you need to create a headless/daemon app that calls into MS Graph, there are a couple of steps that you need to follow in order to get everything wired up. You need </p><ul><li>a certificate to avoid storing client secrets insecurely,</li><li>an app registration in Azure AD with pre-declared and pre-consented permissions</li><li>a few lines of code to put all of it together</li></ul><p>I hope that this blog helps you get started with Azure AD and MS Graph but feel free to ping me if you have any questions.</p>
+                </section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
