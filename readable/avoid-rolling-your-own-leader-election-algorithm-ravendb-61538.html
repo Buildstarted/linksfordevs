@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Avoid rolling your own leader election algorithm | RavenDB - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Avoid rolling your own leader election algorithm | RavenDB - linksfor.dev(s)"/>
+    <meta property="article:author" content="by Oren Eini, CEO RavenDB"/>
+    <meta property="og:description" content="Jeremy Miller has an interesting blog post about using advisory locks in Postgres to handle leader elections. This is a..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ravendb.net/articles/avoid-rolling-your-own-leader-election-algorithm"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Avoid rolling your own leader election algorithm | RavenDB</title>
+<div class="readable">
+        <h1>Avoid rolling your own leader election algorithm | RavenDB</h1>
+            <div>by by Oren Eini, CEO RavenDB</div>
+            <div>Reading time: 6-8 minutes</div>
+        <div>Posted here: 11 May 2020</div>
+        <p><a href="https://ravendb.net/articles/avoid-rolling-your-own-leader-election-algorithm">https://ravendb.net/articles/avoid-rolling-your-own-leader-election-algorithm</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="blog-body" data-article="articles/avoid-rolling-your-own-leader-election-algorithm">
+                
+                
+                <hr>
+                <p>Jeremy Miller has an <a href="https://jeremydmiller.com/2020/05/05/using-postgresql-advisory-locks-for-leader-election/">interesting blog post</a> about using advisory locks in Postgres to handle leader elections. This is a topic I spend a lot of time on, so I went over the post in detail. I don’t like this approach, because it has several subtle issues that are going to bite you down the road. All of them are relatively obscure, and all of them are going to happen in production in short order.</p><p>Go read the blog post, it explains the reasoning well. The core of the leader election is this:</p><blockquote><div id="gist102865714">
+    <div>
+      <div>
+        <div>
+  <div id="file-leader-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-leader-cs-L1" data-line-number="1"></td>
+        <td id="file-leader-cs-LC1"><span>protected</span> <span>override</span> <span>async</span> <span>Task</span> <span>ExecuteAsync</span>(<span>CancellationToken</span> <span>stoppingToken</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L2" data-line-number="2"></td>
+        <td id="file-leader-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L3" data-line-number="3"></td>
+        <td id="file-leader-cs-LC3">    <span><span>//</span> Don't try to start right off the bat</span></td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L4" data-line-number="4"></td>
+        <td id="file-leader-cs-LC4">    <span>await</span> <span>Task</span>.<span>Delay</span>(<span>_settings</span>.<span>FirstPollingTime</span>, <span>stoppingToken</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L5" data-line-number="5"></td>
+        <td id="file-leader-cs-LC5">
+</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L6" data-line-number="6"></td>
+        <td id="file-leader-cs-LC6">    <span>_connection</span> <span>=</span> <span>new</span> <span>NpgsqlConnection</span>(<span>_settings</span>.<span>ConnectionString</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L7" data-line-number="7"></td>
+        <td id="file-leader-cs-LC7">    <span>await</span> <span>_connection</span>.<span>OpenAsync</span>(<span>stoppingToken</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L8" data-line-number="8"></td>
+        <td id="file-leader-cs-LC8">
+</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L9" data-line-number="9"></td>
+        <td id="file-leader-cs-LC9">    <span>while</span> (<span>!</span><span>stoppingToken</span>.<span>IsCancellationRequested</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L10" data-line-number="10"></td>
+        <td id="file-leader-cs-LC10">    {</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L11" data-line-number="11"></td>
+        <td id="file-leader-cs-LC11">        <span>var</span> <span>state</span> <span>=</span> <span>await</span> <span>_process</span>.<span>State</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L12" data-line-number="12"></td>
+        <td id="file-leader-cs-LC12">        <span>if</span> (<span>state</span> <span>!=</span> <span>ProcessState</span>.<span>Active</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L13" data-line-number="13"></td>
+        <td id="file-leader-cs-LC13">        {</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L14" data-line-number="14"></td>
+        <td id="file-leader-cs-LC14">            <span><span>//</span> If you can take the global lock, start</span></td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L15" data-line-number="15"></td>
+        <td id="file-leader-cs-LC15">            <span><span>//</span> the process</span></td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L16" data-line-number="16"></td>
+        <td id="file-leader-cs-LC16">            <span>if</span> (<span>await</span> <span>_connection</span>.<span>TryGetGlobalLock</span>(<span>_settings</span>.<span>LockId</span>, <span>cancellation</span>: <span>stoppingToken</span>))</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L17" data-line-number="17"></td>
+        <td id="file-leader-cs-LC17">            {</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L18" data-line-number="18"></td>
+        <td id="file-leader-cs-LC18">                <span>await</span> <span>_process</span>.<span>Start</span>(<span>_connection</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L19" data-line-number="19"></td>
+        <td id="file-leader-cs-LC19">            }</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L20" data-line-number="20"></td>
+        <td id="file-leader-cs-LC20">        }</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L21" data-line-number="21"></td>
+        <td id="file-leader-cs-LC21">
+</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L22" data-line-number="22"></td>
+        <td id="file-leader-cs-LC22">        <span>await</span> <span>Task</span>.<span>Delay</span>(<span>_settings</span>.<span>OwnershipPollingTime</span>, <span>stoppingToken</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L23" data-line-number="23"></td>
+        <td id="file-leader-cs-LC23">    }</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L24" data-line-number="24"></td>
+        <td id="file-leader-cs-LC24">
+</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L25" data-line-number="25"></td>
+        <td id="file-leader-cs-LC25">    <span>if</span> (<span>_connection</span>.<span>State</span> <span>!=</span> <span>ConnectionState</span>.<span>Closed</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L26" data-line-number="26"></td>
+        <td id="file-leader-cs-LC26">    {</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L27" data-line-number="27"></td>
+        <td id="file-leader-cs-LC27">        <span>await</span> <span>_connection</span>.<span>DisposeAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L28" data-line-number="28"></td>
+        <td id="file-leader-cs-LC28">    }</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L29" data-line-number="29"></td>
+        <td id="file-leader-cs-LC29">
+</td>
+      </tr>
+      <tr>
+        <td id="file-leader-cs-L30" data-line-number="30"></td>
+        <td id="file-leader-cs-LC30">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+</blockquote><p>The idea is that you have a <em>process</em> instance, that has a State() and a Start() methods. On multiple nodes, you are running this method, and it will coordinate using Postgres to ensure that there is only a single process that owns the lock at any given point in time. At least, that is the idea. In practice, there are issues.</p><p>Let’s assume that we are protecting a shared resource, such as a printer. We want to serialize access to the printer so two print jobs won’t get their pages mixed together. For simplicity, we’ll assume just two such nodes that compete on the lock.</p><p>On startup, one of the nodes will successfully get the lock, and the other will not, resulting in retries. So far, this is as expected. </p><p>I’m ignoring for now the lack of error handling, if we cannot start the connection, the whole thing is going to fail. This is sample code, so I’m pointing this out because the code must be resilient to such issues. We may bring up a node before the database is ready, and in this case, you’ll need to retry access the data. </p><p>A much more serious problem here is that we have a way for the process to signal that it is broken, but there is no way for the service to tell the process that it is no longer the leader. Let’s assume that a network issue has caused the connection to drop. The code, as written now, has no way of identifying this issue. It is actually worse than expected, because the connection isn’t actually being <em>used</em>. So even if the connection has dropped, the service is not aware of this. Even this, though, is something that can be fixed in a straightforward manner. You can add a cancellation token that the process will listen to. </p><p>You also need to keep verifying against the database server that you are still the owner of the lock and that the connection didn’t drop / fail and released it behind your back. And of course, there may be a delay between losing the lock and finding out about that.</p><p>That leads us to the most serious problem: Race conditions. In this case, even if the code handled all such scenarios nicely, we have to take into account the fact that we are dealing with separate resources here. In our example, we have Postgres for the leader election and the printer as the protected resource. The two nodes are competing on the lock, and then one of them starts printing. The lock is lost because of a network reset. At this point, Postgres frees the lock and the other node is able to lock it. It starts to run its own printing jobs. </p><p>Let’s say that the first node has a way to detect that it lost the lock. There is still the issue of how fast that can happen. It is very likely that at a certain point, you’ll have two nodes that believe that they are the leader. That is a Bad Thing.</p><p>A couple of years ago, GitHub was down <a href="https://github.blog/2018-10-30-oct21-post-incident-analysis/">for more than a day</a> because of exactly this kind of a scenario. I analyzed the issue at <a href="https://ayende.com/blog/185057-C/analyzing-the-github-outage">the time in detail</a>.</p><p>In this case, using the system above, you are pretty much guaranteed to have a messed up printing job, with pages from multiple jobs mixed together. </p><p>If you really care about consistency in the leader operations, you can’t just run things using a leader election. You have to run everything through the same mechanism. In GitHub’s example, they used Raft (a distributed consensus algorithm), but they used that to make decisions on a <em>separate</em> system, so there was a guarantee for inconsistency in that system. </p><p>In other words, you are either all in to distributed consensus or you should be out. Note that being out is fine, if you don’t <em>care</em> about short periods of multiple leaders. But if you need to ensure that this is the case, you cannot make it work without building it properly from the ground up.</p>
+            </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
