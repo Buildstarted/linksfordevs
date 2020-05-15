@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+EF Core and Cosmos DB with Blazor WebAssembly - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="EF Core and Cosmos DB with Blazor WebAssembly - linksfor.dev(s)"/>
+    <meta property="article:author" content="Empowering developers to be their best.&#x1F4C5; May 14, 2020&#xA;&#x1F558; 21 min read&#xA;&#x1F4AC; 4263 words"/>
+    <meta property="og:description" content="With Blazor WebAssembly it is possible to use EF Core to access Cosmos DB directly from the browser. This post explores why, how, and what security implications and considerations exist."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.jeremylikness.com/blog/ef-core-and-cosmosdb-with-blazor-webassembly/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - EF Core and Cosmos DB with Blazor WebAssembly</title>
+<div class="readable">
+        <h1>EF Core and Cosmos DB with Blazor WebAssembly</h1>
+            <div>by Empowering developers to be their best.&#x1F4C5; May 14, 2020&#xA;&#x1F558; 21 min read&#xA;&#x1F4AC; 4263 words</div>
+            <div>Reading time: 25-32 minutes</div>
+        <div>Posted here: 15 May 2020</div>
+        <p><a href="https://blog.jeremylikness.com/blog/ef-core-and-cosmosdb-with-blazor-webassembly/">https://blog.jeremylikness.com/blog/ef-core-and-cosmosdb-with-blazor-webassembly/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>It all began as a simple idea. I’ve been speaking with customers about <a href="https://jlik.me/hvb">Entity Framework Core (EF Core)</a> and was intrigued by the popularity of using EF Core to access <a href="https://jlik.me/hvc">Cosmos DB</a>. I’m a huge fan of Cosmos DB and have worked with it since it evolved from Azure DocumentDB. It wasn’t clear to me why anyone would want to use EF Core when Cosmos DB <a href="https://jlik.me/hvd">has its own SDK</a>. I started asking questions and <a href="https://twitter.com/julielerman"><i></i>Julie Lerman</a> answered with this tweet for context:</p><twitter-widget id="twitter-widget-0" data-tweet-id="1245732530160050176"></twitter-widget><p>Many customers shared the same feedback:</p><ul><li>EF Core presents a common interface and set of APIs for data access</li><li>Developers fluent in that API prefer to use it over other approaches</li><li>EF Core hides many of the nuances of setting up the Cosmos DB client to access documents</li><li>EF Core by convention creates a container named after the context and then stores all entity types in that table with a special type discriminator. This means less work for the developer</li><li>In some scenarios it is possible to reuse code across providers</li></ul><p>The last point was interesting because I spoke to an internal team working on a process that distributes data to <a href="https://jlik.me/hve">Azure SQL</a> and Cosmos DB. They are using Azure Functions and chose EF Core so that most of the code remains the same between connectors. For the most part, they just plug in the appropriate provider to make it work.</p><p>Speaking with these teams sold me on the idea of using EF Core for Cosmos DB. What happened next was unexpected.</p><h2 id="the-idea">The Idea</h2><p><a href="https://jlik.me/hvf">Blazor WebAssembly</a> is one of the most amazing new technologies I’ve worked with in my career. I know that’s a bold statement, but it’s not just based on personal experience. Enabling .NET apps to run in the browser efficiently and without plug-ins is revolutionary. Customers are migrating desktop and legacy web apps to the new platform. C# developers are rejoicing that they can build responsive Single Page Apps without getting sucked into choosing a JavaScript framework and learning an entirely new language and platform.</p><p>As powerful as the technology is, it is constrained by the fact it runs as a client in the browser. This means it can’t make direct TCP connections, for example, which limits the databases it can connect to directly. All the code runs in the browser, so credentials can’t be secured the same way they are on the webserver. Therefore most access is done over HTTP APIs and creates the challenge of deciding how to serialize complex queries over the wire.</p><p>Although there are new solutions like OData and GraphQL, I wondered if they are always necessary. <a href="https://firebase.google.com/">Firebase</a> is a popular solution and, from what I understand, developers can easily (but securely) connect directly from the browser. Would a similar experience be possible with Blazor?</p><p>A final push for the idea came from friend and coworker <a href="https://twitter.com/bradygaster"><i></i>Brady Gaster</a>. He was working on a special demo and shared how much he enjoyed using EF Core for Cosmos DB. We chatted about the potential to use it in Blazor apps and considered the implications of Blazor Server vs. Blazor WebAssembly. That’s when I had my <em>“Ah-hah!"</em> moment (thanks, Brady!).</p><h2 id="why-cosmos-db">Why Cosmos DB</h2><p>The Cosmos DB client allows <a href="https://jlik.me/hvg">two connection modes</a>: direct (TCP) and gateway (HTTPS). Gateway mode <em>should</em> be usable from the browser. The challenge is how to secure credentials. There is no safe way to ship them in the browser and if anyone were to intercept them, your entire database will be compromised. I decided to first tackle <em>if</em> it could work, then tackle whether it <em>should</em> be done based on security concerns. But why even consider Cosmos DB in the browser? There are a few reasons:</p><ul><li>Cosmos DB can be configured with multiple regions and will automatically route to the closest (and fastest) node</li><li>Building it into the client app removes the need to build an additional API tier (with exceptions, more on that later)</li><li>Enterprise apps often have complex grids and search mechanisms. A client solution allows applying those queries directly to the database instead of figuring out some way to serialize them and re-materialize over the wire</li><li>The most popular web frameworks tend to be easy to use with minimal moving parts, and I’d love to see us offer something similar</li></ul><p>Things began to click into place. I decided I had what I need to build a quick experiment. I immediately set to work, and just as fast, hit my first roadblock. More on that in a minute.</p><h2 id="why-entity-framework-core">Why Entity Framework Core</h2><p>My decision to use Entity Framework Core goes beyond the fact that I work closely with the team. I’ve learned in my conversations with developers that they love using EF Core as a data access API. It also simplifies the strategy of how to store documents and discriminate between varying types - this is all done automatically. I was confident that EF Core <em>could</em> run in Blazor because it targets .NET Standard 2.1. The question was only whether the provider <em>would</em> work. I had also just demoed some new EF Core features in the <a href="https://youtu.be/SwIBkZZ32r4">ASP.NET Community Standup</a>.</p><p><iframe src="https://www.youtube-nocookie.com/embed/SwIBkZZ32r4" allowfullscreen="" title="YouTube Video"></iframe></p><p>I used Cosmos DB and built an example app that handles blogs and blog posts. To keep my experiment fast and easy, I simply copied the setup from that app into my Blazor WebAssembly project. I was up and running in just a few minutes. The moment of truth had arrived. For now, I brazenly embedded my secrets as hard-coded string literals that I used to <a href="https://jlik.me/hvh">configure the database context</a>. I hit <code>CTRL+F5</code> to “Start without Debugging” and eagerly waited for the blog posts to render.</p><p>Instead, what I got was an exception.</p><h2 id="mono-blocker">Mono Blocker</h2><p>To reproduce the error and eliminate EF Core as the culprit, I used this very simple statement:</p><div><pre><code data-lang="csharp"><span>var</span> client = <span>new</span> CosmosClient(
+   <span>"[CosmosEndpoint]"</span>,
+   <span>"[CosmosKey]"</span>,
+   <span>new</span> CosmosClientOptions()
+   {
+      ConnectionMode = ConnectionMode.Gateway,
+      LimitToEndpoint = <span>true</span>
+   });
+</code></pre></div><p>Before even attempting to issue a request, the client was failing. The exception had a very large call stack with this at the top:</p><p><code>System.Threading.SynchronizationLockException: Cannot wait on monitors on this runtime.</code></p><p>Blazor doesn’t allow blocking code, and something was blocking. I filed <a href="https://github.com/Azure/azure-cosmos-dotnet-v3/issues/1429">GitHub Issue #1429</a> and set aside my hopes and dreams for a while. OK, maybe it wasn’t <em>that</em> dramatic. The Cosmos DB SDK team responded quickly and figured out how to detect the mono runtime to change some settings with the HTTP client. I was excited to receive this email from <a href="https://twitter.com/ealsur"><i></i>Matias</a>:</p><div><pre><code data-lang="text">Subject: RE: Cosmos client on Blazor WebAssembly
+
+Jeremy,
+
+The 3.9.0-preview2 Nuget package is now out,
+with the changes for WebAssembly,
+you can now try it yourself 😊
+
+Matias
+</code></pre></div><p>I pulled down the preview package, recompiled and ran it. Success! (Thanks, Matias!) But there was still one problem left to solve.</p><h2 id="security-concerns">Security Concerns</h2><p>Blazor WebAssembly runs entirely in the browser. This creates a major security concern. In most applications, the secrets are hidden in an API tier. That tier communicates with the database on behalf of the user. It is capable of restricting access based on their role. If the user credentials are compromised, a hacker can impersonate that user but is constrained to the subset of actions and data their role allows. This is far more containable than the case of a hacker obtaining administrative credentials. They could then read sensitive information or even destroy the entire database.</p><p>Storing the credentials is therefore a problem. Even if the credentials are encrypted, there has to be a way to decrypt them in order to use them. If your code can decrypt them, assume the user who has your code running in their browser can too. Therefore, ⛔ <strong>embedded credentials are a no-go</strong>.</p><p>What about requesting the credentials from the server? HTTPS is a secure protocol. It is why we trust web applications in the first place. When I log into my bank, I know a complicated handshake occurred to encrypt my data for that session so that would-be attackers are unable to steal data from the wire. This is all fine, but that data must be decrypted in the browser to be used. I can easily look at my own traffic to see what is being sent and received. Therefore ⛔ <strong>sending me master credentials over a secured connection is meaningless</strong> because I can view them on my end and use them to take over the database.</p><p>So how does Firebase work? Although Firebase “feels” like a serverless solution, my understanding is that the service itself hosts information about users. When a user authenticates from the browser, they are giving their credentials (username and password) and receiving a connection specifically configured for them. That connection is completely controlled through role-based access (RBAC) so the scope of what they can do is limited. The question is, can we create a similar scenario with Cosmos DB? It turns out the answer is, “Yes.”</p><p>📱 It turns out this problem has already been solved in mobile applications. Although there are secure ways to store secrets on phones, no one wants to risk shipping the master keys. So how do <em>they</em> do it?</p><p>The official documentation for Cosmos DB includes an article to <a href="https://jlik.me/hvj">learn how to secure access to data</a>. In that article you can read about “resource tokens.” These are ephemeral (short-lived) keys for access that are generated specifically for a user. The keys allow very refined access permissions and even allow you to scope access to a particular partition key for multi-tenant scenarios. The maximum lifespan of a token is five hours, but you can configure it to a shorter duration. The default is just one hour.</p><p>Handing the user their own token only allows them to do what we want them to do anyway. If the token is somehow intercepted, the hacker only has the same level of access they would via a Web API scenario: they can only act based on the permissions the user has. They also have a limited timeline to do so.</p><blockquote><p>I would be remiss to not include a major <strong>security notice</strong> here. I believe there are viable scenarios that make sense <em>if</em> you follow the principle of least privilege and issue only the most restrictive tokens possible (the least amount of access acceptable for the app).</p></blockquote><p>Here’s a poorly drawn diagram of the process:</p><p><img src="https://blog.jeremylikness.com/blog/ef-core-and-cosmosdb-with-blazor-webassembly/images/tokenprocess.jpg" alt="Identity flow"></p><p>Let’s review pros and cons:</p><p>Pros:</p><ul><li>Simplified access from the client</li><li>Removes an additional round-trip to an API service for subsequent calls (after the token request) resulting in lower latency</li><li>Takes advantage of Cosmos DB global distribution to route to the nearest cluster</li><li>Token is ephemeral and restricted</li><li><a href="https://jlik.me/hvk">Cross Original Resource Sharing (CORS)</a> is configurable to constrain access (I was unable to access my endpoint until I set this up for my localhost port)</li></ul><p>Cons:</p><ul><li>The token can be intercepted or stolen</li><li>The endpoint of your Cosmos DB database is exposed, opening up a potential attack vector</li><li>You have to either disable your <a href="https://jlik.me/hvl">IP access control policy</a> or somehow capture all potential IP endpoints for access</li></ul><p>⚠ The last two concerns aren’t unique to Blazor WebAssembly apps. They also exist for mobile apps that access Cosmos DB directly. I’m curious about your thoughts: do you consider the endpoint to be a “secret” and how much risk do you feel is involved when it is revealed? Would love to hear your comments below.</p><p>💡 For reference, here’s the documentation for <a href="https://jlik.me/hvo">accessing Cosmos DB from Xamarin (mobile) apps</a>. Does anything look familiar? They had professionals draw <em>their</em> diagram. It turns out we’re not in completely unchartered territory here.</p><h2 id="the-final-solution">The Final Solution</h2><p>After I was successful, I posted a teaser to Twitter. I did not anticipate the magnitude of the response I received. The biggest (well-placed) concerns are around how security is implemented.</p><twitter-widget id="twitter-widget-1" data-tweet-id="1260340804351975424"></twitter-widget><p>I apologize to anyone looking for an out of the box solution. My project uses the latest preview bits and relies on <a href="https://jlik.me/hvm">ASP.NET Core Identity</a> for authentication, so it has a lot of moving parts that will likely be out of date before I publish this. Instead, I’ll walk through the relevant steps and share the code I used along the way.</p><p>The first step is to create a Blazor WebAssembly project. I used the Release Candidate (<code>3.2.0-rc1.20223.4</code>). Choose “ASP.NET Core Hosted” so you can host authentication, then pick the option to include authentication in the app. This will set up a SQL database to store user profiles. It requires you to run an initial migration to set up the database (thanks to template magic, it will give you an option to do this directly from an error page the first time you run the app). This is just to facilitate an authentication mechanism for the example. If you have an external authentication provider, feel free to use that instead.</p><p><img src="https://blog.jeremylikness.com/blog/ef-core-and-cosmosdb-with-blazor-webassembly/images/createproject.jpg" alt="Screenshot of the create project dialog"></p><p>Your project structure will include:</p><div><pre><code data-lang="text">BlazorApp.Client
+BlazorApp.Server
+BlazorApp.Shared
+</code></pre></div><p>The preview packages target .NET 5, but the server solution defaults to ASP.NET Core 3.1. To fix that, I simply opened up the <code>.csproj</code> file for the server and changed the target framework to 5.0:</p><div><pre><code data-lang="xml"><span>&lt;PropertyGroup&gt;</span>
+    <span>&lt;TargetFramework&gt;</span>net5.0<span>&lt;/TargetFramework&gt;</span>
+    <span>&lt;UserSecretsId&gt;</span>Caught you looking<span>&lt;/UserSecretsId&gt;</span>
+<span>&lt;/PropertyGroup&gt;</span>
+</code></pre></div><p>The client hosts your Blazor WebAssembly project. The server hosts authentication and any other APIs you choose to stand up. Shared is just what it implies. Now for some additions. From the NuGet package manager, install the Azure Cosmos DB SDK (<a href="https://www.nuget.org/packages/Microsoft.Azure.Cosmos/">Microsoft.Azure.Cosmos</a>) version <code>3.9.0-preview3</code> or later for the server project. Install EF Core for Cosmos (<a href="https://www.nuget.org/packages/Microsoft.EntityFrameworkCore.Cosmos/">Microsoft.EntityFrameworkCore.Cosmos</a>) on the client project. I used <code>5.0.0-preview.3.20181.2</code> but anything later should work fine.</p><p>⚠ <strong>Important Step</strong> when I installed EF Core, it automatically pulled in an older version of the Azure Cosmos SDK for the client project. To fix this, I simply went into the NuGet package manager and upgraded it in the client project to the latest version.</p><p><img src="https://blog.jeremylikness.com/blog/ef-core-and-cosmosdb-with-blazor-webassembly/images/nuget.jpg" alt="NuGet screenshot"></p><p>In the server project, store your Cosmos DB connection string (this is a master key) somewhere secure. For my local test I put it in <code>applicationSettings.Development.json</code> under the key “CosmosConnection” (if you do this in a repo, make sure your <code>.gitignore</code> is setup so you don’t accidentally check it in). In production this would get put into environment variables, Azure Key Vault and/or application settings. This is the project that is <em>not</em> exposed to the client.</p><p>That’s the project setup, now for the custom code.</p><h3 id="set-up-the-cosmos-db-user">Set up the Cosmos DB User</h3><p>The first step to generate a resource token is to add the user to Cosmos DB and configure permissions. You can choose how to identify your user (I will provide an example with email address, but you can use the id or name or anything else that is unique). You can also configure different sets of permissions and name them however you like. When and how you do this depends on your application design. If they should have access by default, you can add them to Cosmos DB the same time their profile is set up. Other options include the first time they try to access the resource, or as the result of some administrative action. Programmatically, the code looks like this to create the user. Because permissions are ephemeral, I’ll cover those later:</p><div><pre><code data-lang="csharp"><span>var</span> client = <span>new</span> CosmosClient(CONNECTION_STRING);
+<span>var</span> db = Client.GetDatabase(<span>"myblogs"</span>);
+<span>var</span> cosmosUser = <span>await</span> db.CreateUserAsync(email);
+</code></pre></div><p>Assuming the email <code>test@test.com</code> this will create a user on the <code>myblogs</code> database with the same name.</p><p>This step only needs to happen once. It creates the user, but it is the permissions that generate the tokens. In the <a href="#code-snippets">Code Snippets</a> section I share a gist that shows how to override Identity to automatically add the user to Cosmos DB.</p><h3 id="generate-the-token">Generate the Token</h3><p>The two properties needed to connect to a Cosmos DB account are the endpoint and the key. I created a shared class to represent these properties:</p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>CosmosCredentials</span>
+{
+    <span>public</span> <span>string</span> EndPoint { <span>get</span>; <span>set</span>; }
+    <span>public</span> <span>string</span> Key { <span>get</span>; <span>set</span>; }
+}
+</code></pre></div><p>Next, create an empty Web API controller in the server project. I named mine <code>CosmosController.cs</code>.</p><div><pre><code data-lang="csharp"><span>using</span> <span>System.Threading.Tasks</span>;
+<span>using</span> <span>IConfiguration</span> = Microsoft.Extensions.Configuration.IConfiguration;
+<span>using</span> <span>Microsoft.AspNetCore.Authorization</span>;
+<span>using</span> <span>Microsoft.AspNetCore.Mvc</span>;
+<span>using</span> <span>Microsoft.Azure.Cosmos</span>;
+<span>using</span> <span>Microsoft.Extensions.Configuration</span>;
+<span>using</span> <span>BlazorCosmosWasm.Shared</span>;
+<span>using</span> <span>IdentityServer4.Extensions</span>;
+<span>using</span> <span>System.Linq</span>;
+<span>using</span> <span>Microsoft.AspNetCore.Identity</span>;
+<span>using</span> <span>BlazorCosmosWasm.Server.Models</span>;
+
+<span>namespace</span> <span>BlazorCosmosWasm.Server.Controllers</span>
+{
+<span>    [Authorize]</span>
+<span>    [Route("api/[controller]</span><span>")]
+</span><span></span><span>    [ApiController]</span>
+    <span>public</span> <span>class</span> <span>CosmosController</span> : ControllerBase
+    {
+        <span>private</span> <span>readonly</span> UserManager&lt;ApplicationUser&gt; Manager;
+
+        <span>public</span> CosmosController(IConfiguration config, UserManager&lt;ApplicationUser&gt; manager)
+        {
+            Config = config;
+            Manager = manager;
+            Client = <span>new</span> CosmosClient(Config.GetValue&lt;<span>string</span>&gt;(<span>"CosmosConnection"</span>));
+       }
+
+        <span>private</span> CosmosClient Client { <span>get</span>; }
+        <span>public</span> IConfiguration Config { <span>get</span>; <span>set</span>; }
+    }
+}
+</code></pre></div><p>Notice this expects configuration to be injected for connection strings, but also takes an instance of the user manager. This is important for us to find the email of the logged in user. The <code>[Authorize]</code> attribute requires the user to be logged in to access any controller methods. When the authenticated user requests the controller endpoint, their security identity includes a set of claims. The username, email, and other information don’t exist. One of the claims contains a unique identifier for the user, which can be used to obtain the remaining information. Here’s a helper method to get the email address of the logged in user:</p><div><pre><code data-lang="csharp"><span>private</span> <span>async</span> Task&lt;<span>string</span>&gt; GetEmailAsync()
+{
+    <span>if</span> (User.IsAuthenticated())
+    {
+        <span>var</span> id = User.Claims.SingleOrDefault(
+            key =&gt; key.Type == System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        <span>var</span> user = <span>await</span> Manager.FindByIdAsync(id);
+        <span>return</span> user?.Email;
+    }
+    <span>return</span> <span>null</span>;
+}
+</code></pre></div><p>Now that we have the email, we can request and return the token. There are three basic steps:</p><ol><li>Retrieve the user</li><li>Grant the user permissions</li><li>Retrieve the token</li></ol><p>This example will grant the <code>test@test.com</code> user access to only the <code>BlogContext</code> container. The permission is named <code>Permission-test@test.com-blogs</code> and only grants “read” access. As mentioned earlier, you can further restrict access to a specific partition key. If you want to override the token expiration, pass the desired timeout in seconds after the <code>PermissionProperties</code> parameter.</p><div><pre><code data-lang="csharp"><span>[HttpGet]</span>
+<span>public</span> <span>async</span> Task&lt;IActionResult&gt; Get()
+{
+    <span>var</span> user = <span>await</span> GetEmailAsync();
+    <span>if</span> (user == <span>null</span>)
+    {
+        <span>return</span> NotFound();
+    }
+    <span>var</span> db = Client.GetDatabase(<span>"myblogs"</span>);
+    <span>var</span> container = db.GetContainer(nameof(BlogContext));
+    <span>var</span> cosmosUser = db.GetUser(user);
+    <span>var</span> permissionId = <span>$"Permission-{user}-blogs"</span>;
+    <span>await</span> cosmosUser.UpsertPermissionAsync(<span>new</span> PermissionProperties(
+                id: permissionId,
+                permissionMode: PermissionMode.Read,
+                container: container));
+    <span>var</span> token = <span>await</span> cosmosUser.GetPermission(permissionId).ReadAsync();
+    <span>return</span> Ok(
+        <span>new</span> CosmosCredentials
+        {
+            EndPoint = Client.Endpoint.ToString(),
+            Key = token.Resource.Token
+        });
+}
+</code></pre></div><p>The code proactively creates or updates the permissions, then grabs the token. Each time the permissions are updated, the token expiration is updated as well. Every time the permission is read, a new token is generated. You can proactively manage tokens by tracking expiration and requesting a new one, or reactively by capturing the authorization exception when it expires and request a new one.</p><h3 id="the-data-model">The Data Model</h3><p>OK, we’re done with the server. Let’s work on using the token. In the shared project, add the following code to define blogs, posts, and an EF Core context. I’m keeping this example simple (read only) so you may want to write some bootstrap code to insert a few sample documents. The EF Core docs explain how to seed Cosmos DB.</p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>Blog</span>
+{
+    <span>public</span> Blog()
+    {
+        Id = Guid.NewGuid();
+    }
+    <span>public</span> Guid Id { <span>get</span>; <span>set</span>; }
+    <span>public</span> <span>string</span> Name { <span>get</span>; <span>set</span>; }
+    <span>public</span> <span>string</span> Url { <span>get</span>; <span>set</span>; }
+    <span>public</span> List&lt;Post&gt; Posts { <span>get</span>; <span>set</span>; } = <span>new</span> List&lt;Post&gt;();
+}
+<span>
+</span><span>[Owned]</span>
+<span>public</span> <span>class</span> <span>Post</span>
+{
+    <span>public</span> <span>string</span> Title { <span>get</span>; <span>set</span>; }
+    <span>public</span> <span>bool</span> IsActive { <span>get</span>; <span>set</span>; }
+}
+
+<span>public</span> <span>class</span> <span>BlogContext</span> : DbContext
+{
+    <span>public</span> DbSet&lt;Blog&gt; Blogs { <span>get</span>; <span>set</span>; }
+
+    <span>public</span> BlogContext(): <span>base</span>()
+    {
+
+    }
+
+    <span>public</span> BlogContext(DbContextOptions&lt;BlogContext&gt; options): <span>base</span>(options)
+    {
+
+    }
+
+    <span>protected</span> <span>override</span> <span>void</span> OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity&lt;Blog&gt;().Property&lt;<span>string</span>&gt;(<span>"ETag"</span>).IsEtagConcurrency();
+        <span>base</span>.OnModelCreating(modelBuilder);
+    }
+}
+</code></pre></div><p>Using <code>DbContextOptions</code> allows you to defer configuration and standup the context with the provider of your choice. The model building code simply adds a shadow property to track concurrency as I showed in the standup.
+Let’s move over to the client project.</p><h3 id="the-client-service">The Client Service</h3><p>The ordinary steps to register a data context won’t work here because the token needs to be retrieved before it is initialized. Therefore, I created a service to handle the additional steps. The interface is simple:</p><div><pre><code data-lang="csharp"><span>public</span> <span>interface</span> IBlogClient
+{
+    Task&lt;BlogContext&gt; GetDbContextAsync();
+}
+</code></pre></div><p>The implementation looks like this:</p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>BlogClient</span> : IBlogClient
+{
+    <span>private</span> CosmosCredentials Credentials;
+    <span>private</span> <span>readonly</span> HttpClient Http;
+
+    <span>public</span> BlogClient(HttpClient client)
+    {
+        Http = client;
+    }
+
+    <span>public</span> <span>async</span> Task&lt;BlogContext&gt; GetDbContextAsync()
+    {
+        <span>if</span> (Credentials == <span>null</span>)
+        {
+            <span>await</span> GetCredentialsAsync();
+        }
+
+        <span>var</span> options = <span>new</span> DbContextOptionsBuilder&lt;BlogContext&gt;()
+            .UseCosmos(Credentials.EndPoint, Credentials.Key, <span>"myblogs"</span>,
+            opt =&gt;
+                opt.ConnectionMode(Microsoft.Azure.Cosmos.ConnectionMode.Gateway));
+
+        <span>return</span> <span>new</span> BlogContext(options.Options);
+    }
+
+    <span>private</span> <span>async</span> Task GetCredentialsAsync()
+    {
+        Credentials = <span>await</span> Http.GetFromJsonAsync&lt;CosmosCredentials&gt;(<span>"api/Cosmos"</span>);
+    }
+}
+</code></pre></div><p>The <code>CosmosCredentials</code> class is from the shared project. The <code>HttpClient</code> is injected to use the special client properties that are configured by Blazor.</p><p>The service will cache the token. Right now, the service doesn’t deal with expiration; that would involve either setting an expiration and checking it, or capturing an authorization error and re-requesting the token. Either way, the endpoint will only return a token if the user is authenticated and already added to the Cosmos DB database. The options builder then specifies the Cosmos DB provider, passes the endpoint and token, and sets the connection mode to “gateway.” This is used to create a new context that is passed back.</p><blockquote><p>⭐ Normally, creating a new context is a fast operation. The preferred pattern is to create a context per operation, and this scales well under most providers (except when you are using the change tracking features to add, update, and/or delete entities). The service here gives you the flexibility to generate and discard the context or hang onto it.</p></blockquote><p>I registered it as “scoped” in the client project <code>Program.cs</code>:</p><div><pre><code data-lang="csharp">builder.Services.AddScoped&lt;IBlogClient, BlogClient&gt;();
+</code></pre></div><p>The final step is to use the service and consume some data.</p><h3 id="the-view-component">The View Component</h3><p>Next, create a Razor component named <code>cosmos.razor</code>. The heading should look like this:</p><div><pre><code data-lang="csharp">@page <span>"/cosmos"</span>
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+@using BlazorCosmosWasm.Shared
+@using BlazorCosmosWasm.Client.Data
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize]
+@inject IBlogClient Client
+</code></pre></div><p>A few things are going on here:</p><ul><li>The route is set to “cosmos” for navigation</li><li>The <code>[Authorize]</code> attribute is used to require authorization for the page</li><li>The blog service is injected</li></ul><p>Next, the template to render the blog content:</p><div><pre><code data-lang="html">@if (Blogs != null)
+{
+    &lt;<span>h1</span>&gt;Blogs&lt;/<span>h1</span>&gt;
+    @foreach (var blog in Blogs)
+    {
+        &lt;<span>h2</span>&gt;&lt;<span>a</span> <span>href</span><span>=</span><span>"@blog.Url"</span> <span>target</span><span>=</span><span>"_blank"</span>&gt;@blog.Name&lt;/<span>a</span>&gt;&lt;/<span>h2</span>&gt;
+        &lt;<span>ul</span>&gt;
+            @foreach (var post in blog.Posts)
+            {
+                @if (post.IsActive)
+                {
+                    &lt;<span>li</span>&gt;&lt;<span>strong</span>&gt;@post.Title&lt;/<span>strong</span>&gt;&lt;/<span>li</span>&gt;
+                }
+                else
+                {
+                    &lt;<span>li</span>&gt;(inactive) @post.Title&lt;/<span>li</span>&gt;
+                }
+            }
+
+        &lt;/<span>ul</span>&gt;
+    }
+}
+</code></pre></div><p>I also added a “loading” prompt and an error message:</p><div><pre><code data-lang="html">@if (Blogs == null <span>&amp;&amp;</span> string.IsNullOrWhiteSpace(error))
+{
+    &lt;<span>p</span> <span>class</span><span>=</span><span>"alert alert-info"</span>&gt;Loading...&lt;/<span>p</span>&gt;
+}
+
+@if (Blogs == null <span>&amp;&amp;</span> !string.IsNullOrWhiteSpace(error))
+{
+    &lt;<span>p</span> <span>class</span><span>=</span><span>"alert alert-danger"</span>&gt;Bad news: @error&lt;/<span>p</span>&gt;
+}
+</code></pre></div><p>The code exposes an error property and a list of blogs:</p><div><pre><code data-lang="csharp"><span>public</span> List&lt;Blog&gt; Blogs = <span>null</span>;
+<span>public</span> <span>string</span> error;
+</code></pre></div><p>Finally, the initialization code:</p><div><pre><code data-lang="csharp"><span>protected</span> <span>override</span> <span>async</span> Task OnInitializedAsync()
+{
+    BlogContext blogContext = <span>null</span>;
+    <span>try</span>
+    {
+        blogContext = <span>await</span> Client.GetDbContextAsync();
+    }
+    <span>catch</span> (AccessTokenNotAvailableException exception)
+    {
+        exception.Redirect();
+    }
+    <span>catch</span> (Exception ex)
+    {
+        error = ex.Message;
+    }
+
+    <span>if</span> (<span>string</span>.IsNullOrEmpty(error))
+    {
+        <span>using</span> (blogContext)
+        {
+            Blogs = <span>await</span> blogContext.Blogs.ToListAsync();
+        }
+    }
+}
+</code></pre></div><p>If the user is not authorized when the token endpoint is accessed, an exception is thrown that redirects them to a page to login or register. Any other errors are simply captured and displayed. The context is used to fetch the list and then disposed immediately. I’ve been asked how fast it takes to render. This is a real-time capture of the process.</p><p><img src="https://blog.jeremylikness.com/blog/ef-core-and-cosmosdb-with-blazor-webassembly/images/blazorappexample.gif" alt="Example of using the app"></p><p>That’s a wrap!</p><h2 id="code-snippets">Code Snippets</h2><p>For a more complete look at the code, I created several gists:</p><ul><li><a href="https://gist.github.com/JeremyLikness/e34eede71f31ab0dc1769584d2237301">CosmosExtensions.cs</a> - a few helper methods.</li><li><a href="https://gist.github.com/JeremyLikness/fcb62c9e6b55f3ead624e354998f003a">CosmosController.cs</a> - the entire code of my token controller.</li><li><a href="https://gist.github.com/JeremyLikness/f73214be66301111ec853706620301eb">ApplicationCosmosDbContext.cs</a> - a custom context that derives from the Identity context. It uses the context to find new users, then automatically adds them as Cosmos DB users (if you decide to use this, don’t forget to intercept the removal or deactivation of users as well). This gets registered in place of <code>ApplicationDbContext</code> in the startup methods.</li><li><a href="https://gist.github.com/JeremyLikness/b73ec9f54983a4d4e204faafd06511ee">BlogClient.cs</a> - a version of the client that will retry on failure in case the exception is due to an expired token.</li></ul><h2 id="conclusion">Conclusion</h2><p>I believe that this experience can be a game changer for building applications, especially if the majority of effort is based on reading and querying data. There are definite security concerns to consider for this approach, but I’m not convinced they are much different than the experience of connecting from mobile. Although Cosmos DB was my first target for using EF Core in the client, there are other possibilities as well. Other teams have successfully implemented in-browser versions of SQLite. It will be interesting to explore how to set that up with the EF Core provider and consider scenarios like offline apps and disconnected sync.</p><p>I was surprised by how much attention my original tweet generated, so I’m very interested to hear your thoughts. What are your thoughts and concerns around Cosmos DB in Blazor WebAssembly? Do you have use cases this may work well for? Is there a security risk I didn’t consider that you would like to relate? How do you feel about using EF Core as a “database dialect” in your Blazor apps, regardless of whether it is working through a direct provider or simply transports the requests to the server and materializes results over the wire?</p><p>Please comment below!</p><p>Regards,</p><p><img src="https://blog.jeremylikness.com/images/jeremylikness.gif" alt="Jeremy Likness"></p></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
