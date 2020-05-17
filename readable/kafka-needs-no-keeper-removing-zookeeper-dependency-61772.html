@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Kafka Needs No Keeper - Removing ZooKeeper Dependency - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Kafka Needs No Keeper - Removing ZooKeeper Dependency - linksfor.dev(s)"/>
+    <meta property="og:description" content="Say goodbye to Kafka ZooKeeper dependency! KIP-500 introduces a new way of storing data in Kafka itself, rather than in external systems such as ZooKeeper."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.confluent.io/blog/removing-zookeeper-dependency-in-kafka/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Kafka Needs No Keeper - Removing ZooKeeper Dependency</title>
+<div class="readable">
+        <h1>Kafka Needs No Keeper - Removing ZooKeeper Dependency</h1>
+            <div>Reading time: 10-13 minutes</div>
+        <div>Posted here: 17 May 2020</div>
+        <p><a href="https://www.confluent.io/blog/removing-zookeeper-dependency-in-kafka/">https://www.confluent.io/blog/removing-zookeeper-dependency-in-kafka/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><div><p>Currently, Apache Kafka<sup>®</sup> uses Apache ZooKeeper™ to store its metadata. Data such as the location of partitions and the configuration of topics are stored outside of Kafka itself, in a separate ZooKeeper cluster. In 2019, we outlined a <a href="https://cwiki.apache.org/confluence/x/KoxiBw" target="_blank" rel="noopener noreferrer">plan</a> to break this dependency and bring metadata management into Kafka itself.</p>
+<p>So what is the problem with ZooKeeper? Actually, the problem is not with ZooKeeper itself but with the concept of external metadata management.</p>
+<p>Having two systems leads to a lot of duplication. Kafka, after all, is a replicated distributed log with a pub/sub API on top. ZooKeeper is a replicated distributed log with a filesystem API on top. Each has its own way of doing network communication, security, monitoring, and configuration. Having two systems roughly doubles the total complexity of the result for the operator. This leads to an unnecessarily steep learning curve and increases the risk of some misconfiguration causing a security breach.</p>
+<p>Storing metadata externally is not very efficient. We run at least three additional Java processes, and sometimes more. In fact, we often see Kafka clusters with just as many ZooKeeper nodes as Kafka nodes! Additionally, the data in ZooKeeper also needs to be reflected on the Kafka controller, which leads to double caching.</p>
+<p>Worse still, storing metadata externally limits Kafka’s scalability. When a Kafka cluster is starting up, or a new controller is being elected, the controller must load the full state of the cluster from ZooKeeper. As the amount of metadata grows, so does the length of this loading process. This limits the number of partitions that Kafka can store.</p>
+<p>Finally, storing metadata externally opens up the possibility of the controller’s in-memory state becoming de-synchronized from the external state. The controller’s view of liveness—which is in the cluster—can also diverge from ZooKeeper’s view.</p>
+<h2 id="kip-500"><a id="kip-500"></a>KIP-500</h2>
+<h3 id="handling-metadata"><a id="handling-metadata"></a>Handling metadata</h3>
+<p>KIP-500 outlines a better way of handling metadata in Kafka. You can think of this as “Kafka on Kafka,” since it involves storing Kafka’s metadata in Kafka itself rather than in an external system such as ZooKeeper.</p>
+<p>In the post-KIP-500 world, metadata will be stored in a partition inside Kafka rather than in ZooKeeper. The controller will be the leader of this partition. There will be no external metadata system to configure and manage, just Kafka itself.</p>
+<p>We will treat metadata as a log. Brokers that need the latest updates can read only the tail of the log. This is similar to how consumers that need the latest log entries only need to read the very end of the log, not the entire log. Brokers will also be able to persist their metadata caches across process restarts.</p>
+<h3 id="controller-architecture"><a id="controller-architecture"></a>Controller architecture</h3>
+<p>A Kafka cluster elects a controller node to manage partition leaders and cluster metadata. The more partitions and metadata we have, the more important controller scalability becomes. We would like to minimize the number of operations that require a time linearly proportional to the number of topics or partitions.</p>
+<p>One such operation is controller failover. Currently, when Kafka elects a new controller, it needs to load the full cluster state before proceeding. As the amount of cluster metadata grows, this process takes longer and longer.</p>
+<p>In contrast, in the post-KIP-500 world, there will be several standby controllers that are ready to take over whenever the active controller goes away. These standby controllers are simply the other nodes in the Raft quorum of the metadata partition. This design ensures that we never need to go through a lengthy loading process when a new controller is elected.</p>
+<p>KIP-500 will speed up topic creation and deletion. Currently, when a topic is created or deleted, the controller must reload the full list of all topic names in the cluster from ZooKeeper. This is necessary because while ZooKeeper notifies us when the set of topics in the cluster has changed, it doesn’t tell us exactly which topics were added or removed. In contrast, creating or deleting a topic in the post-KIP-500 world will simply involve creating a new entry in the metadata partition, which is an O(1) operation.</p>
+<p>Metadata scalability is a key part of scaling Kafka in the future. We expect that a single Kafka cluster will eventually be able to support a million partitions or more.</p>
+<p><img src="https://cdn.confluent.io/wp-content/uploads/metadata-scalability.png" alt="Current | Proposed" width="2874" height="1248" srcset="https://cdn.confluent.io/wp-content/uploads/metadata-scalability.png 2874w, https://cdn.confluent.io/wp-content/uploads/metadata-scalability-300x130.png 300w, https://cdn.confluent.io/wp-content/uploads/metadata-scalability-1024x445.png 1024w, https://cdn.confluent.io/wp-content/uploads/metadata-scalability-768x333.png 768w, https://cdn.confluent.io/wp-content/uploads/metadata-scalability-1536x667.png 1536w, https://cdn.confluent.io/wp-content/uploads/metadata-scalability-2048x889.png 2048w, https://cdn.confluent.io/wp-content/uploads/metadata-scalability-350x152.png 350w, https://cdn.confluent.io/wp-content/uploads/metadata-scalability-600x261.png 600w" sizes="(max-width: 2874px) 100vw, 2874px"></p>
+<h2 id="roadmap"><a id="roadmap"></a>Roadmap</h2>
+<h3 id="removing-zookeeper"><a id="removing-zookeeper"></a>Removing ZooKeeper from Kafka’s administrative tools</h3>
+<p>Several administrative tools shipped as part of the Kafka release still allow direct communication with ZooKeeper. Worse still, there are still one or two operations that can’t be done except through this direct ZooKeeper communication.</p>
+<p>We have been working hard to close these gaps. Soon, there will be a public Kafka API for every operation that previously required direct ZooKeeper access. We will also disable or remove the unnecessary <code>--zookeeper</code> flags in the next major release of Kafka.</p>
+<h3 id="self-managed-metadata-quorums"><a id="self-managed-metadata-quorums"></a>Self-managed metadata quorums</h3>
+<p>In the post-KIP-500 world, the Kafka controller will store its metadata in a Kafka partition rather than in ZooKeeper. However, because the controller depends on this partition, the partition itself cannot depend on the controller for things like leader election. Instead, the nodes that manage this partition must implement a self-managed Raft quorum.</p>
+<p><a href="https://cwiki.apache.org/confluence/x/Li7cC" target="_blank" rel="noopener noreferrer">KIP-595: A Raft Protocol for the Metadata Quorum</a> outlines how we will adapt the Raft protocol to Kafka so that it really feels like a native part of the system. This will involve changing the push-based model described in the <a href="https://raft.github.io/raft.pdf" target="_blank" rel="noopener noreferrer">Raft paper</a> to a pull-based model, which is consistent with traditional Kafka replication. Rather than pushing out data to other nodes, the other nodes will connect to them. Similarly, we will use terminology consistent with Kafka rather than the original Raft paper—”epochs” instead of “terms,” and so forth.</p>
+<p>The initial implementation will be focused on supporting the metadata partition. It will not support the full range of operations that would be needed to convert regular partitions over to Raft. However, this is a topic we may return to in the future.</p>
+<h3 id="kip-500-mode"><a id="kip-500-mode"></a>KIP-500 mode</h3>
+<p>The most exciting part of this project, of course, is the ability to run without ZooKeeper, in “KIP-500 mode.” When Kafka is run in this mode, we will use a Raft quorum to store our metadata rather than ZooKeeper.</p>
+<p>Initially, KIP-500 mode will be experimental. Most users will continue to use “legacy mode,” in which ZooKeeper is still in use. Partly, this is because KIP-500 mode will not support all possible features at first. Another reason is because we want to gain confidence in KIP-500 mode before making it the default. Finally, we will need time to perfect the upgrade process from legacy mode to KIP-500 mode.</p>
+<p>Much of the work to enable KIP-500 mode will be in the controller. We must separate out the part of the controller that interacts with ZooKeeper from the part that implements more general-purpose logic such as replica set management.</p>
+<p>We need to define and implement more controller APIs to replace the communication mechanisms that currently involve ZooKeeper. One example of this is the new <code>AlterIsr</code> API. This API allows a replica to notify the controller of a change in the in-sync replica set without using ZooKeeper.</p>
+<h3 id="upgrades"><a id="upgrades"></a>Upgrades</h3>
+<p>KIP-500 introduced the concept of a <em>bridge release</em> that can coexist with both pre- and post-KIP-500 versions of Kafka. Bridge releases are important because they enable zero-downtime upgrades to the post-ZooKeeper world. Users on an older version of Kafka simply upgrade to a bridge release. Then, they can perform a second upgrade to a release that lacks ZooKeeper. As its name suggests, the bridge release acts as a bridge into the new world.</p>
+<p>So how does this work? Consider a cluster that is in a partially upgraded state, with several brokers on the bridge release and several brokers on a post-KIP-500 release. The controller will always be a post-KIP-500 broker. In this cluster, brokers cannot rely on directly modifying ZooKeeper to announce changes they are making (such as a configuration change or an ACL change). The post-KIP-500 brokers would not receive such notifications because they are not listening on ZooKeeper. Only the controller is still interacting with ZooKeeper, by mirroring its changes to ZooKeeper.</p>
+<p>Therefore, in the bridge release, all the brokers except the controller must treat ZooKeeper as read only (with some very limited exceptions).</p>
+<p>For RPCs like <code>IncrementalAlterConfigs</code>, we simply need to ensure that the call is processed by the active controller. This is easy for new clients—they can simply send the calls there directly. For older clients, we need a redirection system that will run on the brokers that send the RPCs to the active controller, no matter which broker they initially end up on.</p>
+<p>For RPCs that involve a complex interaction between the broker and the controller, we will need to create new controller APIs. One example is <a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-497%3A+Add+inter-broker+API+to+alter+ISR" target="_blank" rel="noopener noreferrer">KIP-497</a>, which specifies a new <code>AlterIsrRequest</code> API that allows brokers to request changes to partition in-sync replicas (ISRs).</p>
+<p>Replacing ad hoc ZooKeeper APIs with well-documented and supported RPCs has many of the same benefits as removing client-side ZooKeeper access did. Maintaining cross-version compatibility will be easier. For the special case of <code>AlterIsrRequest</code>, there will also be benefits to reducing the number of writes to ZooKeeper that a common operation requires.</p>
+<h2><a id="conclusion"></a>Conclusion</h2>
+<p>Kafka is one of the most active Apache projects. It has been amazing to see the evolution in its architecture over the last few years. That evolution is not done yet, as projects like KIP-500 show. What I like most about KIP-500 is that it’s a simplification to the overall architecture—for administrators and developers alike. It will let us use the powerful abstraction of the event log for metadata handling. And it will finally prove that…Kafka needs no keeper.</p>
+<p>If you have any questions about ZooKeeper removal in Apache Kafka, <a href="https://cnfl.io/KIP-Slack-Add-Calendar" target="_blank" rel="noopener noreferrer">join our live Q&amp;A in the Confluent Community Slack</a> #general channel on May 21st at 10:00 a.m. PDT. To learn about other work that is happening to make Kafka <a href="https://www.confluent.io/project-metamorphosis/elastic-scaling/">elastically scalable</a>, check out this <a href="https://www.confluent.io/blog/project-metamorphosis-part-1-elastic-kafka-clusters-in-confluent-cloud/">blog post</a> on Project Metamorphosis.</p>
+<div>
+
+<p>Colin McCabe currently works for Confluent to improve the performance, scalability, and general awesomeness of Apache Kafka. Previously, he worked on the Apache™ Hadoop® Distributed Filesystem. Colin studied computer science and computer engineering at Carnegie Mellon University, and he enjoys homebrewing and scuba diving.</p>
+</div>
+</div></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
