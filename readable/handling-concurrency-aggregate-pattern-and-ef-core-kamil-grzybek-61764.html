@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Handling concurrency - Aggregate Pattern and EF Core - Kamil Grzybek - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Handling concurrency - Aggregate Pattern and EF Core - Kamil Grzybek - linksfor.dev(s)"/>
+    <meta property="og:description" content="How to handle concurrency conflicts and enforce domain invariants using Entity Framework Core and Domain-Driven Design Aggregate Pattern."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.kamilgrzybek.com/design/handling-concurrency-aggregate-pattern-and-ef-core/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Handling concurrency - Aggregate Pattern and EF Core - Kamil Grzybek</title>
+<div class="readable">
+        <h1>Handling concurrency - Aggregate Pattern and EF Core - Kamil Grzybek</h1>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 17 May 2020</div>
+        <p><a href="https://www.kamilgrzybek.com/design/handling-concurrency-aggregate-pattern-and-ef-core/">https://www.kamilgrzybek.com/design/handling-concurrency-aggregate-pattern-and-ef-core/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<h2>Introduction</h2>
+<p>In this post I would like to discuss a frequently overlooked, though in some circumstances very important topic – concurrency handling in context of protection of the so-called <span>Domain Invariants</span>. </p>
+<p>In other words, the question is the following: how to ensure that even in a <a href="https://en.wikipedia.org/wiki/Multithreading_(computer_architecture)" rel="noopener" target="_blank">multi-threaded</a> environment we are able to <u>always guarantee</u> the <a href="http://www.kamilgrzybek.com/design/processing-multiple-aggregates-transactional-vs-eventual-consistency/" rel="noopener" target="_blank">immediate consistency</a> for our business rules?</p>
+<p>It’s best to describe this problem with an example…</p>
+<h2>Problem</h2>
+<p>Let’s assume that our domain has the concept of <strong>Order</strong> and <strong>Order Line</strong>. Domain expert said that:</p>
+<blockquote><p>One Order can have a maximum of 5 Order Lines.</p></blockquote>
+<p>In addition, he said that this rule must be met at all times (without exception). We can model it in the following way:</p>
+<figure id="attachment_1290"><a href="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/ConceptualModel.png"><img src="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/ConceptualModel-1024x306.png" alt="Conceptual Model" width="660" height="197" srcset="https://www.kamilgrzybek.com/wp-content/uploads/2020/05/ConceptualModel-1024x306.png 1024w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/ConceptualModel-300x90.png 300w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/ConceptualModel-768x229.png 768w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/ConceptualModel.png 1215w" sizes="(max-width: 660px) 100vw, 660px"></a><figcaption>Conceptual Model</figcaption></figure>
+<h3>The Aggregate</h3>
+<p>One of the main goals of our system is to enforce business rules. One way to do this is to use the Domain-Driven Design tactical building block – an <span>Aggregate</span>. The Aggregate is a concept created to enforce business rules (invariants). Its implementation may vary depending on the paradigm we use, but In object-oriented programming, it is an object-oriented graph as <a href="https://martinfowler.com/bliki/DDD_Aggregate.html" rel="noopener" target="_blank">Martin Fowler</a> describes it:</p>
+<blockquote><p>A DDD aggregate is a cluster of domain objects that can be treated as a single unit.</p></blockquote>
+<p>And Eric Evans in <a href="https://domainlanguage.com/ddd/reference/" rel="noopener" target="_blank">DDD reference</a> describes:</p>
+<blockquote><p>Use the same aggregate boundaries to govern transactions and distribution. Within an aggregate boundary, apply consistency rules synchronously</p></blockquote>
+<p>Back to the example. How can we ensure that our Order will never exceed 5 Order Lines? We must have an object that will take care of it. To do this, it must have information about the current number of Order Lines. So it must have a state and based on this state its responsibility is to decide whether invariant is broken or not.</p>
+<p>In this case, the Order seems to be the perfect object for this. It will become root of our Aggregate, which will have Order Lines. It will be his responsibility to add the order line and check that the invariant has not been broken.</p>
+<figure id="attachment_1293"><a href="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Aggregate.png"><img src="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Aggregate-1024x472.png" alt="Order Aggregate" width="660" height="304" srcset="https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Aggregate-1024x472.png 1024w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Aggregate-300x138.png 300w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Aggregate-768x354.png 768w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Aggregate.png 1413w" sizes="(max-width: 660px) 100vw, 660px"></a><figcaption>Order Aggregate</figcaption></figure>
+<p>Let’s see how the implementation of such a construct may look like:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ec128f106812287108187" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p><p>23</p><p>24</p><p>25</p><p>26</p></div>
+				</td>
+						<td><div><p><span>public</span><span> </span><span>class</span><span> </span><span>Order</span><span> </span><span>:</span><span> </span><span>AggregateRootBase</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>Guid</span><span> </span><span>Id</span><span> </span><span>{</span><span> </span><span>get</span><span>;</span><span> </span><span>private</span><span> </span><span>set</span><span>;</span><span> </span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>private</span><span> </span><span>List</span><span>&lt;</span><span>OrderLine</span><span>&gt;</span><span> </span><span>_orderLines</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>private</span><span> </span><span>DateTime</span><span>?</span><span> </span><span>_modifyDate</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>private</span><span> </span><span>Order</span><span>(</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>_orderLines</span><span> </span><span>=</span><span> </span><span>new</span><span> </span><span>List</span><span>&lt;</span><span>OrderLine</span><span>&gt;</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>void</span><span> </span><span>AddOrderLine</span><span>(</span><span>string</span><span> </span><span>productCode</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>if</span><span> </span><span>(</span><span>_orderLines</span><span>.</span><span>Count</span><span> </span><span>&gt;=</span><span> </span><span>5</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>throw</span><span> </span><span>new</span><span> </span><span>Exception</span><span>(</span><span>"Order cannot have more than 5 order lines."</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>_orderLines</span><span>.</span><span>Add</span><span>(</span><span>OrderLine</span><span>.</span><span>CreateNew</span><span>(</span><span>productCode</span><span>)</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>_modifyDate</span><span> </span><span>=</span><span> </span><span>DateTime</span><span>.</span><span>Now</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>AddDomainEvent</span><span>(</span><span>new</span><span> </span><span>OrderLineAddedDomainEvent</span><span>(</span><span>this</span><span>.</span><span>Id</span><span>)</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0038 seconds] -->
+
+<p>Everything’s fine right now, but this is only a static view of our model. Let’s see what the typical system flow is when invariant is not broken and when is broken:</p>
+<figure id="attachment_1296"><a href="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing1.png"><img src="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing1-1024x736.png" alt="Process of adding Order Line - one thread" width="660" height="474" srcset="https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing1-1024x736.png 1024w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing1-300x216.png 300w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing1-768x552.png 768w" sizes="(max-width: 660px) 100vw, 660px"></a><figcaption>Process of adding Order Line – success</figcaption></figure>
+<figure id="attachment_1298"><a href="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing2_throwsError.png"><img src="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing2_throwsError-1024x704.png" alt="Process of adding Order Line - rule broken" width="660" height="454" srcset="https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing2_throwsError-1024x704.png 1024w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing2_throwsError-300x206.png 300w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing2_throwsError-768x528.png 768w" sizes="(max-width: 660px) 100vw, 660px"></a><figcaption>Process of adding Order Line – rule broken</figcaption></figure>
+<p>Simplified implementation bellow:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ec128f106823449449960" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p><p>23</p><p>24</p><p>25</p><p>26</p><p>27</p></div>
+				</td>
+						<td><div><p><span>[</span><span>ApiController</span><span>]</span></p><p><span>[</span><span>Route</span><span>(</span><span>"[controller]"</span><span>)</span><span>]</span></p><p><span>public</span><span> </span><span>class</span><span> </span><span>OrdersController</span><span> </span><span>:</span><span> </span><span>ControllerBase</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>private</span><span> </span><span>readonly</span><span> </span><span>OrdersContext </span><span>_ordersContext</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>OrdersController</span><span>(</span><span>OrdersContext </span><span>ordersContext</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>_ordersContext</span><span> </span><span>=</span><span> </span><span>ordersContext</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>[</span><span>HttpPost</span><span>]</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>async</span><span> </span><span>Task</span><span>&lt;</span><span>IActionResult</span><span>&gt;</span><span> </span><span>AddOrderLine</span><span>(</span><span>AddOrderLineRequest </span><span>request</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>orderId</span><span> </span><span>=</span><span> </span><span>Guid</span><span>.</span><span>Parse</span><span>(</span><span>"33d4201c-4a8e-40a2-ae1d-50bc64097085"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>order</span><span> </span><span>=</span><span> </span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>Orders</span><span>.</span><span>FindAsync</span><span>(</span><span>orderId</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Thread</span><span>.</span><span>Sleep</span><span>(</span><span>3000</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>order</span><span>.</span><span>AddOrderLine</span><span>(</span><span>request</span><span>.</span><span>ProductCode</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>SaveChangesAsync</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>return</span><span> </span><span>Ok</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0029 seconds] -->
+
+<h3>Concurrency problem</h3>
+<p>Everything works nice and clean if we operate in a not heavy loaded environment. However, let’s see what can happen when <strong>2 threads almost at the same time</strong> want to perform our operation:</p>
+<figure id="attachment_1301"><a href="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_business_rule_broken.png"><img src="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_business_rule_broken-1024x570.png" alt="Process of adding Order Line - business rule broken" width="660" height="367" srcset="https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_business_rule_broken-1024x570.png 1024w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_business_rule_broken-300x167.png 300w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_business_rule_broken-768x427.png 768w" sizes="(max-width: 660px) 100vw, 660px"></a><figcaption>Process of adding Order Line – business rule broken</figcaption></figure>
+<p>As you can see in the diagram above, <strong>2 threads load exactly the same aggregate at the same time</strong>. Let’s assume that the Order  has <strong>4</strong>  Order Lines. The aggregate with 4 Order Lines will be loaded in both the first and second threads. The exception will not be thrown, because of 4 &lt; 5. Finally, depending on how we persist the aggregate, the following scenarios are possible:</p>
+<p>a) If we have a relational database and a separate table for Order Lines then <strong>2</strong> Order Lines will be added giving a total of <strong>6</strong> Order Lines – the business rule is broken.</p>
+<p>b) If we store aggregate in one atomic place (for example in document database as a JSON object), the second thread will override the first operation and we (and the User) won’t even know about this.</p>
+<p>The reason for this behavior is that the second thread read data from the database (point 2.1) before the first one committed it (point 1.4.3). </p>
+<p>Let’s see how we can solve this problem.</p>
+<h2>Solution</h2>
+<h3>Pessimistic concurrency</h3>
+<p>The first way to ensure that our business rule will not be broken is to use <span>Pessimistic concurrency</span>. In that approach, we allow <strong>only one thread to process a given Aggregate</strong>. This leads to the fact that the processing thread <u>must block</u> the reading of other threads by creating a <a href="https://docs.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver15" rel="noopener" target="_blank">lock</a>. Only when the lock is released, the next thread can get the object and process it.</p>
+<figure id="attachment_1307"><a href="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_pessimistic_concurrency.png"><img src="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_pessimistic_concurrency-1024x945.png" alt="Pessimistic concurrency" width="660" height="609" srcset="https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_pessimistic_concurrency-1024x945.png 1024w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_pessimistic_concurrency-300x277.png 300w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_pessimistic_concurrency-768x709.png 768w" sizes="(max-width: 660px) 100vw, 660px"></a><figcaption>Pessimistic concurrency</figcaption></figure>
+<p>The main difference from the previous approach is that the second thread waits for the previous one to finish (time between points 2.1 and 1.3). This approach causes us to lose performance because we can process transactions only one after the other. Moreover, it can lead to <a href="https://en.wikipedia.org/wiki/Deadlock" rel="noopener" target="_blank">deadlocks</a>.</p>
+<p>How can we implement this behavior using EntityFramework Core and SQL server? </p>
+<p>Unfortunately, EF Core does not support <span>Pessimistic Concurrency</span>. However, we can do it easily by ourselves using raw SQL and the <a href="https://docs.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-query?view=sql-server-ver15" rel="noopener" target="_blank">query hint mechanism of the SQL Server engine</a>.</p>
+<p>Firsty, the database transaction must be set. Then the lock must be set. This can be done in two ways – either read data with query hint (XLOCK, PAGELOCK) or by updating the record at the beginning:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ec128f10682b776376205" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p></div>
+				</td>
+						<td><div><p><span>public</span><span> </span><span>async</span><span> </span><span>Task</span><span>&lt;</span><span>IActionResult</span><span>&gt;</span><span> </span><span>AddOrderLine</span><span>(</span><span>AddOrderLineRequest </span><span>request</span><span>)</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>orderId</span><span> </span><span>=</span><span> </span><span>Guid</span><span>.</span><span>Parse</span><span>(</span><span>"33d4201c-4a8e-40a2-ae1d-50bc64097085"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>await</span><span> </span><span>using</span><span> </span><span>(</span><span>var</span><span> </span><span>tran</span><span> </span><span>=</span><span> </span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>Database</span><span>.</span><span>BeginTransactionAsync</span><span>(</span><span>)</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>Database</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>.</span><span>ExecuteSqlRawAsync</span><span>(</span><span>$</span><span>"UPDATE orders.Orders WITH (XLOCK) SET Id = Id&nbsp;&nbsp;WHERE Id = '{orderId}'"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>order</span><span> </span><span>=</span><span> </span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>Orders</span><span>.</span><span>FindAsync</span><span>(</span><span>orderId</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Thread</span><span>.</span><span>Sleep</span><span>(</span><span>3000</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>order</span><span>.</span><span>AddOrderLine</span><span>(</span><span>request</span><span>.</span><span>ProductCode</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>SaveChangesAsync</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>return</span><span> </span><span>Ok</span><span>(</span><span>)</span><span>;</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0026 seconds] -->
+
+<p>In this way, the transaction on the first thread will receive a <span>Exclusive Lock</span> (on write) and until it releases it (through the transaction commit) no other thread will be able to read this record. Of course, assuming that our queries operate in at least <a href="https://docs.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql?view=sql-server-ver15" rel="noopener" target="_blank">read committed transaction isolation level</a> to avoid the so-called <a href="https://docs.microsoft.com/en-us/sql/odbc/reference/develop-app/transaction-isolation-levels?view=sql-server-ver15" rel="noopener" target="_blank">dirty reads</a>.</p>
+<h3>Optimistic concurrency</h3>
+<p>An alternative, and most often preferred solution is to use <span>Optimistic Concurrency</span>. In this case, the whole process takes place without locking the data. Instead, the data in the database is versioned and during the update, it is checked – whether there was a change of version in the meantime. </p>
+<figure id="attachment_1311"><a href="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_optimistic_concurrency.png"><img src="http://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_optimistic_concurrency-1024x612.png" alt="Optimistic Concurrency" width="660" height="394" srcset="https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_optimistic_concurrency-1024x612.png 1024w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_optimistic_concurrency-300x179.png 300w, https://www.kamilgrzybek.com/wp-content/uploads/2020/05/Processing_optimistic_concurrency-768x459.png 768w" sizes="(max-width: 660px) 100vw, 660px"></a><figcaption>Optimistic Concurrency</figcaption></figure>
+<p>What does the implementation of this solution look like? Most ORMs support <span>Optimistic Concurrency</span> out of the box. It is enough to indicate which fields should be checked when writing to the database and it will be added to the  
+			<span id="crayon-5ec128f106830012094836"><span><span>WHERE</span></span></span>  statement. If it turned out that our statement has updated 0 records, it means that the version of the record has changed and we need to do a rollback. Though often the current fields are not used to check the version and special column called “Version” or “Timestamp” is added.</p>
+<p>Back to our example, does adding a column with a version and incrementing it every time the Order entity is changed solve the problem? Well no. The aggregate must be treated as a whole, as a boundary of transaction and consistency.</p>
+<p>Therefore, <strong>the version incrementation must take place when we change anything in our aggregate</strong>. If we have added the Order Line and we keep it in a separate table, ORM support for optimistic concurrency will not help us because it works on updates and here there are inserts and deletes left.</p>
+<p>How can we know that the state of our <span>Aggregate</span> has changed? If you follow this blog well, you already know the answer – by <a href="https://docs.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/domain-events-design-implementation" rel="noopener" target="_blank">Domain Events</a>. If a Domain Event was thrown from the Aggregate, it means that the state has changed and we need to increase Aggregate version.</p>
+<p>The implementation can look like this. </p>
+<p>First, we add a  
+			<span id="crayon-5ec128f106835922345562"><span><span>_version</span></span></span> field to each Aggregate Root and the method to increment that version.</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ec128f106838790976236" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>public</span><span> </span><span>class</span><span> </span><span>AggregateRootBase</span><span> </span><span>:</span><span> </span><span>Entity</span><span>,</span><span> </span><span>IAggregateRoot</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>private</span><span> </span><span>int</span><span> </span><span>_versionId</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>void</span><span> </span><span>IncreaseVersion</span><span>(</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>_versionId</span><span>++</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0009 seconds] -->
+
+<p>Secondly, we add a mapping for the version attribute and indicate that it is a EF <a href="https://docs.microsoft.com/en-us/ef/core/modeling/concurrency?tabs=data-annotations" rel="noopener" target="_blank">Concurrency Token</a>:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ec128f10683b003351916" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p></div>
+				</td>
+						<td><div><p><span>internal</span><span> </span><span>sealed</span><span> </span><span>class</span><span> </span><span>OrderEntityTypeConfiguration</span><span> </span><span>:</span><span> </span><span>IEntityTypeConfiguration</span><span>&lt;</span><span>Order</span><span>&gt;</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>void</span><span> </span><span>Configure</span><span>(</span><span>EntityTypeBuilder</span><span>&lt;</span><span>Order</span><span>&gt;</span><span> </span><span>builder</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>builder</span><span>.</span><span>ToTable</span><span>(</span><span>"Orders"</span><span>,</span><span> </span><span>"orders"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>builder</span><span>.</span><span>HasKey</span><span>(</span><span>b</span><span> </span><span>=</span><span>&gt;</span><span> </span><span>b</span><span>.</span><span>Id</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>builder</span><span>.</span><span>Property</span><span>(</span><span>"_modifyDate"</span><span>)</span><span>.</span><span>HasColumnName</span><span>(</span><span>"ModifyDate"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>builder</span><span>.</span><span>Property</span><span>(</span><span>"_versionId"</span><span>)</span><span>.</span><span>HasColumnName</span><span>(</span><span>"VersionId"</span><span>)</span><span>.</span><span>IsConcurrencyToken</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>builder</span><span>.</span><span>OwnsMany</span><span>&lt;</span><span>OrderLine</span><span>&gt;</span><span>(</span><span>"_orderLines"</span><span>,</span><span> </span><span>orderLine</span><span> </span><span>=</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>orderLine</span><span>.</span><span>WithOwner</span><span>(</span><span>)</span><span>.</span><span>HasForeignKey</span><span>(</span><span>"OrderId"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>orderLine</span><span>.</span><span>ToTable</span><span>(</span><span>"OrderLines"</span><span>,</span><span> </span><span>"orders"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>orderLine</span><span>.</span><span>Property</span><span>&lt;</span><span>Guid</span><span>&gt;</span><span>(</span><span>"Id"</span><span>)</span><span>.</span><span>ValueGeneratedNever</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>orderLine</span><span>.</span><span>HasKey</span><span>(</span><span>"Id"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>orderLine</span><span>.</span><span>Property</span><span>&lt;</span><span>string</span><span>&gt;</span><span>(</span><span>"_productCode"</span><span>)</span><span>.</span><span>HasColumnName</span><span>(</span><span>"ProductCode"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0035 seconds] -->
+
+<p>The last thing to do is incrementing the version if any Domain Events have been published:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ec128f10683f021808886" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p></div>
+				</td>
+						<td><div><p><span>[</span><span>HttpPost</span><span>]</span></p><p><span>public</span><span> </span><span>async</span><span> </span><span>Task</span><span>&lt;</span><span>IActionResult</span><span>&gt;</span><span> </span><span>AddOrderLine</span><span>(</span><span>AddOrderLineRequest </span><span>request</span><span>)</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>orderId</span><span> </span><span>=</span><span> </span><span>Guid</span><span>.</span><span>Parse</span><span>(</span><span>"33d4201c-4a8e-40a2-ae1d-50bc64097085"</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>order</span><span> </span><span>=</span><span> </span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>Orders</span><span>.</span><span>FindAsync</span><span>(</span><span>orderId</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Thread</span><span>.</span><span>Sleep</span><span>(</span><span>3000</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>order</span><span>.</span><span>AddOrderLine</span><span>(</span><span>request</span><span>.</span><span>ProductCode</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>domainEvents</span><span> </span><span>=</span><span> </span><span>DomainEventsHelper</span><span>.</span><span>GetAllDomainEvents</span><span>(</span><span>order</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>if</span><span> </span><span>(</span><span>domainEvents</span><span>.</span><span>Any</span><span>(</span><span>)</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>order</span><span>.</span><span>IncreaseVersion</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>await</span><span> </span><span>_ordersContext</span><span>.</span><span>SaveChangesAsync</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>return</span><span> </span><span>Ok</span><span>(</span><span>)</span><span>;</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0026 seconds] -->
+
+<p>With this setup, all updates will execute this statement:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ec128f106843542061805" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>info</span><span>:</span><span> </span><span>Microsoft</span><span>.</span><span>EntityFrameworkCore</span><span>.</span><span>Database</span><span>.</span><span>Command</span><span>[</span><span>20101</span><span>]</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Executed </span><span>DbCommand</span><span> </span><span>(</span><span>0ms</span><span>)</span><span> </span><span>[</span><span>Parameters</span><span>=</span><span>[</span><span>@</span><span>p2</span><span>=</span><span>'33d4201c-4a8e-40a2-ae1d-50bc64097085'</span><span>,</span><span> </span><span>@</span><span>p0</span><span>=</span><span>'2020-05-14T21:02:41'</span><span> </span><span>(</span><span>Nullable</span><span> </span><span>=</span><span> </span><span>true</span><span>)</span><span>,</span><span> </span><span>@</span><span>p1</span><span>=</span><span>'8'</span><span>,</span><span> </span><span>@</span><span>p3</span><span>=</span><span>'7'</span><span>]</span><span>,</span><span> </span><span>CommandType</span><span>=</span><span>'Text'</span><span>,</span><span> </span><span>CommandTimeout</span><span>=</span><span>'30'</span><span>]</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>SET</span><span> </span><span>NOCOUNT </span><span>ON</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>UPDATE</span><span> </span><span>[</span><span>orders</span><span>]</span><span>.</span><span>[</span><span>Orders</span><span>]</span><span> </span><span>SET</span><span> </span><span>[</span><span>VersionId</span><span>]</span><span> </span><span>=</span><span> </span><span>@</span><span>p1</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>WHERE</span><span> </span><span>[</span><span>Id</span><span>]</span><span> </span><span>=</span><span> </span><span>@</span><span>p2 </span><span>AND</span><span> </span><span>[</span><span>VersionId</span><span>]</span><span> </span><span>=</span><span> </span><span>@</span><span>p3</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>SELECT</span><span> </span><span>@</span><span>@</span><span>ROWCOUNT</span><span>;</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0026 seconds] -->
+
+<p>For our example, for second thread no record will be updated ( 
+			<span id="crayon-5ec128f106847611373578"><span><span>@</span><span>@</span><span> </span><span>ROWOCOUNT</span><span> </span><span>=</span><span> </span><span>0</span></span></span> ), so EntityFramework will throw the following message:</p>
+<blockquote><p>Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException: Database operation expected to affect 1 row(s) but actually affected 0 row(s). Data may have been modified or deleted since entities were loaded. See <a href="http://go.microsoft.com/fwlink/?LinkId=527962" rel="nofollow"><span>http</span><span>://</span><span>go</span><span>.</span><span>microsoft</span><span>.</span><span>com</span><span>/</span><span>fwlink</span><span>/?</span><span>LinkId</span><span>=</span><span>527962</span></a> for information on understanding and handling optimistic concurrency exceptions.</p></blockquote>
+<p>and our Aggregate will be consistent – the 6th Order Line will not be added. The business rule is not broken, mission accomplished.</p>
+<h2>Summary</h2>
+<p>In summary, the most important issues here are:</p>
+<ul>
+<li>The Aggregate’s main task is to protect invariants (business rules, the boundary of immediate consistency)</li>
+<li>In a multi-threaded environment, when multiple threads are running simultaneously on the same Aggregate, a business rule may be broken</li>
+<li>A way to solve concurrency conflicts is to use Pessimistic or Optimistic concurrency techniques</li>
+<li><span>Pessimistic Concurrency</span> involves the use of a database transaction and a locking mechanism. In this way, requests are processed one after the other, so basically concurrency is lost and it can lead to deadlocks.</li>
+<li><span>Optimistic Concurrency</span> technique is based on versioning database records and checking whether the previously loaded version has not been changed by another thread.</li>
+<li>Entity Framework Core supports <span>Optimistic Concurrency</span>. <span>Pessimistic Concurrency</span> is not supported</li>
+<li>The Aggregate must always be treated and versioned as a single unit</li>
+<li>Domain events are an indicator, that state was changed so Aggregate version should be changed as well</li>
+<h2>GitHub sample repository</h2>
+<p>Especially for the needs of this article, I created a repository that shows the implementation of 3 scenarios:</p>
+<p>– without concurrency handling<br>
+– with Pessimistic Concurrency handling<br>
+– with Optimistic Concurrency handling</p>
+<p>Link: <a href="https://github.com/kgrzybek/efcore-concurrency-handling" rel="noopener" target="_blank">https://github.com/kgrzybek/efcore-concurrency-handling</a></p>
+<h2>Related Posts</h2>
+<p><a href="http://www.kamilgrzybek.com/design/handling-domain-events-missing-part/">Handling Domain Events: Missing Part</a><br>
+<a href="http://www.kamilgrzybek.com/design/domain-model-encapsulation-and-pi-with-entity-framework-2-2/">Domain Model Encapsulation and PI with Entity Framework 2.2</a><br>
+<a href="http://www.kamilgrzybek.com/design/clean-domain-model-attributes/">Attributes of Clean Domain Model</a></p>
+	</ul></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
