@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Multi-path cancellation; a tale of two codependent async enumerators - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Multi-path cancellation; a tale of two codependent async enumerators - linksfor.dev(s)"/>
+    <meta property="article:author" content="Marc Gravell"/>
+    <meta property="og:description" content="Disclaimer: I&#x27;ll be honest: many of the concepts in this post are a bit more advanced - some viewer caution is advised! It touches on concur..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.marcgravell.com/2020/05/multi-path-cancellation-tale-of-two.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Multi-path cancellation; a tale of two codependent async enumerators</title>
+<div class="readable">
+        <h1>Multi-path cancellation; a tale of two codependent async enumerators</h1>
+            <div>by Marc Gravell</div>
+            <div>Reading time: 12-16 minutes</div>
+        <div>Posted here: 18 May 2020</div>
+        <p><a href="https://blog.marcgravell.com/2020/05/multi-path-cancellation-tale-of-two.html">https://blog.marcgravell.com/2020/05/multi-path-cancellation-tale-of-two.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="post-body-6984565970026557093" itemprop="description articleBody">
+<p>Disclaimer: I'll be honest: many of the concepts in this post are a bit more advanced - some viewer caution is advised! It touches on concurrent linked async enumerators that share a termination condition by combining multiple <code>CancellationToken</code>.</p>
+<hr>
+<p>Something that I've been looking at recently - in the context of gRPC (and <a href="https://www.nuget.org/packages/protobuf-net.Grpc/" rel="nofollow">protobuf-net.Grpc</a> in particular) - is the complex story of duplex data pipes. A full-duplex connection is a connection between two nodes, but instead of being request-response, either node can send messages at any time. There's still a notional "client" and "server", but that is purely a feature of which node was sat listening for connection attempts vs which node reached out and <em>established</em> a connection. Shaping a duplex API is much more complex than shaping a request-response API, and frankly: a lot of the details around timing are <em>hard</em>.</p>
+<p>So: I had the idea that maybe we can reshape everything at the library level, and offer the consumer something more familiar. It makes an interesting (to me, at least) worked example of cancellation in practice. So; let's start with an imaginary <em>transport</em> API (the thing that is happening underneath) - let's say that we have:</p>
+<ul>
+<li>a client establishes a connection (we're not going to worry about how)</li>
+<li>there is a <code>SendAsync</code> message that sends a message from the client to the server</li>
+<li>there is a <code>TryReceiveAsync</code> message that attempts to await a message <em>from</em> the server (this will also report <code>true</code> if a message could be fetched, and <code>false</code> if the server has indicated that it won't ever be sending any more)</li>
+<li>additionally, the server controls data flow termination; if the server indicates that it has sent the last message, the client should not send any more</li>
+</ul>
+<p>something like (where <code>TRequest</code> is the data-type being sent from the client to the server, and <code>TResponse</code> is the data-type expected from the server to the client):</p>
+<div><pre><span>interface</span> <span>ITransport</span>&lt;<span>TRequest</span>, <span>TResponse</span>&gt; : <span>IAsyncDisposable</span>
+{
+    <span>ValueTask</span> <span>SendAsync</span>(<span>TRequest</span> <span>request</span>,
+        <span>CancellationToken</span> <span>cancellationToken</span>);
+
+    <span>ValueTask</span>&lt;(<span>bool</span> <span>Success</span>, <span>TResponse</span> <span>Message</span>)&gt; <span>TryReceiveAsync</span>(
+        <span>CancellationToken</span> <span>cancellationToken</span>);
+}</pre></div>
+<p>This API doesn't <em>look</em> all that complicated - it <em>looks</em> like (if we ignore connection etc for the moment) we can just create a couple of loops, and expose the data via enumerators - presumably starting the <code>SendAsync</code> via <code>Task.Run</code> or similar so it is on a parallel flow:</p>
+<div><pre><span>ITransport</span>&lt;<span>TRequest</span>, <span>TResponse</span>&gt; <span>transport</span>;
+<span>public</span> <span>async</span> <span>IAsyncEnumerable</span>&lt;<span>TResponse</span>&gt; <span>ReceiveAsync</span>(
+    [<span>EnumeratorCancellation</span>] <span>CancellationToken</span> <span>cancellationToken</span>)
+{
+    <span>while</span> (<span>true</span>)
+    {
+        <span>var</span> (<span>success</span>, <span>message</span>) <span>=</span>
+            <span>await</span> <span>transport</span>.<span>TryReceiveAsync</span>(<span>cancellationToken</span>);
+        <span>if</span> (<span>!</span><span>success</span>) <span>break</span>;
+        <span>yield</span> <span>return</span> <span>message</span>;
+    }
+}
+
+<span>public</span> <span>async</span> <span>ValueTask</span> <span>SendAsync</span>(
+    <span>IAsyncEnumerable</span>&lt;<span>TRequest</span>&gt; <span>data</span>,
+    <span>CancellationToken</span> <span>cancellationToken</span>)
+{
+    <span>await</span> <span>foreach</span> (<span>var</span> <span>message</span> <span>in</span> <span>data</span>
+        .<span>WithCancellation</span>(<span>cancellationToken</span>))
+    {
+        <span>await</span> <span>transport</span>.<span>SendAsync</span>(<span>message</span>, <span>cancellationToken</span>);
+    }
+}</pre></div>
+<p>and it <em>looks</em> like we're all set for cancellation - we can pass in an external cancellation-token to both methods, and we're set. Right?</p>
+<p>Well, it is a bit more complex than that, and the above doesn't take into consideration that these two flows are <em>codependent</em>. In particular, a big concern is that we don't want to leave the producer (the thing pumping <code>SendAsync</code>) still running in any scenario where the connection is doomed. There are actually many more cancellation paths than we might think:</p>
+<ol>
+<li>we might have supplied an external cancellation-token to both methods, and this token may have triggered</li>
+<li>the <em>consumer</em> of <code>ReceiveAsync</code> (the thing iterating it) might have supplied a cancellation-token to <code>GetAsyncEnumerator</code> (via <code>WithCancellation</code>), and this token may have been triggered (we looked at this <a href="https://blog.marcgravell.com/2020/05/the-anatomy-of-async-iterators-aka.html" rel="nofollow">last time</a>)</li>
+<li>we could have faulted in our send/receive code</li>
+<li>the consumer of <code>ReceiveAsync</code> may have decided <em>not to take all the data</em> - that might be because of some async simile of <code>Enumerable.Take()</code>, or it could be because <em>they</em> faulted when processing a message they had received</li>
+<li>the producer in <code>SendAsync</code> may have faulted</li>
+</ol>
+<p>All of these scenarios <em>essentially</em> signify termination of the connection, so we need to be able to encompass all of these scenarios in some way that allows us to communicate the problem between the send and receive path. In a word, we want our own <code>CancellationTokenSource</code>.</p>
+<p>There's a lot going on here; more than we can reasonably expect consumers to do <em>each and every time they use the API</em>, so this is a perfect scenario for a library method. Let's imagine that we want to encompass all this complexity in a simple single library API that the consumer can access - something like:</p>
+<div><pre><span>public</span> <span>IAsyncEnumerable</span>&lt;<span>TResponse</span>&gt; <span>Duplex</span>(
+    <span>IAsyncEnumerable</span>&lt;<span>TRequest</span>&gt; <span>request</span>,
+    <span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>);</pre></div>
+<p>This:</p>
+<ul>
+<li>allows them to pass <em>in</em> a producer</li>
+<li>optionally allows them to pass in an external cancellation-token</li>
+<li>makes an async feed of responses available to them</li>
+</ul>
+<p>Their usage might be something like:</p>
+<div><pre><span>await</span> <span>foreach</span> (<span>MyResponse</span> <span>item</span> <span>in</span> <span>client</span>.Duplex(ProducerAsync()))
+{
+    <span>Console</span>.<span>WriteLine</span>(<span>item</span>);
+}</pre></div>
+<p>where their <code>ProducerAsync()</code> method is (just "because"):</p>
+<div><pre><span>async</span> <span>IAsyncEnumerable</span>&lt;<span>MyRequest</span>&gt; <span>ProducerAsync</span>(
+    [<span>EnumeratorCancellation</span>] <span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>)
+{
+    <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>100</span>; <span>i</span><span>++</span>)
+    {
+        <span>yield</span> <span>return</span> <span>new</span> <span>MyRequest</span>(<span>i</span>);
+        <span>await</span> <span>Task</span>.<span>Delay</span>(<span>100</span>, <span>cancellationToken</span>);
+    }
+}</pre></div>
+<p>As I discussed in <a href="https://blog.marcgravell.com/2020/05/the-anatomy-of-async-iterators-aka.html" rel="nofollow">The anatomy of async iterators (aka await, foreach, yield)</a>, our call to <code>ProducerAsync()</code> <em>doesn't actually do much yet</em> - this just hands a place-holder that <em>can</em> be enumerated later, and it is the act of enumerating it that actually invokes the code. Very important point, that.</p>
+<p>So; what can our <code>Duplex</code> code do? It <em>already</em> needs to think about at least 2 different kinds of cancellation:</p>
+<ul>
+<li>the external token that was passed into <code>cancellationToken</code></li>
+<li>the potentially different token that <em>could</em> be passed into <code>GetAsyncEnumerator()</code> <em>when it is consumed</em></li>
+</ul>
+<p>but we know from our thoughts earler that we <em>also</em> have a bunch of other ways of cancelling. We can do something clever here. Recall how the <em>compiler</em> usually combines the above two tokens for us? Well, if we do that <em>ourselves</em>, then instead of getting just a <code>CancellationToken</code>, we find ourselves with a <code>CancellationTokenSource</code>, which gives us lots of control:</p>
+<div><pre><span>public</span> <span>IAsyncEnumerable</span>&lt;<span>TResponse</span>&gt; <span>Duplex</span>(
+    <span>IAsyncEnumerable</span>&lt;<span>TRequest</span>&gt; <span>request</span>,
+    <span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>)
+    <span>=&gt;</span> <span>DuplexImpl</span>(<span>transport</span>, <span>request</span>, <span>cancellationToken</span>);
+
+<span>private</span> <span>async</span> <span>static</span> <span>IAsyncEnumerable</span>&lt;<span>TResponse</span>&gt; <span>DuplexImpl</span>(
+    <span>ITransport</span>&lt;<span>TRequest</span>, <span>TResponse</span>&gt; <span>transport</span>,
+    <span>IAsyncEnumerable</span>&lt;<span>TRequest</span>&gt; <span>request</span>,
+    <span>CancellationToken</span> <span>externalToken</span>,
+    [<span>EnumeratorCancellation</span>] <span>CancellationToken</span> <span>enumeratorToken</span> <span>=</span> <span>default</span>)
+{
+    <span>using</span> <span>var</span> <span>allDone</span> <span>=</span> <span>CancellationTokenSource</span>.<span>CreateLinkedTokenSource</span>(
+            <span>externalToken</span>, <span>enumeratorToken</span>);
+    <span><span>//</span> ... todo</span>
+}</pre></div>
+<p>Our <code>DuplexImpl</code> method here allows the enumerator cancellation to be provided, but (importantly) kept <em>separate</em> from the original external token; this means that it won't yet be combined, and we can do that ourselves using <code>CancellationTokenSource.CreateLinkedTokenSource</code> - much like the compiler would
+have done for us, but: now we have a <code>CancellationTokenSource</code> that we can cancel <em>when we choose</em>. This means that we can use <code>allDone.Token</code> in all the places we want to ask "are we done yet?", and we're considering everything.</p>
+<p>For starters, let's handle the scenario where the consumer <em>doesn't take all the data</em> (out of choice, or because of a fault). We want to trigger <code>allDone</code> <em>however</em> we exit <code>DuplexImpl</code>. Fortunately, the way that iterator blocks are implemented makes this simple (and we're already using it here, via <code>using</code>): recall (from the previous blog post) that <code>foreach</code> and <code>await foreach</code> both (usually) include a <code>using</code> block that invokes <code>Dispose</code>/<code>DisposeAsync</code> on the enumerator instance? Well: anything we put in a <code>finally</code> <em>essentially</em> relocates to that <code>Dispose</code>/<code>DisposeAsync</code>. The upshot of this is that triggering the cancellation token when the consumer is <em>done with us</em> is trivial:</p>
+<div><pre><span>using</span> <span>var</span> <span>allDone</span> <span>=</span> <span>CancellationTokenSource</span>.<span>CreateLinkedTokenSource</span>(
+        <span>externalToken</span>, <span>enumeratorToken</span>);
+<span>try</span>
+{
+    <span><span>//</span> ... todo</span>
+}
+<span>finally</span>
+{   <span><span>//</span> cancel allDone however we exit</span>
+    <span>allDone</span>.<span>Cancel</span>();
+}</pre></div>
+<p>The next step is to get our <em>producer</em> working - that's our <code>SendAsync</code> code. Because this is duplex, it doesn't have any bearing on the incoming messages, so we'll start that as a completely separate code-path via <code>Task.Run</code>, but we can make it such that <em>if the producer or send faults</em>, it stops the entire show; so if we look just at our <code>// ... todo</code> code, we can add:</p>
+<div><pre><span>var</span> <span>send</span> <span>=</span> <span>Task</span>.<span>Run</span>(<span>async</span> () <span>=&gt;</span>
+{
+    <span>try</span>
+    {
+        <span>await</span> <span>foreach</span> (<span>var</span> <span>message</span> <span>in</span>
+            <span>request</span>.<span>WithCancellation</span>(<span>allDone</span>.<span>Token</span>))
+        {
+            <span>await</span> <span>transport</span>.<span>SendAsync</span>(<span>message</span>, <span>allDone</span>.<span>Token</span>);
+        }
+    }
+    <span>catch</span>
+    {   <span><span>//</span> trigger cancellation if send faults</span>
+        <span>allDone</span>.<span>Cancel</span>();
+        <span>throw</span>;
+    }
+}, <span>allDone</span>.<span>Token</span>);
+
+<span><span>//</span> ... todo: receive</span>
+
+<span>await</span> <span>send</span>; <span><span>//</span> observe send outcome</span></pre></div>
+<p>This starts a parallel operation that <em>consumes the data from our producer</em>, but notice that we're using <code>allDone.Token</code> to pass our combined cancellation knowledge <em>to the producer</em>. This is very subtle, because it represents a cancellation state that <em>didn't even conceptually exist</em> at the time <code>ProducerAsync()</code> was originall invoked. The fact that <code>GetAsyncEnumerator</code> is <em>deferred</em> has allowed us to give it something <em>much more useful</em>, and as long as <code>ProducerAsync()</code> uses the cancellation-token appropriately, it can now be fully aware of the life-cycle of the composite duplex operation.</p>
+<p>This just leaves our receive code, which is more or less like it was originally, but again: using <code>allDone.Token</code>:</p>
+<div><pre><span>while</span> (<span>true</span>)
+{
+    <span>var</span> (<span>success</span>, <span>message</span>) <span>=</span> <span>await</span> <span>transport</span>.<span>TryReceiveAsync</span>(<span>allDone</span>.<span>Token</span>);
+    <span>if</span> (<span>!</span><span>success</span>) <span>break</span>;
+    <span>yield</span> <span>return</span> <span>message</span>;
+}
+
+<span><span>//</span> the server's last message stops everything</span>
+<span>allDone</span>.<span>Cancel</span>();</pre></div>
+<p>Putting all this together gives us a non-trivial libray function:</p>
+<div><pre><span>private</span> <span>async</span> <span>static</span> <span>IAsyncEnumerable</span>&lt;<span>TResponse</span>&gt; <span>DuplexImpl</span>(
+    <span>ITransport</span>&lt;<span>TRequest</span>, <span>TResponse</span>&gt; <span>transport</span>,
+    <span>IAsyncEnumerable</span>&lt;<span>TRequest</span>&gt; <span>request</span>,
+    <span>CancellationToken</span> <span>externalToken</span>,
+    [<span>EnumeratorCancellation</span>] <span>CancellationToken</span> <span>enumeratorToken</span> <span>=</span> <span>default</span>)
+{
+    <span>using</span> <span>var</span> <span>allDone</span> <span>=</span> <span>CancellationTokenSource</span>.<span>CreateLinkedTokenSource</span>(
+        <span>externalToken</span>, <span>enumeratorToken</span>);
+    <span>try</span>
+    {
+        <span>var</span> <span>send</span> <span>=</span> <span>Task</span>.<span>Run</span>(<span>async</span> () <span>=&gt;</span>
+        {
+            <span>try</span>
+            {
+                <span>await</span> <span>foreach</span> (<span>var</span> <span>message</span> <span>in</span>
+                    <span>request</span>.<span>WithCancellation</span>(<span>allDone</span>.<span>Token</span>))
+                {
+                    <span>await</span> <span>transport</span>.<span>SendAsync</span>(<span>message</span>, <span>allDone</span>.<span>Token</span>);
+                }
+            }
+            <span>catch</span>
+            {   <span><span>//</span> trigger cancellation if send faults</span>
+                <span>allDone</span>.<span>Cancel</span>();
+                <span>throw</span>;
+            }
+        }, <span>allDone</span>.<span>Token</span>);
+
+        <span>while</span> (<span>true</span>)
+        {
+            <span>var</span> (<span>success</span>, <span>message</span>) <span>=</span> <span>await</span> <span>transport</span>.<span>TryReceiveAsync</span>(<span>allDone</span>.<span>Token</span>);
+            <span>if</span> (<span>!</span><span>success</span>) <span>break</span>;
+            <span>yield</span> <span>return</span> <span>message</span>;
+        }
+
+        <span><span>//</span> the server's last message stops everything</span>
+        <span>allDone</span>.<span>Cancel</span>();
+
+        <span>await</span> <span>send</span>; <span><span>//</span> observe send outcome</span>
+    }
+    <span>finally</span>
+    {   <span><span>//</span> cancel allDone however we exit</span>
+        <span>allDone</span>.<span>Cancel</span>();
+    }
+}</pre></div>
+<p>The key points here being:</p>
+<ul>
+<li>both the external token and the enumerator token contribute to <code>allDone</code></li>
+<li>the transport-level send and receive code uses <code>allDone.Token</code></li>
+<li>the producer enumeration uses <code>allDone.Token</code></li>
+<li>however we exit our enumerator, <code>allDone</code> is cancelled
+<ul>
+<li>if transport-receive faults, <code>allDone</code> is cancelled</li>
+<li>if the consumer terminates early, <code>allDone</code> is cancelled</li>
+</ul>
+</li>
+<li>when we receive the last message from the server, <code>allDone</code> is cancelled</li>
+<li>if the producer or transport-send faults, <code>allDone</code> is cancelled</li>
+</ul>
+<p>The one thing it <em>doesn't</em> support well is people using <code>GetAsyncEnumerator()</code> directly and <em>not</em> disposing it. That comes under the heading of "using the API incorrectly", and is self-inflicted.</p>
+<p>A side note on <code>ConfigureAwait(false)</code>; by default <code>await</code> includes a check on <code>SynchronizationContext.Current</code>; in addition to meaning an extra context-switch, in the case of UI applications this may mean running code on the UI thread that <em>does not need</em> to run on the UI thread. Library code usually does not <em>require</em> this (it isn't as though we're updating form controls here, so we don't need thread-affinity). As such, in library code, it is common to use <code>.ConfigureAwait(false)</code> <em>basically everywhere that you see an <code>await</code></em> - which bypasses this mechanism. I have not included that in the code above, for readability, but: you should <em>imagine</em> it being there :) By contrast, in <em>application</em> code, you should usually default to just using <code>await</code> without <code>ConfigureAwait</code>, unless you know you're writing something that doesn't need sync-context.</p>
+<p>I hope this has been a useful delve into some of the more complex things you can do with cancellation-tokens, and how you can combine them to represent codependent exit conditions.</p>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
