@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Handling Web API Exceptions with ProblemDetails middleware - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Handling Web API Exceptions with ProblemDetails middleware - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I describe the ProblemDetailsMiddleware by Kristian Hellang that can be used to return ProblemDetails when an exception occurs in an API"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/handling-web-api-exceptions-with-problemdetails-middleware/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Handling Web API Exceptions with ProblemDetails middleware</title>
+<div class="readable">
+        <h1>Handling Web API Exceptions with ProblemDetails middleware</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 19 May 2020</div>
+        <p><a href="https://andrewlock.net/handling-web-api-exceptions-with-problemdetails-middleware/">https://andrewlock.net/handling-web-api-exceptions-with-problemdetails-middleware/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+<div>
+<p>In this short post I describe <a href="https://github.com/khellang/Middleware/blob/25eac131b2595fa72e2072c87c24763e42bd8e31/src/ProblemDetails">a handy error-handling middleware</a>, created by <a href="https://twitter.com/khellang">Kristian Hellang</a>, that is used to return <code>ProblemDetails</code> results when an exception occurs.</p>
+<h2 id="problemdetails-and-the-apicontroller-attribute">ProblemDetails and the [ApiController] attribute<a href="#problemdetails-and-the-apicontroller-attribute"></a></h2>
+<p>ASP.NET Core 2.1 introduced the <code>[ApiController]</code> attribute which <a href="https://docs.microsoft.com/en-us/aspnet/core/web-api/?view=aspnetcore-3.1#apicontroller-attribute">applies a number of common API-specific conventions</a> to controllers. In ASP.NET Core 2.2 an extra convention was added - transforming error status codes (&gt;= 400) to <code>ProblemDetails</code>.</p>
+<p>Returning a consistent type, <code>ProblemDetails</code>, for all errors makes it much easier for consuming clients. All errors from MVC controllers, whether they're a 400 (Bad Request) or a 404 (Not Found), return a <code>ProblemDetails</code> object:</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_1.png" alt="Problem details for NotFound requests"></p>
+<p>However, if your application throws an exception, you don't get a <code>ProblemDetails</code> response:</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_2.png" alt="Developer exception page"></p>
+<p>In the default <code>webapi</code> template (shown below), the developer exception page handles errors in the Development environment, producing the error above.</p>
+<pre><code><span>public</span> <span>class</span> <span>Startup</span>
+<span>{</span>
+    <span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+    <span>{</span>
+        services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>Configure</span><span>(</span><span>IApplicationBuilder</span> app<span>,</span> <span>IWebHostEnvironment</span> env<span>)</span>
+    <span>{</span>
+        
+        <span>if</span> <span>(</span>env<span>.</span><span>IsDevelopment</span><span>(</span><span>)</span><span>)</span>
+        <span>{</span>
+            app<span>.</span><span>UseDeveloperExceptionPage</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span>
+
+        app<span>.</span><span>UseHttpsRedirection</span><span>(</span><span>)</span><span>;</span>
+        app<span>.</span><span>UseRouting</span><span>(</span><span>)</span><span>;</span>
+        app<span>.</span><span>UseAuthorization</span><span>(</span><span>)</span><span>;</span>
+        app<span>.</span><span>UseEndpoints</span><span>(</span>endpoints <span>=</span><span>&gt;</span>
+        <span>{</span>
+            endpoints<span>.</span><span>MapControllers</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>In the production environment, there's no exception middleware registered so you get a "raw" 500 status code without a message body at all:</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_3.png" alt="Production exception page"></p>
+<p>A better option would be to consistent, and return a <code>ProblemDetails</code> object for exceptions too. One way to achieve this would be to create a custom error handler, <a href="https://andrewlock.net/creating-a-custom-error-handler-middleware-function/">as I described in a previous post</a>. A better option is to use an existing NuGet package that handles it for you.</p>
+<h2 id="problemdetailsmiddleware">ProblemDetailsMiddleware<a href="#problemdetailsmiddleware"></a></h2>
+<p>The <a href="https://github.com/khellang/Middleware/tree/master/src/ProblemDetails">ProblemDetailsMiddleware</a> from <a href="https://twitter.com/khellang">Kristian Hellang</a> does exactly what you expect - it handles exceptions in your middleware pipeline, and converts them to <code>ProblemDetails</code>. It has a lot of configuration options (which I'll get to later), but out of the box it does exactly what we need.</p>
+<p>Add the <em>Hellang.Middleware.ProblemDetails</em> to your <em>.csproj</em> file, by calling <code>dotnet add package Hellang.Middleware.ProblemDetails</code>. The latest version at the time of writing is 5.0.0:</p>
+<pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk.Web<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFramework</span><span>&gt;</span></span>netcoreapp3.1<span><span><span>&lt;/</span>TargetFramework</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Hellang.Middleware.ProblemDetails<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>5.0.0<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre>
+<p>You need to add the required services to the DI container by calling <code>AddProblemDetails()</code>. Add the middleware itself to the pipeline by calling <code>UseProblemDetails</code>. You should add this early in the pipeline, to ensure it catches errors from any subsequent middleware:</p>
+<pre><code><span>public</span> <span>class</span> <span>Startup</span>
+<span>{</span>
+    <span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+    <span>{</span>
+        services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+        services<span>.</span><span>AddProblemDetails</span><span>(</span><span>)</span><span>;</span> 
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>Configure</span><span>(</span><span>IApplicationBuilder</span> app<span>,</span> <span>IWebHostEnvironment</span> env<span>)</span>
+    <span>{</span>
+        app<span>.</span><span>UseProblemDetails</span><span>(</span><span>)</span><span>;</span> 
+
+        app<span>.</span><span>UseHttpsRedirection</span><span>(</span><span>)</span><span>;</span>
+        app<span>.</span><span>UseRouting</span><span>(</span><span>)</span><span>;</span>
+        app<span>.</span><span>UseAuthorization</span><span>(</span><span>)</span><span>;</span>
+        app<span>.</span><span>UseEndpoints</span><span>(</span>endpoints <span>=</span><span>&gt;</span>
+        <span>{</span>
+            endpoints<span>.</span><span>MapControllers</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>With this simple addition, if you get an exception somewhere in the pipeline (in a controller for example), you'll still get a <code>ProblemDetails</code> response. In the Development environment, the middleware includes the exception details and the Stack Trace:</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_4.png" alt="Developer ProblemDetails page"></p>
+<p>This is more than just calling <code>ToString()</code> on the <code>Exception</code> though - the response even includes the line that threw the exception (<code>contextCode</code>) and includes the source code before (<code>preContextCode</code>) and after (<code>postContextCode</code>) the offending lines:</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_5.png" alt="Context code"></p>
+<p>In the Production environment, the middleware doesn't include these details for obvious reasons, and instead returns the basic <code>ProblemDetails</code> object only.</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_6.png" alt="Production ProblemDetails page"></p>
+<p>As well as handling exceptions, the <code>ProblemDetailsMiddleware</code> also catches status code errors that come from <em>other</em> middleware too. For example, if a request doesn't match any endpoints in your application, the pipeline will return a 404. The <code>ApiController</code> attribute won't catch that, so it <em>won't</em> be converted to a <code>ProblemDetails</code> object. </p>
+<p>Similarly, by default, if you send a <code>POST</code> request to a <code>GET</code> method, you'll get a <code>405</code> response, again <em>without</em> a method body, <em>even if you apply the <code>[ApiController]</code> attribute</em>:</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_7.png" alt="Method not found does not cause a ProblemDetails response"></p>
+<p>With the <code>ProblemDetailsMiddleware</code> in place, you get a <code>ProblemDetails</code> response for these error codes too:</p>
+<p><img src="https://andrewlock.net/content/images/2020/problem_details_8.png" alt="With the middleware in place, method not found causes a ProblemDetails response"></p>
+<p>This behaviour gave exactly what I needed out-of-the-box, but you can also extensively customise the behaviour of the middleware if you need to. In the next section, I'll show some of these customization options.</p>
+<h2 id="customising-the-middleware-behaviour">Customising the middleware behaviour<a href="#customising-the-middleware-behaviour"></a></h2>
+<p>You can customise the behaviour of the <code>ProblemDetailsMiddleware</code> by providing a configuration lambda for an <code>ProblemDetailsOptions</code> instance in the <code>AddProblemDetails</code> call:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span>AddProblemDetails</span><span>(</span>opts <span>=</span><span>&gt;</span> <span>{</span>
+        
+    <span>}</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>There's lots of possible configuration settings, as shown below. Most of the configuration settings are <code>Func&lt;&gt;</code> properties, that give access to the current <code>HttpContext</code>, and let you control how the middleware behaves. </p>
+<pre><code><span>public</span> <span>class</span> <span>ProblemDetailsOptions</span>
+<span>{</span>
+    <span>public</span> <span>int</span> SourceCodeLineCount <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>IFileProvider</span> FileProvider <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> Func<span>&lt;</span>HttpContext<span>,</span> <span>string</span><span>&gt;</span> GetTraceId <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> Func<span>&lt;</span>HttpContext<span>,</span> Exception<span>,</span> <span>bool</span><span>&gt;</span> IncludeExceptionDetails <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> Func<span>&lt;</span>HttpContext<span>,</span> <span>bool</span><span>&gt;</span> IsProblem <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> Func<span>&lt;</span>HttpContext<span>,</span> MvcProblemDetails<span>&gt;</span> MapStatusCode <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> Action<span>&lt;</span>HttpContext<span>,</span> MvcProblemDetails<span>&gt;</span> OnBeforeWriteDetails <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> Func<span>&lt;</span>HttpContext<span>,</span> Exception<span>,</span> MvcProblemDetails<span>,</span> <span>bool</span><span>&gt;</span> ShouldLogUnhandledException <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+<span>}</span>
+</code></pre>
+<p>For example, by default, <code>ExceptionDetails</code> are included only for the Development environment. If you wanted to include the details in the Staging environment too, you could use something like the following:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span>AddProblemDetails</span><span>(</span>opts <span>=</span><span>&gt;</span>
+    <span>{</span>
+        
+        opts<span>.</span>IncludeExceptionDetails <span>=</span> <span>(</span>ctx<span>,</span> ex<span>)</span> <span>=</span><span>&gt;</span>
+        <span>{</span>
+            
+            <span>var</span> env <span>=</span> ctx<span>.</span>RequestServices<span>.</span><span><span>GetRequiredService</span><span>&lt;</span><span>IHostEnvironment</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>return</span> env<span>.</span><span>IsDevelopment</span><span>(</span><span>)</span> <span>||</span> env<span>.</span><span>IsStaging</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span><span>;</span>
+    <span>}</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>Another thing worth pointing out is that you can control when the middleware should convert non-exception responses to <code>ProblemDetails</code>. The default configuration converts non-exception responses to <code>ProblemDetails</code> when the following is true:</p>
+<ul>
+<li>The status code is between 400 and 600.</li>
+<li>The <code>Content-Length</code> header is empty.</li>
+<li>The <code>Content-Type</code> header is empty.</li>
+</ul>
+<p>As I mentioned at the start of this post, the <code>[ApiController]</code> attribute from ASP.NET Core 2.2 onwards automatically converts "raw" status code results into <code>ProblemDetails</code> anyway. Those responses are ignored by the middleware, as the response will already have a <code>Content-Type</code>. </p>
+<p>However, if you're <em>not</em> using the <code>[ApiController]</code> attribute, or are still using ASP.NET Core 2.1, then you can use the <code>ProblemDetailsMiddleware</code> to automatically convert raw status code results into <code>ProblemDetails</code>, just as you get in ASP.NET Core 2.2+.</p>
+<blockquote>
+<p>The responses in these cases aren't <em>identical</em>, but they're very similar. There are small differences in the values used for the <code>Title</code> and <code>Type</code> properties for example.</p>
+</blockquote>
+<p>Another option would be to use the <code>ProblemDetailsMiddleware</code> in an application that combines Razor Pages with API controllers. You could then use the <code>IsProblem</code> function to ensure that <code>ProblemDetails</code> are only generated for API controller endpoints. </p>
+<p>I've only touched on a couple of the customisation features, but there's lots of additional hooks you can use to control how the middleware works. I just haven't had to use them, as the defaults do exactly what I need!</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I described the <code>ProblemDetailsMiddleware</code> by <a href="https://twitter.com/khellang">Kristian Hellang</a>, that can be used with API projects to generate <code>ProblemDetails</code> results for exceptions. This is a very handy library if you're building APIs, as it ensures all errors return a consistent object. The project is <a href="https://github.com/khellang/Middleware/blob/25eac131b2595fa72e2072c87c24763e42bd8e31/src/ProblemDetails">open source on GitHub</a>, and available <a href="https://www.nuget.org/packages/Hellang.Middleware.ProblemDetails/">on NuGet</a>, so check it out!</p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
