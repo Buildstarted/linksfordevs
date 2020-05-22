@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+More Performant Serverless GraphQL with Azure Functions, GraphQL for .NET, and Cosmos DB - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="More Performant Serverless GraphQL with Azure Functions, GraphQL for .NET, and Cosmos DB - linksfor.dev(s)"/>
+    <meta property="article:author" content="Tomasz P&#x119;czek"/>
+    <meta property="og:description" content="This posts focuses one few key performance aspects of serverless GraphQL service built with Azure Functions, GraphQL for .NET, and Cosmos DB."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.tpeczek.com/2020/05/more-performant-serverless-graphql-with.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - More Performant Serverless GraphQL with Azure Functions, GraphQL for .NET, and Cosmos DB</title>
+<div class="readable">
+        <h1>More Performant Serverless GraphQL with Azure Functions, GraphQL for .NET, and Cosmos DB</h1>
+            <div>by Tomasz P&#x119;czek</div>
+            <div>Reading time: 8-11 minutes</div>
+        <div>Posted here: 22 May 2020</div>
+        <p><a href="https://www.tpeczek.com/2020/05/more-performant-serverless-graphql-with.html">https://www.tpeczek.com/2020/05/more-performant-serverless-graphql-with.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody">
+<p>Almost a year ago I've written about setting up a <em>GraphQL service</em> on top of <em>Azure Functions</em> and <em>Cosmos DB</em>. Since that time I've had a number of questions and discussions around the subject. Stefan Schoof has even created an <a href="https://github.com/graphql-dotnet/examples/pull/34">official sample</a> based on a demo from that post. But I never had time to write more on the subject - until now. In this post I'm going to write about some key performance aspects when building such a service and maybe (just maybe) this will become a series.</p>
+<ul>
+<li><a href="https://www.tpeczek.com/2019/05/serverless-graphql-with-azure-functions.html">Getting Started</a></li>
+<li>Performance</li>
+</ul>
+<p>I will continue building on top of the <a href="https://github.com/tpeczek/Demo.Azure.Functions.GraphQL">demo</a> from the previous post. For context, below you can see the types and queries I'm going to start with.</p>
+<pre><code><span>internal</span> <span>class</span> <span>CharacterType</span> : <span>ObjectGraphType</span>&lt;<span>Character</span>&gt;
+{
+    <span><span>public</span> <span>CharacterType</span><span>()</span>
+    </span>{
+        Field(t =&gt; t.CharacterId);
+        Field(t =&gt; t.Name);
+        Field(t =&gt; t.BirthYear);
+    }
+}
+</code></pre>
+<pre><code><span>internal</span> <span>class</span> <span>PlanetType</span>: <span>ObjectGraphType</span>&lt;<span>Planet</span>&gt;
+{
+    ...
+
+    <span><span>public</span> <span>PlanetType</span><span>(IDocumentClient documentClient, IDataLoaderContextAccessor dataLoaderContextAccessor)</span>
+    </span>{
+        _documentClient = documentClient;
+
+        Field(t =&gt; t.WorldId);
+        Field(t =&gt; t.Name);
+
+        Field&lt;ListGraphType&lt;CharacterType&gt;&gt;(
+            <span>"characters"</span>,
+            resolve: context =&gt; <span>return</span> _documentClient.CreateDocumentQuery&lt;Character&gt;(_planetsCollectionUri, _feedOptions)
+                                    .Where(c =&gt; c.HomeworldId == context.Source.WorldId)
+        );
+    }
+}
+</code></pre>
+<pre><code><span>internal</span> <span>class</span> <span>StarWarsQuery</span>: <span>ObjectGraphType</span>
+{
+    ...
+
+    <span><span>public</span> <span>StarWarsQuery</span><span>(IDocumentClient documentClient)</span>
+    </span>{
+        Field&lt;ListGraphType&lt;PlanetType&gt;&gt;(
+            <span>"planets"</span>,
+            resolve: context =&gt; documentClient.CreateDocumentQuery&lt;Planet&gt;(_planetsCollectionUri, _feedOptions)
+        );
+
+        Field&lt;ListGraphType&lt;CharacterType&gt;&gt;(
+            <span>"characters"</span>,
+            resolve: context =&gt; documentClient.CreateDocumentQuery&lt;Character&gt;(_charactersCollectionUri, _feedOptions)
+        );
+    }
+}
+</code></pre>
+<p>As we are talking about performance, we should be measuring something. I'm going to use <a href="https://docs.microsoft.com/en-us/azure/cosmos-db/monitor-cosmos-db"><em>Azure Monitor</em></a> to measure total request units for queries.</p>
+<h2 id="dataloader">DataLoader</h2>
+<p>If you start searching for information about GraphQL performance, one of the first things you will probably encounter is <em>DataLoader</em>. It has a simple purpose, to reduce requests to the backend via batching and caching. What does it mean? Consider below GraphQL query.</p>
+<pre><code>{
+    planets
+    {
+        name,
+        characters
+        {
+            name,
+            birthYear
+        }
+    }
+}
+</code></pre><p>It's grabbing a list of parents (<em>planets</em>) with their children (<em>characters</em>). For my simple dataset (it's available in <code>SeedFunction</code> in the demo project), this costs 32.15 RSU. Quite a lot. The reason is that GraphQL performs a separate query for children of every parent. This is known as <em>"N+1 selects"</em> problem and if you've been working with Entity Framework (or any other ORM) you probably know it very well. DataLoader is a solution to this problem. In order to use it, we need to inject <code>IDataLoaderContextAccessor</code> into our parent type and register a batch loader. Batch Loader is a simple method that will be given an enumeration of identifiers and is supposed to query all items in one batch. This can look like below.</p>
+<pre><code><span>internal</span> <span>class</span> <span>PlanetType</span>: <span>ObjectGraphType</span>&lt;<span>Planet</span>&gt;
+{
+    ...
+
+    <span><span>public</span> <span>PlanetType</span><span>(IDocumentClient documentClient, IDataLoaderContextAccessor dataLoaderContextAccessor)</span>
+    </span>{
+        _documentClient = documentClient;
+
+        Field(t =&gt; t.WorldId);
+        Field(t =&gt; t.Name);
+
+        Field&lt;ListGraphType&lt;CharacterType&gt;&gt;(
+            <span>"characters"</span>,
+            resolve: context =&gt; {
+                <span>var</span> dataLoader = dataLoaderContextAccessor.Context
+                    .GetOrAddCollectionBatchLoader&lt;<span>int</span>, Character&gt;(<span>"GetCharactersByHomeworldId"</span>, GetCharactersByHomeworldIdAsync);
+
+                <span>return</span> dataLoader.LoadAsync(context.Source.WorldId);
+            }
+        );
+    }
+
+    <span>private</span> Task&lt;ILookup&lt;<span>int</span>, Character&gt;&amp;<span>7</span>gt; GetCharactersByHomeworldIdAsync(IEnumerable homeworldIds)
+    {
+        <span>return</span> Task.FromResult(_documentClient.CreateDocumentQuery&lt;Character&gt;(_planetsCollectionUri, _feedOptions)
+            .Where(c =&gt; homeworldIds.Contains(c.HomeworldId))
+            .ToLookup(c =&gt; c.HomeworldId)
+        );
+    }
+}
+</code></pre>
+<p>For my data, this change brings the query cost down to 5.22 RSU. That's a huge difference and having DataLoader where appropriate should be one of your best practices for GraphQL.</p>
+<h2 id="querying-only-requested-fields">Querying Only Requested Fields</h2>
+<p>Another thing specific about GraphQL is that when a client makes a query, the list of fields always needs to be specified. Very often this list is only a subset of fields available for a type. Take a look at the below query.</p>
+<pre><code>{
+    characters
+    {
+        characterId,
+        name
+    }
+}
+</code></pre><p>This costs 2.84 RSU and queries Cosmos DB for all fields on a <em>character</em>. It doesn't have to be like this. We can access the list of request fields through <code>ResolveFieldContext.SubFields</code>. This allows for building a simple helper that will create a tailored SQL query.</p>
+<pre><code><span>internal</span> <span>static</span> <span>class</span> <span>ResolveFieldContextExtensions</span>
+{
+    <span>public</span> <span>static</span> SqlQuerySpec ToSqlQuerySpec&lt;TSource&gt;(<span>this</span> ResolveFieldContext&lt;TSource&gt; context)
+    {
+        StringBuilder queryTextStringBuilder = <span>new</span> StringBuilder();
+
+        queryTextStringBuilder.Append(<span>"SELECT "</span>);
+
+        queryTextStringBuilder.Append(String.Join(
+            <span>','</span>,
+            context.SubFields.Keys.Select(fieldName =&gt; $<span>"c.{Char.ToUpperInvariant(fieldName[0])}{fieldName.Substring(1)}"</span>)));
+
+        queryTextStringBuilder.Append(<span>" FROM c"</span>);
+
+        <span>return</span> <span>new</span> SqlQuerySpec(queryTextStringBuilder.ToString());
+    }
+}
+</code></pre>
+<p>Now we can just use a different overload of <code>CreateDocumentQuery</code>.</p>
+<pre><code><span>internal</span> <span>class</span> <span>StarWarsQuery</span>: <span>ObjectGraphType</span>
+{
+    ...
+
+    <span><span>public</span> <span>StarWarsQuery</span><span>(IDocumentClient documentClient)</span>
+    </span>{
+        ...
+
+        Field&lt;ListGraphType&lt;CharacterType&gt;&gt;(
+            <span>"characters"</span>,
+            resolve: context =&gt; documentClient.CreateDocumentQuery&lt;Character&gt;(_charactersCollectionUri, context.ToSqlQuerySpec(), _feedOptions)
+        );
+    }
+}
+</code></pre>
+<p>For me, this brings the cost down to 2.79 RSU, where the difference is one field. On top of that, there is less data to push through the network.</p>
+<h2 id="arguments">Arguments</h2>
+<p>One more thing I wanted to touch here are arguments. This is a little bit different than DataLoader and requested fields. If you don't provide an implementation for arguments they are not supported at all. But somehow I felt they fit here as well.</p>
+<p>GraphQL arguments have couple of purposes. One of them is querying only a subset of data. Below is a query for only a single <em>character</em>.</p>
+<pre><code>{
+    characters(characterId: <span>"6ca83ad0a77d4d45902354c416241688"</span>) {
+          name,
+          birthYear
+      }
+}
+</code></pre><p>To support such an argument, one needs to change the query definition.</p>
+<pre><code><span>internal</span> <span>class</span> <span>StarWarsQuery</span>: <span>ObjectGraphType</span>
+{
+    ...
+
+    <span><span>public</span> <span>StarWarsQuery</span><span>(IDocumentClient documentClient)</span>
+    </span>{
+        ...
+
+        Field&lt;ListGraphType&lt;CharacterType&gt;<span>7</span>gt;(
+            <span>"characters"</span>,
+            arguments: <span>new</span> QueryArguments(<span>new</span> QueryArgument&lt;IdGraphType&gt; { Name = <span>"characterId"</span> }),
+            resolve: context =&gt; documentClient.CreateDocumentQuery&lt;Character&gt;(_charactersCollectionUri, context.ToSqlQuerySpec(), _feedOptions)
+        );
+    }
+}
+</code></pre>
+<p>This will not make the query work, only pass. Without handling the argument, the entire list will be returned.</p>
+<p>Handling the argument means grabbing its value from <code>ResolveFieldContext.Arguments</code> and adding it to he Cosmos DB query. One place to do it can be the previously created helper.</p>
+<pre><code><span>public</span> <span>static</span> SqlQuerySpec ToSqlQuerySpec&lt;TSource&gt;(<span>this</span> ResolveFieldContext&lt;Source&gt; context)
+{
+    ...
+
+    SqlParameterCollection parameters = <span>new</span> SqlParameterCollection();
+    <span>if</span> (context.Arguments.Count &gt; <span>0</span>)
+    {
+        queryTextStringBuilder.Append(<span>" WHERE "</span>);
+
+        <span>foreach</span> (KeyValuePair&lt;<span>string</span>, <span>object</span>&gt; argument <span>in</span> context.Arguments)
+        {
+            queryTextStringBuilder.Append($<span>"c.{Char.ToUpperInvariant(argument.Key[0])}{argument.Key.Substring(1)} = @{argument.Key} AND "</span>);
+            parameters.Add(<span>new</span> SqlParameter(<span>"@"</span> + argument.Key, argument.Value));
+        }
+
+        queryTextStringBuilder.Length = queryTextStringBuilder.Length - <span>5</span>;
+    }
+
+    <span>return</span> <span>new</span> SqlQuerySpec(queryTextStringBuilder.ToString(), parameters);
+}
+</code></pre>
+<p>The above code is demoware. It doesn't account for different argument types and various edge cases, so never use it in production. It's just a hint of how you can start building your own implementation.</p>
+<h2 id="what-s-next-">What's Next?</h2>
+<p>Those are the aspects I wanted to touch in this post. As always, you can find the complete demo code on <a href="https://github.com/tpeczek/Demo.Azure.Functions.GraphQL">GitHub</a>. I hope to write a few more posts on the subject to share the answers to other most common questions I've been asked regarding building a GraphQL service with Azure Functions and Cosmos DB.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
