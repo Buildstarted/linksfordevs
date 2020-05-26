@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Scaling Azure Functions from Consumption Plan to Premium Plan (and back again) - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Scaling Azure Functions from Consumption Plan to Premium Plan (and back again) - linksfor.dev(s)"/>
+    <meta property="og:description" content="Azure Functions, when hosted on a consumption plan, are great for most scenarios. You pay per use which is great for keeping costs down but there are some downsides and limitations. One of those is th"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.davepaquette.com/archive/2020/05/23/scaling-azure-functions-from-consumption-plan-to-premium-hosting-plan.aspx"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Scaling Azure Functions from Consumption Plan to Premium Plan (and back again)</title>
+<div class="readable">
+        <h1>Scaling Azure Functions from Consumption Plan to Premium Plan (and back again)</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 26 May 2020</div>
+        <p><a href="https://www.davepaquette.com/archive/2020/05/23/scaling-azure-functions-from-consumption-plan-to-premium-hosting-plan.aspx">https://www.davepaquette.com/archive/2020/05/23/scaling-azure-functions-from-consumption-plan-to-premium-hosting-plan.aspx</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody">
+      
+                
+        <p>Azure Functions, when hosted on a consumption plan, are great for most scenarios. You pay per use which is great for keeping costs down but there are some downsides and limitations. One of those is the time it takes to cold start your function app. If your function app hasn’t been triggered in some time, it can take a while for the a new instance to start up to run your app. Likewise, if a very sudden spike in load occurs, it can take some time for the consumption plan to start up enough instances to handle that load. In the meantime, you might have clients getting timeouts or failed requests.</p>
+<p>Azure Functions offers another hosting model called <a href="https://docs.microsoft.com/en-us/azure/azure-functions/functions-premium-plan" target="_blank" rel="external">Azure Functions Premium Plan</a>. With premium plans, instead of paying per function execution, you pay for the underlying compute instances that are hosting your functions. This is often more expensive, but it also ensures there are always a pre-set number of warmed instances ready to execute your function.</p>
+<p>That’s great, but what if I only really need those pre-warmed instances for a short period of time when I’m expecting a lot of incoming traffic. The rest of the time, I would rather use a Consumption Plan to save on hosting costs.</p>
+<p>I thought the choice of hosting plan was something you needed to make up front but it turns out that you can actually move an Azure Function App from a consumption plan to a premium plan (and back again).</p>
+<p>Thanks to <a href="https://twitter.com/stimms/" target="_blank" rel="external">Simon Timms</a> for starting this discussion on Twitter. We got very helpful responses from folks on the Azure Functions team:</p>
+<p><a href="https://twitter.com/jeffhollan/" target="_blank" rel="external">Jeff Hollan</a> has a great <a href="https://github.com/Azure-Samples/functions-csharp-premium-scaler" target="_blank" rel="external">sample</a> using an Azure Durable Function to scale an Azure Function App to a premium plan for a specified amount of time, then automatically scale back down to a consumption plan.</p>
+<twitter-widget id="twitter-widget-0" data-tweet-id="1245779682961674240"></twitter-widget> 
+<p>This is a super cool sample. It uses the <a href="https://docs.microsoft.com/en-us/rest/api/resources/" target="_blank" rel="external">Azure Resource Manager REST API</a> to make changes to the target function app resources. For my project however, I didn’t really want to spin up another Azure Function to manage my Azure Functions. I just wanted an easy way to scale my 12 function apps up to premium plans for a couple hours, then scale them back down to a consumption plan.</p>
+<p>I decided to try using the AZ CLI for this and it turned out really well. I was able to write a simple script to scale up and down.</p>
+<h2 id="Setting_up_the_AZ_CLI">Setting up the AZ CLI</h2><p>First up, <a href="https://docs.microsoft.com/en-us/cli/azure/?view=azure-cli-latest" target="_blank" rel="external">install the az cli</a>.</p>
+<p>Once installed, you’ll need to login to your Azure Subscription.</p>
+<figure><div><pre><span>az login</span><br></pre></div></figure>
+<p>A browser window will popup, prompting you to log in to your Azure account. Once you’ve logged in, the browser window will close and the az cli will display a list of subscriptions available in your account. If you have more than one subscription, make sure you select the one you want to use.</p>
+<figure><div><pre><span>az account <span>set</span> --subscription YourSubscriptionId</span><br></pre></div></figure>
+<h2 id="Create_a_Resource_Group">Create a Resource Group</h2><p>You will need a resource group for your Storage and CDN resources. If you don’t already have one, create it here.<br></p><figure><div><pre><span>az group create --name DavesFunctionApps --location WestUS2</span><br></pre></div></figure>
+<p>Most commands will require you to pass in a <code>--resource-group</code> and <code>--location</code> parameters. These parameters are <code>-g</code> and <code>-l</code> for short, but you can save yourself even more keystrokes by setting defaults for <code>az</code>.</p>
+<figure><div><pre><span>az configure <span>-d</span> group=DavesFunctionApps</span><br><span>az configure <span>-d</span> location=WestUS2</span><br></pre></div></figure>
+<h2 id="Creating_a_(temporary)_Premium_Hosting_Plan">Creating a (temporary) Premium Hosting Plan</h2><p>There is a strange requirement with Azure Functions / App Service. As per Jeff Hollan’s sample:</p>
+<blockquote><p>The Azure Functions Premium plan is only available in a sub-set of infrastructure in each region. Internally we call these “webspaces” or “stamps.” You will only be able to move your function between plans if the webspace supports both consumption and premium. To make sure your consumption and premium functions land in an enabled webspace you should create a premium plan in a new resource group. Then create a consumption plan in the same resource group. You can then remove the premium plan. This will ensure the consumption function is in a premium-enabled webspace.</p>
+</blockquote>
+<p>First, add an Azure Functions Premium plan to the resource group.<br></p><figure><div><pre><span>az functionapp plan create -n dave_temp_premium_plan --sku EP1 --min-instances <span>1</span></span><br></pre></div></figure>
+<p>You can delete this premium plan using the command below <em>after</em> you’ve deployed a function app to this resource group . <strong>Don’t forget to delete the premium plan. These cost $$$</strong></p>
+<figure><div><pre><span>az functionapp plan delete -n dave_temp_premium_plan</span><br></pre></div></figure>
+<h2 id="Creating_a_Function_App">Creating a Function App</h2><p>There are many options for creating a new function app. I really like the <code>func</code> command line tool which I installed using npm. Check out the <a href="https://github.com/Azure/azure-functions-core-tools" target="_blank" rel="external">Azure Functions Core Tools GitHub Repo</a> for details on other options for installing the <code>func</code> tooling.</p>
+<figure><div><pre><span>npm i -g azure-functions-core-tools@<span>3</span> --unsafe-perm <span>true</span></span><br></pre></div></figure>
+<p>The focus of this blog post is around scaling a function app. If you don’t already have an app built, you can follow along with <a href="https://docs.microsoft.com/azure/azure-functions/functions-run-local?tabs=windows%2Ccsharp%2Cbash" target="_blank" rel="external">this walkthrough</a> to create a function app.</p>
+<p>A function app requires a Storage Account resource. An Application Insights resource is also highly recommended as this really simplifies monitoring your function app after it has been deployed. Let’s go ahead and create those 2 resources.</p>
+<figure><div><pre><span>az storage account create -n davefuncappstorage</span><br><span>az extension add -n application-insights</span><br><span>az monitor app-insights component create --app davefuncappinsights</span><br></pre></div></figure>
+<p>Now we can create our Azure Function App resource with a consumption plan, passing in the name of the storage account and app insights resources that we just created. In my case, I’m specifying the dotnet runtime on a Windows host.</p>
+<figure><div><pre><span>az functionapp create --consumption-plan-location WestUS2 --name davefuncapp123 --os-type Windows --runtime dotnet --storage-account davefuncappstorage --app-insights davefuncappinsights --functions-version <span>3</span></span><br></pre></div></figure>
+<p>Remember to delete that temporary Premium Hosting Plan now!</p>
+<figure><div><pre><span>az functionapp plan delete -n dave_temp_premium_plan</span><br></pre></div></figure>
+<h3 id="Deploying_your_Function_App_using_the_az_cli">Deploying your Function App using the az cli</h3><p>This is a bit outside the scope of this blog post but I like using the <code>az</code> cli to deploy my function apps because it’s easy to incorporate that into my CI/CD pipelines. Since my app is using the dotnet runtime, I use the <code>dotnet publish</code> command to build the app.</p>
+<figure><div><pre><span>dotnet publish -c release</span><br></pre></div></figure>
+<p>Then, zip the contents of the publish folder (<code>bin\release\netcoreapp3.1\publish\</code>).</p>
+<p>In PowerShell:<br></p><figure><div><pre><span>Compress-Archive -Path .\bin\release\netcoreapp3.<span>1</span>\publish\* -DestinationPath .\bin\release\netcoreapp3.<span>1</span>\package.zip</span><br></pre></div></figure><p>or in Bash</p>
+<figure><div><pre><span>zip -r ./bin/release/netcoreapp3.<span>1</span>/package.zip ./bin/release/netcoreapp3.<span>1</span>/publish/</span><br></pre></div></figure>
+<p>Finally, use the <code>az functionapp deployment</code> command to deploy the function app.</p>
+<figure><div><pre><span>az functionapp deployment <span>source</span> config-zip  -n davefuncapp123 --src ./bin/release/netcoreapp3.<span>1</span>/package.zip</span><br></pre></div></figure>
+<h2 id="Scale_up_to_a_premium_plan">Scale up to a premium plan</h2><p>Okay, now that we have a functioning (pun intended) app deployed and running on a consumption plan, let’s see what it takes to scale this thing up to a premium plan.</p>
+<p>First, create a new Premium Hosting Plan with the parameters that make sense for the load you are expecting. The <code>--sku</code> parameter refers to the size of the compute instance: EP1 is the smallest. The <code>--min-instancs</code> parameter is the number of pre-warmed instances that will always be running for this hosting plan. The <code>--max-burst</code> parameter is the upper bounds on the number of instances that the premium plan can elastically scale out if more instances are needed to handle load.</p>
+<figure><div><pre><span>az functionapp plan create -n davefuncapp123_premium_plan --sku EP1 --min-instances <span>4</span> --max-burst <span>12</span></span><br></pre></div></figure>
+<p>Next, move the function app to that premium hosting plan.</p>
+<figure><div><pre><span>az functionapp update --plan davefuncapp123_premium_plan -n davefuncapp123</span><br></pre></div></figure>
+<p>That’s it! All it took was those 2 command and your function app is now running on a premium plan!</p>
+<h2 id="Scale_back_down_to_a_consumption_plan">Scale back down to a consumption plan</h2><p>Of course, that premium plan isn’t cheap. You might only want your function app running on the premium plan for a short period of time. Scaling back down is equally easy.</p>
+<p>First, move the function app back to the consumption based plan. In my case, the name of the consumption plan is <code>WestUS2Plan</code>. You should see a consumption plan in your resource group. </p>
+<figure><div><pre><span>az functionapp update --plan WestUS2Plan -n davefuncapp123</span><br></pre></div></figure>
+<p>Next, delete the premium hosting plan.</p>
+<figure><div><pre><span>az functionapp plan delete -n davefuncapp123_premium_plan</span><br></pre></div></figure>
+<h2 id="Wrapping_it_up">Wrapping it up</h2><p>In this post, we saw how easy it is to move a function app between Premium and Consumption plans. A couple very simple <code>az</code> commands can help you get the performance and features of the Premium plan <em>only</em> when you need it while taking advantages of the simplicity and cost savings of a Consumption plan the rest of the time. </p>
+
+      
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

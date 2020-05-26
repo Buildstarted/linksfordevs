@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+BackgroundService Gotcha: Startup - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="BackgroundService Gotcha: Startup - linksfor.dev(s)"/>
+    <meta property="og:description" content="BackgroundService (and IHostedService) are started synchronously."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.stephencleary.com/2020/05/backgroundservice-gotcha-startup.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - BackgroundService Gotcha: Startup</title>
+<div class="readable">
+        <h1>BackgroundService Gotcha: Startup</h1>
+            <div>Reading time: 3-4 minutes</div>
+        <div>Posted here: 26 May 2020</div>
+        <p><a href="https://blog.stephencleary.com/2020/05/backgroundservice-gotcha-startup.html">https://blog.stephencleary.com/2020/05/backgroundservice-gotcha-startup.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+        <div>
+            <div>
+
+  <header>
+      
+  </header>
+
+  <header>
+    
+  </header>
+
+  <article>
+  <h2 id="backgroundservice-gotcha-synchronous-starts">BackgroundService Gotcha: Synchronous Starts</h2>
+
+<p>This is some behavior that I’ve found surprising (and others have as well): ASP.NET Core background services are started with a synchronous call.</p>
+
+<p>Specifically, the host will invoke <code>IHostedService.StartAsync</code> for all its hosted services, and <code>BackgroundService</code> <a href="https://github.com/dotnet/runtime/blob/e3ffd343ad5bd3a999cb9515f59e6e7a777b2c34/src/libraries/Microsoft.Extensions.Hosting.Abstractions/src/BackgroundService.cs#L37">directly invokes <code>ExecuteAsync</code> before returning from <code>StartAsync</code></a>. So <code>BackgroundService</code> <em>assumes</em> that its derived classes will have an asynchronous <code>ExecuteAsync</code>. If the <code>ExecuteAsync</code> implementation is synchronous (or starts executing with a blocking call), then problems will ensue.</p>
+
+<h2 id="problem-description">Problem Description</h2>
+
+<p>The resulting behavior is that the background service will start executing, but the host will be unable to finish starting up. This will block other background services from starting.</p>
+
+<p>Depending on the background service implementation, this may manifest as a delay of startup or a complete block of startup. If <code>ExecuteAsync</code> is synchronous, then the host cannot continue starting up until that background service has <em>completed</em>. If <code>ExecuteAsync</code> is asynchronous but takes a long time before it yields, then the host has its startup delayed.</p>
+
+<h2 id="common-scenarios">Common Scenarios</h2>
+
+<p>This problem is common in any of these conditions:</p>
+
+<ol>
+  <li>The hosted service has a synchronous <code>ExecuteAsync</code>. In this case, the host is prevented from starting until <code>ExecuteAsync</code> completes.</li>
+  <li>The hosted service reads from a queue to process messages, but the queue reading is blocking. Even if the processing is asynchronous, the host startup is blocked until the first message arrives for this service and is (asynchronously) processed.</li>
+  <li>The hosted service is properly asynchronous, but the asynchrony is completing immediately. E.g., if it is asynchronously reading from a queue but there are many messages immediately received, then the host startup is blocked until the background service actually yields.</li>
+</ol>
+
+<h2 id="solution">Solution</h2>
+
+<p>Since the problem is synchronous <code>ExecuteAsync</code> methods (or at least <code>ExecuteAsync</code> methods that do non-trivial work before they become asynchronous), the simplest solution is to ensure <code>ExecuteAsync</code> is asynchronous.</p>
+
+<p>I’m <a href="https://blog.stephencleary.com/2013/11/taskrun-etiquette-examples-dont-use.html">not a fan of using <code>Task.Run</code> to wrap the body of a method</a> (i.e., “fake asynchrony”), but since the caller <em>requires</em> an asynchronous implementation, I think that’s an acceptable approach in this case:</p>
+
+<figure><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>MyBackgroundService</span> <span>:</span> <span>BackgroundService</span>
+<span>{</span>
+    <span>protected</span> <span>override</span> <span>Task</span> <span>ExecuteAsync</span><span>(</span><span>CancellationToken</span> <span>stoppingToken</span><span>)</span> <span>=&gt;</span> <span>Task</span><span>.</span><span>Run</span><span>(</span><span>async</span> <span>()</span> <span>=&gt;</span>
+    <span>{</span>
+        <span>// Implementation</span>
+    <span>});</span>
+<span>}</span></code></pre></figure>
+
+<p>That way, any slow or blocking code early in <code>ExecuteAsync</code> will not prevent the host from starting up.</p>
+
+<h2 id="update-2020-05-22">Update (2020-05-22)</h2>
+
+
+
+  </article>
+    
+    
+</div>
+        </div>
+        
+        
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
