@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+ASP.NET Core WebSockets and Application Lifetime Shutdown Events - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="ASP.NET Core WebSockets and Application Lifetime Shutdown Events - linksfor.dev(s)"/>
+    <meta property="article:author" content="https://facebook.com/rickstrahl"/>
+    <meta property="og:description" content="WebSockets in ASP.NET Core are easy to use but due to the simple model it&#x27;s easy to forget that socket requests are long lived and can linger for a long time in the background and that can cause problems when an application needs to shut down cleanly. Luckily there&#x27;s an `IHostApplicationLifetime` interface available that allows hooking shutdown operations and that provides the necessary cancellation tokens to allow an WebSocket connection to be terminated in response to a shutdown event. This post shows how this works."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://weblog.west-wind.com/posts/2020/May/28/ASPNET-Core-WebSockets-and-Application-Lifetime-Shutdown-Events"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - ASP.NET Core WebSockets and Application Lifetime Shutdown Events</title>
+<div class="readable">
+        <h1>ASP.NET Core WebSockets and Application Lifetime Shutdown Events</h1>
+            <div>by https://facebook.com/rickstrahl</div>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 01 Jun 2020</div>
+        <p><a href="https://weblog.west-wind.com/posts/2020/May/28/ASPNET-Core-WebSockets-and-Application-Lifetime-Shutdown-Events">https://weblog.west-wind.com/posts/2020/May/28/ASPNET-Core-WebSockets-and-Application-Lifetime-Shutdown-Events</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="ArticleBody" itemprop="articleBody">
+        
+        
+
+
+        <p><a href="https://weblog.west-wind.com/images/2020/ASP.NET-Core-WebSockets-and-Application-Lifetime-Shutdown/EventCancelled.jpg"><img src="https://weblog.west-wind.com/images/2020/ASP.NET-Core-WebSockets-and-Application-Lifetime-Shutdown/EventCancelled.jpg" alt=""></a></p>
+<p>A couple of days ago I received a bug report in my <a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/issues/28">Westwind.AspnetCore.LiveReload</a> repository that revolves around the application life cycle handling events. According to the bug report, when Live Reload is enabled in the application, the shutdown <code>IHostApplicationLifetime</code> events are not consistently firing when the application is shutting down.</p>
+<h2 id="websockets-and-persistent-connections"><a name="websockets-and-persistent-connections" href="#websockets-and-persistent-connections"></a>WebSockets and Persistent Connections</h2>
+<p>The Live Reload middleware works by running a Web socket between any open HTML page in the browser and the application. When a file of interest is changed in the dev environment, the WebSocket forces the HTML page to be refreshed.</p>
+<p>ASP.NET Core makes it pretty easy to handle WebSocket requests as part of an ASP.NET Core application - you can just check a request for the <code>context.WebSockets.IsWebSocketRequest</code> and you're off to the races. You create a connection and then wait to receive data on this connection which looks something like this in this very simple WebSocket implementation that pushes for refresh requests into the browser:</p>
+<pre><code>
+<span>if</span> (context.Request.Path == config.WebSocketUrl)
+{
+   <span>if</span> (context.WebSockets.IsWebSocketRequest)
+   {
+       <span>using</span> (<span>var</span> webSocket = <span>await</span> context.WebSockets.AcceptWebSocketAsync())
+       {
+           <span>if</span> (!ActiveSockets.Contains(webSocket))
+               ActiveSockets.Add(webSocket);
+
+           
+           <span>await</span> WebSocketWaitLoop(webSocket, context); 
+       }
+   }
+   <span>else</span>
+   {
+       context.Response.StatusCode = <span>400</span>;
+   }
+
+   <span>return</span> <span>true</span>;
+}
+
+<span><span>private</span> <span>async</span> Task <span>WebSocketWaitLoop</span>(<span>WebSocket webSocket, HttpContext context</span>)</span>
+{
+    
+    <span>var</span> buffer = <span>new</span> <span>byte</span>[<span>1024</span>];
+    <span>while</span> (webSocket.State.HasFlag(WebSocketState.Open))
+    {
+        <span>try</span>
+        {
+            <span>var</span> received =<span>await</span> webSocket.ReceiveAsync(buffer);
+        }
+        <span>catch</span>(Exception ex)
+        {
+            <span>break</span>; 
+        }
+    }
+
+    ActiveSockets.Remove(webSocket);
+
+    <span>if</span> (webSocket.State != WebSocketState.Closed &amp;&amp;
+        webSocket.State != WebSocketState.Aborted)
+    {
+        <span>try</span>
+        {
+            <span>await</span> webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure,
+                <span>"Socket closed"</span>,
+                CancellationToken.None);
+        }
+        <span>catch</span>
+        {
+            
+        }
+    }
+
+}
+</code></pre>
+<p>What's nice about the ASP.NET Core WebSocket implementation is that you still get a request context and a lot of the same semantics of a regular transactional HTTP request, except with the big difference that <strong>WebSocket requests are persistent rather than transactional</strong>. Basically a WebSocket connects and then sits and waits for incoming data to do it's thing until it's disconnected.</p>
+<p>The above code works, but <strong>it's completely oblivious to anything else going on</strong>. Like say an application shutting down...</p>
+<h2 id="websockets-and-application-lifetime"><a name="websockets-and-application-lifetime" href="#websockets-and-application-lifetime"></a>WebSockets and Application Lifetime</h2>
+<p>When the application shuts down, it's possible and quite likely actually that a socket is connected to an HTML page. So there's an active connection while the application is trying to shut down.</p>
+<p>In quick testing I was able to verify that the lifetime event handlers in my sample application in <code>Startup.Configure()</code> are not firing <strong>if there's a connected socket</strong> still running during shutdown.</p>
+<p>Luckily ASP.NET Core has built in support for basic Lifetime management that can be used to notify long running tasks like a Web Socket that the application is shutting down.</p>
+<p><a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/host/generic-host?view=aspnetcore-3.0#ihostapplicationlifetime">IHostApplicationLifetime</a> is a simple interface that allows trapping shut down events. It's one of the default services available in a .NET Core application so it's always available for injection. This interface also exposes several CancellationTokens that can be used to notify long running operations that the application is shutting down.</p>
+<p>Setting up ApplicationLifetime in <code>Configure()</code> and testing the application with one or more connected pages I would see the following life time events intermittently working or not working (mostly not):</p>
+<pre><code><span><span>public</span> <span>void</span> <span>Configure</span>(<span>IApplicationBuilder app,
+          IWebHostEnvironment env, 
+          IHostApplicationLifetime lifetime</span>)</span> 
+{
+    
+    
+    
+    lifetime.ApplicationStopping.Register(() =&gt;
+    {
+      Console.WriteLine(<span>"*** Application is shutting down..."</span>);
+    }, <span>true</span>);
+    
+    lifetime.ApplicationStopped.Register(() =&gt;
+    {
+      Console.WriteLine(<span>"*** Application is shut down..."</span>);
+    }, <span>true</span>);
+}
+</code></pre>
+<p>Instead the application would shut down without these events firing (after some delay) or worse in some instances the application would crash just before the final shutdown. This often goes unnoticed because by the time this happens the application infrastructure is already unloaded so logging is likely not happening anymore, and so the crashes often occur unnoticed. If running manually and killing with Ctrl-C this would show up as occasional shut down crashes with strangely unrelated framework level error messages.</p>
+<p>Not critical but clearly not optimal!</p>
+<h2 id="application-lifetime-cancellation-tokens"><a name="application-lifetime-cancellation-tokens" href="#application-lifetime-cancellation-tokens"></a>Application Lifetime Cancellation Tokens</h2>
+<p>As with most things async in ASP.NET Core, most async methods allow you to pass <strong>Cancellation Tokens</strong> to the async method and the <code>websocket.ReceiveAsync()</code> method is no different.</p>
+<p>Cancellation Tokens provide a cancellation context that allow anybody holding the token along the call chain to signal that the operation should be canceled.</p>
+<p>The <code>IHostApplicationLifetime</code> object passed has several CancellationTokens it exposes:</p>
+<ul>
+<li>ApplicationStarted</li>
+<li>ApplicationStopping</li>
+<li>ApplicationStopped</li>
+</ul>
+<p>These tokens are set as the application goes through the relevant phase of operation.</p>
+<p>In my WebSocket loop I need to get a hold of the <code>ApplicationStopping</code> CancellationToken. So to use this functionality I need to:</p>
+<ul>
+<li>Set up the Application Lifetime event handling in <code>Startup.Configure()</code></li>
+<li>Use DI to retrieve the <code>IHostApplicationLifetime</code> reference</li>
+<li>Pass the Lifetime's <code>ApplicationStopping</code> cancellation token to my Socket function.</li>
+</ul>
+<p><code>IHostApplicationLifetime</code> is a pre-configured service that is available in the default ASP.NET service configuration so it can be injected directly into the <code>Startp.Configure()</code> method. I showed that code above in the previous code snippet.</p>
+<p>Likewise I can use Dependency Injection to access the <code>IHostApplicationLifetime</code> in my Middleware component's CTOR:</p>
+<pre><code><span>public</span> <span>class</span> <span>LiveReloadMiddleware</span>
+{
+    <span>private</span> IHostApplicationLifetime applicationLifetime;
+    
+    <span><span>public</span> <span>LiveReloadMiddleware</span>(<span>RequestDelegate next,
+                    IHostApplicationLifetime lifeTime</span>)</span>
+    {
+        applicationLifetime = lifeTime;
+        _next = next;
+    }
+    
+    
+}    
+</code></pre>
+<p>The <code>applicationLifetime.Stopping</code> CancellationToken can then be used to pass the Cancellation token to the <code>ReceiveAsync()</code> call.</p>
+<pre><code><span><span>private</span> <span>async</span> Task <span>WebSocketWaitLoop</span>(<span>WebSocket webSocket, HttpContext context</span>)</span>
+{
+    
+    <span>var</span> buffer = <span>new</span> <span>byte</span>[<span>1024</span>];
+    <span>while</span> (webSocket.State.HasFlag(WebSocketState.Open))
+    {
+        <span>try</span>
+        {
+            <span>var</span> received =
+                <span>await</span> webSocket.ReceiveAsync(buffer, applicationLifetime.ApplicationStopping);
+        }
+        <span>catch</span>(Exception ex)
+        {
+            <span>break</span>;
+        }
+    }
+
+    ActiveSockets.Remove(webSocket);
+
+    <span>if</span> (webSocket.State != WebSocketState.Closed &amp;&amp;
+        webSocket.State != WebSocketState.Aborted)
+    {
+        <span>try</span>
+        {
+            <span>await</span> webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure,
+                <span>"Socket closed"</span>,
+                applicationLifetime.ApplicationStopping);
+        }
+        <span>catch</span>
+        {
+            
+        }
+    }
+
+}
+</code></pre>
+<p>With this code in place in the middleware the shutdown events now correctly fire. No more random shutdown crashes and the lifetime events consistently fire now.</p>
+<h2 id="summary"><a name="summary" href="#summary"></a>Summary</h2>
+<p>WebSockets in ASP.NET Core are easy to use but due to the simple model that looks similar to typical ASP.NET Core requests, it's easy to forget that socket requests are long lived and can linger for a long time in the background. In order to ensure that an application can shutdown cleanly the sockets have to be disconnected or aborted before the application can shut down.</p>
+<p>The <code>IHostApplicationLifetime</code> interface provides the tools to both intercept the shut down operations as well as providing the necessary <code>CancellationToken</code> instances to let other operations safely shut down when a shutdown is requested. It's all quite disconnected but once you know how to get a hold of the Cancellation tokens, making sockets clean to shut down is easy enough to accomplish.</p>
+<p>Cancel the shutdown frustrations... onward!</p>
+
+
+
+
+
+        
+        
+        
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
