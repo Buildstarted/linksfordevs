@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+EF Core In depth &#x2013; what happens when EF Core reads from the database? &#x2013; The Reformed Programmer - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="EF Core In depth &#x2013; what happens when EF Core reads from the database? &#x2013; The Reformed Programmer - linksfor.dev(s)"/>
+    <meta property="og:description" content="Last Updated: June 1, 2020 | Created: May 31, 2020"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.thereformedprogrammer.net/ef-core-in-depth-what-happens-when-ef-core-reads-from-the-database/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - EF Core In depth &#x2013; what happens when EF Core reads from the database? &#x2013; The Reformed Programmer</title>
+<div class="readable">
+        <h1>EF Core In depth &#x2013; what happens when EF Core reads from the database? &#x2013; The Reformed Programmer</h1>
+            <div>Reading time: 17-22 minutes</div>
+        <div>Posted here: 01 Jun 2020</div>
+        <p><a href="https://www.thereformedprogrammer.net/ef-core-in-depth-what-happens-when-ef-core-reads-from-the-database/">https://www.thereformedprogrammer.net/ef-core-in-depth-what-happens-when-ef-core-reads-from-the-database/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+		<p><span>Last Updated: June 1, 2020 | Created: May 31, 2020</span>
+					</p>
+
+		
+<p>This article gives an “under the hood” view of what happens when EF Core reads in data from a database. I look at two types of database read: a normal query and a query that contains the AsNoTracking method in it. I also show how a bit of experimenting on my part solved a performance problem that one of my client’s had.</p>
+
+
+
+<p>I do assume you know EF Core, but I start with a look at using EF Core to make sure we have the basics covered before I dive into the depths of EF Core. But this is a “deep dive” so be ready for lots of technical detail, hopefully described in a way you can understand.</p>
+
+
+
+<p>This article is part of a “EF Core In depth” series. Here is the current list of articles in this series:</p>
+
+
+
+<ul><li>EF Core In depth – what happens when EF Core reads from the database? <strong>(this article)</strong></li><li>EF Core In depth – what happens when EF Core writes to the database? (coming soon)</li></ul><p>This “EF Core In depth” series is inspired by what I found while updating my book “<a href="https://bit.ly/EfCoreBook2">Entity Framework Core in Action</a>” to cover EF Core 5. I am also added a LOT of new content from my experiences of working with EF Core on client applications over the last 2½ years.</p>
+
+
+
+<blockquote><p>NOTE: There is a companion GitHub repo at <a href="https://github.com/JonPSmith/EfCoreinAction-SecondEdition">https://github.com/JonPSmith/EfCoreinAction-SecondEdition</a>. This has a simple e-commerce site called Book App that you can run. Also, there are unit tests that go with the content in this article – look for unit test class whose name start with “Ch01_”, “Ch02_” etc.</p></blockquote>
+
+
+
+<h2 id="tldr-summary">TL;DR – summary<a href="#tldr-summary"></a></h2>
+
+
+
+<ul><li>EF Core has two ways to read data from the database (known as a <em>query</em>): a normal LINQ query and a LINQ query that contains the method AsNoTracking.</li><li>Both types of query return classes (referred to as <a><em>entity classes</em></a>) with links to any other entity classes (known as <em>navigational properties</em>) loaded at the same time. But how and what they are linked to is different between the two types of queries.</li><li>The normal query also takes a copy of any data it reads in inside the application’s DbContext – the entity classes are said to be <em>tracked</em>. This allows the loaded entity classes to take part in commands to update the database.</li><li>This normal query also has some sophisticated code called <em>relational fixup</em> which fills in any links between the entity classes read in, and any other tracked entities.</li><li>The AsNoTracked query doesn’t take a copy so it isn’t tracked – this means its faster than a normal query. This also means it won’t be considered for database writes.</li><li>Finally, I show a little-known feature of EF Core’s normal query as an example of how clever it is in linking up relationship via its navigational properties.</li></ul><h2 id="setting-the-scene-the-basics-of-ef-core-writing-to-the-database">Setting the scene – the basics of EF Core writing to the database<a href="#setting-the-scene-the-basics-of-ef-core-writing-to-the-database"></a></h2>
+
+
+
+<p><em>TIP: If you already know EF Core then you can skip this section – it’s just an example of how you read a database.</em></p>
+
+
+
+<p>In my book I have created a small web application that sells books – think super-simple Amazon. In this introduction I am going to describe the database structure and then give you a simple example of writing to that database.</p>
+
+
+
+<h3 id="a-the-classes-tables-im-going-to-work-with">a. The classes/tables I’m going to work with<a href="#a-the-classes-tables-im-going-to-work-with"></a></h3>
+
+
+
+<p>My Book App as I call it starts out in chapter 2 with the following five tables shown in the figure below. I chose this because a) the data/concepts are easy to understand because of sites like Amazon etc. and b) it has one of each of the basic relationships that can exist between tables.</p>
+
+
+
+<figure><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Database-diagram-1024x832.png" alt="" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Database-diagram-1024x832.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Database-diagram-300x244.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Database-diagram-768x624.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Database-diagram.png 1470w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>Theses tables are mapped to classes with similar names, e.g. Book, BookAuthor, Author, with properties with the same name as the columns shown in the tables. I’m not going to show the classes because of space, but you can see these classes <a href="https://github.com/JonPSmith/EfCoreinAction-SecondEdition/tree/master/DataLayer/EfClasses">here in my GitHub repo</a>.</p>
+
+
+
+<h3 id="b-a-look-at-what-you-need-to-read-this-database-via-ef-core">b. A look at what you need to read this database via EF Core<a href="#b-a-look-at-what-you-need-to-read-this-database-via-ef-core"></a></h3>
+
+
+
+<p>For EF Core to write to the database I have shown you need 5 parts</p>
+
+
+
+<ol type="1"><li>A database server, such as SQL Server, Sqlite, PostgreSQL…</li><li>An existing database with data in it.</li><li>A class, or classes, to map to your database – I refer to these as <em>entity classes</em>.</li><li>A class which inherits EF Core’s DbContext class, which contains the setup/configuration of EF Core</li><li>Finally, the commands to read from the database.</li></ol><p>The unit test code below comes from the <a href="https://github.com/JonPSmith/EfCoreinAction-SecondEdition">EfCoreinAction-SecondEdition</a> GitHub repo and shows a simple example of reading in a set of four Books, with their BookAuthor and Authors entity classes from an existing database.</p>
+
+
+
+<p>The example database contains four books, where the first two books have the same author, Martin Folwer.</p>
+
+
+<div><div id="highlighter_202428"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p></td><td><div><p><code>[Fact]</code></p><p><code>public</code> <code>void</code> <code>TestBookCountAuthorsOk()</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>var</code> <code>options = SqliteInMemory.CreateOptions&lt;EfCoreContext&gt;();</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>using</code> <code>(</code><code>var</code> <code>context = </code><code>new</code> <code>EfCoreContext(options))</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>var</code> <code>books = context.Books</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Include(r =&gt; r.AuthorsLink)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ThenInclude(r =&gt; r.Author)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ToList();</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>books.Count.ShouldEqual(4);</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>books.SelectMany(x =&gt; x.AuthorsLink.Select(y =&gt; y.Author))</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Distinct().Count().ShouldEqual(3);</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>Now, if we link unit test code to the list of 5 parts, it goes like this</p>
+
+
+
+<ol type="1"><li><strong>A database server</strong> – Line 5: I have chosen a Sqlite database server, and in this case the SqliteInMemory.CreateOptions method, which comes from my <a href="https://www.nuget.org/packages/EfCore.TestSupport/">EfCore.TestSupport NuGet package</a>, sets up a new, in-memory database (in-memory database are great for unit testing as you can set up a new, empty database just for this test – see chapter 17 of my book for more).</li><li><strong>An existing database with data</strong> – Line 6: I deal with writing to the database in the next article, for now just assume there is a database with four books, two of which have the same author.</li><li><strong>A class, or classes</strong> – not shown but classes <a href="https://github.com/JonPSmith/EfCoreinAction-SecondEdition/tree/master/DataLayer/EfClasses">found</a> here, but there is a Book entity class, with relationships to an Author entity class, via a many-to-many linking entity class called BookAuhor.</li><li><strong>A class inherits DbContext</strong> – Line 7:&nbsp; the EfCoreContext class inherits the DbContext class and configures the links from the classes to the database (you can see this class <a href="https://github.com/JonPSmith/EfCoreinAction-SecondEdition/blob/master/DataLayer/EfCode/EfCoreContext.cs">here in my GitHub repo</a>).</li><li><strong>Commands to read from the database</strong> – Lines 10 to 13 – this is a query:<ol><li>Line 10 – the EfCoreContext instance called context gives you access to the database, and adding Books says you want to access the Books table.</li></ol><ol><li>Line 11&nbsp; – The Include is known as eager loading and tells EF Core that when it loads a Book is should also load all the BookAuthor entity classes that are linked to that book.</li></ol><ol><li>Line 12&nbsp; – The ThenInclude is part of the eager loading and tells EF Core that when it loads a BookAuthor it should also load the Author entity classes that are linked to that BookAuthor.</li></ol></li></ol><p>The result of all of this is a set of books, with normal properties, like the Title of the Book, filled in and the navigational properties that link the entity classes, like the AuthorsLink property in the Book, filled in with a reference to the correct instance of the entity class it links to.&nbsp; And the last few lines after the //VERIFY comment are some simple checks that there are four books have, between them, three distinct authors.</p>
+
+
+
+<p>This example is known as a query, and one of the four types of database accesses, which are known as CRUD (Create, Read, Update, and Delete). I cover the Create and Update in the next article.</p>
+
+
+
+<h2 id="how-ef-core-represents-data-when-reading-from-the-database">How EF Core represents data when reading from the database<a href="#how-ef-core-represents-data-when-reading-from-the-database"></a></h2>
+
+
+
+<p>When you query a database EF Core goes thought various steps to convert from data returned by the database into entity classes with navigational links filled in. In this section we will look at those steps for two types of queries – a normal query (i.e. without AsNoTracking, also known as a <em>read-write query</em>) and a query with the AsNoTracking method added (known as a <em>read-only query</em>).</p>
+
+
+
+<p>But first we look at the initial part which takes your LINQ command, converts it to the relevant commands for the database type you are using, and gets the data back. This is common to the two types of query we are going to look at. See the following figure for this first part.</p>
+
+
+
+
+
+
+
+<figure><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-first-part-of-the-query-1024x497.png" alt="" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-first-part-of-the-query-1024x497.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-first-part-of-the-query-300x146.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-first-part-of-the-query-768x373.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-first-part-of-the-query.png 1475w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>There is some very complex code that converts your LINQ into database commands, but there really isn’t a lot to say other than if your LINQ can’t be translated you will get an exception from EF Core with a message that contains ‘could not be translated’. Also, when the data is coming back features like <a href="https://docs.microsoft.com/en-gb/ef/core/modeling/value-conversions">Value Converters</a> may adapt the data.</p>
+
+
+
+<blockquote><p>NOTE: In chapter 6 of my book I cover some of the more complex LINQ commands and what you should do to help EF Core to translate to database commands.</p></blockquote>
+
+
+
+<p>This section has shown the first part of the query, where your LINQ is turned into database commands and returns all the correct values. Now we look at the second part of the query where EF Core takes the returned values and turns them into instances of the entity classes and filling in any <em>navigational properties</em>. There are two types of queries which we will look at.</p>
+
+
+
+<ol type="a"><li><strong>A normal query </strong>(<em>read-write query</em>)</li><li><strong>An AsNoTracking query</strong>, which has the AsNoTracking method added (<em>read-only query</em>).</li></ol><h3 id="1-normal-query-a-read-write-query">1. Normal query – a <em>read-write query</em><a href="#1-normal-query-a-read-write-query"></a></h3>
+
+
+
+<p>A normal query reads in the data in such a way that the data can be edited, which is why I refer to it as a read-write<em> query</em>. It doesn’t automatically update data (See next article for how to write to the database), but unless your query read-write then you won’t be about to update the data you have just read in.</p>
+
+
+
+<p>The example I gave you in the introduction does a normal query that reads in the four example books with the links to their authors. Here is the query code part of that example</p>
+
+
+<div><div id="highlighter_659027"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p></td><td><div><p><code>var</code> <code>books = context.Books</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Include(r =&gt; r.AuthorsLink)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ThenInclude(r =&gt; r.Author)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ToList();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>Then EF Core goes through three steps to convert those values back into entity classes with navigational properties filled in. The figure below shows the three steps and the resulting entity classes with their navigational links.</p>
+
+
+
+<figure><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-normal-query-1024x730.png" alt="" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-normal-query-1024x730.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-normal-query-300x214.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-normal-query-768x547.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-normal-query.png 1372w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>Let’s look at three steps:</p>
+
+
+
+<ol type="1"><li><strong>Create classes and fill in data</strong>. This takes the values that came back for the database and fills in the non-navigational (known as <em>scalar</em>) properties, fields, etc. In the Book entity class this would be properties like BookId (Book’s primary key), Title, etc. – see bottom left, light blue rectangles.<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; There can be a lot of other issues around here, such as how EF Core used constructors, backing fields, shadow properties, adapting data, client-side calculations to name but a few. Chapters 2, 6 and 7 cover these issues.</li><li><strong>Relational fixup</strong>. The first step will have filled in the primary keys and foreign keys, which define how the data is connected to each other. EF Core then uses these keys to set up the navigational properties between the entity classes (shown as thick blue lines in the figure).<br>&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;This Relational fixup’s linking feature goes beyond the entity classes just read in by the query, it looks at every tracked entity in the DbContext and fills in any navigational properties. This is a powerful feature, but if you have lots of tracked entities then it can take some time – that’s why the AsNoTracking query exists, to be quicker.</li><li>Creating a<strong> tracking snapshot</strong>. The tracking snapshot is a copy of the entity classes that are passed back to the user, plus other things like a link to each entity class that it shadows – an entity is said to be <em>tracked</em>, which means it can be used in database writes.</li></ol><h3 id="2-asnotracking-query-read-only-query">2. AsNoTracking query – read-only query<a href="#2-asnotracking-query-read-only-query"></a></h3>
+
+
+
+<p>An AsNoTracking query is a read-only query. That means anything you read in won’t be looked at when the SaveChanges method is called. The AsNoTracking option is there because it makes the query perform better. I cover this and other differences from a normal query in the next section.</p>
+
+
+
+<p>Following the example in the introduction I alter the query code to add the AsNoTracking method below (see line 2)</p>
+
+
+<div><div id="highlighter_195544"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p></td><td><div><p><code>var</code> <code>books = context.Books</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.AsNoTracking()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Include(r =&gt; r.AuthorsLink)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ThenInclude(r =&gt; r.Author)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ToList();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>The LINQ query goes through the two of the three steps shown in the normal query figure above. The step that is left out is the 3. Tracking snapshot, and the relational fixup step is slightly different. The following figures shows the steps for an AsNoTracking query.</p>
+
+
+
+<figure><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-AsNoTracking-query-1024x728.png" alt="" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-AsNoTracking-query-1024x728.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-AsNoTracking-query-300x213.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-AsNoTracking-query-768x546.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/EF-Core-in-depth-AsNoTracking-query.png 1394w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><p>Let’s look at three steps:</p>
+
+
+
+<ol type="1"><li><strong>Create classes and fill in data</strong>. <strong><em>(same as normal query)</em></strong> This takes the values that came back for the database and fills in the non-navigational (known as <em>scalar</em>) properties, fields, etc. (known as scalar properties). In the Book entity class this would be properties like BookId (Book’s primary key), Title, etc. – see bottom left, light blue rectangles.</li><li><strong>Relational fixup</strong>. <strong><em>(different from normal query)</em></strong> The first step will have filled in the primary keys and foreign keys, which define how the data is connected to each other. EF Core can use that to fill in the navigational properties (shown as thick blue lines) between the entity classes, but NOT looking outside the query to tracked entities.</li><li>Creating a <strong><s>tracking snapshot</s></strong>. <strong><em>(NOT RUN)</em></strong></li></ol><h3 id="c-differences-between-normal-and-asnotracking-queries">c. Differences between normal and AsNoTracking queries<a href="#c-differences-between-normal-and-asnotracking-queries"></a></h3>
+
+
+
+<p>Now let’s compare the two query types and highlight the differences.</p>
+
+
+
+<ol type="1"><li><strong>The AsNoTracking query performs better</strong>. The main reason for having the AsNoTracking feature is about performance. The AsNoTracking query is<ol><li>Slightly faster and uses slightly less memory because it doesn’t have to create the tracking snapshot.</li></ol><ol><li>Not having the tracking snapshot of the queried data improved the performance of SaveChanges because it doesn’t have to inspect the tracking snapshot for changes.</li></ol><ol><li>Slightly faster because the relational fixup doesn’t what is called <em>identity resolution</em>. This is why you get two author instances with the same data in them.</li></ol></li><li><strong>The AsNoTracking query <em>relational fixup</em> only links entities in the query</strong>. In the normal query I already said that the relational fixup linked both to entities in the query AND entities that are currently tracked. But the AsNoTracking query only filled in the navigational properties between entities in the query.</li><li><strong>The AsNoTracking query doesn’t always represent the database relationships</strong>. Another difference in relational fixup between the two types of queries is that the AsNoTracking query uses a quicker fixup without identity resolution. This can produce multiple instances for the same row in the database – see the blue Author entities and comment in the bottom right of the previous figure. That difference doesn’t matter if you are just showing the data to a user, but if you have business logic then the multiple instances doesn’t correctly reflect the structure of the data and could cause problems.</li></ol><h2 id="useful-relational-fixup-feature-with-hierarchical-data">Useful relational fixup feature with hierarchical data<a href="#useful-relational-fixup-feature-with-hierarchical-data"></a></h2>
+
+
+
+<p>The relational fixup step is quite clever, especially in a normal query. This allows all sorts of clever things in a normal query and I wanted to show you how I used relational fixup to solve a performance problem I had in a client’s project.</p>
+
+
+
+<p>I worked for a company where a lot of their dat was hierarchical, that is data that has a series of linked entity classes with an indeterminate depth. The problem was I had to parse the whole hierarchy before I could display it. I initially did this by <a href="https://docs.microsoft.com/en-gb/ef/core/querying/related-data#eager-loading">eager loading</a> the first two levels and then used <a href="https://docs.microsoft.com/en-gb/ef/core/querying/related-data#explicit-loading"><em>explicit loading</em></a> for deeper level. It worked but the performance was very slow, and the database was overloaded with lots of single database accesses.</p>
+
+
+
+<p>This got me thinking, if the normal query relational fixup is so clever could it help me improve the performance of the query? – and it could! Let me give you an example using an example of employees in a company. The figure below shows you a possible hierarchical structure of a company we want to load.</p>
+
+
+
+<figure><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Hierarchical-data-1024x355.png" alt="" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Hierarchical-data-1024x355.png 1024w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Hierarchical-data-300x104.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Hierarchical-data-768x267.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Hierarchical-data-1536x533.png 1536w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/05/Hierarchical-data-2048x711.png 2048w" sizes="(max-width: 1024px) 100vw, 1024px"></figure><blockquote><p>NOTE: You can see the Employee class <a href="https://github.com/JonPSmith/EfCoreinAction-SecondEdition/blob/master/Test/Chapter06Listings/Employee.cs">here</a>, but the basic idea is it has Manger navigation Manager navigational property (single), which linked to their boss (or null if top person) and a WorksForMe navigational property (collection), which has all the employees that work for this employee (can be none). It also has employee info like their Name and what department(s) they work for.</p></blockquote>
+
+
+
+<p>You could use .Include(x =&gt; x.WorksForMe).ThenInclude(x =&gt; x.WorksForMe)… and so on, but it turns out that a single .Include(x =&gt; x.WorksForMe) is enough, as the relational fixup can work out the rest! That is surprizing, but very useful.</p>
+
+
+
+<p>For instance, if I wanted to select all the people that work in Development (each Employee has a property with the name WhatTheyDo with a type Role which has the department(s) they work in) I could write this code.</p>
+
+
+<div><div id="highlighter_669924"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p></td><td><div><p><code>var</code> <code>devDept = context.Employees&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Include(x =&gt; x.WorksFromMe)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Where(x =&gt; x.WhatTheyDo.HasFlag(Roles.Development))</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ToList();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>This creates one query that loads all the employees who work in Development, and the relational fixup filled in the WorksFoMe navigational property (collection) and the Manager navigational property (single) on all the employees in the returned employees. This improves both the time the query takes and reduced the load on the database server by only sending one query (comareed with my original query that used explicit loading).</p>
+
+
+
+<blockquote><p>NOTE: You do need to work out which relationship to Include. In this case I have a Manager navigational property (single) and a WorksForMe navigational property (collection). It turns out that including the WorksForMe property fills in both the WorksForMe collection and the Manager property. But including the Manager navigational property means that the WorksForMe collection is only created if there are entities to link to, otherwise it is null. I don’t know why – that’s why I test everything to test what works.</p></blockquote>
+
+
+
+<h2 id="conclusion">Conclusion<a href="#conclusion"></a></h2>
+
+
+
+<p>You have seen two types of queries, which I called a) a normal, read-write query, and b) an AsNoTracking, read-only query. For each query type I showed you what EF Core does “under the hood” and the structure of the data read in. And the differences in how they work shows their strengths and weaknesses.</p>
+
+
+
+<p>The AsNoTracking query is the obvious solution for read-only queries, as its faster than the normal, read-write query. But you should keep in mind its limitations of the relational fixup, which can create multiple instances of classes where the database only has one relationship.</p>
+
+
+
+<p>The normal, read-write query is the solution for loading tracked entities, which means you can use them in Create, Update and Delete database changes. The normal, read-write query does take up more resources of time and memory, but is has some useful features such as linking automatically to other tracked instances of entity classes.</p>
+
+
+
+<p>I hope you have found this article useful. You can find a must longer and detailed version of this in chapters 1 to 6 of my book <a href="https://bit.ly/EfCoreBook2">Entity Framework in Action, section edition</a>.</p>
+
+
+
+<p>Happy coding.</p>
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
