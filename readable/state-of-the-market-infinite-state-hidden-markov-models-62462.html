@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+State of the Market - Infinite State Hidden Markov Models - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="State of the Market - Infinite State Hidden Markov Models - linksfor.dev(s)"/>
+    <meta property="article:author" content="Dean Markwick"/>
+    <meta property="og:description" content="My dirichletprocess package for R has the ability to fit Infinite Hidden Markov Models using a Dirichlet process. To demonstrate this functionality I will fit a Hidden Markov model to some financial data to see how the states change over time and hopefully highlight why this might be useful."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://dm13450.github.io/2020/06/03/State-of-the-Market.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - State of the Market - Infinite State Hidden Markov Models</title>
+<div class="readable">
+        <h1>State of the Market - Infinite State Hidden Markov Models</h1>
+            <div>by Dean Markwick</div>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 04 Jun 2020</div>
+        <p><a href="http://dm13450.github.io/2020/06/03/State-of-the-Market.html">http://dm13450.github.io/2020/06/03/State-of-the-Market.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div aria-label="Content">
+      <div>
+        
+
+<article itemscope="" itemtype="http://schema.org/BlogPosting">
+
+  
+
+  <div itemprop="articleBody">
+    <p>My <code>dirichletprocess</code> package for R has the ability to fit Infinite Hidden Markov
+Models using a Dirichlet process. To demonstrate this functionality I
+will fit a Hidden Markov model to some financial data to see how the
+states change over time and hopefully highlight why this might be
+useful.</p>
+
+<p>The typical Markov model in finance assumes two states; a bull state
+where the market is rising and a bear state where the market is
+falling. By markets rising we mean that the average return is positive
+and by falling we mean the average return is negative. We then take
+the return data of some stock, fit this type of model to obtain the
+state parameters. Then buy the stock when the parameters suggest a
+bull market, sell it in the bear market and hope you make a
+profit. This ticks all the boxes for a good model; its simple to
+explain and simple to fit. However (and this is a big however) it
+relies on some two assumptions:</p>
+
+<ul>
+  <li>There are only two states</li>
+  <li>All the bull states have the same parameters and likewise for the
+bear states.</li>
+</ul>
+
+<p>Firstly, two states is kind of arbitrary; why not add another “neutral”
+state where the average return is zero? Or maybe have 4 states, big
+bear, bear, bull, big bull?
+Secondly, assuming the state parameters constant for each type of
+state is very limiting. Why should the bear market of the dot com
+crash have the same parameters are the Great Financial Crisis?</p>
+
+<p>Quite quickly this model falls apart, and once you start relaxing
+these assumptions you find that you can always tweak the model to get
+better results than before.</p>
+
+<p><em>So how do we fix this?</em></p>
+
+<p>Enter the Dirichlet process and unsupervised machine learning. A
+Dirichlet process is a type of random process that can have an
+infinite amount of parameters. We can use the Dirichlet process to learn a sensible
+amount of parameters from data where we feed the Dirichlet
+process model some data and get out suitable clusters and their
+parameters all in an unsupervised manner. With a few mathematical
+tweaks we can set the Dirichlet process up as a hidden Markov model to
+learn from the data so now the assumptions of the Markov model are
+relaxed:</p>
+
+<ul>
+  <li>Two states → As many states as the data needs.</li>
+  <li>Same parameters for each type of state → Each state has its own
+parameters.</li>
+</ul>
+
+<p>This means we now let the data speak for itself and it can arrange
+into suitable states with suitable parameters. I will show how you use
+my <code>dirichletprocess</code> package to fit this type of model and how it can
+be applied to an ETF’s change in returns.</p>
+
+<p>So if you want to play along at home, download thes packages, fire up
+RStudio and get programming!</p>
+
+<p>You’ll need to download the dev version of <code>diricheltprocess</code> as I
+haven’t updated the CRAN release with some new features yet. To do
+this</p>
+
+<div><div><pre><code><span>devtools</span><span>::</span><span>install_github</span><span>(</span><span>"dm13450/dirichletprocess"</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<div><div><pre><code><span>set.seed</span><span>(</span><span>20202020</span><span>)</span><span>
+</span><span>knitr</span><span>::</span><span>opts_chunk</span><span>$</span><span>set</span><span>(</span><span>warning</span><span> </span><span>=</span><span> </span><span>FALSE</span><span>,</span><span> </span><span>message</span><span> </span><span>=</span><span> </span><span>FALSE</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>dirichletprocess</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>alphavantager</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>dplyr</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>tidyr</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>ggplot2</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>lubridate</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>xts</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>coda</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>ggrepel</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>knitr</span><span>)</span><span>
+</span><span>require</span><span>(</span><span>parallel</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<p>Using the <a href="https://www.alphavantage.co/">AlphaVantage</a> API we can download the SPY ETF daily price
+series. We are using the SPY ETF as it is a good indicator of the
+stock market - if SPY is in a positive return state we should be buying
+stock, if it is in a negative state we should be selling.</p>
+
+<div><div><pre><code><span>spy</span><span> </span><span>&lt;-</span><span> </span><span>av_get</span><span>(</span><span>symbol</span><span> </span><span>=</span><span> </span><span>"SPY"</span><span>,</span><span> </span><span>av_fun</span><span> </span><span>=</span><span> </span><span>"TIME_SERIES_DAILY_ADJUSTED"</span><span>,</span><span> </span><span>outputsize</span><span>=</span><span>"full"</span><span>)</span><span>
+
+</span><span>spy</span><span> </span><span>%&gt;%</span><span>
+  </span><span>mutate</span><span>(</span><span>LogReturns</span><span> </span><span>=</span><span> </span><span>c</span><span>(</span><span>NA</span><span>,</span><span> </span><span>diff</span><span>(</span><span>log</span><span>(</span><span>adjusted_close</span><span>))),</span><span> 
+         </span><span>timestamp</span><span> </span><span>=</span><span> </span><span>ymd</span><span>(</span><span>timestamp</span><span>),</span><span>
+         </span><span>RollingSD</span><span> </span><span>=</span><span> </span><span>rollapply</span><span>(</span><span>LogReturns</span><span>,</span><span> </span><span>30</span><span>,</span><span> </span><span>sd</span><span>,</span><span> </span><span>align</span><span>=</span><span>"right"</span><span>,</span><span> </span><span>fill</span><span>=</span><span>NA</span><span>))</span><span> </span><span>-&gt;</span><span> </span><span>spy</span><span>
+</span></code></pre></div></div>
+
+<p>Before we start fitting the model we normalise the data. We do
+this by first taking the daily log returns from the closing prices and
+then dividing by the previous 30 days standard deviation, which acts as
+a proxy to volatility.</p>
+
+<div><div><pre><code><span>ggplot</span><span>(</span><span>spy</span><span>,</span><span> </span><span>aes</span><span>(</span><span>x</span><span>=</span><span>timestamp</span><span>,</span><span> </span><span>y</span><span>=</span><span>LogReturns</span><span>/</span><span>RollingSD</span><span>))</span><span> </span><span>+</span><span> 
+  </span><span>geom_point</span><span>()</span><span> </span><span>+</span><span> 
+  </span><span>ggtitle</span><span>(</span><span>"Normalised Returns"</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>xlab</span><span>(</span><span>""</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>ylab</span><span>(</span><span>"Log Returns"</span><span>)</span><span>
+
+</span><span>ggplot</span><span>(</span><span>spy</span><span>,</span><span> </span><span>aes</span><span>(</span><span>x</span><span>=</span><span>timestamp</span><span>,</span><span> </span><span>y</span><span>=</span><span>RollingSD</span><span>))</span><span> </span><span>+</span><span> 
+  </span><span>geom_line</span><span>()</span><span> </span><span>+</span><span> 
+  </span><span>ggtitle</span><span>(</span><span>"30 Day Volatility"</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>xlab</span><span>(</span><span>""</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>ylab</span><span>(</span><span>"Volatility"</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<p><img src="http://dm13450.github.io/assets/HMMFinPost_files/figure-gfm/unnamed-chunk-3-1.png" alt=""><!-- --></p>
+
+<p>From the normalised returns we can see that the values are bounded
+between -5 and 2, so a normal distribution will be sufficient to
+describe them. When we look at the rolling standard deviation we
+can see that it proxies volatility well, capturing the turbulence of the
+Great Financial Crisis of 2007-2008 and is currently spiking with this
+COVID-19 outbreak but is now coming back down.</p>
+
+<p>A Dirichlet Process Hidden Markov Model (DPHMM) works by iterating
+through the data points and  assigning each point to a cluster
+sequentially. A point can belong to
+either the previous cluster (yesterday’s cluster) or form its own
+cluster where the ability to form
+its own cluster is controlled by the parameters <span id="MathJax-Element-1-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>&amp;#x03B1;</mi><mo>,</mo><mi>&amp;#x03B2;</mi></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>α</mi><mo>,</mo><mi>β</mi></math></span></span>. These are <em>hyperparameters</em> which
+dictate the overall state ‘stickiness’ and how easy it is to form a new
+cluster. Then once every datapoint has a new state we update the state
+parameters using all the data assigned to that state. This gives an iterative
+Bayesian method for fitting these models;</p>
+
+<ol>
+  <li>Iterate over the data assigning it to a state.</li>
+  <li>Iterate over the states updating the parameters.</li>
+  <li>Update the hyperparameters <span id="MathJax-Element-2-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>&amp;#x03B1;</mi><mo>,</mo><mi>&amp;#x03B2;</mi></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>α</mi><mo>,</mo><mi>β</mi></math></span></span>.</li>
+</ol>
+
+<p>Thanks to <code>dirichletprocess</code> you don’t have to worry about any of
+this. Instead you can just create the Dirichlet process object with
+the data and let my hard work handle all the sampling for you.</p>
+
+<div><div><pre><code><span>spy</span><span> </span><span>%&gt;%</span><span> 
+  </span><span>drop_na</span><span>()</span><span> </span><span>%&gt;%</span><span>
+  </span><span>mutate</span><span>(</span><span>y</span><span>=</span><span>LogReturns</span><span>/</span><span>RollingSD</span><span>)</span><span> </span><span>-&gt;</span><span> </span><span>trainFrame</span><span> 
+
+</span><span>mdobj</span><span> </span><span>&lt;-</span><span> </span><span>GaussianMixtureCreate</span><span>()</span><span>
+</span><span>dphmm1</span><span> </span><span>&lt;-</span><span> </span><span>DirichletHMMCreate</span><span>(</span><span>trainFrame</span><span>$</span><span>y</span><span>,</span><span> </span><span>mdobj</span><span>,</span><span> 
+                             </span><span>alpha</span><span> </span><span>=</span><span> </span><span>1</span><span>,</span><span> </span><span>beta</span><span> </span><span>=</span><span> </span><span>1</span><span>)</span><span>
+</span><span>dphmm2</span><span> </span><span>&lt;-</span><span> </span><span>DirichletHMMCreate</span><span>(</span><span>trainFrame</span><span>$</span><span>y</span><span>,</span><span> </span><span>mdobj</span><span>,</span><span> 
+                             </span><span>alpha</span><span> </span><span>=</span><span> </span><span>0.1</span><span>,</span><span> </span><span>beta</span><span> </span><span>=</span><span> </span><span>0.1</span><span>)</span><span>
+
+</span><span>ts</span><span> </span><span>&lt;-</span><span> </span><span>75000</span><span>
+
+</span><span>dpList</span><span> </span><span>&lt;-</span><span> </span><span>mclapply</span><span>(</span><span>dpList</span><span>,</span><span> </span><span>Fit</span><span>,</span><span> </span><span>its</span><span>=</span><span>its</span><span>,</span><span> </span><span>progressBar</span><span>=</span><span>F</span><span>,</span><span> </span><span>mc.cores</span><span>=</span><span>3</span><span>)</span><span>
+</span><span>endTime</span><span> </span><span>&lt;-</span><span> </span><span>now</span><span>()</span><span>
+</span></code></pre></div></div>
+
+<p>We fit two different DPHMM with different starting parameters to assess
+how the dependent the number of states is on these parameters. We fit
+each DP for 75000 iterations and will discard the first 37500
+iterations as burnin. The fitting took 17.5 minutes on my late 2013
+MacBook Pro.</p>
+
+<p>We use the <code>coda</code> package to assess whether the <span id="MathJax-Element-3-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>&amp;#x03B1;</mi><mo>,</mo><mi>&amp;#x03B2;</mi></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>α</mi><mo>,</mo><mi>β</mi></math></span></span> values
+have converged to similar values.</p>
+
+<div><div><pre><code><span>paramCoda</span><span> </span><span>&lt;-</span><span> </span><span>mcmc.list</span><span>(</span><span>lapply</span><span>(</span><span>dpList</span><span>,</span><span> 
+                              </span><span>function</span><span>(</span><span>x</span><span>)</span><span> </span><span>mcmc</span><span>(</span><span>cbind</span><span>(</span><span>Alpha</span><span> </span><span>=</span><span> </span><span>x</span><span>$</span><span>alphaChain</span><span>,</span><span> 
+                                                     </span><span>Beta</span><span> </span><span>=</span><span> </span><span>x</span><span>$</span><span>betaChain</span><span>))))</span><span>
+
+</span><span>gelman.diag</span><span>(</span><span>paramCoda</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<div><div><pre><code>## Potential scale reduction factors:
+## 
+##       Point est. Upper C.I.
+## Alpha       1.04       1.08
+## Beta        1.00       1.00
+## 
+## Multivariate psrf
+## 
+## 1.01
+</code></pre></div></div>
+
+<p>This shows that everything has converged nicely. For more information on
+convergence of Dirichlet processes you can read my previous blog post
+<a href="http://dm13450.github.io/2020/01/11/Dirichlet-Convergence.html">here</a>.</p>
+
+<p>We now want to see what state each data point has been assigned.</p>
+
+<div><div><pre><code><span>averageStateAllocation1</span><span> </span><span>&lt;-</span><span> </span><span>rowMeans</span><span>(</span><span>data.frame</span><span>(</span><span>dpList</span><span>[[</span><span>1</span><span>]]</span><span>$</span><span>statesChain</span><span>[</span><span>-</span><span>(</span><span>1</span><span>:</span><span>its</span><span>/</span><span>2</span><span>)]))</span><span>
+</span><span>averageStateAllocation2</span><span> </span><span>&lt;-</span><span> </span><span>rowMeans</span><span>(</span><span>data.frame</span><span>(</span><span>dpList</span><span>[[</span><span>2</span><span>]]</span><span>$</span><span>statesChain</span><span>[</span><span>-</span><span>(</span><span>1</span><span>:</span><span>its</span><span>/</span><span>2</span><span>)]))</span><span>
+
+</span><span>avgStates</span><span> </span><span>&lt;-</span><span> </span><span>rbind</span><span>(</span><span>
+  </span><span>data.frame</span><span>(</span><span>Time</span><span> </span><span>=</span><span> </span><span>trainFrame</span><span>$</span><span>timestamp</span><span>,</span><span> </span><span>StateAllocation</span><span> </span><span>=</span><span> </span><span>averageStateAllocation1</span><span>,</span><span> </span><span>Params</span><span> </span><span>=</span><span> </span><span>"1"</span><span>),</span><span>
+  </span><span>data.frame</span><span>(</span><span>Time</span><span> </span><span>=</span><span> </span><span>trainFrame</span><span>$</span><span>timestamp</span><span>,</span><span> </span><span>StateAllocation</span><span> </span><span>=</span><span> </span><span>averageStateAllocation2</span><span>,</span><span> </span><span>Params</span><span> </span><span>=</span><span> </span><span>"0.1"</span><span>)</span><span>
+  </span><span>)</span><span>
+
+</span><span>avgStates</span><span> </span><span>%&gt;%</span><span> </span><span>gather</span><span>(</span><span>Model</span><span>,</span><span> </span><span>StateAllocation</span><span>,</span><span> </span><span>-</span><span>Params</span><span>)</span><span> </span><span>-&gt;</span><span> </span><span>avgStatesTidy</span><span>
+
+</span><span>ggplot</span><span>(</span><span>avgStates</span><span>,</span><span> </span><span>aes</span><span>(</span><span>x</span><span>=</span><span>Time</span><span>,</span><span> </span><span>y</span><span>=</span><span>StateAllocation</span><span>,</span><span> </span><span>colour</span><span>=</span><span>Params</span><span>))</span><span> </span><span>+</span><span> 
+  </span><span>geom_point</span><span>()</span><span> </span><span>+</span><span> 
+  </span><span>theme</span><span>(</span><span>legend.position</span><span> </span><span>=</span><span> </span><span>"bottom"</span><span>)</span><span> </span><span>+</span><span>
+  </span><span>xlab</span><span>(</span><span>""</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>ylab</span><span>(</span><span>"Average State Allocation"</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<p><img src="http://dm13450.github.io/assets/HMMFinPost_files/figure-gfm/unnamed-chunk-6-1.png" alt=""><!-- --></p>
+
+<p>When we plot the average state allocation for each point we can see that
+the two different DP models have similar state numbers with jumps at
+similar time. Each jump in state allocation shows a regime shift where
+the model feels that the next set of returns are better suited with new
+parameters.</p>
+
+<div><div><pre><code><span>stateAlloc</span><span> </span><span>&lt;-</span><span> </span><span>data.frame</span><span>(</span><span>dpList</span><span>[[</span><span>1</span><span>]]</span><span>$</span><span>statesChain</span><span>[</span><span>-</span><span>(</span><span>1</span><span>:</span><span>its</span><span>/</span><span>2</span><span>)])</span><span>
+</span><span>avg_alloc</span><span> </span><span>&lt;-</span><span> </span><span>rowMeans</span><span>(</span><span>stateAlloc</span><span>)</span><span>
+</span><span>lq_alloc</span><span> </span><span>&lt;-</span><span> </span><span>apply</span><span>(</span><span>stateAlloc</span><span>,</span><span> </span><span>1</span><span>,</span><span> </span><span>quantile</span><span>,</span><span> </span><span>probs</span><span> </span><span>=</span><span> </span><span>0.05</span><span>)</span><span>
+</span><span>uq_alloc</span><span> </span><span>&lt;-</span><span> </span><span>apply</span><span>(</span><span>stateAlloc</span><span>,</span><span> </span><span>1</span><span>,</span><span> </span><span>quantile</span><span>,</span><span> </span><span>probs</span><span> </span><span>=</span><span> </span><span>0.95</span><span>)</span><span>
+</span><span>allocFrame</span><span> </span><span>&lt;-</span><span> </span><span>data.frame</span><span>(</span><span>Time</span><span> </span><span>=</span><span> </span><span>trainFrame</span><span>$</span><span>timestamp</span><span>,</span><span> </span><span>AvgAlloc</span><span> </span><span>=</span><span> </span><span>avg_alloc</span><span>,</span><span> </span><span>LQ_Alloc</span><span>=</span><span>  </span><span>lq_alloc</span><span>,</span><span> </span><span>UQ_Alloc</span><span> </span><span>=</span><span> </span><span>uq_alloc</span><span>)</span><span>
+
+</span><span>ggplot</span><span>(</span><span>allocFrame</span><span>,</span><span> </span><span>aes</span><span>(</span><span>x</span><span>=</span><span>Time</span><span>,</span><span> </span><span>y</span><span>=</span><span>AvgAlloc</span><span>,</span><span> </span><span>ymin</span><span>=</span><span>LQ_Alloc</span><span>,</span><span> </span><span>ymax</span><span>=</span><span>UQ_Alloc</span><span>))</span><span> </span><span>+</span><span> 
+  </span><span>geom_line</span><span>()</span><span> </span><span>+</span><span> 
+  </span><span>geom_ribbon</span><span>(</span><span>alpha</span><span>=</span><span>0.25</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>xlab</span><span>(</span><span>""</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>ylab</span><span>(</span><span>"Average State Allocation"</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<p><img src="http://dm13450.github.io/assets/HMMFinPost_files/figure-gfm/unnamed-chunk-8-1.png" alt=""><!-- --></p>
+
+<p>This is a Bayesian model so we can easily extract out the uncertainty
+around the state allocations and get an idea about how confident we
+can be about each of the states. The black line above indicates the
+average state with the grey band around the line shows the 95%
+credible interval. We can see that the more recent states have been
+more uncertain.</p>
+
+<h3 id="state-parameters">State Parameters</h3>
+
+<p>Now that we know that there are states in the data we want to examine
+the actual values of the state parameters and see what that can tell
+us about the state of the world over time.</p>
+
+<div><div><pre><code><span>burnin</span><span> </span><span>&lt;-</span><span> </span><span>(</span><span>its</span><span>/</span><span>2</span><span>)</span><span>:</span><span>its</span><span>
+</span><span>allMus</span><span> </span><span>&lt;-</span><span> </span><span>vector</span><span>(</span><span>"list"</span><span>,</span><span> </span><span>length</span><span>(</span><span>burnin</span><span>))</span><span>
+</span><span>allSigmas</span><span> </span><span>&lt;-</span><span> </span><span>vector</span><span>(</span><span>"list"</span><span>,</span><span> </span><span>length</span><span>(</span><span>burnin</span><span>))</span><span>
+
+</span><span>for</span><span>(</span><span>i</span><span> </span><span>in</span><span> </span><span>seq_along</span><span>(</span><span>burnin</span><span>)){</span><span>
+  </span><span>allparams</span><span> </span><span>&lt;-</span><span> </span><span>dpList</span><span>[[</span><span>1</span><span>]]</span><span>$</span><span>paramChain</span><span>[[</span><span>burnin</span><span>[</span><span>i</span><span>]]][</span><span>dpList</span><span>[[</span><span>1</span><span>]]</span><span>$</span><span>statesChain</span><span>[[</span><span>burnin</span><span>[</span><span>i</span><span>]]]]</span><span>
+  </span><span>allMus</span><span>[[</span><span>i</span><span>]]</span><span> </span><span>&lt;-</span><span> </span><span>sapply</span><span>(</span><span>allparams</span><span>,</span><span> </span><span>"[["</span><span>,</span><span> </span><span>1</span><span>)</span><span>
+  </span><span>allSigmas</span><span>[[</span><span>i</span><span>]]</span><span> </span><span>&lt;-</span><span> </span><span>sapply</span><span>(</span><span>allparams</span><span>,</span><span> </span><span>"[["</span><span>,</span><span> </span><span>2</span><span>)</span><span>
+</span><span>}</span><span>
+</span><span>allMusMatrix</span><span> </span><span>&lt;-</span><span> </span><span>do.call</span><span>(</span><span>cbind</span><span>,</span><span> </span><span>allMus</span><span>)</span><span>
+</span><span>allSigmasMatrix</span><span> </span><span>&lt;-</span><span> </span><span>do.call</span><span>(</span><span>cbind</span><span>,</span><span> </span><span>allSigmas</span><span>)</span><span>
+
+</span><span>avgMus</span><span> </span><span>&lt;-</span><span> </span><span>rowMeans</span><span>(</span><span>allMusMatrix</span><span>)</span><span>
+</span><span>avgSigmas</span><span> </span><span>&lt;-</span><span> </span><span>rowMeans</span><span>(</span><span>allSigmasMatrix</span><span>)</span><span>
+
+</span><span>lqMus</span><span> </span><span>&lt;-</span><span> </span><span>apply</span><span>(</span><span>allMusMatrix</span><span>,</span><span> </span><span>1</span><span>,</span><span> </span><span>quantile</span><span>,</span><span> </span><span>probs</span><span>=</span><span>0.05</span><span>)</span><span>
+</span><span>uqMus</span><span> </span><span>&lt;-</span><span> </span><span>apply</span><span>(</span><span>allMusMatrix</span><span>,</span><span> </span><span>1</span><span>,</span><span> </span><span>quantile</span><span>,</span><span> </span><span>probs</span><span>=</span><span>0.95</span><span>)</span><span>
+
+</span><span>lqSigmas</span><span> </span><span>&lt;-</span><span> </span><span>apply</span><span>(</span><span>allSigmasMatrix</span><span>,</span><span> </span><span>1</span><span>,</span><span> </span><span>quantile</span><span>,</span><span> </span><span>probs</span><span>=</span><span>0.05</span><span>)</span><span>
+</span><span>uqSigmas</span><span> </span><span>&lt;-</span><span> </span><span>apply</span><span>(</span><span>allSigmasMatrix</span><span>,</span><span> </span><span>1</span><span>,</span><span> </span><span>quantile</span><span>,</span><span> </span><span>probs</span><span>=</span><span>0.95</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<p>Give that we are convinced that the two fitting runs have converged to
+the same result, we will take the values from the first object to
+conduct the rest of our analysis.</p>
+
+<div><div><pre><code><span>trainFrame</span><span> </span><span>%&gt;%</span><span> 
+  </span><span>mutate</span><span>(</span><span>AvgState</span><span> </span><span>=</span><span> </span><span>averageStateAllocation1</span><span>,</span><span> 
+         </span><span>Mu</span><span> </span><span>=</span><span> </span><span>avgMus</span><span>,</span><span> 
+         </span><span>LQ_Mu</span><span> </span><span>=</span><span> </span><span>lqMus</span><span>,</span><span>
+         </span><span>UQ_Mu</span><span> </span><span>=</span><span> </span><span>uqMus</span><span>,</span><span>
+         </span><span>Sigma</span><span> </span><span>=</span><span> </span><span>avgSigmas</span><span>,</span><span>
+         </span><span>LQ_Sigma</span><span> </span><span>=</span><span> </span><span>lqSigmas</span><span>,</span><span> 
+         </span><span>UQ_Sigma</span><span> </span><span>=</span><span> </span><span>uqSigmas</span><span>,</span><span>
+         </span><span>DiffState</span><span> </span><span>=</span><span> </span><span>c</span><span>(</span><span>NA</span><span>,</span><span> </span><span>diff</span><span>(</span><span>AvgState</span><span>)),</span><span>
+         </span><span>StateChange</span><span> </span><span>=</span><span> </span><span>if_else</span><span>(</span><span>DiffState</span><span> </span><span>&gt;</span><span> </span><span>0.05</span><span>,</span><span> </span><span>1</span><span>,</span><span> </span><span>0</span><span>))</span><span> </span><span>-&gt;</span><span> </span><span>trainFrame</span><span>
+
+</span><span>trainFrame</span><span> </span><span>%&gt;%</span><span> </span><span>filter</span><span>(</span><span>StateChange</span><span> </span><span>!=</span><span> </span><span>0</span><span>)</span><span> </span><span>-&gt;</span><span> </span><span>stateChangesDF</span><span>
+</span><span>trainFrame</span><span> </span><span>%&gt;%</span><span> </span><span>mutate</span><span>(</span><span>PlotColour</span><span> </span><span>=</span><span> </span><span>if_else</span><span>(</span><span>Mu</span><span> </span><span>&gt;</span><span> </span><span>0</span><span>,</span><span> </span><span>"Positive"</span><span>,</span><span> </span><span>"Negative"</span><span>))</span><span> </span><span>-&gt;</span><span> </span><span>trainFrame</span><span>
+
+</span><span>ggplot</span><span>(</span><span>trainFrame</span><span>,</span><span> </span><span>aes</span><span>(</span><span>x</span><span>=</span><span>timestamp</span><span>,</span><span> </span><span>y</span><span>=</span><span>adjusted_close</span><span>,</span><span> </span><span>colour</span><span>=</span><span>PlotColour</span><span>))</span><span> </span><span>+</span><span> 
+  </span><span>geom_point</span><span>(</span><span>size</span><span> </span><span>=</span><span> </span><span>0.5</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>#geom_vline(data=stateChangesDF, aes(xintercept=timestamp), linetype="longdash") + </span><span>
+  </span><span>theme</span><span>(</span><span>legend.position</span><span> </span><span>=</span><span> </span><span>"bottom"</span><span>,</span><span> </span><span>legend.title</span><span> </span><span>=</span><span> </span><span>element_blank</span><span>())</span><span> </span><span>+</span><span> 
+  </span><span>xlab</span><span>(</span><span>""</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>ylab</span><span>(</span><span>"Price"</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<p><img src="http://dm13450.github.io/assets/HMMFinPost_files/figure-gfm/unnamed-chunk-11-1.png" alt=""><!-- --></p>
+
+<p>Here we have plotted the closing price of the SPY ETF over time, with the
+dashed lines separating the different states that the model has found
+and then the colours indicating whether we are in a positive return
+period (bull) <span id="MathJax-Element-4-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>&amp;#x03BC;</mi><mo>&amp;gt;</mo><mn>0</mn></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>μ</mi><mo>&gt;</mo><mn>0</mn></math></span></span> or a negative return period (bear) <span id="MathJax-Element-5-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>&amp;#x03BC;</mi><mo>&amp;lt;</mo><mn>0</mn></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>μ</mi><mo>&lt;</mo><mn>0</mn></math></span></span>. Most of
+the time we’ve been in continual positive return, with only the
+volatility changing. We can see though that the Great Financial Crisis
+had a negative return period, as did early 2018. Unsurprisingly we are
+just leaving a negative return period and have transitioned into a
+positive return state as the world adjusts to the ‘new normal’. Funnily enough I’ve had this blog
+post sitting in the drafts for a while, I didn’t like the fact that it
+was constantly in a positive return state so be careful what you
+wish for I suppose.</p>
+
+<div><div><pre><code><span>ggplot</span><span>(</span><span>trainFrame</span><span>,</span><span> </span><span>aes</span><span>(</span><span>x</span><span>=</span><span>timestamp</span><span>,</span><span> </span><span>y</span><span>=</span><span>Mu</span><span>,</span><span> </span><span>ymin</span><span>=</span><span>LQ_Mu</span><span>,</span><span> </span><span>ymax</span><span>=</span><span>UQ_Mu</span><span>))</span><span> </span><span>+</span><span> 
+  </span><span>geom_hline</span><span>(</span><span>yintercept</span><span> </span><span>=</span><span> </span><span>0</span><span>,</span><span> </span><span>linetype</span><span> </span><span>=</span><span> </span><span>"dashed"</span><span>)</span><span> </span><span>+</span><span>
+  </span><span>geom_line</span><span>()</span><span> </span><span>+</span><span> 
+  </span><span>geom_ribbon</span><span>(</span><span>alpha</span><span>=</span><span>0.25</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>xlab</span><span>(</span><span>""</span><span>)</span><span>
+  
+</span><span>ggplot</span><span>(</span><span>trainFrame</span><span>,</span><span> </span><span>aes</span><span>(</span><span>x</span><span>=</span><span>timestamp</span><span>,</span><span> </span><span>y</span><span>=</span><span>Sigma</span><span>,</span><span> </span><span>ymin</span><span>=</span><span>LQ_Sigma</span><span>,</span><span> </span><span>ymax</span><span>=</span><span>UQ_Sigma</span><span>))</span><span> </span><span>+</span><span> 
+  </span><span>geom_line</span><span>()</span><span> </span><span>+</span><span>
+  </span><span>geom_ribbon</span><span>(</span><span>alpha</span><span> </span><span>=</span><span> </span><span>0.25</span><span>)</span><span> </span><span>+</span><span> 
+  </span><span>xlab</span><span>(</span><span>""</span><span>)</span><span>
+</span></code></pre></div></div>
+
+<p><img src="http://dm13450.github.io/assets/HMMFinPost_files/figure-gfm/unnamed-chunk-12-1.png" alt=""><!-- --></p>
+
+<p>Here we can see that there have only been four states with negative
+average <span id="MathJax-Element-6-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>&amp;#x03BC;</mi></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>μ</mi></math></span></span> and the most recent negative state was very
+negative. The rest are all positive each with slightly different
+volatility.</p>
+
+<p>This <span id="MathJax-Element-7-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>&amp;#x03C3;</mi></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>σ</mi></math></span></span> parameter is distributed around 1 because we
+normalised the return with the standard deviation so any changes in
+this parameter must also be combined with the rolling volatility we
+calculated at the start. Most recently the volatility has seen more
+changes with a particularly high spike during the COVID crisis.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>We have broken away from the typical Markov model and instead learnt
+the best fitting amount of states from the data which each also have
+their own parameters.</p>
+
+<p>From these results it looks like we are through the worst of the
+negative returns and have transitioned into a positive return state
+with smaller volatility which you could use as evidence to rotate
+back into stocks as this new state. However it is not exactly
+predictive as we don’t know when the state will change next until we
+observe the new returns. We could empirically calculate the average
+length of state, but just by looking at the average state allocations
+we can see that the recent market behaviour is leading to large
+uncertainty as to where we actually are.</p>
+
+<p>Overall, this type of model is useful for quantifying the types of
+states a time-series has gone through which helps us make judgement what
+is likely to happen in the future, or the short term future at least.
+You could start looking at other asset classes (TLT, GLD etc.) to see if
+they have gone through similar state changes and use that to make asset
+allocation decisions, i.e.&nbsp;SPY is now in a negative state so we should
+rotate to GLD if it is in a positive state, or even a negative state
+with smaller volatility!</p>
+
+<h2 id="further-reading">Further Reading</h2>
+
+<ul>
+  <li>The GitHub page for my package
+<a href="https://github.com/dm13450/dirichletprocess">dirichletprocess</a></li>
+  <li>The original paper <a href="https://arxiv.org/pdf/1505.01665.pdf">here</a></li>
+</ul>
+
+
+  </div>
+
+  
+    
+
+  
+  
+  
+
+
+  
+
+  
+</article>
+
+      </div>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Taming Webpack&#x2BC;s content hashes - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Taming Webpack&#x2BC;s content hashes - linksfor.dev(s)"/>
+    <meta property="article:author" content="Matt Hinchliffe"/>
+    <meta property="og:description" content="We wanted our collection of microservices share and reuse the assets they compile. How hard could that be?"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.matthinchliffe.dev/2020/06/03/taming-webpacks-content-hashes.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Taming Webpack&#x2BC;s content hashes</title>
+<div class="readable">
+        <h1>Taming Webpack&#x2BC;s content hashes</h1>
+            <div>by Matt Hinchliffe</div>
+            <div>Reading time: 9-12 minutes</div>
+        <div>Posted here: 04 Jun 2020</div>
+        <p><a href="https://www.matthinchliffe.dev/2020/06/03/taming-webpacks-content-hashes.html">https://www.matthinchliffe.dev/2020/06/03/taming-webpacks-content-hashes.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+    <main role="main">
+      <article itemscope="" itemtype="http://schema.org/BlogPosting">
+  
+
+  <div itemprop="articleBody">
+    <p>Like many websites FT.com is not a single application but a collection of microservices and as you browse the site you’re likely to cross between several independent applications. This raises challenges for delivering the front-end because we need to make sure that this experience is seamless and we maintain a consistent interface.</p>
+
+<p>When we rebuilt the site in 2015 we created a shared UI module which provided the global user interface, commonly used components, and all sorts of other useful bits. This module ensured our services maintained a high level of consistency but it wasn’t very efficient because it required our users to redownload the same assets over and over again as they moved around the site.</p>
+
+<p><img src="https://www.matthinchliffe.dev/images/2020/code-split-1.png" alt="Diagram showing original no code splitting strategy"></p>
+
+<p>We knew this wasn’t good for performance so we started shipping precompiled bundles of code with our shared UI module and instructed our services to exclude anything they could reuse from them. After this change around 25% of the JavaScript needed by FT.com could be downloaded once and not fetched again as you browsed the website - a big win considering <a href="https://v8.dev/blog/cost-of-javascript-2019">the cost of JavaScript</a>!</p>
+
+<p><img src="https://www.matthinchliffe.dev/images/2020/code-split-2.png" alt="Diagram showing old partial code splitting strategy"></p>
+
+<p>Whilst this strategy was good it wasn’t perfect; it meant pushing code that was not always needed, it could be tricky to work with locally, it was an occasional single point of failure (not very microservices!), and we <a href="https://www.keycdn.com/support/what-is-cache-busting">bust the cache</a> regularly - forcing our users to redownload everything again anyway.</p>
+
+<p>When <a href="https://medium.com/ft-product-technology/designing-a-sustainable-front-end-toolset-for-ft-com-f37c59d27eeb">we rebuilt the front-end toolset for FT.com</a> last year we wanted to avoid all of these pitfalls. Our plan was to enable our services to share as much client-side code as possible whilst also improving the developer experience, remove any single point of failure, and allow our users to cache the assets they download for longer.</p>
+
+<p>To achieve all of these things we decided to split up the client-side CSS and JS that our services compiled into lots of separate pieces and deploy them all to the same place. Our theory was that this would create a pool of shared resources that any service could call upon.</p>
+
+<p><img src="https://www.matthinchliffe.dev/images/2020/code-split-3.png" alt="Diagram showing planned full code splitting strategy"></p>
+
+<p><em>All we had to do</em> to implement this strategy was make sure that our services compiled the same assets with the same names. How hard could that be?</p>
+
+<h2 id="code-splitting">Code splitting</h2>
+
+<p>The first concept we needed to learn was how to use <a href="https://developers.google.com/web/fundamentals/performance/optimizing-javascript/code-splitting/">code splitting</a> effectively. In short, code splitting enables you to break apart one big bundle of code into smaller <em>chunks</em>.</p>
+
+<p>Bundling up code only to break it apart again sounds strange but it’s a useful tool for minimising cache invalidation (e.g. separating code that changes often from code which changes less often) and loading code only when it’s needed (e.g. loading a component only when it is scrolled into view.)</p>
+
+<p>Most popular JavaScript bundlers support <em>dynamic</em> code splitting by using the <code>import()</code> function but we couldn’t rewrite all of our services and their many dependencies to use dynamic imports. Our only option was to utilise Webpack because it’s currently the only bundler which supports <a href="https://webpack.js.org/plugins/split-chunks-plugin/">a configuration based method</a> for code splitting that we could centralise and share.</p>
+
+<p>After configuring our code splitting rules I thought we were done.</p>
+
+<h2 id="the-problem">The problem</h2>
+
+<p>In August last year we started shipping <a href="https://github.com/Financial-Times/dotcom-page-kit/">Page Kit</a>, our new front-end toolset, and after celebrating the first few migrations going live I decided to check how our plan was going.</p>
+
+<p><em>Shit!</em></p>
+
+<p>The only code our Page Kit powered services were sharing was the tiny Webpack runtime (about 2kb) and nothing else! Although the services had all generated chunks with the same names as we had planned they had not created them with the same <em>content hash</em>:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Service A</th>
+      <th>Service B</th>
+      <th>Matches?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span>webpack-runtime.53ab.js</span></td>
+      <td><span>webpack-runtime.53ab.js</span></td>
+      <td>✅</td>
+    </tr>
+    <tr>
+      <td><span>o-header.48cb.js</span></td>
+      <td><span>o-header.5ea8.js</span></td>
+      <td>❌</td>
+    </tr>
+    <tr>
+      <td><span>o-footer.82b8.js</span></td>
+      <td><span>o-footer.bca3.js</span></td>
+      <td>❌</td>
+    </tr>
+    <tr>
+      <td><span>o-tabs.c77f.js</span></td>
+      <td><span>o-date.c7e7.js</span></td>
+      <td>❌</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>I hurriedly downloaded and unminified a few files to see what the differences between them could be. Across the files I looked at there appeared to be only one small but repeated difference: the <em>module IDs</em> did not match.</p>
+
+<h2 id="what-are-module-ids">What are Module IDs?</h2>
+
+<p>When Webpack builds the <a href="https://webpack.js.org/concepts/dependency-graph/">dependency graph</a> for your project it gives each file, or module, it finds a unique ID. Before outputting your JavaScript bundles Webpack will replace every <code>import</code> statement and <code>require()</code> call in your source code with its own mechanism for resolving modules which uses these IDs. For example, <code>import React from "react"</code> could become <code>__webpack_require__("ID")</code>.</p>
+
+<p>By default when Webpack is run in development mode a module’s ID will be its relative path on disk (e.g. <code>./src/utilities.js</code> or <code>./node_modules/react/index.js</code>) but using paths means that the IDs can get quite long, may vary between users and project installs, and possibly even reveal something they shouldn’t, so in production mode Webpack uses simple numerical values instead. This value is assigned incrementally, so the first module added to the dependency graph will have an ID of <code>1</code>, the second <code>2</code>, etc.</p>
+
+<p>The reason why our modules had different IDs is because the order they are found and added to the dependency graph is different for each service.</p>
+
+<p>Fortunately, Webpack allows you to choose which <a href="https://webpack.js.org/configuration/optimization/#optimizationmoduleids">module ID algorithm</a> to use or even provide your own (which <a href="https://github.com/i-like-robots/reliable-module-ids-plugin/">we did</a>.) With the module ID problem now sorted I tested again.</p>
+
+<p><em>Nope!</em></p>
+
+<p>The services I tested were now compiling a few matching chunks but the majority still had different hashes despite often looking the same inside.</p>
+
+<h2 id="what-is-a-content-hash">What is a content hash?</h2>
+
+<p>Webpack makes adding hashes to your file names very easy, you only need to add a <code>[contenthash]</code> placeholder to your output filename and a hash will magically appear in its place when the file is written.</p>
+
+<p>I had long assumed that Webpack’s content hashes were like a <a href="https://en.wikipedia.org/wiki/File_verification">file verification checksum</a> but the struggle we were having showed that this assumption must be wrong. Searching GitHub and Google I only found more confusion so I started digging into Webpack’s source code to find answers. From this I discovered:</p>
+
+<ol>
+  <li>Each chunk’s content hash is created by combining some metadata about the chunk, the chunk’s ID, and the hashes of all the modules it contains…</li>
+  <li>Each module also has a hash. How this is generated varies between the different types of module but they’re mostly some combination of the module’s ID, the IDs of its dependencies, the original source file contents, and a list of its <em>used exports</em>.</li>
+</ol>
+
+<p>Equipped with this new knowledge I tapped into Webpack using its <a href="https://webpack.js.org/api/compilation-hooks/">compilation hooks</a> to log information about the modules contained in the mismatched chunks.</p>
+
+<p><em>Ah-ha!</em></p>
+
+<p>Skimming through the long list of differences between the logs I could see that it was the lists of used exports which were not always the same.</p>
+
+<h2 id="what-are-used-exports">What are used exports?</h2>
+
+<p>When a JavaScript module is added to the dependency graph Webpack will create a list of the properties it exports and each time that module is imported it will try to track which of those properties gets used (it’s this clever feature that enables <a href="https://developers.google.com/web/fundamentals/performance/optimizing-javascript/tree-shaking">tree shaking</a> by “pruning” any unused properties.)</p>
+
+<p>The reason this was affecting our content hashes was because our services do not all integrate and use their dependencies in the same way.</p>
+
+<figure>
+
+<img src="https://www.matthinchliffe.dev/images/2020/module-log-diff.png" alt="Screenshot of module log differences">
+
+<figcaption>
+<p>By comparing logs of module metadata I could find the differences between services.</p>
+</figcaption>
+</figure>
+
+<p>Solving this was tricky because we still wanted to allow tree shaking in any non-reusable code but disable it in the reusable code. Webpack does not currently allow this level of control via an option but it is possible via a plugin so <a href="https://github.com/i-like-robots/disable-tree-shaking-for-chunk-plugin/">I hacked one together</a>. Feeling confident that the used exports problem was now fixed I tested once more.</p>
+
+<p><em>Arghh!</em></p>
+
+<p>Now I had a few more matching chunks than before but about half of them still had different hashes. The contents of all the chunks I looked at appeared to be identical so I used my logging plugin again to find out what the differences could be and I eventually found where to look.</p>
+
+<h2 id="what-is-babelruntime">What is @babel/runtime?</h2>
+
+<p>We use Babel to compile the modern JavaScript and syntax extensions we use in our source code into plain ES5 which can be run by all of the browsers we support. For some transformations helper functions may be imported from a package called <code>@babel/runtime</code>. By default the code for these helpers will be injected into every module which needs them but to avoid duplication Babel <a href="https://babeljs.io/docs/en/babel-plugin-transform-runtime">can be configured</a> to depend on the external package instead, which we had done.</p>
+
+<p>Just like the problems caused by changing module IDs and used exports which helper functions are needed and how they are used varies between our services and because they’re so widely depended upon this was causing a cascade of content hash changes that spread throughout the dependency graph.</p>
+
+<p>To resolve this we chose to disable the use of the external <code>@babel/runtime</code> package. Injecting the helpers was not only simpler but the difference in code size was negligible (~1-3kb in total) and because <a href="https://github.com/terser/terser">the JavaScript optimiser</a> is so clever this change meant hundreds of function calls could actually be cleaned away!</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>The services that make up FT.com can now often share and reuse the majority of the JavaScript they compile - in some cases over 90%. We don’t currently know the impact this has had on site-wide performance nor user behaviour so we don’t actually know if it was worth it but our working theory is that we did <em>a good thing</em>.</p>
+
+<p>Our simple idea became a tough battle (and I haven’t documented the real frustration, missteps, and blind luck) but I hope that the next version of Webpack will remove the need for many of the workarounds we had to find and implement. Webpack 5 has new algorithms for module hashes, a proper API for disabling tree shaking on modules, and <a href="https://webpack.js.org/concepts/module-federation/">module federation</a> could supersede all of this.</p>
+
+<p><img src="https://www.matthinchliffe.dev/images/2020/you-win.gif" alt="Tekken winning animation"></p>
+
+<hr>
+
+<p>Thank you to <a href="https://medium.com/@mags_40745">Maggie Allen</a> and <a href="http://www.wheresrhys.co.uk/">Rhys Evans</a> for proofreading this article 🙇‍♂️</p>
+
+  </div>
+
+  
+  
+  
+
+</article>
+
+    </main>
+
+  </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

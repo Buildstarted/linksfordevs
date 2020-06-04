@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Why does this lazy sequence work? | Phillippe Siclait - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Why does this lazy sequence work? | Phillippe Siclait - linksfor.dev(s)"/>
+    <meta property="og:description" content="I explore a succinct, corecursive definition for the sequence of prime numbers in Clojure &#x2014; and why it works."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://phillippe.siclait.com/blog/primes-lazy-sequence"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Why does this lazy sequence work? | Phillippe Siclait</title>
+<div class="readable">
+        <h1>Why does this lazy sequence work? | Phillippe Siclait</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 04 Jun 2020</div>
+        <p><a href="https://phillippe.siclait.com/blog/primes-lazy-sequence">https://phillippe.siclait.com/blog/primes-lazy-sequence</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><article><p>3 June 2020</p><p>I explore a succinct, corecursive definition for the sequence of prime numbers in Clojure — and why it works.</p><p>In the comments of a <a href="https://stackoverflow.com/questions/62007445/infinitely-recursive-lazy-sequence-appears-as-empty-sequence-in-clojure">recent Stack Overflow question</a>, one user proposed a succinct expression for generating prime numbers in Clojure using <a href="https://en.wikipedia.org/wiki/Generation_of_primes">trial division</a>. There exist more efficient algorithms for generating prime numbers, but this one’s brevity makes it interesting.</p><pre><code><span id="pair-6-close">(</span><span>def</span> primes <span id="pair-5-close">(</span><span>remove</span>
+              <span id="pair-3-close">(</span><span>fn</span> <span id="pair-7-close">[</span>x<span id="pair-7-open">]</span>
+                <span id="pair-2-close">(</span><span>some</span> #<span id="pair-1-close">(</span><span>zero?</span> <span id="pair-0-close">(</span>mod x %<span id="pair-0-open">)</span><span id="pair-1-open">)</span> primes<span id="pair-2-open">)</span><span id="pair-3-open">)</span>
+              <span id="pair-4-close">(</span><span>iterate</span> <span>inc</span> <span>2</span><span id="pair-4-open">)</span><span id="pair-5-open">)</span><span id="pair-6-open">)</span></code></pre><p>This definition uses <a href="https://en.wikipedia.org/wiki/Lazy_evaluation">lazy evaluation</a> to create an infinite sequence that only calculates prime numbers when they are needed. For example, we can use this sequence to find the first ten primes,</p><pre><code>user=<span>&gt;</span> <span id="pair-8-close">(</span><span>take</span> <span>10</span> primes<span id="pair-8-open">)</span>
+<span id="pair-9-close">(</span><span>2</span> <span>3</span> <span>5</span> <span>7</span> <span>11</span> <span>13</span> <span>17</span> <span>19</span> <span>23</span> <span>29</span><span id="pair-9-open">)</span></code></pre><p>or we can use it to find the 10,000th prime,</p><pre><code>user=<span>&gt;</span> <span id="pair-11-close">(</span><span>nth</span> primes <span id="pair-10-close">(</span><span>dec</span> <span>10000</span><span id="pair-10-open">)</span><span id="pair-11-open">)</span>
+<span>104729</span></code></pre><p>and in each case, only the primes we need have been calculated.</p><p>When I first saw this definition, I was surprised that it worked. The predicate that we pass to the <code>remove</code> function iterates over every element in <code>primes</code> to determine if <code>x</code> is prime. But if that’s the case, then how does this expression terminate? It must be that the inner reference to <code>primes</code> only contains the primes we’ve seen so far. But why?</p><p>My first thought was to trace through the code using the CIDER debugger. Unfortunately, when I tried stepping through the code with the debugger, the process froze. I’m not sure why this happened, but I’d like to explore it in the future.</p><p>Given that the debugger failed, I decided to use my mental debugger and trace the code by reading it. This led me into the code for various core library functions — <code>remove</code>, <code>some</code>, <code>filter</code>, <code>lazy-seq</code> etc — as well as the Java code for the <code>clojure.lang.LazySeq</code> class. Reading the code for the <a href="https://github.com/clojure/clojure/blob/38bafca9e76cd6625d8dce5fb6d16b87845c8b9d/src/clj/clojure/core.clj#L683">lazy-seq</a> macro and the <a href="https://github.com/clojure/clojure/blob/30a36cbe0ef936e57ddba238b7fa6d58ee1cbdce/src/jvm/clojure/lang/LazySeq.java">LazySeq</a> class gave me a better understanding of lazy sequences in Clojure and this <a href="https://en.wikipedia.org/wiki/Corecursion">corecursive</a> definition for primes. Now, I’ll lead us through this code to explain why it works.</p><p>The <code>lazy-seq</code> macro is simple.</p><pre><code><span id="pair-14-close">(</span><span>defmacro</span> lazy-seq
+  <span>"Takes a body of expressions that returns an ISeq or nil, and yields
+  a Seqable object that will invoke the body only the first time seq
+  is called, and will cache the result and return it on all subsequent
+  seq calls. See also - realized?"</span>
+  <span id="pair-17-close">{</span><span>:added</span> <span>"1.0"</span><span id="pair-17-open">}</span>
+  <span id="pair-15-close">[</span>&amp; body<span id="pair-15-open">]</span>
+  <span id="pair-13-close">(</span><span>list</span> <span>'new</span> <span>'clojure</span>.lang.LazySeq <span id="pair-12-close">(</span><span>list*</span> '^<span id="pair-18-close">{</span><span>:once</span> <span>true</span><span id="pair-18-open">}</span> fn* <span id="pair-16-close">[</span><span id="pair-16-open">]</span> body<span id="pair-12-open">)</span><span id="pair-13-open">)</span><span id="pair-14-open">)</span></code></pre><p>Given a definition for a lazy sequence such as</p><pre><code><span id="pair-26-close">(</span><span>defn</span> integers
+  <span id="pair-20-close">(</span><span id="pair-27-close">[</span><span id="pair-27-open">]</span>
+    <span id="pair-19-close">(</span>integers <span>1</span><span id="pair-19-open">)</span><span id="pair-20-open">)</span>
+  <span id="pair-25-close">(</span><span id="pair-28-close">[</span>n<span id="pair-28-open">]</span>
+    <span id="pair-24-close">(</span>lazy-seq <span id="pair-23-close">(</span><span>cons</span> n <span id="pair-22-close">(</span>integers <span id="pair-21-close">(</span><span>inc</span> n<span id="pair-21-open">)</span><span id="pair-22-open">)</span><span id="pair-23-open">)</span><span id="pair-24-open">)</span><span id="pair-25-open">)</span><span id="pair-26-open">)</span></code></pre><p>The macro expands a call to <code>(integers)</code> into,</p><pre><code><span id="pair-33-close">(</span><span>new</span> clojure.lang.LazySeq
+  <span id="pair-32-close">(</span>^<span>:once</span> fn* <span id="pair-34-close">[</span><span id="pair-34-open">]</span> <span id="pair-31-close">(</span><span>cons</span> <span>1</span> <span id="pair-30-close">(</span>integers <span id="pair-29-close">(</span><span>inc</span> <span>1</span><span id="pair-29-open">)</span><span id="pair-30-open">)</span><span id="pair-31-open">)</span><span id="pair-32-open">)</span><span id="pair-33-open">)</span></code></pre><p>which creates an instance of <code>LazySeq</code> with a single functon argument.</p><p>A <code>LazySeq</code> is an object with three fields,</p><pre><code><span>private</span> <span>IFn</span> fn<span>;</span>
+<span>private</span> <span>Object</span> sv<span>;</span>
+<span>private</span> <span>ISeq</span> s<span>;</span></code></pre><p><code>fn</code> is the function argument that returns the value of the realized sequence. A common pattern for lazy sequences is for this returned value to be a <code>cons</code> of the next value of the sequence and another lazy sequence containing the rest. For example, in the above definition for a lazy sequence of integers from  to , the function argument <code>fn</code> is defined</p><pre><code><span id="pair-38-close">(</span>^<span>:once</span> fn* <span id="pair-39-close">[</span><span id="pair-39-open">]</span> <span id="pair-37-close">(</span><span>cons</span> <span>1</span> <span id="pair-36-close">(</span>integers <span id="pair-35-close">(</span><span>inc</span> <span>1</span><span id="pair-35-open">)</span><span id="pair-36-open">)</span><span id="pair-37-open">)</span><span id="pair-38-open">)</span></code></pre><p><code>sv</code> is the result of calling <code>fn</code>. This intermediate value is a sequence that may or may not be another lazy sequence.</p><p><code>s</code> is the cached result of calling <code>seq</code> on the lazy sequence.</p><p>This object goes through a series of states as the values for these variables are set and unset. A lazy sequence is <strong>realized</strong> after <code>seq</code> has been called on it. Internally this is represented by setting the <code>fn</code> field of the lazy sequence to null.</p><p>When the <code>integers</code> sequence above is realized, its cached sequence value <code>s</code> is equal to the return value of the function argument,</p><pre><code><span id="pair-42-close">(</span><span>cons</span> <span>1</span> <span id="pair-41-close">(</span>integers <span id="pair-40-close">(</span><span>inc</span> <span>1</span><span id="pair-40-open">)</span><span id="pair-41-open">)</span><span id="pair-42-open">)</span></code></pre><p>Now, let’s walk through the definition of <code>primes</code> to see why the inner reference to <code>primes</code> is a sequence containing the prime numbers seen so far.</p><p>When <code>primes</code> is defined, a <code>LazySeq</code> object is created. On calling a function to realize the values of <code>primes</code>, such as <code>take</code>, <code>seq</code> is called on this lazy sequence. Tracing the <code>seq</code> call, we eventually get to line 3 of the following code snippet where we call the underlying <code>fn</code> that returns the sequence.</p><pre data-line="3,4"><code><span>final</span> <span>synchronized</span> <span>Object</span> <span>sval</span><span>(</span><span>)</span> <span>{</span>
+    <span>if</span> <span>(</span>fn <span>!=</span> <span>null</span><span>)</span> <span>{</span>
+        sv <span>=</span> fn<span>.</span><span>invoke</span><span>(</span><span>)</span><span>;</span>
+        fn <span>=</span> <span>null</span><span>;</span>
+    <span>}</span>
+    <span>if</span> <span>(</span>sv <span>!=</span> <span>null</span><span>)</span>
+        <span>return</span> sv<span>;</span>
+    <span>return</span> s<span>;</span>
+<span>}</span></code></pre><p>This call eventually returns something that looks like,</p><pre><code><span id="pair-44-close">(</span><span>cons</span> <span>2</span> <span id="pair-43-close">(</span>lazy-seq …<span id="pair-43-open">)</span><span id="pair-44-open">)</span></code></pre><p>but not until we’ve determined that  is a prime number. To determine that, we need the result of calling the following predicate on ,</p><pre><code><span id="pair-48-close">(</span><span>fn</span> <span id="pair-49-close">[</span>x<span id="pair-49-open">]</span>
+  <span id="pair-47-close">(</span><span>some</span> #<span id="pair-46-close">(</span><span>zero?</span> <span id="pair-45-close">(</span>mod x %<span id="pair-45-open">)</span><span id="pair-46-open">)</span> primes<span id="pair-47-open">)</span><span id="pair-48-open">)</span></code></pre><p>At this point, <code>primes</code> has not been realized — meaning that line 4 from the above definition of <code>sval</code> has not been executed. This can be verified by printing out the return value of <code>(realized? primes)</code> in the above anonymous predicate function, before the call to <code>some</code>. In the same way, we can show that invoking the <code>fn</code> field of the <code>LazySeq</code> returns null the first time this predicate is called. The first time the predicate is called is the <em>second</em> time <code>fn</code> is called — the first was when we initially called <code>seq</code> on <code>primes</code>. Why is the result null on this second invocation of <code>fn</code>?</p><p>If we go back to the <code>lazy-seq</code> macro, we see that the function argument is created using <code>^{:once true} fn*</code> instead of a simple <code>fn</code>. As mentioned in the blog post <a href="http://clj-me.cgrand.net/2013/09/11/macros-closures-and-unexpected-object-retention/">“Macros, closures&nbsp;and unexpected object retention”</a> by Christophe Grand, the <code>:once</code> metadata flag tells the compiler that the function will be executed once and that closed-over objects can be garbage collected. Since the predicate is invoking <code>fn</code> for the second time, some of our closed-over objects are now <code>nil</code>. This includes our lazy sequence of integers from  to . We can see this at work in the following example,</p><pre><code>user=<span>&gt;</span> <span id="pair-58-close">(</span><span>let</span> <span id="pair-62-close">[</span><span>f</span> <span id="pair-55-close">(</span><span id="pair-54-close">(</span><span>fn</span> <span id="pair-59-close">[</span><span id="pair-59-open">]</span>
+                    <span id="pair-53-close">(</span><span>let</span> <span id="pair-60-close">[</span>i <span id="pair-50-close">(</span><span>iterate</span> <span>inc</span> <span>2</span><span id="pair-50-open">)</span><span id="pair-60-open">]</span>
+                      <span id="pair-52-close">(</span>^<span>:once</span> fn* <span id="pair-61-close">[</span><span id="pair-61-open">]</span>
+                        <span id="pair-51-close">(</span><span>first</span> i<span id="pair-51-open">)</span><span id="pair-52-open">)</span><span id="pair-53-open">)</span><span id="pair-54-open">)</span><span id="pair-55-open">)</span><span id="pair-62-open">]</span>
+           <span id="pair-63-close">[</span><span id="pair-56-close">(</span><span>f</span><span id="pair-56-open">)</span> <span id="pair-57-close">(</span><span>f</span><span id="pair-57-open">)</span><span id="pair-63-open">]</span><span id="pair-58-open">)</span>
+<span id="pair-64-close">[</span><span>2</span> <span>nil</span><span id="pair-64-open">]</span></code></pre><p>On the first invocation, <code>(f)</code> returns <code>2</code>, while on the second it returns <code>nil</code>.</p><p>Now, we simply need to explain how this property of <code>fn</code> results in the inner reference to <code>primes</code> being a sequence of the primes seen so far. Let’s first consider the base case of determining that  is prime, then we can consider the case where <code>primes</code> is a non-empty sequence. Simplifying a bit, the function argument <code>fn</code> can be written,</p><pre><code><span id="pair-75-close">(</span>^<span>:once</span> fn* <span id="pair-76-close">[</span><span id="pair-76-open">]</span>
+  <span id="pair-74-close">(</span><span>when-let</span> <span id="pair-77-close">[</span>s <span id="pair-65-close">(</span><span>seq</span> coll<span id="pair-65-open">)</span><span id="pair-77-open">]</span>
+    …
+    <span id="pair-73-close">(</span><span>let</span> <span id="pair-78-close">[</span><span>f</span> <span id="pair-66-close">(</span><span>first</span> s<span id="pair-66-open">)</span> r <span id="pair-67-close">(</span><span>rest</span> s<span id="pair-67-open">)</span><span id="pair-78-open">]</span>
+      <span id="pair-72-close">(</span><span>if</span> <span id="pair-68-close">(</span>pred <span>f</span><span id="pair-68-open">)</span>
+        <span id="pair-70-close">(</span><span>cons</span> <span>f</span> <span id="pair-69-close">(</span><span>filter</span> pred r<span id="pair-69-open">)</span><span id="pair-70-open">)</span>
+        <span id="pair-71-close">(</span><span>filter</span> pred r<span id="pair-71-open">)</span><span id="pair-72-open">)</span><span id="pair-73-open">)</span><span id="pair-74-open">)</span><span id="pair-75-open">)</span></code></pre><p>In this function, <code>coll</code> is the sequence of integers that we test for primality and <code>pred</code> is the predicate that checks if some integer <code>x</code> is prime. If <code>coll</code> is <code>nil</code>, which it will be on the second invocation of <code>fn</code>, then the function just returns <code>nil</code>. This sets <code>sv</code> to null on line 3 in the definition of <code>sval</code>. Coming back up to the <code>seq</code> function in <code>clojure.lang.LazySeq</code>,</p><pre data-line="3,11"><code><span>final</span> <span>synchronized</span> <span>public</span> <span>ISeq</span> <span>seq</span><span>(</span><span>)</span> <span>{</span>
+    <span>sval</span><span>(</span><span>)</span><span>;</span>
+    <span>if</span> <span>(</span>sv <span>!=</span> <span>null</span><span>)</span> <span>{</span>
+        <span>Object</span> ls <span>=</span> sv<span>;</span>
+        sv <span>=</span> <span>null</span><span>;</span>
+        <span>while</span> <span>(</span>ls <span>instanceof</span> <span>LazySeq</span><span>)</span> <span>{</span>
+            ls <span>=</span> <span>(</span><span>(</span><span>LazySeq</span><span>)</span>ls<span>)</span><span>.</span><span>sval</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span>
+        s <span>=</span> RT<span>.</span><span>seq</span><span>(</span>ls<span>)</span><span>;</span>
+    <span>}</span>
+    <span>return</span> s<span>;</span>
+<span>}</span></code></pre><p>we see that the condition on line 3 is false and that on line 11 the function returns the default value of <code>s</code>, which is null, representing an empty sequence. Repeating the earlier definition of primes,</p><pre><code><span id="pair-85-close">(</span><span>def</span> primes <span id="pair-84-close">(</span><span>remove</span>
+              <span id="pair-82-close">(</span><span>fn</span> <span id="pair-86-close">[</span>x<span id="pair-86-open">]</span>
+                <span id="pair-81-close">(</span><span>some</span> #<span id="pair-80-close">(</span><span>zero?</span> <span id="pair-79-close">(</span>mod x %<span id="pair-79-open">)</span><span id="pair-80-open">)</span> primes<span id="pair-81-open">)</span><span id="pair-82-open">)</span>
+              <span id="pair-83-close">(</span><span>iterate</span> <span>inc</span> <span>2</span><span id="pair-83-open">)</span><span id="pair-84-open">)</span><span id="pair-85-open">)</span></code></pre><p>we see that if <code>primes</code> is an empty sequence, then the predicate returns <code>false</code>, and  should not be removed (it is prime). When this predicate is called again on some value , <code>primes</code> is traversed normally until it reaches the end of the sequence. At the end of the sequence, we again find ourselves with an instance of <code>LazySeq</code> and a noninitial invocation of <code>fn</code>. By the same argument as above, the lazy sequence resolves to null, marking the end of the sequence.</p><p>So, why does the inner reference to <code>primes</code> terminate with the primes we’ve seen so far? Because the <code>:once</code> metadata flag in the function argument to the lazy sequence makes the collection we're filtering <code>nil</code> in noninitial evaluations of the function argument.</p><p>I’m <a href="https://twitter.com/siclait">@siclait</a> on Twitter — reach out to continue the conversation.</p></article></div><div><p>©&nbsp;2020 Louis Phillippe Siclait</p></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
