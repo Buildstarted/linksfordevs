@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Dynamically Build LINQ Expressions - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Dynamically Build LINQ Expressions - linksfor.dev(s)"/>
+    <meta property="article:author" content="Empowering developers to be their best.&#x1F4C5; Jun 3, 2020&#xA;&#x1F558; 13 min read&#xA;&#x1F4AC; 2720 words"/>
+    <meta property="og:description" content="If you want to master Language Integrated Query (LINQ), you first need to understand the expressions it is based on. This blog post demonstrates how to dynamically build a LINQ expression tree with multiple nested conditions, use the compiled query to filter an in-memory list, then reuse the expression query a relational database."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.jeremylikness.com/blog/dynamically-build-linq-expressions/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Dynamically Build LINQ Expressions</title>
+<div class="readable">
+        <h1>Dynamically Build LINQ Expressions</h1>
+            <div>by Empowering developers to be their best.&#x1F4C5; Jun 3, 2020&#xA;&#x1F558; 13 min read&#xA;&#x1F4AC; 2720 words</div>
+            <div>Reading time: 17-22 minutes</div>
+        <div>Posted here: 08 Jun 2020</div>
+        <p><a href="https://blog.jeremylikness.com/blog/dynamically-build-linq-expressions/">https://blog.jeremylikness.com/blog/dynamically-build-linq-expressions/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p><a href="https://jlik.me/hzf">LINQ</a> stands for Language Integrated Query and is one of my favorite .NET and C# technologies. Using LINQ, developers can write queries directly in strongly typed code. LINQ provides a standard language and syntax that is consistent across data sources.</p><h2 id="the-basics">The Basics</h2><p>Consider this LINQ query (you can paste this into a console application and run it yourself):</p><div><pre><code data-lang="csharp"><span>using</span> <span>System</span>;
+<span>using</span> <span>System.Linq</span>;
+
+<span>public</span> <span>class</span> <span>Program</span>
+{
+   <span>public</span> <span>static</span> <span>void</span> Main()
+   {
+      <span>var</span> someNumbers = <span>new</span> <span>int</span>[]{<span>4</span>, <span>8</span>, <span>15</span>, <span>16</span>, <span>23</span>, <span>42</span>};
+      <span>var</span> query =
+         <span>from</span> num <span>in</span> someNumbers
+            <span>where</span> num &gt; <span>10</span>
+            <span>orderby</span> num <span>descending</span>
+            <span>select</span> num.ToString();
+      Console.WriteLine(<span>string</span>.Join(<span>'-'</span>, query.ToArray()));
+      <span>// 42-23-16-15
+</span><span></span>   }
+}
+</code></pre></div><p>Because <code>someNumbers</code> is an <code>IEnumerable&lt;int&gt;</code>, the query is parsed by <a href="https://jlik.me/hzg">LINQ to Objects</a>. The same query syntax can be used with a tool like <a href="https://jlik.me/hzh">Entity Framework Core</a> to generate T-SQL that is run against a relational database. LINQ can be written using one of two syntaxes: <em>query syntax</em> (shown above) or <em>method syntax</em>. The two syntaxes are semantically identical and the one you use depends on your preference. The same query above can be written using method syntax like this:</p><div><pre><code data-lang="csharp"><span>var</span> secondQuery = someNumbers.Where(n =&gt; n &gt; <span>10</span>)
+    .OrderByDescending(n =&gt; n)
+    .Select(n =&gt; n.ToString());
+</code></pre></div><p>Every LINQ query has three phases:</p><ol><li>A data source is set up, known as a <em>provider</em>, for the query to act against. For example, the code shown so far uses the built-in LINQ to Objects provider. Your EF Core projects use the <a href="https://jlik.me/hzi">EF Core provider</a> that maps to your database.</li><li>The query is defined and turned into an <em>expression tree</em>. I’ll cover expressions more in a moment.</li><li>The query is executed, and data is returned.</li></ol><p>Step 3 is important because LINQ uses what is called <em>deferred execution</em>. In the example above, <code>secondQuery</code> defines an expression tree but doesn’t yet return any data. In fact, nothing actually happens until you start to iterate the data. This is important because it allows providers to manage resources by only delivering the data requested. For example, let’s assume you want to find a specific string using <code>secondQuery</code>, so you do something like this:</p><div><pre><code data-lang="csharp"><span>var</span> found = <span>false</span>;
+<span>foreach</span>(<span>var</span> item <span>in</span> secondQuery.AsEnumerable())
+{
+    <span>if</span> (item == <span>"23"</span>)
+    {
+        found = <span>true</span>;
+        <span>break</span>;
+    }
+}
+</code></pre></div><p>A provider can handle the enumerator so that it feeds data one element at a time. If you find the value on the third iteration, it is possible that only three items were actually returned from the database. On the other hand, when you use the <code>.ToList()</code> extension method, all data is immediately fetched to populate the list.</p><h2 id="the-challenge">The Challenge</h2><p>For my role as PM for .NET Data, I frequently speak to customers to understand their needs. Recently, I had a discussion with a customer who wants to use a third-party control in their website to build business rules. More specifically, the business rules are “predicates” or a set of conditions that resolve to <code>true</code> or <code>false</code>. The tool can generate the rules in JSON or SQL format. SQL is tempting to pass along to the database, but their requirement is to apply the predicates to in-memory objects as a filter on the server as well. They are considering a tool that translates SQL to expressions (it’s called <a href="https://dynamic-linq.net/">Dynamic LINQ</a> if you’re interested). I suggested that the JSON format probably is fine, because it can be parsed into a LINQ expression that is run against objects in memory or easily applied to an Entity Framework Core collection to run against the database.</p><p>The spike I wrote only deals with the default JSON produced by the tool:</p><div><pre><code data-lang="json">{
+  <span>"condition"</span>: <span>"and"</span>,
+  <span>"rules"</span>: [
+    {
+      <span>"label"</span>: <span>"Category"</span>,
+      <span>"field"</span>: <span>"Category"</span>,
+      <span>"operator"</span>: <span>"in"</span>,
+      <span>"type"</span>: <span>"string"</span>,
+      <span>"value"</span>: [
+        <span>"Clothing"</span>
+      ]
+    },
+    {
+      <span>"condition"</span>: <span>"or"</span>,
+      <span>"rules"</span>: [
+        {
+          <span>"label"</span>: <span>"TransactionType"</span>,
+          <span>"field"</span>: <span>"TransactionType"</span>,
+          <span>"operator"</span>: <span>"equal"</span>,
+          <span>"type"</span>: <span>"boolean"</span>,
+          <span>"value"</span>: <span>"income"</span>
+        },
+        {
+          <span>"label"</span>: <span>"PaymentMode"</span>,
+          <span>"field"</span>: <span>"PaymentMode"</span>,
+          <span>"operator"</span>: <span>"equal"</span>,
+          <span>"type"</span>: <span>"string"</span>,
+          <span>"value"</span>: <span>"Cash"</span>
+        }
+      ]
+    },
+    {
+      <span>"label"</span>: <span>"Amount"</span>,
+      <span>"field"</span>: <span>"Amount"</span>,
+      <span>"operator"</span>: <span>"equal"</span>,
+      <span>"type"</span>: <span>"number"</span>,
+      <span>"value"</span>: <span>10</span>
+    }
+  ]
+}
+</code></pre></div><p>The structure is simple: there is an <code>AND</code> or <code>OR</code> <em>condition</em> that contains a set of rules that are either comparisons, or a nested condition. My goal was twofold: learn more about LINQ expressions to better inform my understanding of EF Core and related technologies, and provide a simple example to show how the JSON can be used without relying on a third party tool.</p><blockquote><p>One of my earliest open source contributions was the NoSQL database engine I named <a href="https://github.com/JeremyLikness/sterling-net-core">Sterling</a> because I wrote it as a local database for Silverlight. It later gained popularity when Windows Phone was released with Silverlight as the runtime and was used in several popular recipe and fitness apps. Sterling suffered from several limitations that could have easily been mitigated with a proper LINQ provider. My goal is to ultimately master enough of LINQ to be able to write my own EF Core provider if the need arises.</p></blockquote><h2 id="the-solution-dynamic-expressions">The Solution: Dynamic Expressions</h2><p>I created a simple console app to test my hypothesis that materializing the LINQ from the JSON would be relatively straightforward.</p><p><i></i>&nbsp;<a href="https://github.com/JeremyLikness/ExpressionGenerator" target="_blank">
+JeremyLikness/ExpressionGenerator</a></p><p>Set the startup project to <strong><code>ExpressionGenerator</code></strong> for the first part of this post. If you run it from the command line, be sure that <code>rules.json</code> is in your current directory.</p><p>I embedded the sample JSON as <code>rules.json</code>. Using <a href="https://jlik.me/hzj">System.Text.Json</a> to parse the file is this simple:</p><div><pre><code data-lang="csharp"><span>var</span> jsonStr = File.ReadAllText(<span>"rules.json"</span>);
+<span>var</span> jsonDocument = JsonDocument.Parse(jsonStr);
+</code></pre></div><p>I then created a <code>JsonExpressionParser</code> to parse the JSON and create an expression tree. Because the solution is a predicate, the expression tree is built from instances of <code>BinaryExpression</code> that evaluate a left expression and a right expression. That evaluation might be a logic gate (<code>AND</code> or <code>OR</code>), or a comparison (<code>equal</code> or <code>greaterThan</code>), or a method call. For the case of <code>In</code> i.e. we want property <code>Category</code> to be in one of several items in a list, I flip the script and use <code>Contains</code>. Conceptually, the referenced JSON looks like this:</p><div><pre><code data-lang="text">                         /-----------AND-----------
+                         |                         |
+                      /-AND-                      |
+Category IN ['Clothing']   Amount eq 10.0        /-OR-
+                        TransactionType EQ 'income'  PaymentMode EQ 'Cash'
+</code></pre></div><p>Notice that each node is binary. Let’s start parsing!</p><h2 id="introducing-transaction">Introducing Transaction</h2><p>No, this isn’t <code>System.Transaction</code>. This is a custom class used in the example project. I didn’t spend much time on the vendor’s site, so I guessed at what the entity might look like based on the rules. I came up with this:</p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>Transaction</span>
+{
+  <span>public</span> <span>int</span> Id { <span>get</span>; <span>set</span>; }
+  <span>public</span> <span>string</span> Category { <span>get</span>; <span>set</span>; }
+  <span>public</span> <span>string</span> TransactionType { <span>get</span>; <span>set</span>; }
+  <span>public</span> <span>string</span> PaymentMode { <span>get</span>; <span>set</span>; }
+  <span>public</span> <span>decimal</span> Amount { <span>get</span>; <span>set</span>; }
+}
+</code></pre></div><p>I then added some additional methods to make it easy to generate random instances. You can see those <a href="https://github.com/JeremyLikness/ExpressionGenerator/blob/master/ExpressionGenerator/Transaction.cs">in the code</a> yourself.</p><h2 id="parameter-expressions">Parameter Expressions</h2><p>The main method returns a predicate function. Here’s the code to start:</p><div><pre><code data-lang="csharp"><span>public</span> Func&lt;T, <span>bool</span>&gt; ParsePredicateOf&lt;T&gt;(JsonDocument doc)
+{
+   <span>var</span> itemExpression = Expression.Parameter(<span>typeof</span>(T));
+   <span>var</span> conditions = ParseTree&lt;T&gt;(doc.RootElement, itemExpression);
+}
+</code></pre></div><p>The first step is to create the predicate parameter. A predicate can be passed to a <code>Where</code> clause, and if we wrote it ourselves it would look something like this:</p><div><pre><code data-lang="csharp"><span>var</span> query = ListOfThings.Where(t =&gt; t.Id &gt; <span>2</span>);
+</code></pre></div><p>The <code>t =&gt;</code> is the first parameter and represents the type of an item in the list. Therefore, we create a parameter for that type. Then we recursively traverse the JSON nodes to build the tree.</p><h2 id="logic-expressions">Logic Expressions</h2><p>The start of the parser looks like this:</p><div><pre><code data-lang="csharp"><span>private</span> Expression ParseTree&lt;T&gt;(
+    JsonElement condition,
+    ParameterExpression parm)
+    {
+        Expression left = <span>null</span>;
+        <span>var</span> gate = condition.GetProperty(nameof(condition)).GetString();
+
+        JsonElement rules = condition.GetProperty(nameof(rules));
+
+        Binder binder = gate == And ? (Binder)Expression.And : Expression.Or;
+
+        Expression bind(Expression left, Expression right) =&gt;
+            left == <span>null</span> ? right : binder(left, right);
+</code></pre></div><p>There’s a bit to digest. The <code>gate</code> variable is the condition, i.e. “and” or “or.” The rules statement gets a node that is the list of related rules. We are keeping track of the left and right side of the expression. The <code>Binder</code> signature is shorthand for a binary expression, and is defined here:</p><div><pre><code data-lang="csharp"><span>private</span> <span>delegate</span> Expression Binder(Expression left, Expression right);
+</code></pre></div><p>The <code>binder</code> variable simply sets up the top-level expression: either <code>Expression.And</code> or <code>Expression.Or</code>. Both take left and right expressions to evaluate.</p><p>The <code>bind</code> function is a little more interesting. As we traverse the tree, we need to build up the various nodes. If we haven’t created an expression yet (<code>left</code> is <code>null</code>) we start with the first expression created. If we have an existing expression, we use that expression to merge the two sides.</p><p>Right now, <code>left</code> is <code>null</code>, and then we start enumerating the rules that are part of this condition:</p><div><pre><code data-lang="csharp"><span>foreach</span> (<span>var</span> rule <span>in</span> rules.EnumerateArray())
+</code></pre></div><h2 id="property-expressions">Property Expressions</h2><p>The first rule is an equality rule, so I’ll skip the condition part for now. Here’s what happens:</p><div><pre><code data-lang="csharp"><span>string</span> @operator = rule.GetProperty(nameof(@operator)).GetString();
+<span>string</span> type = rule.GetProperty(nameof(type)).GetString();
+<span>string</span> field = rule.GetProperty(nameof(field)).GetString();
+JsonElement <span>value</span> = rule.GetProperty(nameof(<span>value</span>));
+<span>var</span> property = Expression.Property(parm, field);
+</code></pre></div><p>First, we get the operator (“in”), the type (“string”), the field (“Category”) and the value (an array with “Clothing” as the only element). Notice the call to <code>Expression.Property</code>. The LINQ for this rule would look like this:</p><div><pre><code data-lang="csharp"><span>var</span> filter = <span>new</span> List&lt;<span>string</span>&gt; { <span>"Clothing"</span> };
+Transactions.Where(t =&gt; filter.Contains(t.Category));
+</code></pre></div><p>The property is the <code>t.Category</code> part, so we create it based on the parent property (<code>t</code>) and the field name.</p><h2 id="constant-and-call-expressions">Constant and Call Expressions</h2><p>Next, we need to build the call to <code>Contains</code>. To simplify things, I created a reference to the method here:</p><div><pre><code data-lang="csharp"><span>private</span> <span>readonly</span> MethodInfo MethodContains = <span>typeof</span>(Enumerable).GetMethods(
+  BindingFlags.Static | BindingFlags.Public)
+  .Single(m =&gt; m.Name == nameof(Enumerable.Contains)
+      &amp;&amp; m.GetParameters().Length == <span>2</span>);
+</code></pre></div><p>This grabs the method on <code>Enumerable</code> that takes two parameters: the enumerable to use and the value to check for. The next bit of logic looks like this:</p><div><pre><code data-lang="csharp"><span>if</span> (@operator == In)
+{
+    <span>var</span> contains = MethodContains.MakeGenericMethod(<span>typeof</span>(<span>string</span>));
+    <span>object</span> val = <span>value</span>.EnumerateArray().Select(e =&gt; e.GetString())
+        .ToList();
+    <span>var</span> right = Expression.Call(
+        contains,
+        Expression.Constant(val),
+        property);
+    left = bind(left, right);
+}
+</code></pre></div><p>First, we use the <code>Enumerable.Contains</code> template to create an <code>Enumerable&lt;string&gt;</code> because that is the type we are looking for. Next, we grab the list of values and turn it into a <code>List&lt;string&gt;</code>. Finally, we build our call, passing it:</p><ul><li>The method to call (<code>contains</code>)</li><li>The value that is the parameter to check for (the list with “Clothing”, or <code>Expression.Constant(val)</code>)</li><li>The property to check it against (<code>t.Category</code>).</li></ul><p>Our expression tree is already fairly deep, with parameters, properties, calls, and constants. Remember that <code>left</code> is still null, so the call to bind simply sets <code>left</code> to the call expression we just created. So far, we look like this:</p><div><pre><code data-lang="csharp">Transactions.Where(t =&gt; (<span>new</span> List&lt;<span>string</span>&gt; { <span>"Clothing"</span> }).Contains(t.Category));
+</code></pre></div><p>Iterating back around, the next rule is a nested condition. We hit this code:</p><div><pre><code data-lang="csharp"><span>if</span> (rule.TryGetProperty(nameof(condition), <span>out</span> JsonElement check))
+{
+    <span>var</span> right = ParseTree&lt;T&gt;(rule, parm);
+    left = bind(left, right);
+    <span>continue</span>;
+}
+</code></pre></div><p>Currently, <code>left</code> is assigned to the “in” expression. <code>right</code> will be assigned as the result of parsing the new condition. I happen to know it’s an <code>OR</code> condition. Right now, our binder is set to <code>Expression.And</code> so when the function returns, the <code>bind</code> call leaves us with:</p><div><pre><code data-lang="csharp">Transactions.Where(t =&gt; (<span>new</span> List&lt;<span>string</span>&gt; { <span>"Clothing"</span> }).Contains(t.Category) &amp;&amp; &lt;something&gt;);
+</code></pre></div><p>Let’s look at “something”.</p><h2 id="comparison-expressions">Comparison Expressions</h2><p>First, the recursive call determines a new condition exists, this time a logical <code>OR</code>. The binder is set to <code>Expression.Or</code> and the rules begin evaluation. The first rule is for <code>TransactionType</code>. It is set as <code>boolean</code> but from what I infer, it means the user in the interface can check to select a value or toggle to another value. Therefore, I implemented it as a simple string comparison. Here’s the code that builds the comparison:</p><div><pre><code data-lang="csharp"><span>object</span> val = (type == StringStr || type == BooleanStr) ?
+    (<span>object</span>)<span>value</span>.GetString() : <span>value</span>.GetDecimal();
+<span>var</span> toCompare = Expression.Constant(val);
+<span>var</span> right = Expression.Equal(property, toCompare);
+left = bind(left, right);
+</code></pre></div><p>The value is deconstructed as a string or decimal (a later rule will use the decimal format). The value is then turned into a constant, then the comparison is created. Notice it is passed the property. The variable <code>right</code> now looks like this:</p><div><pre><code data-lang="csharp">Transactions.Where(t =&gt; t.TransactionType == <span>"income"</span>);
+</code></pre></div><p>In this nested loop, <code>left</code> is still empty. The parser evaluates the next rule, which is the payment mode. The <code>bind</code> function turns it into this “or” statement:</p><div><pre><code data-lang="csharp">Transactions.Where(t =&gt; t.TransactionType == <span>"income"</span> || t.PaymentMode == <span>"Cash"</span>);
+</code></pre></div><p>The rest should be self-explanatory. A nice feature of expressions is that they overload <code>ToString()</code> to generate a representation. This is what our expression looks like (I took the liberty of formatting for easier viewing):</p><div><pre><code data-lang="text">(
+  (value(System.Collections.Generic.List`1[System.String]).Contains(Param_0.Category)
+      And (
+          (Param_0.TransactionType == "income")
+          Or
+          (Param_0.PaymentMode == "Cash"))
+      )
+  And
+  (Param_0.Amount == 10)
+)
+</code></pre></div><p>It looks good… but we’re not done yet!</p><h2 id="lambda-expressions-and-compilation">Lambda Expressions and Compilation</h2><p>The expression tree represents an idea. It needs to be turned into something material. In case the expression can be simplified, I <em>reduce</em> it. Next, I create a lambda expression. This defines the shape of the parsed expression, which will be a predicate (<code>Func&lt;T,bool&gt;</code>). Finally, I return the compiled delegate.</p><div><pre><code data-lang="csharp"><span>var</span> conditions = ParseTree&lt;T&gt;(doc.RootElement, itemExpression);
+<span>if</span> (conditions.CanReduce)
+{
+    conditions = conditions.ReduceAndCheck();
+}
+<span>var</span> query = Expression.Lambda&lt;Func&lt;T, <span>bool</span>&gt;&gt;(conditions, itemExpression);
+<span>return</span> query.Compile();
+</code></pre></div><p>To “check my math” I generate 1000 transactions (weighted to include several that should match). I then apply the filter and iterate the results so I can manually test that the conditions were met.</p><div><pre><code data-lang="csharp"><span>var</span> predicate = jsonExpressionParser
+                .ParsePredicateOf&lt;Transaction&gt;(jsonDocument);
+<span>var</span> transactionList = Transaction.GetList(<span>1000</span>);
+<span>var</span> filteredTransactions = transactionList.Where(predicate).ToList();
+filteredTransactions.ForEach(Console.WriteLine);
+</code></pre></div><p>As you can see, the results all check out (I average about 70 “hits” each run.)</p><p><img src="https://blog.jeremylikness.com/blog/dynamically-build-linq-expressions/images/filteredtransactions.jpg" alt="A screenshot of various entities"></p><h2 id="beyond-memory-to-database">Beyond Memory to Database</h2><p>The generated delegate isn’t just for objects. We can also use it for database access.</p><p>Set the startup project to <strong><code>DatabaseTest</code></strong> for the rest of this post. If you run it from the command line, be sure that <code>databaseRules.json</code> is in your current directory.</p><p>First, I refactored the code. Remember how expressions require a data source? In the previous example, we compile the expression and end up with a delegate that works on objects. To use a different data source, we need to pass the expression before it is compiled. That allows the data source to compile it. If we pass the compiled data source, the database provider will be forced to fetch <em>all</em> rows from the database, then parse the returned list. We want the database to do the work. I moved the bulk of code into a method named <code>ParseExpressionOf&lt;T&gt;</code> that returns the lambda. I refactored the original method to this:</p><div><pre><code data-lang="csharp"><span>public</span> Func&lt;T, <span>bool</span>&gt; ParsePredicateOf&lt;T&gt;(JsonDocument doc)
+{
+    <span>var</span> query = ParseExpressionOf&lt;T&gt;(doc);
+    <span>return</span> query.Compile();
+}
+</code></pre></div><p>The <code>ExpressionGenerator</code> program uses the compiled query. The <code>DatabaseTest</code> uses the raw lambda expression. It applies it to a local SQLite database to demonstrate how the expression is parsed by EF Core. After creating and inserting 1000 transactions into the database, the code retrieves a count:</p><div><pre><code data-lang="csharp"><span>var</span> count = <span>await</span> context.DbTransactions.CountAsync();
+Console.WriteLine(<span>$"Verified insert count: {count}."</span>);
+</code></pre></div><p>This results in the following SQL:</p><div><pre><code data-lang="sql"><span>SELECT</span> <span>COUNT</span>(<span>*</span>)
+<span>FROM</span> <span>"DbTransactions"</span> <span>AS</span> <span>"d"</span>
+</code></pre></div><blockquote><p>If you’re wondering why there are two contexts, it is due to logging. The first context inserts 1000 records and if logging is turned on, it will run very slow as the inserts are written to the console. The second context switches on logging so you can see the evaluated statement.</p></blockquote><p>The predicate is parsed (this time from a new set of rules in <code>databaseRules.json</code>) and passed to the Entity Framework Core provider.</p><div><pre><code data-lang="csharp"><span>var</span> parser = <span>new</span> JsonExpressionParser();
+<span>var</span> predicate = parser.ParseExpressionOf&lt;Transaction&gt;(
+    JsonDocument.Parse(
+        <span>await</span> File.ReadAllTextAsync(<span>"databaseRules.json"</span>)));
+  <span>var</span> query = context.DbTransactions.Where(predicate)
+      .OrderBy(t =&gt; t.Id);
+  <span>var</span> results = <span>await</span> query.ToListAsync();
+</code></pre></div><p>With Entity Framework Core logging turned on, we are able to retrieve the SQL and see the items are fetched in one pass and evaluated in the database engine. Notice the <code>PaymentMode</code> is checked for “Credit” instead of “Cash”.</p><div><pre><code data-lang="sql"><span>SELECT</span> <span>"d"</span>.<span>"Id"</span>, <span>"d"</span>.<span>"Amount"</span>, <span>"d"</span>.<span>"Category"</span>, <span>"d"</span>.<span>"PaymentMode"</span>, <span>"d"</span>.<span>"TransactionType"</span>
+<span>FROM</span> <span>"DbTransactions"</span> <span>AS</span> <span>"d"</span>
+<span>WHERE</span> (<span>"d"</span>.<span>"Category"</span> <span>IN</span> (<span>'Clothing'</span>) <span>&amp;</span>
+        (((<span>"d"</span>.<span>"TransactionType"</span> <span>=</span> <span>'income'</span>) <span>AND</span> <span>"d"</span>.<span>"TransactionType"</span> <span>IS</span> <span>NOT</span> <span>NULL</span>) <span>|</span>
+          ((<span>"d"</span>.<span>"PaymentMode"</span> <span>=</span> <span>'Credit'</span>) <span>AND</span> <span>"d"</span>.<span>"PaymentMode"</span> <span>IS</span> <span>NOT</span> <span>NULL</span>))) <span>&amp;</span>
+      (<span>"d"</span>.<span>"Amount"</span> <span>=</span> <span>'10.0'</span>)
+<span>ORDER</span> <span>BY</span> <span>"d"</span>.<span>"Id"</span>
+</code></pre></div><p>The example app also prints one of the selected entities to spot-check.</p><h2 id="conclusion">Conclusion</h2><p>LINQ expressions are a very powerful tool to filter and transform data. I hope this example helped demystify how expression trees are built. Of course, parsing the expression tree feels a little like magic. How does Entity Framework Core walk the expression tree to produce meaningful SQL? I’m exploring that myself and with a little help from my friend, <a href="https://jlik.me/hzk">ExpressionVisitor</a>. More posts to come on this!</p><p>Regards,</p><p><img src="https://blog.jeremylikness.com/images/jeremylikness.gif" alt="Jeremy Likness"></p></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

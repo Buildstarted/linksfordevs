@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Widespread error in Radiance HDR RGBE conversions  - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Widespread error in Radiance HDR RGBE conversions  - linksfor.dev(s)"/>
+    <meta property="og:description" content=" It has come to my attention that broken RGBE image conversions used in the loading of Radiance HDR files are being spread widely. The broke..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://cbloomrants.blogspot.com/2020/06/widespread-error-in-radiance-hdr-rgbe.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Widespread error in Radiance HDR RGBE conversions </title>
+<div class="readable">
+        <h1>Widespread error in Radiance HDR RGBE conversions </h1>
+            <div>Reading time: 17-21 minutes</div>
+        <div>Posted here: 08 Jun 2020</div>
+        <p><a href="https://cbloomrants.blogspot.com/2020/06/widespread-error-in-radiance-hdr-rgbe.html">https://cbloomrants.blogspot.com/2020/06/widespread-error-in-radiance-hdr-rgbe.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="post-body-5481584668089712219" itemprop="description articleBody"><p>
+
+It has come to my attention that broken RGBE image conversions used in the loading of Radiance HDR files
+are being spread widely.
+The broken routines are causing significant unnecessary errors in float reconstruction from RGBE 8888.
+
+</p><p>
+
+Note that RGBE 8888 is a very lossy encoding of floating point HDR images to begin with.  It
+is really not appropriate as a working HDR image format if further processing will be applied that
+may magnify the errors.  A half-float format is probably a better choice.  If you do use RGBE HDR
+at least use the correct conversions which I will provide here.
+(See <a href="http://www.anyhere.com/gward/hdrenc/hdr_encodings.html">Greg Ward's article on HDR encodings</a>
+and also <a href="https://www.jaloxa.eu/webhdr/formats.shtml"> nice table of dynamic range and accuracy </a>
+of various HDR file formats).
+
+</p><p>
+
+The Radiance HDR RGBE encoding stores 3-channel floating point RGB using four 8-bit components.  It 
+takes the RGB floats and finds the exponent of the largest component, sends that exponent in E,
+then shifts the components to put the largest component's top bit at 128 and sends them as linear 8 bits.
+
+</p><p>
+
+In making the corrected version, I have been guided by 3 principles in order of priority :
+1. ensure existing RGBE HDR images are correct encodings, 2. treat the original Radiance implementation as
+defining the file format, 3. minimize the error of round trip encoding.
+
+</p><p>
+
+With no further ado, let's have the correct RGBE conversion, then we'll talk about the details :
+
+</p><div>		<ol><li><p><span>// float RGB -&gt; U8 RGBE quantization</span></p></li><li><p><span>void</span> float_to_rgbe<span>(</span><span>unsigned</span> <span>char</span> <span>*</span> rgbe<span>,</span><span>const</span> <span>float</span> <span>*</span> rgbf<span>)</span></p></li><li><p><span>{</span></p></li><li><p><span>// rgbf[] should all be &gt;= 0 , RGBE does not support signed values</span></p></li><li></li><li><p><span>float</span> maxf <span>=</span> rgbf<span>[</span><span>0</span><span>]</span> <span>&gt;</span> rgbf<span>[</span><span>1</span><span>]</span> <span>?</span> rgbf<span>[</span><span>0</span><span>]</span> <span>:</span> rgbf<span>[</span><span>1</span><span>]</span><span>;</span></p></li><li><p>&nbsp; &nbsp; maxf <span>=</span> maxf <span>&gt;</span> rgbf<span>[</span><span>2</span><span>]</span> <span>?</span> maxf <span>:</span> rgbf<span>[</span><span>2</span><span>]</span><span>;</span></p></li><li></li><li><p><span>if</span> <span>(</span> maxf <span>&lt;=</span> 1e<span>-</span>32f <span>)</span></p></li><li><p><span>{</span></p></li><li><p><span>// Exponent byte = 0 is a special encoding that makes RGB output = 0</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbe<span>[</span><span>0</span><span>]</span> <span>=</span> rgbe<span>[</span><span>1</span><span>]</span> <span>=</span> rgbe<span>[</span><span>2</span><span>]</span> <span>=</span> rgbe<span>[</span><span>3</span><span>]</span> <span>=</span> <span>0</span><span>;</span></p></li><li><p><span>}</span></p></li><li><p><span>else</span></p></li><li><p><span>{</span></p></li><li><p><span>int</span> exponent<span>;</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; frexpf<span>(</span>maxf<span>,</span> <span>&amp;</span>exponent<span>)</span><span>;</span></p></li><li><p><span>float</span> scale <span>=</span> ldexpf<span>(</span><span>1</span>.<span>f</span><span>,</span> <span>-</span>exponent <span>+</span> <span>8</span><span>)</span><span>;</span></p></li><li></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbe<span>[</span><span>0</span><span>]</span> <span>=</span> <span>(</span><span>unsigned</span> <span>char</span><span>)</span><span>(</span> rgbf<span>[</span><span>0</span><span>]</span> <span>*</span> scale <span>)</span><span>;</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbe<span>[</span><span>1</span><span>]</span> <span>=</span> <span>(</span><span>unsigned</span> <span>char</span><span>)</span><span>(</span> rgbf<span>[</span><span>1</span><span>]</span> <span>*</span> scale <span>)</span><span>;</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbe<span>[</span><span>2</span><span>]</span> <span>=</span> <span>(</span><span>unsigned</span> <span>char</span><span>)</span><span>(</span> rgbf<span>[</span><span>2</span><span>]</span> <span>*</span> scale <span>)</span><span>;</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbe<span>[</span><span>3</span><span>]</span> <span>=</span> <span>(</span><span>unsigned</span> <span>char</span><span>)</span><span>(</span> exponent <span>+</span> <span>128</span> <span>)</span><span>;</span></p></li><li><p><span>}</span></p></li><li><p><span>}</span></p></li><li></li><li><p><span>// U8 RGBE -&gt; float RGB dequantization</span></p></li><li><p><span>void</span> rgbe_to_float<span>(</span><span>float</span> <span>*</span> rgbf<span>,</span><span>const</span> <span>unsigned</span> <span>char</span> <span>*</span> rgbe<span>)</span></p></li><li><p><span>{</span></p></li><li><p><span>if</span> <span>(</span> rgbe<span>[</span><span>3</span><span>]</span> <span>==</span> <span>0</span> <span>)</span></p></li><li><p><span>{</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbf<span>[</span><span>0</span><span>]</span> <span>=</span> rgbf<span>[</span><span>1</span><span>]</span> <span>=</span> rgbf<span>[</span><span>2</span><span>]</span> <span>=</span> <span>0</span>.<span>f</span><span>;</span></p></li><li><p><span>}</span></p></li><li><p><span>else</span></p></li><li><p><span>{</span></p></li><li><p><span>// the extra 8 here does the /256</span></p></li><li><p><span>float</span> fexp <span>=</span> ldexpf<span>(</span><span>1</span>.<span>f</span><span>,</span> <span>(</span><span>int</span><span>)</span>rgbe<span>[</span><span>3</span><span>]</span> <span>-</span> <span>(</span><span>128</span> <span>+</span> <span>8</span><span>)</span><span>)</span><span>;</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbf<span>[</span><span>0</span><span>]</span> <span>=</span> <span>(</span>rgbe<span>[</span><span>0</span><span>]</span> <span>+</span> <span>0.5f</span><span>)</span> <span>*</span> fexp<span>;</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbf<span>[</span><span>1</span><span>]</span> <span>=</span> <span>(</span>rgbe<span>[</span><span>1</span><span>]</span> <span>+</span> <span>0.5f</span><span>)</span> <span>*</span> fexp<span>;</span></p></li><li><p>&nbsp; &nbsp; &nbsp; &nbsp; rgbf<span>[</span><span>2</span><span>]</span> <span>=</span> <span>(</span>rgbe<span>[</span><span>2</span><span>]</span> <span>+</span> <span>0.5f</span><span>)</span> <span>*</span> fexp<span>;</span></p></li><li><p><span>}</span></p></li><li><p><span>}</span></p></li></ol></div>
+
+<p>
+
+RGBE encoding puts the largest component in the range [128,255).  It actually only has 7 bits of mantissa.
+The smaller components are put on a shared exponent with the largest component, which means if you ever care
+about tiny values in the non-maximal component this encoding is terrible (as are any shared-exponent encodings).
+There are much better packings of RGB floats to 32 bits that store more useful bits of precision.
+
+</p><p>
+
+Let's now look at the broken version that's being widely used.  It uses the same encoder as above, but in the
+decoder the bad version does :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">// RGBE 8888 -&gt; float RGB
+// BAD decode restoration, don't copy me
+
+        rgbf[0] = rgbe[0] * fexp;
+        rgbf[1] = rgbe[1] * fexp;
+        rgbf[2] = rgbe[2] * fexp;
+</span></pre><p>
+
+missing the biases by half.
+
+</p><p>
+
+Essentially this is just a quantization problem.  We are taking floats and quantizing them down to 8 bits.
+Each 8 bit index refers to a "bucket" or range of float values.  When you restore after quantizing, you
+should restore to the middle of the bucket.  (with non-uniform error metrics or underlying probability
+distributions, the ideal restoration point might not be the middle; more generally restore to the
+value that minimizes error over the expected distribution of input values).
+
+</p><p>
+
+The broken version is essentially doing a "floor" on both the quantization and restoration.
+
+<span color="GREEN"></span></p><pre><span color="GREEN">
+floor quantization :
+
++---------+---------+---------+---------+---------+---------+
+|0        |1        |2        |3        |4        |5        |
++---------+---------+---------+---------+---------+---------+
+
+-&gt;
+floor restoration :
+
+*0        *1        *2        *3        *4        *5
+
+-&gt;
+bias 0.5 restoration :
+
+     *0.5      *1.5      *2.5      *3.5      *4.5      *5.5
+
+</span></pre><p>
+
+the rule of thumb is that you need an 0.5 bias on either the quantization side or the restoration side.
+If you do floor quantization, do +0.5 in restoration.  If you do centered quantization (+0.5) you can do
+do integer restoration.
+
+</p><p>
+
+The broken version is just a bad quantizer that restores value ranges to one edge of the bucket.  That's
+creating a net shift of values downward and just creates error that doesn't need to be there.  On random
+RGB floats :
+
+</p><p>
+
+<b> Maximum relative error : </b> <br>
+
+Correct RGBE encoding : <b>  0.3891% </b> <br>
+
+Bad floor-floor RGBE encoding : <b> 0.7812% </b> <br>
+
+</p><p>
+
+(percentage error relative to largest component).
+
+</p><p>
+
+Note this is a LOT of error.  If you just took a real number in [0,1) and quantized it to 8 bits, the
+maximum error is 0.195% , so even the correct encoding at around 0.39% error is double that (reflecting
+that we only have 7 bits of precision in the RGBE encoding),
+and the bad encoding at around 0.78% is double that again (it's equal to the maximum error of uniform
+quantization if we only had 6 bits of precision).
+
+</p><p>
+
+Reference test code that will print these errors :
+<a href="http://www.cbloom.com/src/test_rgbe_error.cpp"> test_rgbe_error.cpp </a>
+
+</p><p>
+
+I have where possible tried to make this corrected RGBE quantizer match the original HDR file IO from
+<a href="https://floyd.lbl.gov/radiance/"> Greg Ward's Radiance </a>.  I believe we should treat the Radiance
+version as canonical and make HDR files that match it.  I have adopted a small difference which I note in
+Appendix 4.  The change that I propose here actually makes the encoder match the description of its behavior
+better than it did before (see Appendix 4).
+the original Radiance code does floor quantization and midpoint restoration, like here.  The broken version
+was introduced later.
+
+</p><p>
+
+The broken floor-floor code has been widely copied into many tools used in games (such as STBI and NVTT),
+hopefully those will be fixed soon.  Fortunately, the encoder does not need to be changed, only the decode
+code is changed, so existing HDR images are okay.  They can be loaded with the corrected restoration function
+and should see an improvement in quality for free.
+
+</p><p>
+
+That's it!  We'll followup some details in appendices for those who are interested.
+
+</p><hr><p>
+Appendix 1 : </p><p>
+
+Correct conversion in raw text if the pastebin isn't working :
+
+<code>
+<span color="GREEN"></span></code></p><pre><code><span color="GREEN">// float RGB -&gt; U8 RGBE quantization
+void float_to_rgbe(unsigned char * rgbe,const float * rgbf)
+{
+    // rgbf[] should all be &gt;= 0 , RGBE does not support signed values
+        
+    float maxf = rgbf[0] &gt; rgbf[1] ? rgbf[0] : rgbf[1];
+    maxf = maxf &gt; rgbf[2] ? maxf : rgbf[2];
+
+    if ( maxf &lt;= 1e-32f )
+    {
+        // Exponent byte = 0 is a special encoding that makes RGB output = 0
+        rgbe[0] = rgbe[1] = rgbe[2] = rgbe[3] = 0;
+    }
+    else
+    {
+        int exponent;
+        float scale;
+        frexpf(maxf, &amp;exponent);
+        scale = ldexpf(1.f, -exponent + 8);
+                
+        rgbe[0] = (unsigned char)( rgbf[0] * scale );
+        rgbe[1] = (unsigned char)( rgbf[1] * scale );
+        rgbe[2] = (unsigned char)( rgbf[2] * scale );
+        rgbe[3] = (unsigned char)( exponent + 128 );
+    }
+}
+
+// U8 RGBE -&gt; float RGB dequantization
+void rgbe_to_float(float * rgbf,const unsigned char * rgbe)
+{
+    if ( rgbe[3] == 0 )
+    {
+        rgbf[0] = rgbf[1] = rgbf[2] = 0.f;
+    }
+    else
+    {
+        // the extra 8 here does the /256
+        float fexp = ldexpf(1.f, (int)rgbe[3] - (128 + 8));
+        rgbf[0] = (rgbe[0] + 0.5f) * fexp;
+        rgbf[1] = (rgbe[1] + 0.5f) * fexp;
+        rgbf[2] = (rgbe[2] + 0.5f) * fexp;
+    }
+}
+</span></code></pre><hr><p>
+Appendix 2 : </p><p>
+
+Why I prefer centered quantization.
+
+</p><p>
+
+Radiance HDR does floor quantization &amp; centered restoration.  I think it should have been the other way around
+(centered quantization &amp; int restoration), but I don't propose changing it here because we should stick to the
+reference Greg Ward implementation, and match how existing .hdr files have been encoded.
+
+</p><p>
+
+The reason I prefer centered quantization is that it exactly preserves integers and powers of two.  (it has a small
+bonus of not needing a bias at decode time).
+
+</p><p>
+
+If your input real numbers are evenly distributed with no special values, then there's no reason to prefer either
+style, they're equal.  But usually our inputs are not evenly distributed and random, we often deal with inputs
+where values like 0.0 and 1.0 or 256.0 are special and we'd like to preserve them exactly.
+
+</p><p>
+
+If you do centered quantization, these restore exactly.
+If you do floor quantization and then have an 0.5 bias on dequantization to do centered restoration, values like 0
+shift to be in the center of their bucket.
+
+</p><p>
+
+In the correct RGBE encoding above, a float input of 1.0 is restored as 1.0039063 (= 1 + 1/256), because 1.0 corresponds to the
+bottom edge of a quantization bucket, and we restore to the middle of the bucket.
+
+</p><p>
+
+For example for non-HDR images the quantization I like is :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">// U8 to float 
+// map 1.0 to 255
+// centered quantization
+
+unsigned char unit_float_to_u8(float f)
+{
+    // f in [0,1.0]
+    // scale up to [0,255] , then do centered quantization :
+    //  eg. values after *255 in [0.5,1.5] -&gt; 1
+    // clamp before casting if you aren't sure your floats are bounded!
+    return (unsigned char) (f * 255.f + 0.5f);
+}
+
+float u8_to_unit_float(unsigned char u8)
+{
+    // u8 in [0,255]
+    // scale to [0,1.0]
+    // do straight mapped dequantization :
+    return u8 * (1.f/255);
+}
+</span></pre>
+
+<p>
+
+It seems that perhaps the desire to preserve 1.0 exactly is what got us into this whole mess.
+A widely referenced extraction from Radiance 
+<a href="https://www.graphics.cornell.edu/~bjw/rgbe.html">was posted here : bjw rgbe</a>, but
+with a crucial flaw.  The reconstruction was changed to remove the bias :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">/* standard conversion from rgbe to float pixels */
+/* note: Ward uses ldexp(col+0.5,exp-(128+8)).  However we wanted pixels */
+/*       in the range [0,1] to map back into the range [0,1].            */
+</span></pre><p>
+
+Ward had a valid quantizer (floor encode, bias decode), but it disappeared in this version.
+
+</p><p>
+
+The correct way to get 1.0 preserved would have been to do a centered quantization (bias on the encode).
+As noted previously I don't recommend changing that now as it would mean existing hdr files were encoded wrong,
+and it deviates from Ward's original Radiance implementation, which should be taken as defining the format.
+We should consider the BJW implementation to simply have an incorrect decoder.  (the BJW encoder is okay, but
+it does also suffer from the small flaw discussed in Appendix 4)
+
+</p><hr><p>
+Appendix 3 : </p><p>
+
+RGBE encoder using IEEE floating point bit manipulations.
+
+</p><p>
+
+I don't post this as a suggested optimization, but rather because I think it illuminates what's actually going on
+in the RGBE encoding.
+
+</p><p>
+
+The IEEE floating points that we are encoding are sign-exponent-mantissa :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">SEEEEEEEEMMMMMMMMMMMMMMMMMMMMMMM
+</span></pre><p>
+
+To send the largest component with RGBE, what we are doing is taking the top 7 bits of the mantissa, add the implicit 1 bit
+ahead of those, and put those in 8 bits.
+
+<span color="GREEN"><pre>000000001MMMMMMM0000000000000000
+</pre></span>
+
+What we're doing with dropping the bits below the top 7 is the floor quantization, whatever those bits were, they're gone.
+The +0.5 bias on restoration is equivalent to saying we expect all of those dropped bits to be equally likely, hence their
+average value is 10000 (the highest drop bit is turned on, the rest are left off).
+
+</p><pre><span color="GREEN">000000001MMMMMMM1000000000000000
+</span></pre>
+<p>
+
+The components that aren't the highest are forced onto the same exponent as the highest; this shifts in zeros from the left,
+their mantissa bits are shifted out the bottom of the word, and then we grab the top 8 bits of them.
+
+</p><p>
+
+The "ldexpf" we do in the correct implementation is just making a pure power of two, which is just an exponent in IEEE floats
+(all mantissa bits zero).  When you multiply that on another float, you're just adding to the exponent part.
+Unfortunately there aren't standard C ways to do simple float operations like getting an exponent or adding to an exponent
+so we'll have to dig into the bits.
+
+</p><p>
+
+The full operation is :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">union float_and_bits
+{
+    float f;
+    unsigned int bits;  
+};
+
+// float RGB -&gt; U8 RGBE quantization
+void float_to_rgbe_bits(unsigned char * rgbe,const float * rgbf)
+{
+    float_and_bits fab[3];
+    fab[0].f = rgbf[0];
+    fab[1].f = rgbf[1];
+    fab[2].f = rgbf[2];
+    
+    unsigned int max_bits = fab[0].bits &gt; fab[1].bits ?  fab[0].bits : fab[1].bits;
+    max_bits = max_bits &gt; fab[2].bits ? max_bits : fab[2].bits;
+    int max_exp = (max_bits &gt;&gt; 23) - 127;
+    
+    //max_bits == 0 is exact float zero
+    //(int)max_bits &lt; 0 means the sign bit is on (illegal negative input)
+    //max_exp == 128 is NaN
+    
+    if ( (int)max_bits &lt;= 0 || max_exp &lt;= -32 || max_exp == 128 )
+    {
+        // Exponent byte = 0 is a special encoding that makes RGB output = 0
+        rgbe[0] = rgbe[1] = rgbe[2] = rgbe[3] = 0;
+    }
+    else
+    {
+        // float exponent is a value in [1,2)*e^exp , we want [0.5,1) so do ++
+        max_exp++;
+        
+        unsigned int mantissa = 1 &lt;&lt; 23;
+        int exp0 = (fab[0].bits&gt;&gt;23) - 127;
+        int exp1 = (fab[1].bits&gt;&gt;23) - 127;
+        int exp2 = (fab[2].bits&gt;&gt;23) - 127;
+        int man0 = (fab[0].bits &amp; (mantissa-1)) | mantissa;
+        int man1 = (fab[1].bits &amp; (mantissa-1)) | mantissa;
+        int man2 = (fab[2].bits &amp; (mantissa-1)) | mantissa;
+        man0 &gt;&gt;= min(max_exp - exp0 - 8 + 23,31);
+        man1 &gt;&gt;= min(max_exp - exp1 - 8 + 23,31);
+        man2 &gt;&gt;= min(max_exp - exp2 - 8 + 23,31);
+            
+        rgbe[0] = (unsigned char)( man0 );
+        rgbe[1] = (unsigned char)( man1 );
+        rgbe[2] = (unsigned char)( man2 );
+        rgbe[3] = (unsigned char)( max_exp + 128 );
+    }
+}
+
+// U8 RGBE -&gt; float RGB dequantization
+void rgbe_to_float_bits(float * rgbf,const unsigned char * rgbe)
+{
+    if ( rgbe[3] == 0 )
+    {
+        rgbf[0] = rgbf[1] = rgbf[2] = 0.f;
+    }
+    else
+    {
+        float_and_bits fab;
+        int exp = (int)rgbe[3] - 128 - 8;
+        fab.bits = (exp+127)&lt;&lt;23;
+        float fexp = fab.f;
+        rgbf[0] = (rgbe[0] + 0.5f) * fexp;
+        rgbf[1] = (rgbe[1] + 0.5f) * fexp;
+        rgbf[2] = (rgbe[2] + 0.5f) * fexp;
+    }
+}
+</span></pre><p>
+
+this version using bit manipulation produces exactly identical encodings to the correct version I have
+posted before.
+
+</p><hr><p>
+Appendix 4 : </p><p>
+
+Another common oddity in the RGBE encoders.
+
+</p><p>
+
+I have tried to stick to the original Radiance version where reasonable, but I have changed one part
+that is widely done strangely.
+
+</p><p>
+
+The major bias error we have talked about before is in the decoder.  This error is in the encode side,
+but unlike the bias this error is not a large one, it's a small correction and doesn't change the values
+intended to be stored in the format.
+
+</p><p>
+
+In my correct version, this part :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">        int exponent;
+        float scale;
+        frexpf(maxf, &amp;exponent);
+        scale = ldexpf(1.f, -exponent + 8);
+</span></pre><p>
+
+is just trying to get the exponent of the largest component, and then form a pure power of 2 float that multiplies by
+256 / 2^exponent.
+
+</p><p>
+
+This has been widely done strangely in other implementations.  The majority of other implementations do this :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">divide by self version :
+
+    scale = frexp(maxf,&amp;exponent) * 256.0/maxf;
+</span></pre><p>
+
+frexp returns the mantissa part of the float, scaled to [0.5,1), so when you divide that by maxf what you're doing is cancelling out
+the mantissa part and leaving just the exponent part of maxf (2^-exponent).
+
+</p><p>
+
+This is not only a bit strange, it is in fact worse.  scale made this way does not come out as an exact power of 2, because
+floating point math is not exact (a reciprocal then multiply does not give back exact 1.0).
+This divide-by-yourself method does not produce exactly the same encoding as the bit extraction reference
+version above.
+
+</p><p>
+
+Aside from small drifts of 'scale' causing small error in reconstrction, if it ever got too
+big, you could have another problem.  Our value is supposed to be in [128,256)  (inclusive on the bottom
+of the range, exclusive on the top).  That means you can just cast to unsigned char.  But if scale could ever
+be slightly over 1.0, you could get up to 256 exactly, then the cast to unsigned char would turn into 0, which
+would be a huge error.
+
+</p><p>
+
+This appears to have motivated Greg Ward in the original Radiance code to add a safety margin :
+
+<span color="GREEN"></span></p><pre><span color="GREEN">original Radiance code version :
+/ray/src/common/color.c line 272
+
+    d = frexp(d, &amp;e) * 255.9999 / d;
+</span></pre><p>
+
+The 255.9999 fudge ensures that imprecise math can't make us incorrectly get to 256.  It's an ugly way to handle it,
+and it does cause a small loss of quality, so despite my goal to stick to the original Radiance
+implementation I am not copying this.
+
+</p><p>
+
+(Radiance was started in 1985 when IEEE compliant floating point rounding was by no means standard, so
+we can certainly forgive it some fudgy bias factors)
+
+</p><p>
+
+The way I have shown creates a pure power of two scale factor, so it can't suffer from any drift
+of the scale due to floating point imprecision.
+This actually matches the described behavior of the RGBE encoding better than previous versions.
+
+</p><p>
+
+For example from
+<a href="https://en.wikipedia.org/wiki/Radiance_(software)">Wikipedia</a> :
+</p><p>
+
+<cite>
+Radiance calculates light values as floating point triplets, one each for red, green and blue. But storing a full double precision float for each channel (8 bytes × 3 = 24 bytes) is a burden even for modern systems. Two stages are used to compress the image data. The first scales the three floating point values to share a common 8-bit exponent, taken from the brightest of the three. Each value is then truncated to an 8-bit mantissa (fractional part). The result is four bytes, 32 bits, for each pixel. This results in a 6:1 compression, at the expense of reduced colour fidelity. 
+</cite>
+</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
