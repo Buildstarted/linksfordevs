@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Avoiding AccessTokenNotAvailableException when using the Blazor WebAssembly Hosted template with individual user accounts - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Avoiding AccessTokenNotAvailableException when using the Blazor WebAssembly Hosted template with individual user accounts - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post, I&#x27;m going to show you how to configure an additional HttpClient instance which can be used by unauthenticated users to call unprotected endpoints, avoiding an AccessTokenNotAvailableException."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://chrissainty.com/avoiding-accesstokennotavailableexception-when-using-blazor-webassembly-hosted-template-with-individual-user-accounts/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Avoiding AccessTokenNotAvailableException when using the Blazor WebAssembly Hosted template with individual user accounts</title>
+<div class="readable">
+        <h1>Avoiding AccessTokenNotAvailableException when using the Blazor WebAssembly Hosted template with individual user accounts</h1>
+            <div>Reading time: 7-9 minutes</div>
+        <div>Posted here: 09 Jun 2020</div>
+        <p><a href="https://chrissainty.com/avoiding-accesstokennotavailableexception-when-using-blazor-webassembly-hosted-template-with-individual-user-accounts/">https://chrissainty.com/avoiding-accesstokennotavailableexception-when-using-blazor-webassembly-hosted-template-with-individual-user-accounts/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+                        <p>Blazor WebAssembly has shipped with a host of new options for authentication. We now have the ability to create Blazor Wasm apps which can authenticate against Active Directory, Azure AD, Azure AD B2C, Identity Server, in fact any OIDC provider should work with Blazor. But, there is a little gotcha which has tripped a few people up when building applications which mix protected and unprotected endpoints using the Blazor WebAssembly ASP.NET Core Hosted template with Individual user accounts enabled.</p><p>The default configuration in the template uses an HTTP client with a custom message handler called <code>BaseAddressAuthorizationMessageHandler</code>. This handler attempts to attach an access token to any outgoing requests and if it can't find one, it throws an exception.</p><p>This makes sense if you're only calling protected endpoints, but if your application allows the user to call <strong>unprotected endpoints without logging in</strong> then you might see a <code>AccessTokenNotAvailableException</code> in the browser console. </p><figure><img src="https://chrissainty.com/content/images/2020/06/AccessTokenNotAvailableException.jpg"></figure><p>In this post, I'm going to show you how to configure an additional <code>HttpClient</code> instance which can be used by unauthenticated users to call unprotected endpoints, avoiding an <code>AccessTokenNotAvailableException</code>.</p><h2 id="default-configuration">Default Configuration</h2><p>When you create a new Blazor WebAssembly application using ASP.NET Core Identity, you'll find the following configuration in the <code>Program.Main</code> method.</p><!--kg-card-begin: markdown--><pre><code>builder.Services.AddHttpClient(<span>"BlazorApp.ServerAPI"</span>, client =&gt; client.BaseAddress = <span>new</span> Uri(builder.HostEnvironment.BaseAddress))
+                .AddHttpMessageHandler&lt;BaseAddressAuthorizationMessageHandler&gt;();
+</code></pre>
+<!--kg-card-end: markdown--><p>This sets up the <code>HttpClient</code> for the application using a custom handler, <code>BaseAddressAuthorizationMessageHandler</code>. This handler is really useful as it saves us having to worry about adding access tokens to our API requests manually. However, as I explained in the introduction, this is also a potential issue. </p><p>If we delve into the source code, we can see that the <code>BaseAddressAuthorizationMessageHandler</code> inherits from another class called <code>AuthorizationMessageHandler</code>, this is the class where we find the potential gotcha.</p><!--kg-card-begin: markdown--><pre><code><span>var</span> tokenResult = _tokenOptions != <span>null</span> ?
+                        <span>await</span> _provider.RequestAccessToken(_tokenOptions) :
+                        <span>await</span> _provider.RequestAccessToken();
+                        
+<span>if</span> (tokenResult.TryGetToken(<span>out</span> <span>var</span> token))
+{
+    _lastToken = token;
+    _cachedHeader = <span>new</span> AuthenticationHeaderValue(<span>"Bearer"</span>, _lastToken.Value);
+}
+<span>else</span>
+{
+    <span>throw</span> <span>new</span> AccessTokenNotAvailableException(_navigation, tokenResult, _tokenOptions?.Scopes);
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>The piece of code above is looking for a token so it can add it to the authentication header of the outgoing request. And as you can see, if one isn't found then an exception is thrown, <code>AccessTokenNotAvailableExcpetion</code>.</p><p>The default template configuration actually gives us a hint of this potential issue on the <code>FetchData</code> component. </p><!--kg-card-begin: markdown--><pre><code><span><span>protected</span> <span>override</span> <span>async</span> Task <span>OnInitializedAsync</span>(<span></span>)</span>
+{
+    <span>try</span>
+    {
+        forecasts = <span>await</span> Http.GetFromJsonAsync&lt;WeatherForecast[]&gt;(<span>"WeatherForecast"</span>);
+    }
+    <span>catch</span> (AccessTokenNotAvailableException exception)
+    {
+        exception.Redirect();
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>There is a <code>try..catch</code> setup to specifically check for this exception and redirect the user to login.</p><p>Now we can see where the problem comes from, what's the solution?</p><h2 id="configuring-a-second-httpclient-for-unauthenticated-requests">Configuring a second HttpClient for unauthenticated requests</h2><p>The answer is to add a second HTTP Client instance which doesn't use this message handler. We can then use this instance when we want to make unprotected requests, and use the original one for everything else.</p><p>The easiest way we can achieve this is by adding the following line to our <code>Program.Main</code>.</p><!--kg-card-begin: markdown--><pre><code>builder.Services.AddHttpClient(<span>"BlazorApp.PublicServerAPI"</span>, client =&gt; client.BaseAddress = <span>new</span> Uri(builder.HostEnvironment.BaseAddress));
+</code></pre>
+<!--kg-card-end: markdown--><p>This will add another named HTTP Client instance to our application but, as you can see, there is no special message handler added this time.</p><p>Once this is done, we can get an instance of this client by injecting <code>IHttpClientFactory</code> into our component or service and using the <code>Create</code> method with the name of the client.</p><!--kg-card-begin: markdown--><pre><code>@inject IHttpClientFactory HttpClientFactory
+
+...
+
+
+@code {
+    <span><span>private</span> <span>async</span> Task <span>GetSomethingFromAPI</span>(<span></span>)</span>
+    {
+        <span>var</span> client = HttpClientFactory.Create(<span>"BlazorApp.PublicServerAPI"</span>);
+        <span>var</span> result = client.GetFromJsonAsync&lt;Something&gt;(<span>"/api/something"</span>);
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>Another option, which in my opinion is a bit nicer as I'm not a fan of magic strings, is to create a <em>typed client</em>. This means we can request an instance by type rather than use the magic string solution.</p><p>To do this we first need to add a new class, we'll call it <code>PublicClient</code> and add the following code.</p><!--kg-card-begin: markdown--><pre><code><span>public</span> <span>class</span> <span>PublicClient</span>
+{
+    <span>public</span> HttpClient Client { <span>get</span>; }
+    
+    <span><span>public</span> <span>PublicClient</span>(<span>HttpClient httpClient</span>)</span>
+    {
+        Client = httpClient;
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>This code is quite straightforward, we're just accepting a instance of <code>HttpClient</code> through DI and saving it off to the <code>Client</code> property.</p><p>Then in <code>Program.Main</code> we add the following code.</p><!--kg-card-begin: markdown--><pre><code>builder.Services.AddHttpClient&lt;PublicClient&gt;(client =&gt; client.BaseAddress = <span>new</span> Uri(builder.HostEnvironment.BaseAddress));
+</code></pre>
+<!--kg-card-end: markdown--><p>This is going to inject an <code>HttpClient</code> instance, configured with the base address we've specified, into our <code>PublicClient</code> class. It will also add our <code>PublicClient</code> class into the DI container so we can request an instance of it with the preconfigured <code>HttpClient</code>.</p><p>We can then use it like this.</p><!--kg-card-begin: markdown--><pre><code>@inject PublicClient PublicClient
+
+...
+
+
+@code {
+    <span><span>private</span> <span>async</span> Task <span>GetSomethingFromAPI</span>(<span></span>)</span>
+    {
+        <span>var</span> result = PublicClient.Client.GetFromJsonAsync&lt;Something&gt;(<span>"/api/something"</span>);
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>I think this is a much cleaner way to do things, it's saved us a line of code in our component and it's more obvious at a glance the type of client we are using. Using this approach also allows us to abstract the underlying <code>HttpClient</code> entirely, if we wish. We can write methods on the <code>PublicClient</code> so we never expose the <code>HttpClient</code> to calling code.</p><!--kg-card-begin: markdown--><pre><code><span>public</span> <span>class</span> <span>PublicClient</span>
+{
+    <span>private</span> HttpClient _<span>client
+    
+    <span>public</span> <span>PublicClient</span>(<span>HttpClient httpClient</span>)</span>
+    {
+        _client = httpClient;
+    }
+    
+    <span><span>public</span> <span>async</span> Task&lt;SomeThing&gt; <span>GetSomething</span>(<span></span>)</span>
+    {
+        <span>var</span> result = <span>await</span> _client.GetFromJsonAsync&lt;SomeThing&gt;(<span>"/api/something"</span>);
+        <span>return</span> result;
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><!--kg-card-begin: markdown--><pre><code>@inject PublicClient PublicClient
+
+...
+
+
+@code {
+    <span><span>private</span> <span>async</span> Task <span>GetSomethingFromAPI</span>(<span></span>)</span>
+    {
+        <span>var</span> result = PublicClient.GetSomething();
+    }
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>This code is now really succinct, we've also centralised all our API calling code which should make any future maintenance simpler.</p><h2 id="summary">Summary</h2><p>In this post we've explored a potential issue with unauthenticated users calling unprotected endpoints using the default <code>HttpClient</code> that comes with the Blazor WebAssembly auth templates. We've investigated Blazors source to understand where this comes from and then we've applied a solution which was to add a second <code>HttpClient</code> instance.</p><p>Once we had this working we also looked at a different implementation of the solution which made our code a bit simpler and easier to understand, as well as potentially making API calling code easier to maintain in the long run. </p>
+                        <hr>
+                        
+                        <hr>
+                        
+                    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
