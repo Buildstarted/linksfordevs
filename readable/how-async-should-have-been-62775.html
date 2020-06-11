@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+How async should have been - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="How async should have been - linksfor.dev(s)"/>
+    <meta property="article:author" content="Nikita Sobolev"/>
+    <meta property="og:description" content="Your sync and async code can be identical, but still, can work differently. It is a matter of right abstractions. In this article, I will show how one can write sync code to run async programs in Python."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://sobolevn.me/2020/06/how-async-should-have-been"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - How async should have been</title>
+<div class="readable">
+        <h1>How async should have been</h1>
+            <div>by Nikita Sobolev</div>
+            <div>Reading time: 13-17 minutes</div>
+        <div>Posted here: 11 Jun 2020</div>
+        <p><a href="https://sobolevn.me/2020/06/how-async-should-have-been">https://sobolevn.me/2020/06/how-async-should-have-been</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody">
+      <p>In the last few years <code>async</code> keyword and semantics made its way into many popular programming languages: <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function">JavaScript</a>, <a href="https://doc.rust-lang.org/std/keyword.async.html">Rust</a>, <a href="https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/operators/await">C#</a>, and <a href="https://en.wikipedia.org/wiki/Async/await">many others</a> languages that I don’t know or don’t use.</p>
+
+<p>Of course, Python also has <code>async</code> and <code>await</code> keywords since <code>python3.5</code>.</p>
+
+<p>In this article, I would like to provide my opinion about this feature, think of alternatives, and provide a new solution.</p>
+
+
+      <h2 id="colours-of-functions">
+        
+        <a href="#colours-of-functions">Colours of functions</a>
+        
+      </h2>
+
+<p>When introducing <code>async</code> functions into the languages, we actually end up with a split world. Now, some functions start to be red (or <code>async</code>) and old ones continue to be blue (sync).</p>
+
+<p>The thing about this division is that blue functions cannot call red ones.
+Red ones potentially can call blue ones. In Python, for example, it is partially true. Async functions can only call sync non-blocking functions. Is it possible to tell whether this function is blocking or not by its definition? Of course not! Python is a scripting language, don’t forget about that!</p>
+
+<p>This division creates two subsets of a single language: sync and async ones.
+5 years passed since the release of <code>python3.5</code>, but <code>async</code> support is not even near to what we have in the sync python world.</p>
+
+<p>Read <a href="http://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/">this brilliant piece</a> if you want to learn more about colors of functions.</p>
+
+
+    
+      <h2 id="code-duplication">
+        
+        <a href="#code-duplication">Code duplication</a>
+        
+      </h2>
+
+<p>Different colors of functions lead to a more practical problem: code duplication.</p>
+
+<p>Imagine, that you are writing a CLI tool to fetch sizes of web pages. And you want to support both sync and async ways of doing it. This might be very useful for library authors when you don’t know how your code is going to be used. It is not limited to just PyPI libraries, but also includes your in-company libraries with shared logic for different services written, for example, in Django and aiohttp. Or any other sync and async code. But, I must admit that single applications are mostly written in sync or async way only.</p>
+
+<p>Let’s start with the sync pseudo-code:</p>
+
+<div><div><pre><code><span>def</span> <span>fetch_resource_size</span><span>(</span><span>url</span><span>:</span> <span>str</span><span>)</span> <span>-&gt;</span> <span>int</span><span>:</span>
+    <span>response</span> <span>=</span> <span>client_get</span><span>(</span><span>url</span><span>)</span>
+    <span>return</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>)</span>
+</code></pre></div></div>
+
+<p>Looking pretty good! Now, let’s add its async counterpart:</p>
+
+<div><div><pre><code><span>async</span> <span>def</span> <span>fetch_resource_size</span><span>(</span><span>url</span><span>:</span> <span>str</span><span>)</span> <span>-&gt;</span> <span>int</span><span>:</span>
+    <span>response</span> <span>=</span> <span>await</span> <span>client_get</span><span>(</span><span>url</span><span>)</span>
+    <span>return</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>)</span>
+</code></pre></div></div>
+
+<p>It is basically the same code, but filled with <code>async</code> and <code>await</code> keywords!
+And I am not making this up, just compare code sample in <code>httpx</code> tutorial:</p>
+
+<ul>
+  <li><a href="https://www.python-httpx.org/quickstart/">Sync</a> code</li>
+  <li>vs <a href="https://www.python-httpx.org/async/">Async</a> code</li>
+</ul>
+
+<p>They show exactly the same picture.</p>
+
+
+    
+      <h2 id="abstraction-and-composition">
+        
+        <a href="#abstraction-and-composition">Abstraction and Composition</a>
+        
+      </h2>
+
+<p>Ok, we find ourselves in a situation where we need to rewrite all sync code and add <code>async</code> and <code>await</code> keywords here and there, so our program would become asynchronous.</p>
+
+<p>These two principles can help us in solving this problem.</p>
+
+<p>First of all, let’s rewrite our imperative pseudo-code into a functional pseudo-code. This will allow us to see the pattern more clearly:</p>
+
+<div><div><pre><code><span>def</span> <span>fetch_resource_size</span><span>(</span><span>url</span><span>:</span> <span>str</span><span>)</span> <span>-&gt;</span> <span>Abstraction</span><span>[</span><span>int</span><span>]:</span>
+    <span>return</span> <span>client_get</span><span>(</span><span>url</span><span>).</span><span>map</span><span>(</span>
+        <span>lambda</span> <span>response</span><span>:</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>),</span>
+    <span>)</span>
+</code></pre></div></div>
+
+<p>What is this <a href="https://returns.readthedocs.io/en/latest/pages/container.html#working-with-a-container"><code>.map</code></a> method? What does it do?</p>
+
+<p>This is a functional way of composing complex abstractions and pure functions. This method allows creating a new abstraction from the existing one with the new state. Let’s say that when we call <code>client_get(url)</code> it initially returns <code>Abstraction[Response]</code> and calling <code>.map(lambda response: len(response.content))</code> transforms it to the needed <code>Abstraction[int]</code> instance.</p>
+
+<p>Now the steps are pretty clear! Notice how easily we went from several independent steps into a single pipeline of function calls. We have also changed the return type of this function: now it returns some <code>Abstraction</code>.</p>
+
+<p>Now, let’s rewrite our code to work with async version:</p>
+
+<div><div><pre><code><span>def</span> <span>fetch_resource_size</span><span>(</span><span>url</span><span>:</span> <span>str</span><span>)</span> <span>-&gt;</span> <span>AsyncAbstraction</span><span>[</span><span>int</span><span>]:</span>
+    <span>return</span> <span>client_get</span><span>(</span><span>url</span><span>).</span><span>map</span><span>(</span>
+        <span>lambda</span> <span>response</span><span>:</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>),</span>
+    <span>)</span>
+</code></pre></div></div>
+
+<p>Wow, that’s mostly it! The only thing that is different is the <code>AsyncAbstraction</code> return type. Other than that, our code stayed exactly the same. We also don’t need to use <code>async</code> and <code>await</code> keywords anymore. We don’t use <code>await</code> at all (that’s the whole point of our journey!), and <code>async</code> functions do not make any sense without <code>await</code>.</p>
+
+<p>The last thing we need is to decide which client we want: async or sync one. Let’s fix that!</p>
+
+<div><div><pre><code><span>def</span> <span>fetch_resource_size</span><span>(</span>
+    <span>client_get</span><span>:</span> <span>Callable</span><span>[[</span><span>str</span><span>],</span> <span>AbstactionType</span><span>[</span><span>Response</span><span>]],</span>
+    <span>url</span><span>:</span> <span>str</span><span>,</span>
+<span>)</span> <span>-&gt;</span> <span>AbstactionType</span><span>[</span><span>int</span><span>]:</span>
+    <span>return</span> <span>client_get</span><span>(</span><span>url</span><span>).</span><span>map</span><span>(</span>
+        <span>lambda</span> <span>response</span><span>:</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>),</span>
+    <span>)</span>
+</code></pre></div></div>
+
+<p>Our <code>client_get</code> is now an argument of a callable type that receives a single URL string as an input and returns some <code>AbstractionType</code> over <code>Response</code> object. This <code>AbstractionType</code> is either <code>Abstraction</code> or <code>AsyncAbstraction</code> we have already seen on the previous samples.</p>
+
+<p>When we pass <code>Abstraction</code> our code works like a sync one, when <code>AsyncAbstraction</code> is passed, the same code automatically starts to work asynchronously.</p>
+
+
+    
+      <h2 id="ioresult-and-futureresult">
+        
+        <a href="#ioresult-and-futureresult">IOResult and FutureResult</a>
+        
+      </h2>
+
+<p>Luckily, we already have the right abstractions in <a href="https://github.com/dry-python/returns"><code>dry-python/returns</code></a>!</p>
+
+<p>Let me introduce to you type-safe, <code>mypy</code>-friendly, framework-independent, pure-python tool to provide you awesome abstractions you can use in any project!</p>
+
+
+    
+      <h3 id="sync-version">
+        
+        <a href="#sync-version">Sync version</a>
+        
+      </h3>
+
+<p>Before we go any further, to make this example reproducible, I need to provide dependencies that are going to be used later:</p>
+
+<div><div><pre><code>pip <span>install </span>returns httpx anyio
+</code></pre></div></div>
+
+<p>Let’s move on!</p>
+
+<p>One can rewrite this pseudo-code as a real working python code. Let’s start with the sync version:</p>
+
+<div><div><pre><code><span>from</span> <span>typing</span> <span>import</span> <span>Callable</span>
+
+<span>import</span> <span>httpx</span>
+
+<span>from</span> <span>returns.io</span> <span>import</span> <span>IOResultE</span><span>,</span> <span>impure_safe</span>
+
+<span>def</span> <span>fetch_resource_size</span><span>(</span>
+    <span>client_get</span><span>:</span> <span>Callable</span><span>[[</span><span>str</span><span>],</span> <span>IOResultE</span><span>[</span><span>httpx</span><span>.</span><span>Response</span><span>]],</span>
+    <span>url</span><span>:</span> <span>str</span><span>,</span>
+<span>)</span> <span>-&gt;</span> <span>IOResultE</span><span>[</span><span>int</span><span>]:</span>
+    <span>return</span> <span>client_get</span><span>(</span><span>url</span><span>).</span><span>map</span><span>(</span>
+        <span>lambda</span> <span>response</span><span>:</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>),</span>
+    <span>)</span>
+
+<span>print</span><span>(</span><span>fetch_resource_size</span><span>(</span>
+    <span>impure_safe</span><span>(</span><span>httpx</span><span>.</span><span>get</span><span>),</span>
+    <span>'https://sobolevn.me'</span><span>,</span>
+<span>))</span>
+<span># =&gt; &lt;IOResult: &lt;Success: 27972&gt;&gt;
+</span></code></pre></div></div>
+
+<p>We have changed a couple of things to make our pseudo-code real:</p>
+
+<ol>
+  <li>We now use <a href="https://returns.readthedocs.io/en/latest/pages/io.html"><code>IOResultE</code></a> which is a functional way to handle sync <code>IO</code> that might fail. Remember, <a href="https://sobolevn.me/2019/02/python-exceptions-considered-an-antipattern">exceptions are not always welcome</a>! <code>Result</code>-based types allow modeling exceptions as separate <code>Failure()</code> values. While successful values are wrapped in <code>Success</code> type. In a traditional approach, no one cares about exceptions. But, we do care ❤️</li>
+  <li>We use <a href="https://github.com/encode/httpx/"><code>httpx</code></a> that can work with sync and async requests</li>
+  <li>We use <a href="https://returns.readthedocs.io/en/latest/pages/io.html#impure-safe"><code>impure_safe</code></a> function to convert the return type of <code>httpx.get</code> to return the abstraction we need: <code>IOResultE</code></li>
+</ol>
+
+<p>Now, let’s try the async version!</p>
+
+
+    
+      <h3 id="async-version">
+        
+        <a href="#async-version">Async version</a>
+        
+      </h3>
+
+<div><div><pre><code><span>from</span> <span>typing</span> <span>import</span> <span>Callable</span>
+
+<span>import</span> <span>anyio</span>
+<span>import</span> <span>httpx</span>
+
+<span>from</span> <span>returns.future</span> <span>import</span> <span>FutureResultE</span><span>,</span> <span>future_safe</span>
+
+<span>def</span> <span>fetch_resource_size</span><span>(</span>
+    <span>client_get</span><span>:</span> <span>Callable</span><span>[[</span><span>str</span><span>],</span> <span>FutureResultE</span><span>[</span><span>httpx</span><span>.</span><span>Response</span><span>]],</span>
+    <span>url</span><span>:</span> <span>str</span><span>,</span>
+<span>)</span> <span>-&gt;</span> <span>FutureResultE</span><span>[</span><span>int</span><span>]:</span>
+    <span>return</span> <span>client_get</span><span>(</span><span>url</span><span>).</span><span>map</span><span>(</span>
+        <span>lambda</span> <span>response</span><span>:</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>),</span>
+    <span>)</span>
+
+<span>page_size</span> <span>=</span> <span>fetch_resource_size</span><span>(</span>
+    <span>future_safe</span><span>(</span><span>httpx</span><span>.</span><span>AsyncClient</span><span>().</span><span>get</span><span>),</span>
+    <span>'https://sobolevn.me'</span><span>,</span>
+<span>)</span>
+<span>print</span><span>(</span><span>page_size</span><span>)</span>
+<span>print</span><span>(</span><span>anyio</span><span>.</span><span>run</span><span>(</span><span>page_size</span><span>.</span><span>awaitable</span><span>))</span>
+<span># =&gt; &lt;FutureResult: &lt;coroutine object async_map at 0x10b17c320&gt;&gt;
+# =&gt; &lt;IOResult: &lt;Success: 27972&gt;&gt;
+</span></code></pre></div></div>
+
+<p>Notice, that we have exactly the same result,
+but now our code works asynchronously.
+And its core part didn’t change at all!</p>
+
+<p>However, it has some important notes:</p>
+
+<ol>
+  <li>We changed sync <code>IOResultE</code> into async <a href="https://returns.readthedocs.io/en/latest/pages/future.html"><code>FutureResultE</code></a> and <code>impure_safe</code> to <a href="https://returns.readthedocs.io/en/latest/pages/future.html#future-safe"><code>future_safe</code></a>, which does the same thing but returns another abstraction: <code>FutureResultE</code></li>
+  <li>We now also use <code>AsyncClient</code> from <code>httpx</code></li>
+  <li>We are also required to run the resulting <code>FutureResult</code> value. Because red functions cannot run themselves! To demonstrate that this approach works with any async library (<code>asyncio</code>, <code>trio</code>, <code>curio</code>), I am using <a href="https://github.com/agronholm/anyio"><code>anyio</code></a> utility</li>
+</ol>
+
+
+    
+      <h3 id="combining-the-two">
+        
+        <a href="#combining-the-two">Combining the two</a>
+        
+      </h3>
+
+<p>And now I can show you how you can combine
+these two versions into a single type-safe API.</p>
+
+<p>Sadly, <a href="https://github.com/dry-python/returns/issues/408">Higher Kinded Types</a> and proper <a href="https://github.com/dry-python/classes">type-classes</a> are work-in-progress, so we would use regular <code>@overload</code> function cases:</p>
+
+<div><div><pre><code><span>from</span> <span>typing</span> <span>import</span> <span>Callable</span><span>,</span> <span>Union</span><span>,</span> <span>overload</span>
+
+<span>import</span> <span>anyio</span>
+<span>import</span> <span>httpx</span>
+
+<span>from</span> <span>returns.future</span> <span>import</span> <span>FutureResultE</span><span>,</span> <span>future_safe</span>
+<span>from</span> <span>returns.io</span> <span>import</span> <span>IOResultE</span><span>,</span> <span>impure_safe</span>
+
+<span>@</span><span>overload</span>
+<span>def</span> <span>fetch_resource_size</span><span>(</span>
+    <span>client_get</span><span>:</span> <span>Callable</span><span>[[</span><span>str</span><span>],</span> <span>IOResultE</span><span>[</span><span>httpx</span><span>.</span><span>Response</span><span>]],</span>
+    <span>url</span><span>:</span> <span>str</span><span>,</span>
+<span>)</span> <span>-&gt;</span> <span>IOResultE</span><span>[</span><span>int</span><span>]:</span>
+    <span>"""Sync case."""</span>
+
+<span>@</span><span>overload</span>
+<span>def</span> <span>fetch_resource_size</span><span>(</span>
+    <span>client_get</span><span>:</span> <span>Callable</span><span>[[</span><span>str</span><span>],</span> <span>FutureResultE</span><span>[</span><span>httpx</span><span>.</span><span>Response</span><span>]],</span>
+    <span>url</span><span>:</span> <span>str</span><span>,</span>
+<span>)</span> <span>-&gt;</span> <span>FutureResultE</span><span>[</span><span>int</span><span>]:</span>
+    <span>"""Async case."""</span>
+
+<span>def</span> <span>fetch_resource_size</span><span>(</span>
+    <span>client_get</span><span>:</span> <span>Union</span><span>[</span>
+        <span>Callable</span><span>[[</span><span>str</span><span>],</span> <span>IOResultE</span><span>[</span><span>httpx</span><span>.</span><span>Response</span><span>]],</span>
+        <span>Callable</span><span>[[</span><span>str</span><span>],</span> <span>FutureResultE</span><span>[</span><span>httpx</span><span>.</span><span>Response</span><span>]],</span>
+    <span>],</span>
+    <span>url</span><span>:</span> <span>str</span><span>,</span>
+<span>)</span> <span>-&gt;</span> <span>Union</span><span>[</span><span>IOResultE</span><span>[</span><span>int</span><span>],</span> <span>FutureResultE</span><span>[</span><span>int</span><span>]]:</span>
+    <span>return</span> <span>client_get</span><span>(</span><span>url</span><span>).</span><span>map</span><span>(</span>
+        <span>lambda</span> <span>response</span><span>:</span> <span>len</span><span>(</span><span>response</span><span>.</span><span>content</span><span>),</span>
+    <span>)</span>
+</code></pre></div></div>
+
+<p>With <code>@overload</code> decorators we describe which combinations of inputs are allowed. And what return type will they produce. You can read more about <code>@overload</code> decorator <a href="https://sobolevn.me/2019/01/simple-dependent-types-in-python">here</a>.</p>
+
+<p>Finally, calling our function with both sync and async client:</p>
+
+<div><div><pre><code><span># Sync:
+</span><span>print</span><span>(</span><span>fetch_resource_size</span><span>(</span>
+    <span>impure_safe</span><span>(</span><span>httpx</span><span>.</span><span>get</span><span>),</span>
+    <span>'https://sobolevn.me'</span><span>,</span>
+<span>))</span>
+<span># =&gt; &lt;IOResult: &lt;Success: 27972&gt;&gt;
+</span>
+<span># Async:
+</span><span>page_size</span> <span>=</span> <span>fetch_resource_size</span><span>(</span>
+    <span>future_safe</span><span>(</span><span>httpx</span><span>.</span><span>AsyncClient</span><span>().</span><span>get</span><span>),</span>
+    <span>'https://sobolevn.me'</span><span>,</span>
+<span>)</span>
+<span>print</span><span>(</span><span>page_size</span><span>)</span>
+<span>print</span><span>(</span><span>anyio</span><span>.</span><span>run</span><span>(</span><span>page_size</span><span>.</span><span>awaitable</span><span>))</span>
+<span># =&gt; &lt;FutureResult: &lt;coroutine object async_map at 0x10b17c320&gt;&gt;
+# =&gt; &lt;IOResult: &lt;Success: 27972&gt;&gt;
+</span></code></pre></div></div>
+
+<p>As you can see <code>fetch_resource_size</code> with sync client immediately returns <code>IOResult</code> and can execute itself.
+In contrast to it, async version requires some event-loop to execute it. Like a regular coroutine. We use <code>anyio</code> for the demo.</p>
+
+<p><code>mypy</code> is pretty happy about our code too:</p>
+
+<div><div><pre><code>» mypy async_and_sync.py
+Success: no issues found in 1 source file
+</code></pre></div></div>
+
+<p>Let’s try to screw something up:</p>
+
+<div><div><pre><code><span>---lambda response: len(response.content),
+</span><span>+++lambda response: response.content,
+</span></code></pre></div></div>
+
+<p>And check that new error will be catched by <code>mypy</code>:</p>
+
+<div><div><pre><code><span>»</span> <span>mypy</span> <span>async_and_sync</span><span>.</span><span>py</span>
+<span>async_and_sync</span><span>.</span><span>py</span><span>:</span><span>33</span><span>:</span> <span>error</span><span>:</span> <span>Argument</span> <span>1</span> <span>to</span> <span>"map"</span> <span>of</span> <span>"IOResult"</span> <span>has</span> <span>incompatible</span> <span>type</span> <span>"Callable[[Response], bytes]"</span><span>;</span> <span>expected</span> <span>"Callable[[Response], int]"</span>
+<span>async_and_sync</span><span>.</span><span>py</span><span>:</span><span>33</span><span>:</span> <span>error</span><span>:</span> <span>Argument</span> <span>1</span> <span>to</span> <span>"map"</span> <span>of</span> <span>"FutureResult"</span> <span>has</span> <span>incompatible</span> <span>type</span> <span>"Callable[[Response], bytes]"</span><span>;</span> <span>expected</span> <span>"Callable[[Response], int]"</span>
+<span>async_and_sync</span><span>.</span><span>py</span><span>:</span><span>33</span><span>:</span> <span>error</span><span>:</span> <span>Incompatible</span> <span>return</span> <span>value</span> <span>type</span> <span>(</span><span>got</span> <span>"bytes"</span><span>,</span> <span>expected</span> <span>"int"</span><span>)</span>
+</code></pre></div></div>
+
+<p>As you can see, there’s nothing magical in a way how async code can be written with right abstractions. Inside our implementation, there’s still no magic. Just good old composition. What we real magic we do is providing the same API for different types - this allows us to abstract away how, for example, HTTP requests work: synchronously or asynchronously.</p>
+
+<p>I hope, that this quick demo shows how awesome <code>async</code> programs can be!
+Feel free to try new <a href="https://github.com/dry-python/returns/releases/tag/0.14.0"><code>dry-python/returns@0.14</code></a> release, it has lots of other goodies!</p>
+
+
+    
+      <h2 id="other-awesome-features">
+        
+        <a href="#other-awesome-features">Other awesome features</a>
+        
+      </h2>
+
+<p>Speaking about goodies, I want to highlight several of features I am most proud of:</p>
+
+<ul>
+  <li><a href="https://returns.readthedocs.io/en/latest/pages/curry.html">Typed <code>partial</code> and <code>@curry</code></a> functions</li>
+</ul>
+
+<div><div><pre><code><span>from</span> <span>returns.curry</span> <span>import</span> <span>curry</span><span>,</span> <span>partial</span>
+
+<span>def</span> <span>example</span><span>(</span><span>a</span><span>:</span> <span>int</span><span>,</span> <span>b</span><span>:</span> <span>str</span><span>)</span> <span>-&gt;</span> <span>float</span><span>:</span>
+    <span>...</span>
+
+<span>reveal_type</span><span>(</span><span>partial</span><span>(</span><span>example</span><span>,</span> <span>1</span><span>))</span>
+<span># note: Revealed type is 'def (b: builtins.str) -&gt; builtins.float'
+</span>
+<span>reveal_type</span><span>(</span><span>curry</span><span>(</span><span>example</span><span>))</span>
+<span># note: Revealed type is 'Overload(def (a: builtins.int) -&gt; def (b: builtins.str) -&gt; builtins.float, def (a: builtins.int, b: builtins.str) -&gt; builtins.float)'
+</span></code></pre></div></div>
+
+<p>Which means, that you can use <code>@curry</code> like so:</p>
+
+<div><div><pre><code><span>@</span><span>curry</span>
+<span>def</span> <span>example</span><span>(</span><span>a</span><span>:</span> <span>int</span><span>,</span> <span>b</span><span>:</span> <span>str</span><span>)</span> <span>-&gt;</span> <span>float</span><span>:</span>
+    <span>return</span> <span>float</span><span>(</span><span>a</span> <span>+</span> <span>len</span><span>(</span><span>b</span><span>))</span>
+
+<span>assert</span> <span>example</span><span>(</span><span>1</span><span>,</span> <span>'abc'</span><span>)</span> <span>==</span> <span>4.0</span>
+<span>assert</span> <span>example</span><span>(</span><span>1</span><span>)(</span><span>'abc'</span><span>)</span> <span>==</span> <span>4.0</span>
+</code></pre></div></div>
+
+<ul>
+  <li><a href="https://returns.readthedocs.io/en/latest/pages/pipeline.html">Functional pipelines with type-inference</a></li>
+</ul>
+
+<p>You can now use functional pipelines with full type inference that is augmentated by a custom <code>mypy</code> plugin:</p>
+
+<div><div><pre><code><span>from</span> <span>returns.pipeline</span> <span>import</span> <span>flow</span>
+<span>assert</span> <span>flow</span><span>(</span>
+    <span>[</span><span>1</span><span>,</span> <span>2</span><span>,</span> <span>3</span><span>],</span>
+    <span>lambda</span> <span>collection</span><span>:</span> <span>max</span><span>(</span><span>collection</span><span>),</span>
+    <span>lambda</span> <span>max_number</span><span>:</span> <span>-</span><span>max_number</span><span>,</span>
+<span>)</span> <span>==</span> <span>-</span><span>3</span>
+</code></pre></div></div>
+
+<p>We all know how hard it is to work with <code>lambda</code>s in typed code because its arguments always have <code>Any</code> type. And this might break regular <code>mypy</code> inference.</p>
+
+<p>Now, we always know that <code>lambda collection: max(collection)</code> has <code>Callable[[List[int]], int]</code> type inside this pipeline. And <code>lambda max_number: -max_number</code> is just <code>Callable[[int], int]</code>. You can pass any number of arguments to <code>flow</code>, they all will work perfectly. Thanks to our custom plugin!</p>
+
+<ul>
+  <li><a href="https://returns.readthedocs.io/en/latest/pages/context.html#requirescontextfutureresult-container"><code>RequiresContextFutureResult</code></a> for <a href="https://sobolevn.me/2020/02/typed-functional-dependency-injection">typed functional dependency injection</a></li>
+</ul>
+
+<p>It is an abstraction over <code>FutureResult</code> we have already covered in this article.
+It might be used to explicitly pass dependencies in a functional manner in your async programs.</p>
+
+
+    
+      <h2 id="to-be-done">
+        
+        <a href="#to-be-done">To be done</a>
+        
+      </h2>
+
+<p>However, there are more things to be done before we can hit <code>1.0</code>:</p>
+
+<ol>
+  <li>We need to implement Higher Kinded Types or their emulation, <a href="https://github.com/dry-python/returns/issues/408">source</a></li>
+  <li>Adding proper type-classes, so we can implement needed abstractions, <a href="https://github.com/dry-python/classes">source</a></li>
+  <li>We would love to try the <code>mypyc</code> compiler. It will potentially allow us to compile our typed-annotated Python program to binary. And as a result, simply dropping in <code>dry-python/returns</code> into your program will make it several times faster, <a href="https://github.com/dry-python/returns/issues/398">source</a></li>
+  <li>Finding new ways to write functional Python code, like our on-going investigation of <a href="https://github.com/dry-python/returns/issues/392">“do-notation”</a></li>
+</ol>
+
+
+    
+      <h2 id="conclusion">
+        
+        <a href="#conclusion">Conclusion</a>
+        
+      </h2>
+
+<p>Composition and abstraction can solve any problem. In this article, I have shown you how they can solve a problem of function colors and allow people to write simple, readable, and still flexible code that works. And type-checks.</p>
+
+<p>Check out <a href="https://github.com/dry-python/returns"><code>dry-python/returns</code></a>, provide your feedback, learn new ideas, maybe even <a href="https://github.com/sponsors/dry-python/">help us to sustain this project</a>!</p>
+
+<p>And as always, <a href="https://github.com/sobolevn/">follow me on GitHub</a> to keep up with new awesome Python libraries I make or help with!</p>
+
+
+    
+      <h2 id="gratis">
+        
+        <a href="#gratis">Gratis</a>
+        
+      </h2>
+
+<p>Thanks for reviewing this post to <a href="https://github.com/AlwxSin">@AlwxSin</a> and <a href="https://github.com/ditansu">@ditansu</a>.</p>
+
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
