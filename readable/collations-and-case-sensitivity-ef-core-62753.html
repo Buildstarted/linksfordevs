@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Collations and case sensitivity - EF Core - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Collations and case sensitivity - EF Core - linksfor.dev(s)"/>
+    <meta property="article:author" content="roji"/>
+    <meta property="og:description" content="How to configure collations and case-sensitivity in the database and on queries"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://docs.microsoft.com/en-us/ef/core/miscellaneous/collations-and-case-sensitivity"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Collations and case sensitivity - EF Core</title>
+<div class="readable">
+        <h1>Collations and case sensitivity - EF Core</h1>
+            <div>by roji</div>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 11 Jun 2020</div>
+        <p><a href="https://docs.microsoft.com/en-us/ef/core/miscellaneous/collations-and-case-sensitivity">https://docs.microsoft.com/en-us/ef/core/miscellaneous/collations-and-case-sensitivity</a></p>
+        <hr/>
+<div id="readability-page-1" class="page">
+
+
+	<div data-bi-name="body">
+
+		<div>
+
+			
+
+			<section>
+				<div>
+
+
+				<div id="main-column">
+
+					<main id="main" role="main" data-bi-name="content" lang="en-us" dir="ltr">
+
+
+
+						
+
+						<ul data-bi-name="page info" lang="en-us" dir="ltr">
+							<li>
+								<time data-article-date="" aria-label="Article review date" datetime="2020-04-27T00:00:00.000Z" data-article-date-source="ms.date">04/27/2020</time>
+							</li>
+								<li>5 minutes to read</li>
+									<li>
+										<a href="https://github.com/dotnet/EntityFramework.Docs/blob/master/entity-framework/core/miscellaneous/collations-and-case-sensitivity.md" title="1 Contributor" aria-label="1 Contributor">
+											<ul data-bi-name="contributors" aria-hidden="true">
+														<li><img src="https://github.com/roji.png?size=32" data-src="https://github.com/roji.png?size=32" role="presentation"></li>
+											</ul>
+										</a>
+									</li>
+						</ul>
+
+						<nav id="center-doc-outline" data-bi-name="intopic toc" role="navigation" aria-label="Article Outline">
+							<h3>In this article</h3>
+						<ol><li><a href="#introduction-to-collations">Introduction to collations</a></li><li><a href="#database-collation">Database collation</a></li><li><a href="#column-collation">Column collation</a></li><li><a href="#explicit-collation-in-a-query">Explicit collation in a query</a></li><li><a href="#translation-of-built-in-net-string-operations">Translation of built-in .NET string operations</a></li><li><a href="#database-specific-information">Database-specific information</a></li></ol></nav>
+
+						<!-- <content> -->
+							<div>
+<p><span aria-hidden="true"></span> Note</p>
+<p>This feature is introduced in EF Core 5.0.</p>
+</div>
+<p>Text processing in databases can be a complex, and requires more user attention that one would suspect. For one thing, databases vary considerably in how they handle text; for example, while some databases are case-sensitive by default (e.g. Sqlite, PostgreSQL), others are case-insensitive (SQL Server, MySQL). In addition, because of index usage, case-sensitivity and similar aspects can have a far-reaching impact on query performance: while it may be tempting to use <code>string.Lower</code> to force a case-insensitive comparison in a case-sensitive database, doing so may prevent your application from using indexes. This page details how to configure case sensitivity, or more generally, collations, and how to do so in an efficient way without compromising query performance.</p>
+<h2 id="introduction-to-collations">Introduction to collations<a href="#introduction-to-collations" aria-labelledby="introduction-to-collations"></a></h2>
+<p>A fundamental concept in text processing is the <em>collation</em>, which is a set of rules determining how text values are ordered and compared for equality. For example, while a case-insensitive collation disregards differences between upper- and lower-case letters for the purposes of equality comparison, a case-sensitive collation does not. However, since case-sensitivity is culture-sensitive (e.g. <code>i</code> and <code>I</code> represent different letter in Turkish), there exist multiple case-insensitive collations, each with its own set of rules. The scope of collations also extends beyond case-sensitivity, to other aspects of character data; in German, for example, it is sometimes (but not always) desirable to treat <code>ä</code> and <code>ae</code> as identical. Finally, collations also define how text values are <em>ordered</em>: while German places <code>ä</code> after <code>a</code>, Swedish places it at the end of the alphabet.</p>
+<p>All text operations in a database use a collation - whether explicitly or implicitly - to determine how the operation compares and orders strings. The actual list of available collations and their naming schemes is database-specific; consult <a href="#database-specific-information" data-linktype="self-bookmark">the section below</a> for links to relevant documentation pages of various databases. Fortunately, database do generally allow a default collation to be defined at the database or column level, and to explicitly specify which collation should be use for specific operations in a query.</p>
+<h2 id="database-collation">Database collation<a href="#database-collation" aria-labelledby="database-collation"></a></h2>
+<p>In most database systems, a default collation is defined at the database level; unless overridden, that collation implicitly applies to all text operations occurring within that database. The database collation is typically set at database creation time (via the <code>CREATE DATABASE</code> DDL statement), and if not specified, defaults to a some server-level value determined at setup time. For example, the default server-level collation in SQL Server is <code>SQL_Latin1_General_CP1_CI_AS</code>, which is a case-insensitive, accent-sensitive collation. Although database systems usually do permit altering the collation of an existing database, doing so can lead to complications; it is recommended to pick a collation before database creation.</p>
+<p>When using EF Core migrations to manage your database schema, the following in your model's <code>OnModelCreating</code> method configures a SQL Server database to use a case-sensitive collation:</p>
+<pre tabindex="0"><code name="Main" data-author-content="modelBuilder.UseCollation(&quot;SQL_Latin1_General_CP1_CS_AS&quot;);
+"><span>modelBuilder.UseCollation(<span>"SQL_Latin1_General_CP1_CS_AS"</span>);
+</span></code></pre><h2 id="column-collation">Column collation<a href="#column-collation" aria-labelledby="column-collation"></a></h2>
+<p>Collations can also be defined on text columns, overriding the database default. This can be useful if certain columns need to be case-insensitive, while the rest of the database needs to be case-sensitive.</p>
+<p>When using EF Core migrations to manage your database schema, the following configures the column for the <code>Name</code> property to be case-insensitive in a database that is otherwise configured to be case-sensitive:</p>
+<pre tabindex="0"><code name="Main" highlight-lines="6" data-author-content="protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    modelBuilder.UseCollation(&quot;SQL_Latin1_General_CP1_CS_AS&quot;);
+
+    modelBuilder.Entity<Customer>().Property(c => c.Name)
+        .UseCollation(&quot;SQL_Latin1_General_CP1_CI_AS&quot;);
+}
+"><span><span><span>protected</span> <span>override</span> <span>void</span> <span>OnModelCreating</span>(<span>ModelBuilder modelBuilder</span>)</span>
+{
+    modelBuilder.UseCollation(<span>"SQL_Latin1_General_CP1_CS_AS"</span>);
+
+    modelBuilder.Entity&lt;Customer&gt;().Property(c =&gt; c.Name)</span>
+<mark>        .UseCollation(<span>"SQL_Latin1_General_CP1_CI_AS"</span>);</mark>
+<span>}
+</span></code></pre><h2 id="explicit-collation-in-a-query">Explicit collation in a query<a href="#explicit-collation-in-a-query" aria-labelledby="explicit-collation-in-a-query"></a></h2>
+<p>In some cases, the same column needs to be queried using different collations by different queries. For example, one query may need to perform a case-sensitive comparison on a column, while another may need to perform a case-insensitive comparison on the same column. This can be accomplished by explicitly specifying a collation within the query itself:</p>
+<pre tabindex="0"><code name="Main" data-author-content="var customers = context.Customers
+    .Where(c => EF.Functions.Collate(c.Name, &quot;SQL_Latin1_General_CP1_CS_AS&quot;) == &quot;John&quot;)
+    .ToList();
+"><span><span>var</span> customers = context.Customers
+    .Where(c =&gt; EF.Functions.Collate(c.Name, <span>"SQL_Latin1_General_CP1_CS_AS"</span>) == <span>"John"</span>)
+    .ToList();
+</span></code></pre>
+<p>This generates a <code>COLLATE</code> clause in the SQL query, which applies a case-sensitive collation regardless of the collation defined at the column or database level:</p>
+<pre tabindex="0"><code data-author-content="SELECT [c].[Id], [c].[Name]
+FROM [Customers] AS [c]
+WHERE [c].[Name] COLLATE SQL_Latin1_General_CP1_CS_AS = N'John'
+"><span><span>SELECT</span> [c].[<span>Id</span>], [c].[<span>Name</span>]
+<span>FROM</span> [Customers] <span>AS</span> [c]
+<span>WHERE</span> [c].[<span>Name</span>] <span>COLLATE</span> SQL_Latin1_General_CP1_CS_AS = N<span>'John'</span>
+</span></code></pre>
+<h3 id="explicit-collations-and-indexes">Explicit collations and indexes<a href="#explicit-collations-and-indexes" aria-labelledby="explicit-collations-and-indexes"></a></h3>
+<p>Indexes are one of the most important factors in database performance - a query that runs efficiently with an index can grind to a halt without that index. Indexes implicitly inherit the collation of their column; this means that all queries on the column are automatically eligible to use indexes defined on that column - provided that the query doesn't specify a different collation. Specifying an explicit collation in a query will generally prevent that query from using an index defined on that column, since the collations would no longer match; it is therefore recommended to exercise caution when using this feature. It is always preferable to define the collation at the column (or database) level, allowing all queries to implicitly use that collation and benefit from any index.</p>
+<p>Note that some databases allow the collation to be defined when creating an index (e.g. PostgreSQL, Sqlite). This allows multiple indexes to be defined on the same column, speeding up operations with different collations (e.g. both case-sensitive and case-insensitive comparisons). Consult your database provider's documentation for more details.</p>
+<div>
+<p><span aria-hidden="true"></span> Warning</p>
+<p>Always inspect the query plans of your queries, and make sure the proper indexes are being used in performance-critical queries executing over large amounts of data. Overriding case-sensitivity in a query via <code>EF.Functions.Collate</code> (or by calling <code>string.ToLower</code>) can have a very significant impact on your application's performance.</p>
+</div>
+<h2 id="translation-of-built-in-net-string-operations">Translation of built-in .NET string operations<a href="#translation-of-built-in-net-string-operations" aria-labelledby="translation-of-built-in-net-string-operations"></a></h2>
+<p>In .NET, string equality is case-sensitive by default: <code>s1 == s2</code> performs an ordinal comparison that requires the strings to be identical. Because the default collation of databases varies, and because it is desirable for simple equality to use indexes, EF Core makes no attempt to translate simple equality to a database case-sensitive operation: C# equality is translated directly to SQL equality, which may or may not be case-sensitive, depending on the specific database in use and its collation configuration.</p>
+<p>In addition, .NET provides overloads of <a href="https://docs.microsoft.com/en-us/dotnet/api/system.string.equals#System_String_Equals_System_String_System_StringComparison_" data-linktype="absolute-path"><code>string.Equals</code></a> accepting a <a href="https://docs.microsoft.com/en-us/dotnet/api/system.stringcomparison" data-linktype="absolute-path"><code>StringComparison</code></a> enum, which allows specifying case-sensitivity and culture for the comparison. By design, EF Core refrains from translating these overloads to SQL, and attempting to use them will result in an exception. For one thing, EF Core does know not which case-sensitive or case-insensitive collation should be used. More importantly, applying a collation would in most cases prevent index usage, significantly impacting performance for a very basic and commonly-used .NET construct. To force a query to use case-sensitive or case-insensitive comparison, specify a collation explicitly via <code>EF.Functions.Collate</code> as <a href="#explicit-collations-and-indexes" data-linktype="self-bookmark">detailed above</a>.</p>
+<h2 id="database-specific-information">Database-specific information<a href="#database-specific-information" aria-labelledby="database-specific-information"></a></h2>
+<ul>
+<li><a href="https://docs.microsoft.com/en-us/sql/relational-databases/collations/collation-and-unicode-support" data-linktype="absolute-path">SQL Server documentation on collations</a>.</li>
+<li><a href="https://docs.microsoft.com/en-us/dotnet/standard/data/sqlite/collation" data-linktype="absolute-path">Microsoft.Data.Sqlite documentation on collations</a>.</li>
+<li><a href="https://www.postgresql.org/docs/current/collation.html" data-linktype="external">PostgreSQL documentation on collations</a>.</li>
+<li><a href="https://dev.mysql.com/doc/refman/en/charset-general.html" data-linktype="external">MySQL documentation on collations</a>.</li>
+</ul>
+
+						<!-- </content> -->
+
+						</main>
+
+						<!-- recommended content page section -->
+
+							<nav data-bi-name="recommendation-bottom" hidden="" id="recommended-content-center" aria-labelledby="recommended-content-center-title">
+								<h3 id="recommended-content-center-title">Related Articles</h3>
+							</nav>
+
+						<!-- end recommended content page section -->
+
+						<!-- page rating section -->
+								
+						<!-- end page rating section -->
+
+
+						<!-- feedback section -->
+<section data-bi-name="feedback-section">
+
+    <h2 id="feedback">Feedback</h2>
+
+    <div>
+        <p aria-hidden="true" id="send-feedback-about">Submit and view feedback for</p>
+
+        
+    </div>
+
+    
+</section>
+
+						<!-- end feedback section -->
+
+						<!-- feedback report section -->
+						<!-- end feedback report section -->
+
+						
+					</div>
+
+					
+
+					<!--end of div.columns -->
+				</div>
+
+			<!--end of .primary-holder -->
+			</section>
+
+			
+		</div>
+
+		<!--end of .mainContainer -->
+	</div>
+
+	
+
+	
+
+	
+
+
+</div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
