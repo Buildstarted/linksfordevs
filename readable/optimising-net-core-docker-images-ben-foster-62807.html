@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Optimising .NET Core Docker images - Ben Foster - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Optimising .NET Core Docker images - Ben Foster - linksfor.dev(s)"/>
+    <meta property="og:description" content="Put your .NET Core Docker images on a diet with by combining self-contained applications, assembly trimming and multi-stage Docker builds."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://benfoster.io/blog/optimising-dotnet-docker-images/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Optimising .NET Core Docker images - Ben Foster</title>
+<div class="readable">
+        <h1>Optimising .NET Core Docker images - Ben Foster</h1>
+            <div>Reading time: 4-5 minutes</div>
+        <div>Posted here: 12 Jun 2020</div>
+        <p><a href="https://benfoster.io/blog/optimising-dotnet-docker-images/">https://benfoster.io/blog/optimising-dotnet-docker-images/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>Recently I was giving <a href="https://github.com/benfoster/Ditto">Ditto</a>, one of my side projects, some love and hooking up Docker Hub to build my images. Ditto is a replication tool for <a href="https://eventstore.org/">Event Store</a> providing a drop-in Docker image that with just a few environment variables set can begin replicating events between two Event Store clusters. To create the best deployment experience I started to look at how I could optimise the compiled Docker images, specifically, making them as small as possible.</p><h2 id="multi-stage-builds">Multi-stage builds</h2><p>One of the most popular ways for keeping Docker image size to a minimum is to use <a href="https://docs.docker.com/develop/develop-images/multistage-build/">multi-stage builds</a>. This feature allows you to define stages based on different base images. This means you can use a base image that contains all the dependencies you need to build or publish your application and then a minimal base image containing just runtime dependencies. There’s a good write-up on how to use multi-stage builds with ASP.NET Core <a href="https://docs.microsoft.com/en-us/aspnet/core/host-and-deploy/docker/building-net-docker-images?view=aspnetcore-3.1">here</a>.</p><p>Below is the original Dockerfile from the Ditto project:</p><div><pre><code data-lang="dockerfile"><span>FROM</span><span> mcr.microsoft.com/dotnet/core/sdk:3.1-alpine AS base</span>
+
+<span>ARG</span> <span>BUILDCONFIG</span><span>=</span>RELEASE
+<span>ARG</span> <span>VERSION</span><span>=</span><span>1</span>.0.0
+
+<span># copy csproj and restore as distinct layers</span>
+<span>COPY</span> ./src/Ditto/Ditto.csproj ./Ditto/
+<span>RUN</span> dotnet restore Ditto/Ditto.csproj
+
+<span># copy everything else and build</span>
+<span>COPY</span> ./src/Ditto/ ./Ditto/
+<span>RUN</span> dotnet publish Ditto/Ditto.csproj -c <span>$BUILDCONFIG</span> -o out /p:Version<span>=</span><span>$VERSION</span>
+
+<span># build runtime image</span>
+<span>FROM</span><span> mcr.microsoft.com/dotnet/core/aspnet:3.1-alpine</span>
+<span>WORKDIR</span><span> /app</span>
+<span>COPY</span> --from<span>=</span>base /out ./
+
+<span>EXPOSE</span><span> 5000</span>
+<span>ENTRYPOINT</span> [<span>"./Ditto"</span>]
+</code></pre></div><p>When building with <code>docker build</code> the resulting image is <strong>111MB</strong>.</p><h2 id="assembly-trimming">Assembly trimming</h2><p>As of .NET Core 3.1, assembly trimming is supported natively. Taken from the <a href="https://docs.microsoft.com/en-us/dotnet/core/deploying/trim-self-contained">docs</a>:</p><blockquote><p>The trimming feature works by examining the application binaries to discover and build a graph of the required runtime assemblies. The remaining runtime assemblies that aren’t referenced are excluded.</p></blockquote><p><strong>Note that you should test trimmed applications thoroughly as trimming may have undesired results, especially in applications that dynamically load or reference assemblies using reflection.</strong></p><p>Trimming only works on self-contained deployments where the .NET Core runtime is published alongside your application. Let’s start with publishing a self-contained version of Ditto that targets Alpine Linux. You can find the full list of runtime identifiers <a href="https://docs.microsoft.com/en-us/dotnet/core/rid-catalog">here</a>:</p><pre><code>dotnet publish Ditto/Ditto.csproj --runtime linux-musl-x64 -o out
+</code></pre><p>To see the total file size of the published directory we can use <code>du -hs ./out</code> which returns 79MB. Now let’s see the effect of assembly trimming, with a slight change to our publish command:</p><pre><code>dotnet publish Ditto/Ditto.csproj --runtime linux-musl-x64 -o out -p:PublishTrimmed=true
+</code></pre><p>The output indicates that the assemblies have been optimized.</p><pre><code>Determining projects to restore...
+All projects are up-to-date for restore.
+Ditto -&gt; /Users/ben.foster/source/personal/Ditto/src/Ditto/bin/Debug/netcoreapp3.1/linux-musl-x64/Ditto.dll
+Optimizing assemblies for size, which may change the behavior of the app. Be sure to test after publishing. See: https://aka.ms/dotnet-illink
+Ditto -&gt; /Users/ben.foster/source/personal/Ditto/src/Ditto/out/
+</code></pre><p>This results in a total file size of <strong>59MB, a decrease of 25%</strong>.</p><h2 id="shrinking-the-net-core-docker-image">Shrinking the .NET Core Docker image</h2><p>To benefit from our self-contained application we no longer need to use a base image that includes the .NET Core runtime. Instead, Microsoft provide base images that include the dependencies that the .NET Core <em>runtime</em> needs to run. The updated Dockerfile can be seen below:</p><div><pre><code data-lang="dockerfile"><span>FROM</span><span> mcr.microsoft.com/dotnet/core/sdk:3.1-alpine AS base</span>
+
+<span>ARG</span> <span>BUILDCONFIG</span><span>=</span>RELEASE
+<span>ARG</span> <span>VERSION</span><span>=</span><span>1</span>.0.0
+
+<span># copy csproj and restore as distinct layers</span>
+<span>COPY</span> ./src/Ditto/Ditto.csproj ./Ditto/
+<span>RUN</span> dotnet restore Ditto/Ditto.csproj
+
+<span># copy everything else and build</span>
+<span>COPY</span> ./src/Ditto/ ./Ditto/
+<span>RUN</span> dotnet publish Ditto/Ditto.csproj --runtime linux-musl-x64 -c <span>$BUILDCONFIG</span> -o out /p:Version<span>=</span><span>$VERSION</span> -p:PublishTrimmed<span>=</span>true
+
+<span># build runtime image</span>
+<span>FROM</span><span> mcr.microsoft.com/dotnet/core/runtime-deps:3.1-alpine</span>
+<span>WORKDIR</span><span> /app</span>
+<span>COPY</span> --from<span>=</span>base /out ./
+
+<span>EXPOSE</span><span> 5000</span>
+<span>ENTRYPOINT</span> [<span>"./Ditto"</span>]
+</code></pre></div><p>The resulting Docker image is just <strong>61.6MB a whopping 45% reduction</strong> from the original image.</p><h3 id="conclusion">Conclusion</h3><p>To put your .NET Core Docker images on a diet:</p><ul><li>Use multi-stage builds</li><li>Compile to a self-contained application</li><li>Use assembly trimming</li><li>Test thoroughly</li><li>Use the <code>runtime-deps</code> base image</li></ul></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
