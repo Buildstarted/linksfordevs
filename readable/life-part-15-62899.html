@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 15 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 15 - linksfor.dev(s)"/>
+    <meta property="og:description" content="Code for this episode is here. Where were we? I was gradually changing Abrash&#x2019;s &#x201C;remember the neighbour counts&#x201D; into Stafford&#x2019;s algorithm from an early 1990s optimization co&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/06/15/life-part-15/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 15</title>
+<div class="readable">
+        <h1>Life, part 15</h1>
+            <div>Reading time: 7-9 minutes</div>
+        <div>Posted here: 15 Jun 2020</div>
+        <p><a href="https://ericlippert.com/2020/06/15/life-part-15/">https://ericlippert.com/2020/06/15/life-part-15/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p>Code for this episode is <a href="https://github.com/ericlippert/ConwaysLife/tree/episode15">here</a>.</p>
+<hr>
+<p>Where were we? I was gradually changing Abrash’s “remember the neighbour counts” into Stafford’s algorithm from an early 1990s optimization contest. In this series I’m going to illustrate the algorithm in C#, and we’ll conjecture along the way how the performance characteristics are different from the original machine language implementation; I’m more interested in the ideas expressed in the algorithm than the exact implementation details.</p>
+<p>So far we’ve got:</p>
+<ul>
+<li>Each cell takes six bits out of a byte; one for its current state, four for the count of its neighbours, and one to express the “new state” for a cell that is changing.</li>
+<li>We create a “previous changes” list for use on the next tick; by checking whether the “new state” and “current state” bits are the same, we make adding to the change list idempotent, and thereby deduplicate it.</li>
+<li>The tick algorithm is O(changed cells).</li>
+</ul>
+<p>Dave Stafford’s observation was that if we can compress “six bits per cell” down to five, then we can store three cells in a 16 bit short. That doesn’t sound like a win, but in a few episodes we will see why it is — maybe.</p>
+<hr>
+<p>A brief aside: when I ask technical interview questions I always try to base them on a problem I actually had to solve in the real job. Back in the day we needed to make sure that VBScript could work on 64 bit Windows machines; it previously had only been compiled to 16 and 32 bit Windows. (Yes, 16 bit; Internet Explorer ran on Windows 3.1 in 1996 when I started on the scripting team.) We immediately ran into a problem that, full disclosure, I had caused.</p>
+<p>You see, VBScript used the VARIANT data structure internally to store data, and VARIANT had an unused 32 bit field in the middle of it that I was using to stash a pointer to some supplemental data. The trouble is: the 64 bit version of VARIANT still only had a 32 bit unused field, so we could not stash a pointer in there anymore. So… now what? That’s the problem I had to solve.</p>
+<p>The interview question was a simplified version of this scenario, and let me tell you, the number of candidates who tried to store 64 pounds of bits in a 32 pound sack boggled the mind. So I will forgive you if you’re skeptical right now that there is a way to compress six bits down to five!</p>
+<hr>
+<p>How then to do this impossible thing? The key observation is that the reason we need four bits for the living neighbour count is because there are nine possibilities: zero through eight living neighbours. If we only needed to represent eight possibilities then we could do it in three bits. Without further ado, we’re going to store three cells in a 16 bit short like this:</p>
+<ul>
+<li>Call the three cells Left, Middle and Right, or L, M, R for short.</li>
+<li>Bit 15 is unused; the original implementation did “wrap around” behaviour and used this bit to store whether the triplet was on an edge or not. I’m going to instead continue to use a “surrounding rectangle of death” approach.</li>
+<li>Bits 14, 13 and 12 are the “next state” of L, M, and R.</li>
+<li>Bits 11, 10 and 9 are the “current state” of L, M and R.</li>
+<li>Bits 8, 7 and 6 are a three-bit integer giving the count of<em> living neighbours of Left that are not Middle</em>; we already know the state of Middle in bit 13.</li>
+<li>Bits 5, 4 and 3 are a three-bit integer giving the count of <em>living neighbours of Middle that are not Right or Left</em>.</li>
+<li>Bits 2, 1 and 0 are similarly <em>the living neighbour count of Right not counting Middle.</em></li>
+</ul>
+<p>And that’s how we fit 18 pounds into a 15 pound sack.</p>
+<p>As usual in this series and in life, I’m going to make an immutable value type that wraps a short and put all the bit twiddling code in methods of the struct:</p>
+<pre>struct Triplet
+{
+  private short triplet;
+  public Triplet(short triplet)
+  {
+    this.triplet = triplet;
+  }
+  // Bit numbers
+  private const int lnext = 14;
+  private const int mnext = 13;
+  private const int rnext = 12;
+  private const int lcur = 11;
+  private const int mcur = 10;
+  private const int rcur = 9;
+  private const int lcount = 6;
+  private const int mcount = 3;
+  private const int rcount = 0;
+
+  // Bit masks
+  private const int lnm = 1 &lt;&lt; lnext;
+  private const int mnm = 1 &lt;&lt; mnext;
+  private const int rnm = 1 &lt;&lt; rnext;
+  private const int lcm = 1 &lt;&lt; lcur;
+  private const int mcm = 1 &lt;&lt; mcur;
+  private const int rcm = 1 &lt;&lt; rcur;
+  private const int lcountm = 7 &lt;&lt; lcount;
+  private const int mcountm = 7 &lt;&lt; mcount;
+  private const int rcountm = 7 &lt;&lt; rcount;
+
+  // Getters and setters
+  // I'm going to want the state as both integers and bools because
+  // I do math on them.
+&nbsp; public bool LeftNext =&gt; (lnm &amp; triplet) != 0;
+  public bool MiddleNext =&gt; (mnm &amp; triplet) != 0;
+  public bool RightNext =&gt; (rnm &amp; triplet) != 0;
+
+  public int LeftNextRaw =&gt; (triplet &amp; lnm) &gt;&gt; lnext;
+  public int MiddleNextRaw =&gt; (triplet &amp; mnm) &gt;&gt; mnext;
+  public int RightNextRaw =&gt; (triplet &amp; rnm) &gt;&gt; rnext;
+
+&nbsp; public Triplet SetLeftNext(bool b) =&gt;
+    new Triplet(b ? (lnm | triplet) : (~lnm &amp; triplet));
+  public Triplet SetMiddleNext(bool b) =&gt;
+    new Triplet(b ? (mnm | triplet) : (~mnm &amp; triplet));
+  public Triplet SetRightNext(bool b) =&gt;
+    new Triplet(b ? (rnm | triplet) : (~rnm &amp; triplet));
+
+  public bool LeftCurrent =&gt; (lcm &amp; triplet) != 0;
+  public bool MiddleCurrent =&gt; (mcm &amp; triplet) != 0;
+  public bool RightCurrent =&gt; (rcm &amp; triplet) != 0;
+
+  public int LeftCurrentRaw =&gt; (triplet &amp; lcm) &gt;&gt; lcur;
+  public int MiddleCurrentRaw =&gt; (triplet &amp; mcm) &gt;&gt; mcur;
+  public int RightCurrentRaw =&gt; (triplet &amp; rcm) &gt;&gt; rcur;
+
+  public Triplet SetLeftCurrent(bool b) =&gt;
+    new Triplet(b ? (lcm | triplet) : (~lcm &amp; triplet));
+  public Triplet SetMiddleCurrent(bool b) =&gt;
+    new Triplet(b ? (mcm | triplet) : (~mcm &amp; triplet));
+  public Triplet SetRightCurrent(bool b) =&gt;
+    new Triplet(b ? (rcm | triplet) : (~rcm &amp; triplet));
+  // I want to be able to access both the raw bits and the logical count.
+  public int LeftCountRaw =&gt; (lcountm &amp; triplet) &gt;&gt; lcount;
+  public int MiddleCountRaw =&gt; (mcountm &amp; triplet) &gt;&gt; mcount;
+  public int RightCountRaw =&gt; (rcountm &amp; triplet) &gt;&gt; rcount;
+
+&nbsp; public int LeftCount =&gt; 
+    MiddleCurrentRaw + LeftCountRaw;
+  public int MiddleCount =&gt; 
+    LeftCurrentRaw + RightCurrentRaw + MiddleCountRaw;
+  public int RightCount =&gt; 
+    MiddleCurrentRaw + RightCountRaw;
+
+&nbsp; public Triplet SetLeftCountRaw(int c)
+  {
+    Debug.Assert(0 &lt;= c &amp;&amp; c &lt;= 7);
+    return new Triplet((c &lt;&lt; lcount) | ~lcountm &amp; triplet);
+  }
+&nbsp; public Triplet SetMiddleCountRaw(int c)
+  {
+    Debug.Assert(0 &lt;= c &amp;&amp; c &lt;= 6);
+    return new Triplet((c &lt;&lt; mcount) | ~mcountm &amp; triplet);
+  }
+  public Triplet SetRightCountRaw(int c)
+  {
+    Debug.Assert(0 &lt;= c &amp;&amp; c &lt;= 7);
+    return new Triplet((c &lt;&lt; rcount) | ~rcountm &amp; triplet);
+  }
+}
+</pre>
+<p>Well, that was a little tedious, but it will make the rest of the code read less like bit twiddling.</p>
+<hr>
+<p>You know what, I think that is enough for today; the ideas in Stafford’s algorithm are interesting but the amount of code you have to write, as we’ll see, it’s a lot.</p>
+<p><strong>Next time on FAIC:</strong> We’ll implement the algorithm we have so far — rectangular array of cells, rectangle of death, remembering neighbour counts, change list, store next state in the cell — using the Triplet data structure instead. Unsurprisingly, the added bit twiddling is not cheap; will it pay for itself by unlocking an additional optimization? Stay tuned!</p>
+<hr>
+<p>For today’s extra content: the prettiest spaceship, the Canada Goose. Image from the <a href="https://www.conwaylife.com/wiki/Canada_goose">wiki</a>.<a href="https://ericlippert.files.wordpress.com/2020/06/canadagoose.gif"><img data-attachment-id="7230" data-permalink="https://ericlippert.com/2020/06/15/life-part-15/canadagoose/" data-orig-file="https://ericlippert.files.wordpress.com/2020/06/canadagoose.gif" data-orig-size="274,258" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="Canadagoose" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/06/canadagoose.gif?w=274" data-large-file="https://ericlippert.files.wordpress.com/2020/06/canadagoose.gif?w=274" src="https://ericlippert.files.wordpress.com/2020/06/canadagoose.gif?w=584" alt=""></a></p>
+<p>You’ll note that it is a glider that “pulls along” a pattern behind it that would not otherwise be a spaceship in itself; this situation is called a “tagalong”. There are also “pushalongs” where the spaceship extension goes in the front.</p>
+			</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
