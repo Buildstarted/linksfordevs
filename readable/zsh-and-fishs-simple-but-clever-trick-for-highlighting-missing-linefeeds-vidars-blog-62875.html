@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Zsh and Fish&#x2019;s simple but clever trick for highlighting missing linefeeds &#x2013; Vidar&#x27;s Blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Zsh and Fish&#x2019;s simple but clever trick for highlighting missing linefeeds &#x2013; Vidar&#x27;s Blog - linksfor.dev(s)"/>
+    <meta property="og:description" content="tl;dr: We look at how Zsh and Fish is able to indicate a missing terminating linefeed in program output when the Unix programming model precludes examining the output itself."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.vidarholen.net/contents/blog/?p=878"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Zsh and Fish&#x2019;s simple but clever trick for highlighting missing linefeeds &#x2013; Vidar&#x27;s Blog</title>
+<div class="readable">
+        <h1>Zsh and Fish&#x2019;s simple but clever trick for highlighting missing linefeeds &#x2013; Vidar&#x27;s Blog</h1>
+            <div>Reading time: 6-7 minutes</div>
+        <div>Posted here: 15 Jun 2020</div>
+        <p><a href="https://www.vidarholen.net/contents/blog/?p=878">https://www.vidarholen.net/contents/blog/?p=878</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>tl;dr: We look at how Zsh and Fish is able to indicate a missing terminating linefeed in program output when the Unix programming model precludes examining the output itself.</p>
+<p>Most shells, including bash, ksh, dash, and ash, will show a prompt wherever the previous command left the cursor when it exited.</p>
+<p>The fact that the prompt (almost) always shows up on the familiar left-most column of the next line is because Unix programs universally cooperate to park the cursor there when they exit.</p>
+<p>This is done by always making sure to output a terminating linefeed <code>
+</code> (aka newline):</p>
+<pre><code>vidar@vidarholen-vm2 ~ $ whoami
+vidar
+vidar@vidarholen-vm2 ~ $ whoami | hexdump -c
+0000000   v   i   d   a   r  
+  
+</code></pre>
+<p>If a program fails to follow this convention, the prompt will end up in the wrong place:</p>
+<pre><code>vidar@vidarholen-vm2 ~ $ echo -n "hello world"
+hello worldvidar@vidarholen-vm2 ~ $
+</code></pre>
+<p>However, I recently noticed that <code>zsh</code> and <code>fish</code> will instead show a character indicating a missing linefeed, and still start the prompt where you’d expect to find it:</p>
+<pre><code>vidarholen-vm2% echo -n "hello zsh"
+hello zsh% 
+vidarholen-vm2%
+
+vidar@vidarholen-vm2 ~&gt; echo -n "hello fish"
+hello fish⏎
+vidar@vidarholen-vm2 ~&gt; 
+</code></pre>
+<p>If you’re disappointed that <em>this</em> is what there’s an entire blog post about, you probably haven’t tried to write a shell. This is one of those problems where the more you know, the harder it seems (<a href="https://xkcd.com/1425/">obligatory XKCD</a>).</p>
+<p>If you have a trivial solution in mind, maybe along the lines of <code>if (!output.ends_with("
+")) printf("%
+");</code>, consider the following restrictions*:</p>
+<ul>
+<li>Contrary to popular belief, the shell does <em>not</em> sit between programs and the terminal. The shell has no ability to intercept or examine the terminal output of programs.</li>
+<li>The terminal programming model is based on teletypes (aka TTYs), electromechanical typewriters from the early 1900s. They printed letter by letter onto paper, so there is no memory or screen buffer that can be programmatically read back.</li>
+</ul>
+<p>Given this, here are some flawed ways to make it happen:</p>
+<ul>
+<li>
+<p>The shell could use pipes to intercept all output, and relay it onto the terminal. While it works in trivial cases like <code>whoami</code>, some programs <a href="https://www.vidarholen.net/contents/blog/?p=22">check whether stdout is a terminal</a> and change their behavior, others go over your head and talk to the TTY directly (e.g. <code>ssh</code>‘s password prompt), and some use TTY specific <code>ioctl</code>s that fail if the output is not a TTY, such as querying window size or disabling local echo for password input.</p>
+</li>
+<li>
+<p>The shell can <code>ptrace</code> the process to see what it writes where. This has a huge overhead and breaks <code>sudo</code>, <code>ping</code>, and other commands that rely on suid.</p>
+</li>
+<li>
+<p>The shell can create a pseudo-tty (pty), run commands in that, and relay information back and forth much like <code>ssh</code> or <code>script</code> does. This is an annoying and heavy-handed approach, which in its ultimate form would require re-implementing an entire terminal emulator.</p>
+</li>
+<li>
+<p>The shell can use ECMA-48 cursor position reporting features: <code>printf '[6n'</code> on a supported terminal will cause the terminal to simulate user input on the form <code>^[[y;xR</code> where <code>y</code> and <code>x</code> is the row and column. The shell could then read this to figure out where the cursor is. These kinds of round trips are feasible, but somewhat slow and annoying to implement for such a simple feature.</p>
+</li>
+</ul>
+<p>Zsh and Fish instead have a much simpler and far more clever way of doing it:</p>
+<ol>
+<li>They always output the missing linefeed indicator, whether or not it’s needed.</li>
+<li>They then pad out the line with <code>$COLUMN-1</code> spaces</li>
+<li>This is followed by a carriage return to move to the first column</li>
+<li>Finally, they show the prompt.</li>
+</ol>
+<p>This solution is very simple because it only requires printing a fixed string before every prompt, but it’s highly effective <s>on all terminals</s>§.</p>
+<p>Why?</p>
+<p>Let’s pretend our terminal is 10 columns wide and 3 rows tall, and a canonical program just wrote a short string with a trailing linefeed:</p>
+<pre><code>[vidar     ]
+[|         ]
+[          ]
+</code></pre>
+<p>The cursor, indicated by <code>|</code>, is at the start of the line. This is what would happen in step 1 and 2:</p>
+<pre><code>[vidar      ]
+[%         |]
+[           ]
+</code></pre>
+<p>The indicator is shown, and since we have written exactly <code>$COLUMN</code> characters, the cursor is after the last column. Step 3, a carriage return, now moves it back to the start:</p>
+<pre><code>[vidar      ]
+[|%         ]
+[           ]
+</code></pre>
+<p>The prompt now draws over the indicator, and is shown on the same line:</p>
+<pre><code>[vidar      ]
+[~ $ |      ]
+[           ]
+</code></pre>
+<p>The final result is exactly the same as if we had simply written out the prompt wherever the cursor was.</p>
+<p>Now, let’s look at what happens when a program does <em>not</em> output a terminating linefeed:</p>
+<pre><code>[vidar|     ]
+[           ]
+[           ]
+</code></pre>
+<p>The indicator is shown, but this time the spaces in step 2 causes the line to wrap all the way around to the next line:</p>
+<pre><code>[vidar%     ]
+[     |     ]
+[           ]
+</code></pre>
+<p>The carriage return moves the cursor back to the start <em>of the next line</em>:</p>
+<pre><code>[vidar%     ]
+[|          ]
+[           ]
+</code></pre>
+<p>The prompt is now shown on that line, and therefore doesn’t overwrite the indicator:</p>
+<pre><code>[vidar%     ]
+[~ $ |      ]
+[           ]
+</code></pre>
+<p>And there you have it. A seemingly simple problem turned out harder than expected, but a clever use of line wrapping made it easy again.</p>
+<p>Now that we know the secret sauce, we can of course do the same thing in Bash:</p>
+<pre><code>PROMPT_COMMAND='printf "%%%$((COLUMNS-1))s"'
+</code></pre>
+<hr>
+<p>* These same restrictions are reflected in several other aspects of Unix:</p>
+<ul>
+<li>While useful and often requested, there is no robust way to get the output of the previously executed command.</li>
+<li>It’s surprisingly tricky to take screenshots/dumps of terminals, and it only works on specific terminals.</li>
+<li>The phenomenon of background process output cosmetically trashing foreground processes is well known, and yet there’s no solution</li>
+</ul>
+<p>§ Fish developer and Hacker News reader ComputerGuru explains that there are <a href="https://news.ycombinator.com/item?id=23520607">many caveats related to various terminals’ line wrapping</a> that make this trickier than shown here.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
