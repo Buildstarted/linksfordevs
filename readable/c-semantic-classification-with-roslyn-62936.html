@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+C# semantic classification with Roslyn - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="C# semantic classification with Roslyn - linksfor.dev(s)"/>
+    <meta property="og:description" content="A while ago, I blogged about using Roslyn&#x27;s completion service. In today&#x27;s post, I wanted to continue looking at some of the excellent compiler features that can be utilized to build IDE-like features in your projects. This time, we will look at how to do semantic classification of the code using Roslyn."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.strathweb.com/2020/06/c-semantic-classification-with-roslyn/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - C# semantic classification with Roslyn</title>
+<div class="readable">
+        <h1>C# semantic classification with Roslyn</h1>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 16 Jun 2020</div>
+        <p><a href="https://www.strathweb.com/2020/06/c-semantic-classification-with-roslyn/">https://www.strathweb.com/2020/06/c-semantic-classification-with-roslyn/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="main-wrapper">	
+
+<!-- begin #main -->
+        <div id="main">
+        	<!-- Main Menu -->
+						<section id="content">
+						<!-- begin article -->
+				<article>
+					
+						
+						<div>
+														<p>A while ago, I blogged about <a href="https://www.strathweb.com/2018/12/using-roslyn-c-completion-service-programmatically/">using Roslyn's completion service</a>. In today's post, I wanted to continue looking at some of the excellent compiler features that can be utilized to build IDE-like features in your projects. This time, we will look at how to do semantic classification of the code using Roslyn.</p>
+
+<h3 id="toc_1">Using the classifier</h3>
+<p>Roslyn exposes a static <em>Classifier</em> service, which can be used to ask the compiler to semantically classify the spans contained in a given document or in a semantic model (or part of it). The API exists since Roslyn 1.0 and is part of the workspace layer of Roslyn – the <em>Microsoft.CodeAnalysis.CSharp.Workspaces</em> Nuget package. Under the hood it is underpinned by an internal language service <em>ISyntaxClassificationService</em>.</p>
+<p><em>Classifier</em> exposes two public methods, which, as mentioned briefly, operate on a document or a semantic model level. In either case, you'd need to initialize a Roslyn workspace (most often an MSBuild based workspace) to be able to work with the API – even if you want to classify a standalone, loose piece of C#; in that case a dummy workspace is necessary.</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b4fb760133542" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>public</span><span> </span><span>static</span><span> </span><span>class</span><span> </span><span>Classifier</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>static</span><span> </span><span>async </span><span>Task</span><span>&lt;</span><span>IEnumerable</span><span>&lt;</span><span>ClassifiedSpan</span><span>&gt;</span><span>GetClassifiedSpansAsync</span><span>(</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Document </span><span>document</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>TextSpan </span><span>textSpan</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>CancellationToken </span><span>cancellationToken</span><span> </span><span>=</span><span> </span><span>default</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>static</span><span> </span><span>IEnumerable</span><span>&lt;</span><span>ClassifiedSpan</span><span>&gt;</span><span>GetClassifiedSpans</span><span>(</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>SemanticModel </span><span>semanticModel</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>TextSpan </span><span>textSpan</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Workspace </span><span>workspace</span><span>,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>CancellationToken </span><span>cancellationToken</span><span> </span><span>=</span><span> </span><span>default</span><span>)</span><span>;</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0016 seconds] -->
+</div>
+<p>Looking at the API, you'd likely wonder why one method is async, but not the other. The reason why the document-based method is async, and the semantic model-based one isn't, is because the first one will need to internally obtain the semantic model from the document, which in itself is an async operation. Once the semantic model is available, there is no async work left to do, hence the second method doesn't need to be asynchronous anymore.</p>
+<p>How do we use the <em>Classifier</em>? Let's imagine we'd like to classify the following simple piece of code:</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b50d998335261" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>using </span><span>System</span><span>;</span></p><p><span>public</span><span> </span><span>class</span><span> </span><span>MyClass</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>static</span><span> </span><span>void</span><span> </span><span>MyMethod</span><span>(</span><span>int</span><span> </span><span>value</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0006 seconds] -->
+</div>
+<p>We have already mentioned that a workspace is necessary to initialize a workspace, and the quickest way to do that is to use <em>AdHocWorkspace</em> and default <em>MefHostServices</em>. They will contain the necessary internal compiler services that the classifier requires. For simplicity of the demo, we will hardcode our input code into a local variable – in normal use cases you'd be reading from disk or from some client/user request. If you are dealing with a full C# solution, instead of stand alone C# code to classify, the more appropriate choice over <em>AdHocWorkspace</em> would be to use <a href="https://www.nuget.org/packages/Microsoft.CodeAnalysis.Workspaces.MSBuild/">MSBuildWorkspace</a>.</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b51a536777863" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>var</span><span> </span><span>code</span><span> </span><span>=</span><span> </span><span>@</span><span>"using System;</span></p><p><span>public class MyClass</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;public static void MyMethod(int value)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;}</span></p><p><span>}"</span><span>;</span></p><p><span>var</span><span> </span><span>host</span><span> </span><span>=</span><span> </span><span>MefHostServices</span><span>.</span><span>Create</span><span>(</span><span>MefHostServices</span><span>.</span><span>DefaultAssemblies</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>workspace</span><span> </span><span>=</span><span> </span><span>new</span><span> </span><span>AdhocWorkspace</span><span>(</span><span>host</span><span>)</span><span>;</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0008 seconds] -->
+</div>
+<p>Once you have the workspace, you'd need to produce a <em>Document</em> or a <em>SemanticModel</em> representing our piece of code to classify. Let's first look at the semantic model approach, as it's – in my opinion – a bit less work.</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b525985054897" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>var</span><span> </span><span>souceText</span><span> </span><span>=</span><span> </span><span>SourceText</span><span>.</span><span>From</span><span>(</span><span>code</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>syntaxTree</span><span> </span><span>=</span><span> </span><span>CSharpSyntaxTree</span><span>.</span><span>ParseText</span><span>(</span><span>souceText</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>compilation</span><span> </span><span>=</span><span> </span><span>CSharpCompilation</span><span>.</span><span>Create</span><span>(</span><span>"Dummy"</span><span>)</span><span>.</span><span>AddReferences</span><span>(</span><span>MetadataReference</span><span>.</span><span>CreateFromFile</span><span>(</span><span>typeof</span><span>(</span><span>object</span><span>)</span><span>.</span><span>Assembly</span><span>.</span><span>Location</span><span>)</span><span>)</span><span>.</span><span>AddSyntaxTrees</span><span>(</span><span>syntaxTree</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>semanticModel</span><span> </span><span>=</span><span> </span><span>compilation</span><span>.</span><span>GetSemanticModel</span><span>(</span><span>syntaxTree</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>classifiedSpans</span><span> </span><span>=</span><span> </span><span>Classifier</span><span>.</span><span>GetClassifiedSpans</span><span>(</span><span>semanticModel</span><span>,</span><span> </span><span>new</span><span> </span><span>TextSpan</span><span>(</span><span>0</span><span>,</span><span> </span><span>code</span><span>.</span><span>Length</span><span>)</span><span>,</span><span> </span><span>workspace</span><span>)</span><span>;</span></p><p><span>foreach</span><span> </span><span>(</span><span>var</span><span> </span><span>classifiedSpan </span><span>in</span><span> </span><span>classifiedSpans</span><span>)</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>position</span><span> </span><span>=</span><span> </span><span>souceText</span><span>.</span><span>Lines</span><span>.</span><span>GetLinePositionSpan</span><span>(</span><span>classifiedSpan</span><span>.</span><span>TextSpan</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>$</span><span>"{souceText.ToString(classifiedSpan.TextSpan)} - {classifiedSpan.ClassificationType} - {position.Start}:{position.End}"</span><span>)</span><span>;</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0080 seconds] -->
+</div>
+<p>The first thing to do, is to grab the <em>SourceText</em> representing our string-based C# code. <em>SourceText</em> can then be fed into the syntax tree parser, producing a C# syntax tree. At this point we are half way there, but we still need to initalize the compilation, as the semantic model is a product of the compilation pipeline. When you do that, you need to make sure all the necessary metadata references needed for the code to compile are available – in our case only mscorlib is needed though (<em>typeof(object).Assembly</em>). Finally, we can find the semantic model for a syntax tree by querying the newly created compilation.</p>
+<p>Next, we can call the classifier, and pass in our semantic model, and the text span corresponding to the piece of code we want to classify. We use <em>new TextSpan(0, code.Length)</em>, which simply means the entire code will be classified; however it is also possible to tweak the <em>TextSpan</em> so that position is offset and length is shorter, and thus only part of the code would be submitted for classification – it all depends on the use cases.</p>
+<p>At the end we print all the results, which should show us a nice set of classification info:</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b531855059616" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p></div>
+				</td>
+						<td><div><p><span>using</span><span> </span><span>-</span><span> </span><span>keyword</span><span> </span><span>-</span><span> </span><span>0</span><span>,</span><span>0</span><span>:</span><span>0</span><span>,</span><span>5</span></p><p><span>System</span><span> </span><span>-</span><span> </span><span>namespace</span><span> </span><span>name</span><span> </span><span>-</span><span> </span><span>0</span><span>,</span><span>6</span><span>:</span><span>0</span><span>,</span><span>12</span></p><p><span>;</span><span> </span><span>-</span><span> </span><span>punctuation</span><span> </span><span>-</span><span> </span><span>0</span><span>,</span><span>12</span><span>:</span><span>0</span><span>,</span><span>13</span></p><p><span>public</span><span> </span><span>-</span><span> </span><span>keyword</span><span> </span><span>-</span><span> </span><span>2</span><span>,</span><span>12</span><span>:</span><span>2</span><span>,</span><span>18</span></p><p><span>class</span><span> </span><span>-</span><span> </span><span>keyword</span><span> </span><span>-</span><span> </span><span>2</span><span>,</span><span>19</span><span>:</span><span>2</span><span>,</span><span>24</span></p><p><span>MyClass</span><span> </span><span>-</span><span> </span><span>class</span><span> </span><span>name</span><span> </span><span>-</span><span> </span><span>2</span><span>,</span><span>25</span><span>:</span><span>2</span><span>,</span><span>32</span></p><p><span>{</span><span> </span><span>-</span><span> </span><span>punctuation</span><span> </span><span>-</span><span> </span><span>3</span><span>,</span><span>12</span><span>:</span><span>3</span><span>,</span><span>13</span></p><p><span>public</span><span> </span><span>-</span><span> </span><span>keyword</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>16</span><span>:</span><span>4</span><span>,</span><span>22</span></p><p><span>static</span><span> </span><span>-</span><span> </span><span>keyword</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>23</span><span>:</span><span>4</span><span>,</span><span>29</span></p><p><span>void</span><span> </span><span>-</span><span> </span><span>keyword</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>30</span><span>:</span><span>4</span><span>,</span><span>34</span></p><p><span>MyMethod</span><span> </span><span>-</span><span> </span><span>method </span><span>name</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>35</span><span>:</span><span>4</span><span>,</span><span>43</span></p><p><span>MyMethod</span><span> </span><span>-</span><span> </span><span>static</span><span> </span><span>symbol</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>35</span><span>:</span><span>4</span><span>,</span><span>43</span></p><p><span>(</span><span> </span><span>-</span><span> </span><span>punctuation</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>43</span><span>:</span><span>4</span><span>,</span><span>44</span></p><p><span>int</span><span> </span><span>-</span><span> </span><span>keyword</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>44</span><span>:</span><span>4</span><span>,</span><span>47</span></p><p><span>value</span><span> </span><span>-</span><span> </span><span>parameter </span><span>name</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>48</span><span>:</span><span>4</span><span>,</span><span>53</span></p><p><span>)</span><span> </span><span>-</span><span> </span><span>punctuation</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>53</span><span>:</span><span>4</span><span>,</span><span>54</span></p><p><span>{</span><span> </span><span>-</span><span> </span><span>punctuation</span><span> </span><span>-</span><span> </span><span>5</span><span>,</span><span>16</span><span>:</span><span>5</span><span>,</span><span>17</span></p><p><span>}</span><span> </span><span>-</span><span> </span><span>punctuation</span><span> </span><span>-</span><span> </span><span>6</span><span>,</span><span>16</span><span>:</span><span>6</span><span>,</span><span>17</span></p><p><span>}</span><span> </span><span>-</span><span> </span><span>punctuation</span><span> </span><span>-</span><span> </span><span>7</span><span>,</span><span>12</span><span>:</span><span>7</span><span>,</span><span>13</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0108 seconds] -->
+</div>
+<p>For the sake of completeness, let's also show how the code would look like if we were to go over the document-based API. In order to add a document to a workspace, we also need to create a project that would hold that document. Overall, there are several ways of achieving that – one example is shown below. All the rest of the code (dealing with <em>souceText</em> or displaying the classified spans) is the same as before.</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b53d902718900" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>var</span><span> </span><span>souceText</span><span> </span><span>=</span><span> </span><span>SourceText</span><span>.</span><span>From</span><span>(</span><span>code</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>projectInfo</span><span> </span><span>=</span><span> </span><span>ProjectInfo</span><span>.</span><span>Create</span><span>(</span><span>ProjectId</span><span>.</span><span>CreateNewId</span><span>(</span><span>)</span><span>,</span><span> </span><span>VersionStamp</span><span>.</span><span>Create</span><span>(</span><span>)</span><span>,</span><span> </span><span>"MyProject"</span><span>,</span><span> </span><span>"MyProject"</span><span>,</span><span> </span><span>LanguageNames</span><span>.</span><span>CSharp</span><span>)</span><span>.</span><span>WithMetadataReferences</span><span>(</span><span>new</span><span>[</span><span>]</span><span> </span><span>{</span><span> </span><span>MetadataReference</span><span>.</span><span>CreateFromFile</span><span>(</span><span>typeof</span><span>(</span><span>object</span><span>)</span><span>.</span><span>Assembly</span><span>.</span><span>Location</span><span>)</span><span> </span><span>}</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>project</span><span> </span><span>=</span><span> </span><span>workspace</span><span>.</span><span>AddProject</span><span>(</span><span>projectInfo</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>document</span><span> </span><span>=</span><span> </span><span>workspace</span><span>.</span><span>AddDocument</span><span>(</span><span>project</span><span>.</span><span>Id</span><span>,</span><span> </span><span>"MyFile.cs"</span><span>,</span><span> </span><span>souceText</span><span>)</span><span>;</span></p><p><span>var</span><span> </span><span>classifiedSpans</span><span> </span><span>=</span><span> </span><span>await </span><span>Classifier</span><span>.</span><span>GetClassifiedSpansAsync</span><span>(</span><span>document</span><span>,</span><span> </span><span>new</span><span> </span><span>TextSpan</span><span>(</span><span>0</span><span>,</span><span> </span><span>code</span><span>.</span><span>Length</span><span>)</span><span>)</span><span>;</span></p><p><span>foreach</span><span> </span><span>(</span><span>var</span><span> </span><span>classifiedSpan </span><span>in</span><span> </span><span>classifiedSpans</span><span>)</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>position</span><span> </span><span>=</span><span> </span><span>souceText</span><span>.</span><span>Lines</span><span>.</span><span>GetLinePositionSpan</span><span>(</span><span>classifiedSpan</span><span>.</span><span>TextSpan</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>$</span><span>"{souceText.ToString(classifiedSpan.TextSpan)} - {classifiedSpan.ClassificationType} - {position.Start}:{position.End}"</span><span>)</span><span>;</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0036 seconds] -->
+</div>
+<p>In this approach, we do not need to manually create a <em>Compilation</em> because it will be implicitly created for us based on the <em>Project</em> we set up. Overall, there is really very little difference between the two APIs. Typically when working with structured solutions and <em>MSBuildWorkspace</em>, you'd already be dealing with the documents anyway and the code from the second sample would be more natural to use, while when working with stand alone C# classification based on <em>AdHocWorkspace</em>, then probably the first example would be less tedious to use.</p>
+<h3 id="toc_2">Why do you need the classification?</h3>
+<p>The most obvious use case is to provide syntax highlighting. Using semantic classifier and the power of the compiler provides an extremely reliable and advanced way of highlighting the code, taking all the aspects and language features into account – especially when a typical alternative would be static and regular expression based. This approach is now used in the highlighting features of <a href="https://github.com/OmniSharp/omnisharp-roslyn">OmniSharp</a>.</p>
+<p>One final thing about classification is that if you look closely at the results we produced, there is one strange thing going on. <em>MyMethod</em> at positions <em>4,35:4,43</em> is actually classified twice:</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b549649364101" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>MyMethod</span><span> </span><span>-</span><span> </span><span>method </span><span>name</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>35</span><span>:</span><span>4</span><span>,</span><span>43</span></p><p><span>MyMethod</span><span> </span><span>-</span><span> </span><span>static</span><span> </span><span>symbol</span><span> </span><span>-</span><span> </span><span>4</span><span>,</span><span>35</span><span>:</span><span>4</span><span>,</span><span>43</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0007 seconds] -->
+</div>
+<p>once as <em>method name</em> and once as <em>static symbol</em>. The second classification is the so called “additive classification”. At the moment Roslyn only uses <a href="https://github.com/dotnet/roslyn/blob/e704ca635bd6de70a0250e34c4567c7a28fa9f6d/src/Workspaces/Core/Portable/Classification/ClassificationTypeNames.cs#L16">static symbols</a> for this additive classification but that might change in the future. This information allows, for example, for additional highlighting to be applied to static symbols (e.g. make them bold).</p>
+<p>You can always exclude it from the result set too, by querying the <em>ClassificationTypeNames.AdditiveTypeNames</em> collection:</p>
+<div><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5ee7a06a1b555739276333" data-settings=" minimize scroll-mouseover wrap">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>var</span><span> </span><span>filteredClassifiedSpans</span><span> </span><span>=</span><span> </span><span>classifiedSpans</span><span>.</span><span>Where</span><span>(</span><span>s</span><span> </span><span>=</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>!</span><span>ClassificationTypeNames</span><span>.</span><span>AdditiveTypeNames</span><span>.</span><span>Contains</span><span>(</span><span>s</span><span>.</span><span>ClassificationType</span><span>)</span><span>)</span></p><p><span>)</span><span>;</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0008 seconds] -->
+</div>
+<p>In fact, this is what we do <a href="https://github.com/OmniSharp/omnisharp-roslyn/blob/master/src/OmniSharp.Roslyn.CSharp/Services/SemanticHighlight/SemanticHighlightService.cs#L64">in OmniSharp</a> too, and this is what <a href="https://github.com/dotnet/roslyn/blob/9ee3ac69f99cbcd645d494e0b0ee44616c1725e0/src/Workspaces/Core/Portable/Classification/ClassifierHelper.cs#L49-L55">Visual Studio</a> does too.</p>
+<p>You can find the source code for this blog post at <a href="https://github.com/filipw/Strathweb.Samples.Roslyn.Classification">Github</a></p>
+						</div>
+										</article>
+			<!-- end article -->
+			<hr>
+			
+			
+					</section>
+
+        </div>
+        <!-- end #main -->
+
+<!-- begin aside -->
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
