@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 16 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 16 - linksfor.dev(s)"/>
+    <meta property="og:description" content="Source code for this episode is here. We are continuing with our project to gradually morph Abrash&#x2019;s &#x201C;remember the living neighbour counts&#x201D; algorithm into Stafford&#x2019;s algorit&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/06/18/life-part-16/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 16</title>
+<div class="readable">
+        <h1>Life, part 16</h1>
+            <div>Reading time: 10-13 minutes</div>
+        <div>Posted here: 18 Jun 2020</div>
+        <p><a href="https://ericlippert.com/2020/06/18/life-part-16/">https://ericlippert.com/2020/06/18/life-part-16/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p>Source code for this episode is <a href="https://github.com/ericlippert/ConwaysLife/tree/episode16">here</a>.</p>
+<hr>
+<p>We are continuing with our project to gradually morph Abrash’s “remember the living neighbour counts” algorithm into Stafford’s algorithm. I’m going to start today by adding just a two very small bit-twiddling optimizations to the Triplet wrapper struct I introduced in the previous episode.</p>
+<p>The first optimization is: I’m going to need to update neighbour counts, but remember, we’re going to be updating a short with three neighbour counts in it. Let’s look at an example of a 3×3 grid represented by three shorts, and assume that every other cell in the larger grid is dead.</p>
+<p>I’ll give the <strong>current</strong> state as “A” for alive, “D” for dead, and the counts are “raw” counts; that is, the left-hand living neighbour counts are <i>not including the state of the middle cell</i>, and the middle neighbour counts are not including the left or right cells, and so on.</p>
+<p>The scenario is that an L-shaped triomino is about to become a block:</p>
+<pre>        Before                  After
+        A-1  A-1  D-1           A-2  A-2  D-2
+        A-2  D-2  D-1   ==&gt;     A-2  A-2  D-1
+        D-1  D-1  D-0           D-2  D-2  D-1</pre>
+<p>What has to happen? The middle triplet’s living neighbour counts do not need to change. But when the middle-of-the-middle triplet cell becomes alive, we need to increase <strong>all three</strong> living neighbour counts by one in both the upper and lower triplet.</p>
+<p>Suppose the middle triplet is in a rectangular array of triplets at x, y. We do not want to have to write for this scenario:</p>
+<pre>n = triplet[x, y - 1];
+triplets[x, y - 1] = n.SetLeftCountRaw(n.LeftCountRaw+1)
+                      .SetMiddleCountRaw(n.MiddleCountRaw+1)
+                      .SetRightCountRaw(n.RightCountRaw+1);
+s = triplet[x, y + 1];
+... oh the boredom ...
+</pre>
+<p>That’s both tedious and unnecessarily slow because of all the bit twiddling. Instead I’m going to write 15 helper functions as follows:</p>
+<pre>private const int lcountone = 1 &lt;&lt; lcount;
+private const int mcountone = 1 &lt;&lt; mcount;
+private const int rcountone = 1 &lt;&lt; rcount;
+public Triplet UUP() =&gt; new Triplet(rcountone + triplet);
+public Triplet UUM() =&gt; new Triplet(-rcountone + triplet);
+public Triplet UPU() =&gt; new Triplet(mcountone + triplet);
+public Triplet UPP() =&gt; new Triplet(mcountone + rcountone + triplet);
+public Triplet UMU() =&gt; new Triplet(-mcountone + triplet);
+public Triplet UMM() =&gt; new Triplet(-mcountone - rcountone + triplet);
+public Triplet PUU() =&gt; new Triplet(lcountone + triplet);
+public Triplet PUM() =&gt; new Triplet(lcountone - rcountone + triplet);
+public Triplet PPU() =&gt; new Triplet(lcountone + mcountone + triplet);
+public Triplet PPP() =&gt; new Triplet(lcountone + mcountone + rcountone + triplet);
+public Triplet MUU() =&gt; new Triplet(-lcountone + triplet);
+public Triplet MUP() =&gt; new Triplet(-lcountone + rcountone + triplet);
+public Triplet MMU() =&gt; new Triplet(-lcountone - mcountone + triplet);
+public Triplet MMM() =&gt; new Triplet(-lcountone - mcountone - rcountone + triplet);
+</pre>
+<p>To add one to a three-bit integer embedded inside a short, all we need to do is add one shifted to the right position in the short! We do not need to extract the bits, put them in an integer, do the arithmetic, and then put them back.</p>
+<p>(Also, fun bonus nano-optimization: since I put the constants on the left, the ones with multiple operations will get folded at compile time.)</p>
+<p>The naming is of course P for plus, M for minus, U for unchanged; the operation I described above would be “PPP”.</p>
+<p>The second optimization is: I want to be able to quickly answer the question “is anything going to change in this triplet on this tick?” What we’re going to do, recall, is set three “next state” bits, so the answer to my question is: are the next-state bits as an integer equal to the current-state bits as an integer? If the answer is yes, then there was no change.</p>
+<pre>private const int currentm = lcm | mcm | rcm;
+private const int nextm = lnm | mnm | rnm;
+public int CurrentState =&gt; (currentm &amp; triplet) &gt;&gt; rcur;
+public int NextState =&gt; (nextm &amp; triplet) &gt;&gt; rnext;
+public bool Changed =&gt; CurrentState != NextState;
+</pre>
+<p>All right, let’s get into it. The basic layout of the class is by design almost exactly the same as our previous algorithm because that’s the whole idea of this pedagogy:</p>
+<pre>class StaffordOne : ILife
+{
+  private int height = 258;
+  private int width = 88;
+  private Triplet[,] triplets;
+  private List&lt;(int, int)&gt; changes;
+</pre>
+<p>We have a rectangular array of 258×88 triplets. The top and bottom row, and the left and right triplet will be a rectangle of death, so that gives us 256×258 cells to play with.</p>
+<p>The change list coordinates are triplet array coordinates, not Life grid coordinates.</p>
+<p>I’ve still got my “BecomeAlive” and “BecomeDead” helper methods. They take Life grid coordinates. They are still idempotent but they no longer update the change list because I want to do that on a per-triplet granularity, not a per-cell-changed granularity, and I don’t want to use a hash table to deduplicate the change list.</p>
+<p>Rather, they return true or false, changed or unchanged, and let the caller decide how to update the change list.</p>
+<pre>private bool BecomeAlive(int x, int y)
+{
+  int tx = x / 3;
+  Triplet t = triplets[tx, y];
+  switch (x % 3)
+  {
+  case 0:
+    if (t.LeftCurrent)
+      return false;
+    triplets[tx - 1, y - 1] = triplets[tx - 1, y - 1].UUP();
+    triplets[tx, y - 1] = triplets[tx, y - 1].PPU();
+    triplets[tx - 1, y] = triplets[tx - 1, y].UUP();
+    triplets[tx, y] = t.SetLeftCurrent(true);
+    triplets[tx - 1, y + 1] = triplets[tx - 1, y + 1].UUP();
+    triplets[tx, y + 1] = triplets[tx, y + 1].PPU();
+    break;</pre>
+<p>As in Abrash’s algorithm, we do the expensive work of updating the living neighbour counts only when something changed. If the left cell in a triplet changed then we need to update the counts of the triplets to the north, south, west, northwest and southwest.</p>
+<p>We don’t need to update the count of the middle cell in the current triplet because changing the state of the left state bit is what is going to update that count.</p>
+<p>And we do not need to update the counts of the triplets to the east, northeast or southeast because those triplets have no neighbours in common with the left cell of this triplet.</p>
+<p>I’m going to omit the middle and right cells; you see how this goes I’m sure. And the “become dead” logic is all the same with the signs inverted so let’s skip that too.</p>
+<p>Let’s get into the real business logic; as always, it’s the step function. As before, we do it in two passes.</p>
+<p>In the first pass we look at every triplet on the previously-changed list and the neighbour triplets of all those triplets, which might include duplicates. We make a “current changes” list of every triplet that is going to change, and stash that change in the “next” bits of the triplet.</p>
+<p>In the second pass we update the neighbour counts and current state bits of every changed cell. As we do so, we create a deduplicated changes list for the next tick.</p>
+<pre>public void Step()
+{
+  var currentChanges = new List&lt;(int, int)&gt;();
+&nbsp; foreach ((int cx, int cy) in changes)
+  {
+    int minx = Max(cx - 1, 1);
+    int maxx = Min(cx + 2, width - 1);
+    int miny = Max(cy - 1, 1);
+    int maxy = Min(cy + 2, height - 1);
+    for (int y = miny; y &lt; maxy; y += 1)
+    {
+      for (int x = minx; x &lt; maxx; x += 1)
+      {
+</pre>
+<p>This is basically the same code as before, but something to note here. Suppose we have a triplet that is on the “changed” list because its left cell, and only its left cell, changed on the previous tick. We are now examining the neighbouring triplets, which includes the northeast, east and southeast neighbouring triplets, but those are not affected by a change in the left cell. We are therefore frequently doing unnecessary work here. Isn’t this bad?</p>
+<p>There are ways to avoid that, but as we keep adding optimizations to our implementation of Stafford’s algorithm, we’ll see that it becomes very cheap to process a neighbour that is not going to change. In cases where it is more expensive to run an “avoidable work detector” than it is to simply do the work, it’s better to do the work. I’m therefore going to ignore this small problem for the remainder of the exploration of the algorithm.</p>
+<p>Now we get into the meat of the algorithm, as usual:</p>
+<pre>        Triplet c = triplets[x, y];
+        Triplet t = c;
+        int lc = t.LeftCount;
+        int mc = t.MiddleCount;
+        int rc = t.RightCount;
+        t = t.SetLeftNext(lc == 3 | t.LeftCurrent &amp; lc == 2);
+        t = t.SetMiddleNext(mc == 3 | t.MiddleCurrent &amp; mc == 2);
+        t = t.SetRightNext(rc == 3 | t.RightCurrent &amp; rc == 2);
+        if (t.Changed)
+        {
+          currentChanges.Add((x, y));
+          triplets[x, y] = t;
+        }
+      }
+    }
+  }
+  changes.Clear();</pre>
+<p>That gets us through the first pass. The second pass is rather more verbose than our previous version because it is doing three cells per loop iteration, but is logically the same.</p>
+<pre>  foreach ((int x, int y) in currentChanges)
+  {
+    Triplet t = triplets[x, y];
+    if (!t.Changed)
+      continue;
+    bool changed = false;
+    if (t.LeftNext)
+      changed |= BecomeAlive(x * 3, y);
+    else
+      changed |= BecomeDead(x * 3, y);
+    if (t.MiddleNext)
+      changed |= BecomeAlive(x * 3 + 1, y);
+    else
+      changed |= BecomeDead(x * 3 + 1, y);
+    if (t.RightNext)
+      changed |= BecomeAlive(x * 3 + 2, y);
+    else
+      changed |= BecomeDead(x * 3 + 2, y);
+    Debug.Assert(changed);
+    changes.Add((x, y));
+  }
+}</pre>
+<p>The changed flag I’m tracking there is just a cheap sanity check to make sure we’re not doing unnecessary work, and that BecomeAlive/BecomeDead are doing the right thing.</p>
+<p>That’s it; rather more tedious code but the same algorithm as previous. We should expect that there is a performance penalty as we have added a bunch of bit twiddling that we did not have before but have only gained a very small amount of parallelism, like setting three neighbour counts with a single addition. If we run the performance test on the release build we get:</p>
+<pre>Algorithm           time(ms)  ticks  size(quad)    megacells/s
+Naïve (Optimized):   4000       5K      8               82
+Abrash                550       5K      8              596
+Abrash w/ changes     190       5K      8             1725 
+Abrash, O(c)          240       5K      8             1365
+Stafford v1           340       5K      8              963
+</pre>
+<p>We’ve lost almost half the speed of our previous best version of this algorithm. I sure hope there was a point to all this.</p>
+<hr>
+<p><strong>Next time on FAIC:</strong> We’ll take another brief foray into some interesting Life forms, and improve the speed controls in the client.</p>
+<p><b>Coming up after that:</b> How can we optimize the heck out of the first pass inner loop given this data structure?</p>
+<hr>
+<p>For today’s extra content: the <em>creepiest</em> spaceship, Spider:<a href="https://ericlippert.files.wordpress.com/2020/06/spider.gif"><img data-attachment-id="7261" data-permalink="https://ericlippert.com/2020/06/18/life-part-16/spider/" data-orig-file="https://ericlippert.files.wordpress.com/2020/06/spider.gif" data-orig-size="530,194" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="Spider" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/06/spider.gif?w=300" data-large-file="https://ericlippert.files.wordpress.com/2020/06/spider.gif?w=530" src="https://ericlippert.files.wordpress.com/2020/06/spider.gif?w=584" alt=""></a></p>
+<p>Image from the <a href="https://www.conwaylife.com/wiki/Spider">wiki</a>.</p>
+			</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
