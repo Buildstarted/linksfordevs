@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Reverse Engineering Snapchat (Part II): Deobfuscating the Undeobfuscatable - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Reverse Engineering Snapchat (Part II): Deobfuscating the Undeobfuscatable - linksfor.dev(s)"/>
+    <meta property="og:description" content="Reverse Engineering Snapchat (Part II): Debofuscating the Undeobfuscatable 2020-06-22"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://hot3eed.github.io/2020/06/22/snap_p2_deobfuscation.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Reverse Engineering Snapchat (Part II): Deobfuscating the Undeobfuscatable</title>
+<div class="readable">
+        <h1>Reverse Engineering Snapchat (Part II): Deobfuscating the Undeobfuscatable</h1>
+            <div>Reading time: 14-18 minutes</div>
+        <div>Posted here: 22 Jun 2020</div>
+        <p><a href="https://hot3eed.github.io/2020/06/22/snap_p2_deobfuscation.html">https://hot3eed.github.io/2020/06/22/snap_p2_deobfuscation.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+      
+<p>2020-06-22</p>
+
+
+<p>Many Hackernews users suggested using emulation to generate the token, treating the whole thing as a black box. The problem with this solution as I mentioned in a comment is that there’s way too many real device dependencies. <code>X-Snapchat-Client-Auth-Token</code> isn’t random gibberish. It contains <em>lots</em> of info about the device, encrypted. Even if you use Corellium, I’ll just leave it at saying that the chances of it working are slim. I don’t see an alternative to reversing it.</p>
+
+
+<p>First of all how is all this monstrosity achieved? When you compile <code>hello.c</code> using <code>clang</code>, <code>clang</code> is just the front end, <code>llvm</code> is the real deal; meaning <code>clang</code> takes the C source and converts it to an intermediate representation (IR)<sup><a href="https://releases.llvm.org/2.6/docs/tutorial/JITTutorial1.html">1</a></sup>, <code>llvm</code> then interprets this IR, optimizes and compiles it to machine code. The advantage of this system is that the backend remains language-agonstic, you just write an LLVM-IR-compatible-front end for each language and leave the rest to <code>llvm</code>. Now what we’re interested in is optimizations AKA optimization passes. <code>llvm</code> operates on the IR to generate more efficient code, which might look a bit different in assembly than what you expect.
+That’s where obfuscation comes; instead of actually optimizing the code, we can change it however we want as long as we keep the semantics. That’s how <code>O-LLVM</code><sup><a href="https://github.com/obfuscator-llvm/obfuscator/wiki/Bogus-Control-Flow">2</a></sup> works; at the compiler level, because no one can maintain source code like that. (The team behind O-LLVM is now acquired by Snap <sup><a href="https://www.bloomberg.com/news/articles/2017-07-21/snap-hires-swiss-team-behind-software-protection-startup">3</a></sup>) 
+If we understand the obfuscations can’t we just do the reverse and generate something that resembles the original assembly? As well articulated by one Hackernews user<sup><a href="https://news.ycombinator.com/item?id=23562878">4</a></sup>, obfuscation is mostly lossy; deobfuscate all you want (many cool libraries<sup><a href="https://github.com/ksluckow/awesome-symbolic-execution">5</a></sup> allow you to do this), but you’re way better off getting your hands dirty with the binary directly.</p>
+
+
+<p>This might end my Snapchat reversing career (or the whole post really). One of the biggest hurdles with this binary is <code>fuckup_debugging</code>. You won’t be able to do any kind of dynamic analysis (which is the only way to go in this binary in my opinion) because of it. And you can’t patch <code>fuckup_debugging</code> to return the right <code>path_key</code> so that it takes the right execution and not the infinite loop because there are anti-tamepring checks to stop you from communicating with the server in a modified binary. But first how do you even get the right <code>path_key</code>, by defnition you’ll have to set a breakpoint so that you can get to <code>fuckup_debugging</code> in the first place? Is it a dead lock? Let’s see it in action:
+Here we’re in the function that returns the token, this is the block that calls <code>fuckup_debugging</code>, I know that because when I debug it, the block right after that is an infinite loop.</p>
+
+<figure><pre><code data-lang="asm">mov        x8,#0x4458
+movk       x8,#0x1e6, LSL #16
+movk       x8,#0x1, LSL #32
+movk       x8,#0x0, LSL #48
+mov        x9,#0x4714
+movk       x9,#0x1e6, LSL #16
+movk       x9,#0x1, LSL #32
+movk       x9,#0x0, LSL #48
+add        x1,x8,x27                    ; arg1 = func pointer
+add        x2,x9,x27                    ; arg2 = another func pointer
+mov        w0,#0xad51 
+movk       w0,#0xeb37, LSL #16          ; arg3 = don't care
+blr        x24                          ; fuckup_debugging called
+adrp       x8,0x109e5b000
+ldr        w8,[x8, #0x6a8]
+eor        w8,w8,w0                     ; returned path_key
+cmp        x8,#0xb
+orr        w9,wzr,#0x6
+csel       x8,x9,x8,hi
+ldr        x8,[x28, x8, LSL #0x3]
+br         x8</code></pre></figure>
+
+<p>So how do you “hide” breakpoints from <code>fuckup_debugging</code>?</p>
+<ol>
+  <li>Set a breakpoint right before it’s called.</li>
+  <li>Disable this breakpoint (I disable all of them just in case):
+    
+  </li>
+  <li><em>Single</em> step inside <code>fuckup_debugging</code>.
+    
+  </li>
+  <li>Now as far as <code>fuckup_debugging</code> is concerned, no breakpoints exist.</li>
+  <li>Set a breakpoint before it returns and stop at it:
+    <div><div><pre><code> (lldb) b &lt;you know where&gt;
+ (lldb) c
+</code></pre></div>    </div>
+  </li>
+  <li>Now you have the correct <code>path_key</code> in <code>x0</code>.</li>
+  <li>Profit.</li>
+</ol>
+
+<p>A couple of gotchas here:</p>
+<ol>
+  <li>If you got smart like I did and after disabling all breakpoints, stepped over <code>fuckup_debugging</code> using <code>(lldb) ni</code> instead of single stepping, you’ll get an infinite loop, because you’ve just set another breakpoint. That’s because stepping over is essentially a breakpoint at the address of the next instruction. While single stepping has a sweet little <code>ptrace</code> command of its own (<code>PTRACE_SINGLESTEP</code>)<sup><a href="https://www.man7.org/linux/man-pages/man2/ptrace.2.html">6</a></sup>, or in other words it executes at the CPU level, no code patching.</li>
+  <li>The weakness of <code>fuckup_debugging</code> is that it doesn’t check breakpoints for itself. That’s why you’d be able to set a breakpoints inside it harmlessly. There, a new challenge for future Snap reverse engineers after they patch this.</li>
+</ol>
+
+<p>Now we’ve bypassed one breakpoint check for one function. Not every function in token generation is breakpoint-checked. But now for every check that you bypass using the above method, you can add a comment with the correct path key. So in the future it will be a matter of:</p>
+
+<figure><pre><code data-lang="shell"><span>(</span>lldb<span>)</span> ni
+<span>(</span>lldb<span>)</span> po <span>$x0</span> <span>=</span> &lt;path_key&gt;</code></pre></figure>
+
+<p>We stepped over <code>fuckup_debugging</code> and patched the return value on the fly. We’re a bit slowed down because we’ll have to do this with every patched function, but now we can at least do some real debugging.</p>
+
+
+<p>Here’s what happens on a very high level with the token. We have the joint function <code>gen_token</code>, which calls <code>set_token_params</code>, which is a mammoth joint function that calls <em>many</em> other functions. Then the token is encrypted and returned from <code>gen_token</code>. To get info like this, you have to spend some time on the binary and make educated guesses until you have a rough big picture, then you can go for something specific, or a bottom-up approach to be concise. Let’s go over an example of how you would reverse a specific token parameter.</p>
+
+<h2 id="anchor-addresses">Anchor addresses</h2>
+<p>Having bookmarks in critical areas of the binary will save you lots of time and headache. For example I had bookmarks where the token params are being written, right before the token is encrypted, etc. That way I can start working on a certain parameter just by knowing its offset in the token structure, since that’s the closest trace I know to where it’s generated. But how do you find these anchor addresses in the first place?</p>
+
+<h2 id="watchpoints-are-underrated">Watchpoints are underrated</h2>
+<p>If you asked me to give you <em>only</em> one word that will solve more than half of your problems with the Snap binary, I would tell you: watchpoints. For example you have no idea where to start with anything, but you know that <code>gen_token</code> returns the token’s pointer, so that’s your lead. You then trace <code>gen_token</code> before it returns, and you find that this pointer is actually written to by another function before being returned by <code>gen_token</code>, say the equivalent C code:</p>
+
+<figure><pre><code data-lang="c"><span>char</span> <span>*</span><span>gen_token</span><span>()</span> <span>{</span>
+    <span>// Do stuff</span>
+
+    <span>char</span> <span>token_out</span><span>[</span><span>TOKEN_LEN</span><span>];</span>
+    <span>real_deal</span><span>(</span><span>token_out</span><span>);</span>
+
+    <span>return</span> <span>token_out</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<p>Now before <code>real_deal</code> is called, you set a watchpoint on <code>token_out</code>, disable all breakpoints so that <code>fuckup_debugging</code> is happy, continue execution, then the watchpoint will stop the process as it’s being written to/read from, getting you to a possibly critical point of the code that you can use as an anchor. There’s my second ace with the Snap binary.</p>
+
+<figure><pre><code data-lang="shell"><span>(</span>lldb<span>)</span> w s e <span>-w</span> write <span>--</span> <span>$x0</span>
+<span>(</span>lldb<span>)</span> c
+... Now it will stop as soon as the address at <span>$x0</span> is accessed and you have your anchor address.</code></pre></figure>
+
+<h2 id="no-trick-is-too-dirty">No trick is too dirty</h2>
+<p>Watchpoints are nice and all, but what about registers? You can’t set a watchpoints on those, or in theory you could, but that’s for another time. So what if the value you’re interested in is in a register? The answer is an execution trace and a text editor that supports regex.</p>
+
+<p>Suppose we’re in <code>set_token_params</code> and we know that the value we’re interested in is in <code>x2</code>:</p>
+
+<figure><pre><code data-lang="asm">ldr        x9,[sp, #0x80]	; token parameter offset
+str        x2,[x9]		; token parameter	
+; other instructions..</code></pre></figure>
+
+<p>Since that’s the start of the block and there’s no CFG, we have no idea where <code>x2</code> came from.</p>
+
+<p>What I did is I generated an execution trace using Frida’s Stalker<sup><a href="https://frida.re/docs/stalker/">7</a></sup> from a point near <code>set_token_params</code> enough and one that I know isn’t policed by <code>fuckup_debugging</code>; because Frida patches instructions to hook to functions, which will trigger the breakpoints check. Now I had a sequential execution trace. Then I used a good old text editor to find the above block, and searched for points before it where <code>x2</code> is written to, where the source of the data is.</p>
+
+<h2 id="dreams-of-assembly">Dreams of Assembly</h2>
+<p>Once you find that a certain paramter is generated by the function <code>gen_param1</code>, I see no other way but to reverse it to its high level source code equivalent. I see C (haha) as the best fit for this as you can accurately translate data structures/types from assembly to C. And as close as C is to the CPU, you still have to know how struct alignment works, make educated guesses about certain values and their types, and keep track of all stack offsets. I had dreams of assembly instructions while working on this binary, no shit.</p>
+
+<h2 id="mba-again">MBA, again</h2>
+<p>MBA expressions are the trickiest thing in this binary. The latest research<sup><a href="https://dl.acm.org/doi/pdf/10.1145/2995306.2995308?download=true">8</a></sup> on MBA says that there are effectively two ways to simplify MBA expressions. Let’s explain them then give an example from the binary.</p>
+
+<h3 id="synthesis">Synthesis</h3>
+<p>In this method<sup><a href="https://hal.inria.fr/hal-01241356v2/document">9</a></sup> you treat the whole expression as a black box “oracle”, you give it input, observe the output, and try to generate a function simulating that behavior. 
+The biggest problem with this is that it’s impractical for complex expressions<sup><a href="https://dl.acm.org/doi/pdf/10.1145/2995306.2995308?download=true">8</a></sup>.</p>
+
+<h3 id="re-write-rules">Re-write rules</h3>
+<p>In this method<sup><a href="https://dl.acm.org/doi/pdf/10.1145/2995306.2995308?download=true">8</a></sup> all the rules for simplification is hardcoded, so for example you have a rule that says:
+<code>(x | y) - y + (~x &amp; y) == x ^ y</code>.
+Then you try to match the rules with the expression recursively, after which you use an SMT solver to prove that the original expressions is identical to the simplified tone.
+The problem with this is that the rules aren’t universal like boolean/algebraic simplification, so it won’t be able to handle expressions outside the hardcoded ones.</p>
+
+<h3 id="standing-on-the-shoulders-of-giants">Standing on the shoulders of giants</h3>
+<p>The first step to this is extracting the expressions from the binary, we can do it using symbolic execution<sup><a href="https://en.wikipedia.org/wiki/Symbolic_execution">10</a></sup>. Which is basically a way of executing the binary where we don’t assign concrete values to variables, only symbols. A good fit for this is the awesome Triton<sup><a href="https://github.com/JonathanSalwan/Triton">11</a></sup> framework. After extracting the expressions, for synthesis you could still use Triton<sup><a href="https://github.com/JonathanSalwan/Triton/blob/master/src/examples/python/synthetizing_obfuscated_expressions.py">12</a></sup>, and for re-write rules there exists SSPAM<sup><a href="https://github.com/quarkslab/sspam">13</a></sup> by Quarkslab, which is Python 2 only.</p>
+
+<h3 id="mba-simplification-example">MBA simplification example</h3>
+<p>This example involves a 120+ instruction block, whose input is two values from the stack, and whose output is in 4 registers. The trickiest output is in x27, so we’ll do that one. First we need to extract the expressions. We symbolize the block’s input using <code>Triton.symbolizeMemory</code>, then after emulating the block, we get the full expression in the register using <code>Triton.getSymbolicRegister(x27).regAst().unroll()</code>, which, brace yourselves, prints to:</p>
+
+<figure><pre><code data-lang="python"><span>((((((((</span><span>0x431e33362537db49</span> <span>|</span> <span>(</span><span>~</span><span>((</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span> <span>^</span> <span>((</span><span>0xbac03a4c7e26a10c</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>bss_val1</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xc92460b4173d8ad1</span><span>)</span> <span>|</span> <span>((</span><span>~</span><span>((</span><span>0x431e33362537db49</span> <span>|</span> <span>(</span><span>~</span><span>((</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span> <span>^</span> <span>((</span><span>0xbac03a4c7e26a10c</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>bss_val1</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xc92460b4173d8ad1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)))</span> <span>^</span> <span>((</span><span>0xc92460b4173d8ad1</span> <span>&amp;</span> <span>(</span><span>~</span><span>((((</span><span>0x431e33362537db4a</span> <span>|</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>-</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>((((</span><span>0x431e33362537db4a</span> <span>|</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>-</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xc92460b4173d8ad1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>|</span> <span>(</span><span>~</span><span>(((</span><span>0x431e33362537db49</span> <span>|</span> <span>(</span><span>~</span><span>((</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span> <span>^</span> <span>((</span><span>0xbac03a4c7e26a10c</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>bss_val1</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>~</span><span>((((</span><span>0x431e33362537db4a</span> <span>|</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>-</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>0x253a41858a5c76d6</span><span>)</span> <span>-</span> <span>((((((</span><span>0x431e33362537db49</span> <span>|</span> <span>(</span><span>~</span><span>((</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span> <span>^</span> <span>((</span><span>0xbac03a4c7e26a10c</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>bss_val1</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xc92460b4173d8ad1</span><span>)</span> <span>|</span> <span>((</span><span>~</span><span>((</span><span>0x431e33362537db49</span> <span>|</span> <span>(</span><span>~</span><span>((</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span> <span>^</span> <span>((</span><span>0xbac03a4c7e26a10c</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>bss_val1</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xc92460b4173d8ad1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)))</span> <span>^</span> <span>((</span><span>0xc92460b4173d8ad1</span> <span>&amp;</span> <span>(</span><span>~</span><span>((((</span><span>0x431e33362537db4a</span> <span>|</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>-</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>((((</span><span>0x431e33362537db4a</span> <span>|</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>-</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xc92460b4173d8ad1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>|</span> <span>(</span><span>~</span><span>(((</span><span>0x431e33362537db49</span> <span>|</span> <span>(</span><span>~</span><span>((</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span> <span>^</span> <span>((</span><span>0xbac03a4c7e26a10c</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>bss_val1</span> <span>&amp;</span> <span>(</span><span>~</span><span>(</span><span>0xbac03a4c7e26a10c</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>|</span> <span>(</span><span>~</span><span>((((</span><span>0x431e33362537db4a</span> <span>|</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>-</span> <span>(</span><span>~</span><span>(</span><span>bss_val1</span><span>)</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>))</span> <span>&amp;</span> <span>0x253a41858a5c76d6</span><span>))</span> <span>&amp;</span> <span>0xffffffffffffffff</span><span>)</span></code></pre></figure>
+
+<p>The real expression is less scary than that because Triton adds bit masks. Let’s see what SSPAM has to say:</p>
+
+<figure><pre><code data-lang="shell"><span>$ </span>sspam <span>"</span><span>`</span><span>cat </span>x27_exprs<span>`</span><span>"</span>
+<span>((((((</span>4836359357488159561L | <span>(</span>~ <span>(</span>~ <span>(</span>13456819786791428364L ^ <span>((</span>13456819786791428364L &amp; <span>(</span>~ bss_val1<span>))</span> | <span>(</span>bss_val1 &amp; 4989924286918123251L<span>))))))</span> &amp; 14493815827385387729L<span>)</span> | <span>((</span>~ <span>(</span>4836359357488159561L | <span>(</span>~ <span>(</span>~ <span>(</span>13456819786791428364L ^ <span>((</span>13456819786791428364L &amp; <span>(</span>~ bss_val1<span>))</span> | <span>(</span>bss_val1 &amp; 4989924286918123251L<span>)))))))</span> &amp; 3952928246324163886L<span>))</span> ^ <span>((</span>14493815827385387729L &amp; <span>(</span>~ <span>((</span>- <span>(</span>~ bss_val1<span>))</span> + <span>(</span>4836359357488159562L | <span>(</span>~ bss_val1<span>)))))</span> | <span>(((</span>- <span>(</span>~ bss_val1<span>))</span> + <span>(</span>4836359357488159562L | <span>(</span>~ bss_val1<span>)))</span> &amp; 3952928246324163886L<span>)))</span> | <span>(</span>~ <span>((</span>4836359357488159561L | <span>(</span>~ <span>(</span>~ <span>(</span>13456819786791428364L ^ <span>((</span>13456819786791428364L &amp; <span>(</span>~ bss_val1<span>))</span> | <span>(</span>bss_val1 &amp; 4989924286918123251L<span>))))))</span> | <span>(</span>~ <span>((</span>- <span>(</span>~ bss_val1<span>))</span> + <span>(</span>4836359357488159562L | <span>(</span>~ bss_val1<span>)))))))</span> ^ 2682528569860323030L<span>)</span></code></pre></figure>
+
+<p>That’s not too good. So SSPAM, the only tool that I know to exist for MBA re-write rules, didn’t give a meaningful simplification. So I thought let’s try some synthesis, I used Python’s <code>eval</code> to plug in different inputs to this expression and see how the bits in the output react (try it yourself, it’s fun). In the end my synthesized expression was:</p>
+
+<figure><pre><code data-lang="shell">0x99DB8D4C50945260 ^ bss_val1 &amp; ~0x3</code></pre></figure>
+
+<p>Can’t see it getting simpler than this, but is it identical to the obfuscated expression? Let’s ask Z3:</p>
+
+<figure><pre><code data-lang="python"><span>&gt;&gt;&gt;</span> <span>z3</span><span>.</span><span>prove</span><span>(</span><span>obfsc_expr</span> <span>==</span> <span>simp_expr</span><span>)</span>
+<span>proved</span></code></pre></figure>
+
+<p>Bingo!</p>
+
+
+<p>There’s much more to token generation than obfuscations. Being able to work with the binary at this level is only half the battle. I won’t disclose how to communicate with the API, because if Godfather has taught us anything, it’s that the perfect number of sequels is one.</p>
+
+
+
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
