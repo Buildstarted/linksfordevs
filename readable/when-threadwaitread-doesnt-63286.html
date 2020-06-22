@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+When threadWaitRead Doesn&#x27;t - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="When threadWaitRead Doesn&#x27;t - linksfor.dev(s)"/>
+    <meta property="og:description" content="One might think threadWaitRead (and related functions) will block until a socket receives new data for reading."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://jfischoff.github.io/blog/when-threadwaitread-doesnt.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - When threadWaitRead Doesn&#x27;t</title>
+<div class="readable">
+        <h1>When threadWaitRead Doesn&#x27;t</h1>
+            <div>Reading time: 14-18 minutes</div>
+        <div>Posted here: 22 Jun 2020</div>
+        <p><a href="https://jfischoff.github.io/blog/when-threadwaitread-doesnt.html">https://jfischoff.github.io/blog/when-threadwaitread-doesnt.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article>
+<header>
+
+</header>
+<p>One might think <a href="http://hackage.haskell.org/package/base-4.14.0.0/docs/Control-Concurrent.html#v:threadWaitRead"><code>threadWaitRead</code></a> (and related functions) will block until a socket receives new data for reading.</p>
+<p>Almost, but not quite.</p>
+<p>Consider the following <a href="https://github.com/jfischoff/threadwaitread-race">example server</a>:</p>
+<div id="cb1"><pre><code><span id="cb1-1"><a href="#cb1-1"></a><span>server ::</span> <span>MVar</span> () <span>-&gt;</span> <span>Socket</span> <span>-&gt;</span> <span>IO</span> ()</span>
+<span id="cb1-2"><a href="#cb1-2"></a>server ready sock <span>=</span> <span>flip</span> onException (tryPutMVar ready ()) <span>$</span> <span>do</span></span>
+<span id="cb1-3"><a href="#cb1-3"></a>  (aSock, _) <span>&lt;-</span> accept sock</span>
+<span id="cb1-4"><a href="#cb1-4"></a>  withFdSocket aSock <span>$</span> d <span>-&gt;</span> <span>do</span></span>
+<span id="cb1-5"><a href="#cb1-5"></a>    <span>-- Register a socket read ready callback</span></span>
+<span id="cb1-6"><a href="#cb1-6"></a>    waiter <span>&lt;-</span> <span>fmap</span> <span>fst</span> <span>$</span> threadWaitReadSTM (<span>fromIntegral</span> fd)</span>
+<span id="cb1-7"><a href="#cb1-7"></a>    waitThread <span>&lt;-</span> async <span>$</span> <span>do</span></span>
+<span id="cb1-8"><a href="#cb1-8"></a>      atomically waiter</span>
+<span id="cb1-9"><a href="#cb1-9"></a>      <span>putStrLn</span> <span>"threadWaitRead return!"</span></span>
+<span id="cb1-10"><a href="#cb1-10"></a>    putMVar ready ()</span>
+<span id="cb1-11"><a href="#cb1-11"></a>    threadDelay <span>1</span> <span>-- YMMV</span></span>
+<span id="cb1-12"><a href="#cb1-12"></a>    <span>print</span> <span>=&lt;&lt;</span> recv aSock <span>3</span></span>
+<span id="cb1-13"><a href="#cb1-13"></a>    timeout <span>1000000</span> (wait waitThread) <span>&gt;&gt;=</span> <span>case</span></span>
+<span id="cb1-14"><a href="#cb1-14"></a>      <span>Just</span> _ <span>-&gt;</span> <span>pure</span> ()</span>
+<span id="cb1-15"><a href="#cb1-15"></a>      <span>Nothing</span> <span>-&gt;</span> die <span>"timed out"</span></span></code></pre></div>
+<p>It is a silly server meant to show off the subtle semantics of <a href="http://hackage.haskell.org/package/base-4.14.0.0/docs/Control-Concurrent.html#v:threadWaitReadSTM"><code>threadWaitReadSTM</code></a>.</p>
+<p>After registering for the notification, <code>server</code> waits for the client to send packets by calling <a href="https://hackage.haskell.org/package/network-3.1.1.1/docs/Network-Socket-ByteString.html#v:recv"><code>recv</code></a>.</p>
+<p>Another thread blocks on <code>waiter</code> which will return when there is data to read.</p>
+<p>If we run the test executable repeatedly we will get output like:</p>
+<pre><code>starting
+"recv return"
+threadWaitRead return!
+starting
+"recv return"
+threadWaitRead return!
+starting
+threadWaitRead return!
+"recv return"
+starting
+"recv return"
+threadWaitRead return!
+starting
+threadWaitRead return!
+"recv return"
+starting
+threadWaitRead return!
+"recv return"
+starting
+"recv return"
+timed out</code></pre>
+<p>Sometimes the <code>STM ()</code> action from <code>threadWaitReadSTM</code> never returns even though the socket received new data to read.</p>
+<p>Unfortunately, this is not a bug. <code>threadWaitReadSTM</code> inherits the semantics of the IO multiplexing APIs (<a href="https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html"><code>kqueue</code></a> and <a href="https://man7.org/linux/man-pages/man7/epoll.7.html"><code>epoll</code></a>) that are used to implement the <a href="https://hackage.haskell.org/package/base-4.12.0.0/docs/GHC-Event.html"><code>EventManager</code></a> backends (<a href="https://github.com/ghc/packages-base/blob/master/GHC/Event/KQueue.hsc">1</a>) (<a href="https://github.com/ghc/packages-base/blob/master/GHC/Event/EPoll.hsc">2</a>) and this is how they are supposed to work.</p>
+<p>This behavior occurs on both Linux and MacOS. I know why it happens on Linux and I am assuming the same explanation holds for MacOS.</p>
+
+<p>On Linux <code>threadWaitReadSTM</code> is implemented by utilizing <a href="https://www.man7.org/linux/man-pages/man2/epoll_wait.2.html"><code>epoll_wait</code></a> to receive events registered with <a href="https://man7.org/linux/man-pages/man2/epoll_ctl.2.html"><code>epoll_ctl</code></a>.</p>
+<p>The Linux documentation has the following to say about <code>epoll_wait</code>:</p>
+<pre><code> A call to epoll_wait() will block until either:
+
+ · a file descriptor delivers an event;
+
+ · the call is interrupted by a signal handler; or
+
+ · the timeout expires.</code></pre>
+<p>This line:</p>
+<blockquote>
+<p>a file descriptor delivers an event</p>
+</blockquote>
+<p>glosses over some important details.</p>
+<p>Event notification is a two-step process. In the case of sockets, when new data is available the function <a href="https://github.com/torvalds/linux/blob/cb8e59cc87201af93dfbb6c3dccc8fcad72a09c2/net/core/sock.c#L2900"><code>socket_def_readable</code></a> is called. This causes the thread <a href="https://github.com/torvalds/linux/blob/decd6167bf4f6bec1284006d0522381b44660df3/fs/eventpoll.c#L1820"><code>ep_poll</code></a> was running on to wake up and <a href="https://github.com/torvalds/linux/blob/decd6167bf4f6bec1284006d0522381b44660df3/fs/eventpoll.c#L887">poll the socket</a> to see what sort of events have occured. It does this by calling <a href="https://github.com/torvalds/linux/blob/a5ad5742f671de906adbf29fbedf0a04705cebad/net/ipv4/tcp.c#L499"><code>tcp_poll</code></a>.</p>
+<p><code>tcp_poll</code> checks various properities of the socket to determine if there are any ready events. <a href="https://github.com/torvalds/linux/blob/a5ad5742f671de906adbf29fbedf0a04705cebad/net/ipv4/tcp.c#L476"><code>tcp_stream_is_readable</code></a> examines the socket’s receive buffer to see if there is data for reading.</p>
+<p>If the data is read from the socket between the time of waking and checking, <code>ep_poll</code> will determine there are no events to return and go back to sleep. Thus <code>epoll_wait</code> might not return even if the socket receives new data.</p>
+<p>This is exactly what occurs in the example server above. Sometimes <code>recv</code> happens after data is on the socket but before <code>tcp_poll</code> is executed via the <code>epoll_wait</code> path. When this occurs, the <code>threadWaitReadSTM</code> action (<code>waiter</code>) never returns.</p>
+
+<p>I discovered this tidbit of Linux trivia while trying to understand this bug with <a href="https://github.com/cocreature/hasql-notifications"><code>hasql-notifications</code></a>.</p>
+<p><img src="https://jfischoff.github.io/blog/hardest-wont-fix/issues.png"></p>
+<p>It’s a three-year-old bug that still wasn’t fixed. The expert of <code>postgresql-libpq</code>, <code>lpsmith</code> had weighed in on the bug. <code>cocreature</code> and <code>lpsmith</code> had discovered a work-around. The work-around would require inserting <code>threadWaitRead</code> between sending a query and checking for the result in the bowels of <code>hasql</code>. However they were unsure of why this was necessary.</p>
+<p>As is on-brand for me, I started by seeing if the server was sending the notification using <a href="https://www.wireshark.org/">Wireshark</a>.</p>
+<p>I fired up Wireshark and used “Follow TCP Stream”.</p>
+<p><img src="https://jfischoff.github.io/blog/hardest-wont-fix/follow_tcp_stream.png"></p>
+<p>I captured the flows when the test passed and when it failed. Sadly, they were identical.</p>
+<p><img src="https://jfischoff.github.io/blog/hardest-wont-fix/conversation.png"></p>
+<p>Also I could see a “channel.hi!” sent from the server to the client.</p>
+<p>I concluded the notification was always sent by the server, but was it received?</p>
+<p>To see if the client was receiving the notification I could use something like <code>strace</code> but there would be a lot of noise and I don’t believe <code>strace</code> can show the actual data returned by <a href="https://linux.die.net/man/2/recvfrom"><code>recvfrom</code></a>.</p>
+<p>So I opted for <a href="https://github.com/iovisor/bpftrace"><code>bpftrace</code></a> instead.</p>
+<p><code>bpftrace</code> is part of a suite of new Linux observability tools built off the <a href="https://lwn.net/Articles/740157/"><code>ebpf</code></a> virtual machine and Linux probe technologies.</p>
+<p>I wrote the <a href="https://jfischoff.github.io/blog/hardest-wont-fix/epoll_wait_debugger.bt">following <code>bpftrace</code> script</a>:</p>
+<div id="cb4"><pre><code><span id="cb4-1"><a href="#cb4-1"></a>tracepoint:syscalls:sys_enter_recvfrom</span>
+<span id="cb4-2"><a href="#cb4-2"></a>{</span>
+<span id="cb4-3"><a href="#cb4-3"></a>    printf(<span>"%s sys_enter_recvfrom tid: %d fd=%d</span><span>
+</span><span>"</span>, comm, tid, args-&gt;fd);</span>
+<span id="cb4-4"><a href="#cb4-4"></a>    @sys_enter_recvfrom[tid] = args-&gt;ubuf</span>
+<span id="cb4-5"><a href="#cb4-5"></a>}</span>
+<span id="cb4-6"><a href="#cb4-6"></a></span>
+<span id="cb4-7"><a href="#cb4-7"></a>tracepoint:syscalls:sys_exit_recvfrom</span>
+<span id="cb4-8"><a href="#cb4-8"></a>{</span>
+<span id="cb4-9"><a href="#cb4-9"></a>  printf(<span>"%s sys_enter_recvfrom tid: %d message=%r return value: %d</span><span>
+</span><span>"</span>,</span>
+<span id="cb4-10"><a href="#cb4-10"></a>    comm, tid, buf(@sys_enter_recvfrom[tid], args-&gt;ret), args-&gt;ret);</span>
+<span id="cb4-11"><a href="#cb4-11"></a>}</span></code></pre></div>
+<p><code>recvfrom</code> is passed an output buffer. The return value of <code>recvfrom</code> tells you how many bytes were filled in.</p>
+<p>To gain access to the output buffer in the exit probe, I store the pointer in a thread id indexed global <code>@sys_enter_recvfrom</code> hash table in the enter probe.</p>
+<p>In the exit probe I look up the value of <code>@sys_enter_recvfrom[tid]</code> where <code>tid</code> is the thread id. I then copy out <code>args-&gt;ret</code> using the <code>buf()</code> builtin and print it.</p>
+<blockquote>
+<p>Currently the <code>buf()</code> requires the latest version of <code>bpftrace</code> on GitHub which is not yet released but building it from source is easy.</p>
+</blockquote>
+<p>Another thing to point out is <code>tracepoint</code>s arguments require specific names. I had to look up the format of <code>sys_enter_recvfrom</code> by reading the “format” file in the appropiate <code>/sys/kernel/debug/tracing/events/</code> folder.</p>
+<pre><code>$ cat /sys/kernel/debug/tracing/events/syscalls/sys_enter_recvfrom/format
+name: sys_enter_recvfrom
+ID: 1357
+format:
+    field:unsigned short common_type;   offset:0;   size:2; signed:0;
+    field:unsigned char common_flags;   offset:2;   size:1; signed:0;
+    field:unsigned char common_preempt_count;   offset:3;   size:1; signed:0;
+    field:int common_pid;   offset:4;   size:4; signed:1;
+
+    field:int __syscall_nr; offset:8;   size:4; signed:1;
+    field:int fd;   offset:16;  size:8; signed:0;
+    field:void * ubuf;  offset:24;  size:8; signed:0;
+    field:size_t size;  offset:32;  size:8; signed:0;
+    field:unsigned int flags;   offset:40;  size:8; signed:0;
+    field:struct sockaddr * addr;   offset:48;  size:8; signed:0;
+    field:int * addr_len;   offset:56;  size:8; signed:0;</code></pre>
+<p>This is how I knew to use <code>args-&gt;ubuf</code> for the output buffer.</p>
+<p>Running the test and the <code>sudo bpftrace epoll_wait_debugger.bt</code> I get the following output:</p>
+<pre><code>...
+tester:w tracepoint:syscalls:sys_enter_recvfrom tid: 3692 fd=13
+tester:w tracepoint:syscalls:sys_exit_recvfrom tid: 3692 message= C   NOTIFY A     ~channel hi! Z   I return value 39
+...</code></pre>
+<p>Which is the same message as seen in Wireshark.</p>
+<p>If I was receiving the notification why didn’t <code>epoll_wait</code> get notified?</p>
+<p>I researched the mechanism sockets use for alerting <code>epoll_wait</code> of new data and determined I should trace the <code>socket_def_readable</code> call.</p>
+<p>Here is the <code>bpftrace</code> script snippet to trace <code>socket_def_readable</code> entry:</p>
+<div id="cb7"><pre><code><span id="cb7-1"><a href="#cb7-1"></a><span>#include </span><span>&lt;net/inet_sock.h&gt;</span></span>
+<span id="cb7-2"><a href="#cb7-2"></a><span>#include </span><span>&lt;net/sock.h&gt;</span></span>
+<span id="cb7-3"><a href="#cb7-3"></a></span>
+<span id="cb7-4"><a href="#cb7-4"></a>kprobe:sock_def_readable</span>
+<span id="cb7-5"><a href="#cb7-5"></a>{</span>
+<span id="cb7-6"><a href="#cb7-6"></a>  $inet_sock = (<span>struct</span> inet_sock *)arg0;</span>
+<span id="cb7-7"><a href="#cb7-7"></a>  $dport = (($inet_sock-&gt;inet_dport &amp; <span>0xFF</span>) &lt;&lt; <span>8</span>) | ($inet_sock-&gt;inet_dport &gt;&gt; <span>8</span>);</span>
+<span id="cb7-8"><a href="#cb7-8"></a>  printf(<span>"%s sock_def_readable enter tid: %d port=%d</span><span>
+</span><span>"</span>, comm, tid, $dport);</span>
+<span id="cb7-9"><a href="#cb7-9"></a>}</span>
+<span id="cb7-10"><a href="#cb7-10"></a></span>
+<span id="cb7-11"><a href="#cb7-11"></a>kretprobe:sock_def_readable</span>
+<span id="cb7-12"><a href="#cb7-12"></a>{</span>
+<span id="cb7-13"><a href="#cb7-13"></a>   printf(<span>"%s sock_def_readable exit tid %d</span><span>
+</span><span>"</span>, comm, tid);</span>
+<span id="cb7-14"><a href="#cb7-14"></a>}</span></code></pre></div>
+<p>There isn’t a <code>tracepoint</code> for <code>sock_def_readable</code> but since it is a kernel function, we can trace it with a <a href="https://lwn.net/Articles/132196/"><code>kprobe</code></a>. Unlike <code>tracepoint</code>s there isn’t a format file for <code>kprobe</code>s. The arguments are all positional, hence the <code>arg0</code> for the first argument. To learn the arguments one must look at the Linux source.</p>
+<p>One advantage of <code>kprobe</code>s I’ve found is some complex function arguments of <code>tracepoint</code>s cannot be inspected (I don’t know if this is a bug in <code>bpftrace</code> or what) but I can inspect the arguments of the <code>kprobe</code> counterparts.</p>
+<p>The first argument to <code>socket_def_readable</code> is a <a href="https://github.com/torvalds/linux/blob/master/include/net/sock.h#L346"><code>sock*</code></a> but we can also cast it an <a href="https://github.com/torvalds/linux/blob/master/include/net/inet_sock.h#L195"><code>inet_sock*</code></a> (for some reason I find this works better to get the destination port. Also you can get the source port this way).</p>
+<p>By using <code>#include</code> to bring into scope definitions of structs, one can cast arguments in <code>kprobe</code>s and then inspect the fields of the structs.</p>
+<p>I had to convert the port from big to little endian. That is what the bit shifting is about. At the time of writing this blog post, these <code>bpftrace</code> operators are still undocumented.</p>
+<p>Running <code>sudo bpftrace epoll_wait_debugger.bt</code> gave:</p>
+<pre><code>tester:w sock_def_readable enter tid: 4505 port=2222
+tester:w sock_def_readable exit tid: 4505</code></pre>
+<p>Okay so the socket fired its notification to wake up <code>epoll_wait</code>, but did it work? Did <code>epoll_wait</code> actually return but somehow the GHC runtime did not properly handle the event?</p>
+<p>I extended the script with probes for <code>epoll_wait</code>.</p>
+<div id="cb9"><pre><code><span id="cb9-1"><a href="#cb9-1"></a>tracepoint:syscalls:sys_enter_epoll_wait</span>
+<span id="cb9-2"><a href="#cb9-2"></a>/comm == <span>"tester:w"</span>/</span>
+<span id="cb9-3"><a href="#cb9-3"></a>{</span>
+<span id="cb9-4"><a href="#cb9-4"></a>  printf(<span>"%s sys_enter_epoll_wait tid %d fd=%d </span><span>
+</span><span>"</span>, comm, tid, args-&gt;epfd);</span>
+<span id="cb9-5"><a href="#cb9-5"></a>}</span>
+<span id="cb9-6"><a href="#cb9-6"></a></span>
+<span id="cb9-7"><a href="#cb9-7"></a>tracepoint:syscalls:sys_exit_epoll_wait</span>
+<span id="cb9-8"><a href="#cb9-8"></a>/comm == <span>"tester:w"</span>/</span>
+<span id="cb9-9"><a href="#cb9-9"></a>{</span>
+<span id="cb9-10"><a href="#cb9-10"></a>  printf(<span>"%s sys_exit_epoll_wait tid %d</span><span>
+</span><span>"</span>, comm, tid);</span>
+<span id="cb9-11"><a href="#cb9-11"></a>}</span></code></pre></div>
+<p>The <code>EventManager</code> runs on a <a href="https://github.com/ghc/ghc/blob/6c59cc71dc20f26d5a6650b16a82faeae72f2065/libraries/base/GHC/Event/Thread.hs#L268">bound thread</a> with a <a href="https://github.com/ghc/ghc/blob/64ef4d7fb131f04769c6cab331af335bd87103ec/rts/Task.c#L482">specific name</a> so I filtered <code>epoll_wait</code> calls using the name of the <code>EventManager</code> thread.</p>
+<p>I run everything again and get:</p>
+<pre><code>tester:w sys_enter_epoll_wait tid: 4760 fd=3
+tester:w sys_exit_epoll_wait tid: 4760
+tester:w sys_enter_epoll_wait tid: 4760 fd=3
+tester:w sys_exit_epoll_wait tid: 4760
+tester:w sys_enter_epoll_wait tid: 4760 fd=3</code></pre>
+<p>The triple calls to <code>epoll_wait</code> are a <a href="https://github.com/ghc/ghc/blob/01b15b835a7555c501df862b4dc8cc8eaff86afc/libraries/base/GHC/Event/Manager.hs#L281">small optimization (hopefully)</a> of the <code>EventManager</code> implementation to conserve OS threads. It’s not important. The important piece is that we call <code>epoll_wait</code> but it never returns.</p>
+<p>Okay so time to verify some assumptions. Was the file descriptor ready event actually registered? The registration requires a call to <code>epoll_ctl</code>. It was time for more probes:</p>
+<div id="cb11"><pre><code><span id="cb11-1"><a href="#cb11-1"></a>tracepoint:syscalls:sys_enter_epoll_ctl</span>
+<span id="cb11-2"><a href="#cb11-2"></a>/comm == <span>"tester:w"</span>/</span>
+<span id="cb11-3"><a href="#cb11-3"></a>{</span>
+<span id="cb11-4"><a href="#cb11-4"></a>  $event = (<span>struct</span> epoll_event*)args-&gt;event;</span>
+<span id="cb11-5"><a href="#cb11-5"></a>  printf(<span>"sys_enter_epoll_ctl tid: %d op=%d, fd=%d event_fd=%d</span><span>
+</span><span>"</span>, tid, args-&gt;op, args-&gt;fd, $event-&gt;data);</span>
+<span id="cb11-6"><a href="#cb11-6"></a>}</span>
+<span id="cb11-7"><a href="#cb11-7"></a></span>
+<span id="cb11-8"><a href="#cb11-8"></a>tracepoint:syscalls:sys_exit_epoll_ctl</span>
+<span id="cb11-9"><a href="#cb11-9"></a>/comm == <span>"tester:w"</span>/</span>
+<span id="cb11-10"><a href="#cb11-10"></a>{</span>
+<span id="cb11-11"><a href="#cb11-11"></a>  printf(<span>"sys_exit_epoll_ctl tid: %d return value: %d</span><span>
+</span><span>"</span>, tid, args-&gt;ret);</span>
+<span id="cb11-12"><a href="#cb11-12"></a>}</span></code></pre></div>
+<p>Which gave:</p>
+<pre><code>sys_enter_epoll_ctl tid: 5111 op=3, fd=13 event_fd=13
+sys_exit_epoll_ctl tid: 5111 return value: -2
+sys_enter_epoll_ctl tid: 5111 op=1, fd=13 event_fd=13
+sys_exit_epoll_ctl tid: 5111 return value: 0</code></pre>
+<p>This is the <a href="https://github.com/ghc/ghc/blob/1c2c2d3dfd4c36884b22163872feb87122b4528d/libraries/base/GHC/Event/EPoll.hsc#L93">expected sequence</a>. <code>epoll_ctl</code> successfully added a callback after failing to modify a non-existent callback.</p>
+<p>There goes that theory.</p>
+<p>Somewhat lost, I started to read the <code>epoll_wait</code> source. To help understand which code paths were executed I added more <code>kprobe</code>s to see what <code>epoll_wait</code> was doing.</p>
+<p>This is when I noticed the following sequence:</p>
+<pre><code>tester:w sock_def_readable enter tid: 5902 port=2222
+tester:w sock_def_readable exit tid: 5902
+tester:w sys_enter_recvfrom tid: 5902 fd=13
+tester:w sys_exit_recvfrom tid: 5902 message=C   NOTIFY A      channel hi! Z   I return value: 39
+tester:w kprobe:ep_send_events_proc tid: 5900
+tester:w kprobe:ep_item_poll.isra.0 tid: 5900
+tester:w kretprobe:ep_item_poll.isra.0 tid: 5900
+tester:w kretprobe:ep_send_events_proc tid: 5900</code></pre>
+<blockquote>
+<p>Notice the funny name for the kprobe <code>ep_item_poll.isra.0</code>? I don’t know what this is about but a technique I use to discover the real name of kernel functions that at first fail is to use a wildcard. So I used the probe name <code>ep_item_pol*</code>. Now that I know the name I can just use <code>ep_item_poll.isra.0</code></p>
+</blockquote>
+<p>When the test would pass the sequence was similar but would end with <code>epoll_wait</code> returning.</p>
+<p><a href="https://github.com/torvalds/linux/blob/65759097d804d2a9ad2b687db436319704ba7019/fs/eventpoll.c#L1944">Looking at the code</a> it seemed like the <code>epoll_wait</code> thread would wake up and check to see what events were available and then go back to sleep if it could not find one.</p>
+<p>What can clear out events? Closing a file descriptor could, I assumed.</p>
+<p>I traced out <a href="https://linux.die.net/man/2/close"><code>close</code></a>. Nothing out of the ordinary.</p>
+<p>Then I noticed the difference between success and failure was when the <code>recvfrom</code> occured. If the sequence went:</p>
+<ol type="1">
+<li>sock_def_readable</li>
+<li>ep_send_events_proc</li>
+<li>sys_enter_recvfrom</li>
+</ol>
+<p>everything worked. <code>epoll_wait</code> returned.</p>
+<p>If the sequence went:</p>
+<ol type="1">
+<li>sock_def_readable</li>
+<li>sys_enter_recvfrom</li>
+<li>ep_send_events_proc</li>
+</ol>
+<p><code>epoll_wait</code> would not return. Somehow <code>recvfrom</code> was clearing out the read ready event.</p>
+<p>By reading through the code for <a href="https://github.com/torvalds/linux/blob/cb8e59cc87201af93dfbb6c3dccc8fcad72a09c2/net/socket.c#L2025"><code>recvfrom</code></a> I could not see how it was doing this. Then I happened to reread <a href="https://idndx.com/2014/09/03/the-implementation-of-epoll-2/">this blog post</a> and it talked about a similar situation with write ready events. It mentioned the role <code>tcp_poll</code> played.</p>
+<p><code>tcp_poll</code> was the missing piece of the puzzle. I added the probe and saw that when <a href="https://github.com/torvalds/linux/blob/65759097d804d2a9ad2b687db436319704ba7019/fs/eventpoll.c#L879"><code>ep_item_poll</code></a> called <code>tcp_poll</code> before <code>recvfrom</code> ran <code>tcp_poll</code> returned <code>325</code> which is equivalent to the event flags:</p>
+<div id="cb14"><pre><code><span id="cb14-1"><a href="#cb14-1"></a>EPOLLIN <span>/*0x1*/</span> | EPOLLRDNORM <span>/*0x40*/</span> | EPOLLOUT <span>/*0x4*/</span>| EPOLLWRNORM <span>/*0x100*/</span></span></code></pre></div>
+<p>However if <code>recvfrom</code> ran first, <code>tcp_poll</code> would return <code>260</code> corresponding to the event flags:</p>
+
+<p>At which point <code>epoll_wait</code> would not return because the socket was not ready for reading. <code>recvfrom</code> had already read all the data.</p>
+
+<p>This is the cleaned up version of the steps I took. It’s not really in order. In reality, I started by ignoring the problem and convincing myself it couldn’t affect me. Then I tried to use DTrace and failed (DTrace never seems to work well on Macs). So I moved to Linux and recompiled GHC, adding tracing to the <code>EventManager</code> and dumped an eventlog.</p>
+<p>I learned a lot of details on how the <code>EventManager</code> and how GHC’s scheduler worked but could not find any issues.</p>
+<p>I decided this was an opportunity to read <a href="http://www.brendangregg.com/bpf-performance-tools-book.html">“BPF Performance Tools”</a> and it was helpful. I wandered through the Linux network stack using the <code>bpftrace</code>’s <code>kstack</code> call to understand the sequences of functions for sending and receiving data on localhost. I learned a lot. It was very interesting. It was an inefficent way to solve this bug.</p>
+<p>I made a bunch of wrong turns but the steps above are what ulimately helped after I tried many things that didn’t. I got lucky finding <code>tcp_poll</code>. In the retrospect, debugging with kernel symbols might have been a better approach. Something to try next time.</p>
+
+<p>Back to the bug that started this all.</p>
+<p>Now that I understand the mechanics of the issue, can the bug be fixed?</p>
+<p>I see two ways to avoid the bug <code>hasql-notification</code> has.</p>
+<p>One is two use a simpler implementation which assumes the connection used for waiting will not be used for anything else. This is the approach I took with <a href="https://hackage.haskell.org/package/postgresql-libpq-notify"><code>postgresql-libpq-notify</code></a>.</p>
+<p><code>lpsmith</code>’s original notification design is very clever. It is written in a way where it, in theory, can wait for a notification while freeing the connection up for other operations.</p>
+<p>However due to the semantics of <code>threadWaitRead</code> we have to be very careful no calls to <code>recvfrom</code> are made without <code>epoll_wait</code> returning first. It might be possible to do this using a similar approach to one <code>cocreature</code> developed (which I know realize is how <code>postgresql-simple</code> works as well).</p>
+<p>Update: I think calling <code>threadWaitRead</code> between <code>sendQuery</code> and <code>getResult</code> the way <code>postgresql-simple</code> does will solve the issue, assuming connection a lock is held for the duration of both calls.</p>
+<p>The advantage of this solution is it is able to use connection resources more efficiently. This solution seems possible but easy to mess up.</p>
+<p>Something to think about more in the future.</p>
+<p><a href="https://jfischoff.github.io/index.html">Home</a></p>
+</article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
