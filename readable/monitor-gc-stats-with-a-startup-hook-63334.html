@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Monitor GC stats with a startup hook - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Monitor GC stats with a startup hook - linksfor.dev(s)"/>
+    <meta property="article:author" content="https://medium.com/@kevingosse"/>
+    <meta property="og:description" content="Using startup hooks to automatically fetch GC metrics from any&#xA0;.net core application"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://medium.com/@kevingosse/monitor-gc-stats-with-a-startup-hook-55aa03dedea3"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Monitor GC stats with a startup hook</title>
+<div class="readable">
+        <h1>Monitor GC stats with a startup hook</h1>
+            <div>by https://medium.com/@kevingosse</div>
+            <div>Reading time: 4-5 minutes</div>
+        <div>Posted here: 23 Jun 2020</div>
+        <p><a href="https://medium.com/@kevingosse/monitor-gc-stats-with-a-startup-hook-55aa03dedea3">https://medium.com/@kevingosse/monitor-gc-stats-with-a-startup-hook-55aa03dedea3</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><section><div><div><div><div><div><div><p><a rel="noopener" href="https://medium.com/@kevingosse?source=post_page-----55aa03dedea3----------------------"><img alt="Kevin Gosse" src="https://miro.medium.com/fit/c/96/96/1*uQa2E6LGdotlsEg6fCm1yw.jpeg" width="48" height="48"></a></p></div></div></div></div><p id="0835" data-selectable-paragraph="">.NET core startup hooks is a feature I really like, and <a target="_blank" rel="noopener" href="https://medium.com/criteo-labs/c-have-some-fun-with-net-core-startup-hooks-498b9ad001e1">I had a lot of fun with it in the past</a>. Still, I had yet to find a legitimate use for them, and the opportunity finally came a few days ago.</p><p id="baef" data-selectable-paragraph="">Let’s start by a quick catch-up, for those who don’t know what startup hooks are. The feature was introduced with .net core 2.2, and allows to execute any arbitrary code in a .net process <strong>before the Main entry point has a chance to run. </strong>This is done by declaring a <code>DOTNET_STARTUP_HOOKS</code> environment variable, pointing to the assembly you want to inject. The target assembly must declare a <code>StartupHook</code> class outside of any namespace, with a static <code>Initialize</code> method. That method is the entry point of the hook.</p><p id="5c54" data-selectable-paragraph="">Back to the story. If you follow me on social medias, you might know that I joined Datadog a few weeks ago. I’m working on improving the performance of the .net tracer. As with any performance work, one of the first steps is to setup tests to measure the impact of the optimizations. Datadog already has a reliability environment, where the product is tested against popular applications, and key indicators are measured such as response time, CPU usage, or memory consumption. This was a very good start, but I also wanted to get stats about GC, and more precisely the number of garbage collections.</p><p id="d16e" data-selectable-paragraph="">How to measure this? From inside of the process, it’s just a matter of calling <code>GC.CollectionCount</code>. From outside of the process it gets a bit trickier, as performance counters are not available for .net core applications. <a href="https://labs.criteo.com/2018/06/replace-net-performance-counters-by-clr-event-tracing/" target="_blank" rel="noopener nofollow">You can instead use ETW or event-pipes, as my former coworker Christophe Nasarre wrote back in the days.</a> But this is quite a bit of work, and I was looking for a quick win. I needed an easy and unobtrusive way to inject my code inside of the applications we test. That’s when I remembered of startup hooks.</p><p id="7c70" data-selectable-paragraph="">The Datadog agent <a href="https://www.datadoghq.com/blog/statsd/" target="_blank" rel="noopener nofollow">exposes a StatsD interface</a> that can be used to push any arbitrary metric. My plan was to inject a thread in the target applications that would poll the number of collections and push it to the agent. Once you know about startup hooks, this is surprisingly straightforward to implement:</p><figure><div></div></figure><p id="51ed" data-selectable-paragraph="">The code makes use of the <a href="https://www.nuget.org/packages/DogStatsD-CSharp-Client/" target="_blank" rel="noopener nofollow">DogStatsD-CSharp-Client nuget package</a>. From there, it was just a matter of adding a <code>DOTNET_STARTUP_HOOKS</code> environment variable, pointing to the hook, to start monitoring any .net core application. Or so I thought.</p><p id="67d0" data-selectable-paragraph="">Loading an arbitrary assembly intro a process that has no prior knowledge of it comes with (at least) one tricky part: handling references. My startup hook depended on the <code>DogStatsD-CSharp-Client</code> library, which itself had its own references, and all of those weren’t known to the target application at compilation time. This brought its fair share of dependency errors at runtime. Rather than trying to reconcile the errors on a case-per-case basis, I needed a way to isolate my dependencies from those of the target applications. .NET core does not support <code>AppDomain</code>, but brings a worthy successor: <code><a href="https://docs.microsoft.com/en-us/dotnet/core/dependency-loading/understanding-assemblyloadcontext" target="_blank" rel="noopener nofollow">AssemblyLoadContext</a></code>.</p><p id="f970" data-selectable-paragraph="">To take advantage of it, I separated my project into two assemblies: <code>GCCollector</code>, that starts the background thread and pushes the metrics, and <code>GCStartupHook</code>, which is the entry point of the startup hook. Inside, instead of directly referencing <code>GCCollector</code>, I load it through a dedicated <code>AssemblyLoadContext</code>, so that all of its dependencies are isolated:</p><figure><div></div></figure><p id="1a85" data-selectable-paragraph="">In the implementation of the <code>AssemblyLoadContext</code>, I needed to load all required dependencies. Rather than re-implementing the assembly resolve logic, I took advantage of new gem brought by .net core 3.0: <code><a href="https://docs.microsoft.com/en-us/dotnet/api/system.runtime.loader.assemblydependencyresolver" target="_blank" rel="noopener nofollow">AssemblyDependencyResolver</a></code>.</p><p id="ffd7" data-selectable-paragraph="">The way it works is very straightforward. The resolver is given the path to an assembly, in this case <code>GCStartupHook.dll</code>. Whenever <code>ResolveAssemblyToPath</code> is called, it’s going to use the associated <code>deps.json</code> file in order to resolve dependencies just like if that assembly was a standalone application. Incredibly convenient for plugins… or for startup hooks.</p><figure><div></div></figure><p id="2b35" data-selectable-paragraph="">With that, the hook is complete. All is left is publishing it, setting the <code>DOTNET_STARTUP_HOOKS</code> environment, and the GC metrics are pushed to the agent!</p><figure><div><div><div><div><p><img src="https://miro.medium.com/max/60/1*g9Ql6AZJt7l1sxYaN5zzQw.png?q=20" width="1386" height="453" role="presentation"></p><p><img width="1386" height="453" srcset="https://miro.medium.com/max/552/1*g9Ql6AZJt7l1sxYaN5zzQw.png 276w, https://miro.medium.com/max/1104/1*g9Ql6AZJt7l1sxYaN5zzQw.png 552w, https://miro.medium.com/max/1280/1*g9Ql6AZJt7l1sxYaN5zzQw.png 640w, https://miro.medium.com/max/1400/1*g9Ql6AZJt7l1sxYaN5zzQw.png 700w" sizes="700px" role="presentation"></p></div></div></div></div></figure></div></div></section></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
