@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+ECMAScript proposal: private static methods and accessors in classes - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="ECMAScript proposal: private static methods and accessors in classes - linksfor.dev(s)"/>
+    <meta property="og:description" content="This blog post is part of a series on new members in bodies of class definitions:"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://2ality.com/2020/06/private-static-methods-accessors-in-classes.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - ECMAScript proposal: private static methods and accessors in classes</title>
+<div class="readable">
+        <h1>ECMAScript proposal: private static methods and accessors in classes</h1>
+            <div>Reading time: 9-12 minutes</div>
+        <div>Posted here: 25 Jun 2020</div>
+        <p><a href="https://2ality.com/2020/06/private-static-methods-accessors-in-classes.html">https://2ality.com/2020/06/private-static-methods-accessors-in-classes.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>This blog post is part of a series on new members in bodies of class definitions:</p>
+<ol>
+<li><a href="https://2ality.com/2019/07/public-class-fields.html">Public class fields</a></li>
+<li><a href="https://2ality.com/2019/07/private-class-fields.html">Private class fields</a></li>
+<li><a href="https://2ality.com/2019/07/private-methods-accessors-in-classes.html">Private prototype methods and getter/setters in classes</a></li>
+<li><a href="https://2ality.com/2020/06/private-static-methods-accessors-in-classes.html">Private static methods and getter/setters in classes</a></li>
+</ol>
+<hr>
+<p>This post explains private static methods and accessors in classes, as described in the ECMAScript proposal <a href="https://github.com/tc39/proposal-static-class-features/">“Static class features”</a> by Shu-yu Guo and Daniel Ehrenberg.</p>
+<!--more-->
+<hr>
+<p><strong>Table of contents:</strong></p>
+<nav><ul><li><a href="#overview%3A-private-static-methods-and-accessors">Overview: private static methods and accessors&nbsp;&nbsp;</a></li><li><a href="#an-example-with-private-static-methods">An example with private static methods&nbsp;&nbsp;</a><ul><li><a href="#pitfall%3A-don%E2%80%99t-access-private-static-constructs-via-this">Pitfall: Don’t access private static constructs via this&nbsp;&nbsp;</a></li></ul></li><li><a href="#the-specification-for-private-static-fields%2C-methods%2C-and-accessors">The specification for private static fields, methods, and accessors&nbsp;&nbsp;</a><ul><li><a href="#the-foundations-laid-by-private-prototype-methods">The foundations laid by private prototype methods&nbsp;&nbsp;</a><ul></ul></li><li><a href="#the-specification-for-private-static-constructs">The specification for private static constructs&nbsp;&nbsp;</a></li><li><a href="#the-internal-representation-of-private-static-methods-and-private-instance-fields-illustrated-in-javascript">The internal representation of private static methods and private instance fields illustrated in JavaScript&nbsp;&nbsp;</a></li></ul></li></ul></nav><hr>
+<h2 id="overview%3A-private-static-methods-and-accessors">Overview: private static methods and accessors&nbsp;&nbsp;</h2>
+<p>The following kinds of private static methods and accessors exist:</p>
+<pre><code>class MyClass {
+  static #staticPrivateOrdinaryMethod() {}
+  static * #staticPrivateGeneratorMethod() {}
+
+  static async #staticPrivateAsyncMethod() {}
+  static async * #staticPrivateAsyncGeneratorMethod() {}
+  
+  static get #staticPrivateGetter() {}
+  static set #staticPrivateSetter(value) {}
+}
+</code></pre>
+<h2 id="an-example-with-private-static-methods">An example with private static methods&nbsp;&nbsp;</h2>
+<p>The following class has a private static method <code>.#createInternal()</code>:</p>
+<pre><code>class Point {
+  static create(x, y) {
+    return Point.#createInternal(x, y);
+  }
+  static createZero() {
+    return Point.#createInternal(0, 0);
+  }
+  static #createInternal(x, y) {
+    const p = new Point();
+    p.#x = x; // (A)
+    p.#y = y; // (B)
+    return p;
+  }
+  #x;
+  #y;
+}
+</code></pre>
+<p>This code shows the key benefit of private static methods, compared to external (module-private) helper functions: They can access private instance fields (line A and line B).</p>
+<h3 id="pitfall%3A-don%E2%80%99t-access-private-static-constructs-via-this">Pitfall: Don’t access private static constructs via <code>this</code>&nbsp;&nbsp;</h3>
+<p>Accessing public static constructs via <code>this</code> lets us avoid redundant use of class names. It works because those constructs are inherited by subclasses. Alas, we can’t do the same for private static constructs:</p>
+<pre><code>class SuperClass {
+  static #privateData = 2;
+  static getPrivateDataViaThis() {
+    return this.#privateData;
+  }
+  static getPrivateDataViaClassName() {
+    return SuperClass.#privateData;
+  }
+}
+class SubClass extends SuperClass {
+}
+
+// Works:
+assert.equal(SuperClass.getPrivateDataViaThis(), 2);
+
+// Error:
+assert.throws(
+  () =&gt; SubClass.getPrivateDataViaThis(), // (A)
+  {
+    name: 'TypeError',
+    message: 'Cannot read private member #privateData from an object whose class did not declare it',
+  }
+);
+
+// Work-around for previous error:
+assert.equal(SubClass.getPrivateDataViaClassName(), 2);
+</code></pre>
+<p>The problem in line A is that <code>this</code> points to <code>SubClass</code> which does not have the private field <code>.#privateData</code>. For more information, see <a href="https://2ality.com/2019/07/private-class-fields.html#this-and-private-static-fields">the blog post “Private class fields”</a>.</p>
+<h2 id="the-specification-for-private-static-fields%2C-methods%2C-and-accessors">The specification for private static fields, methods, and accessors&nbsp;&nbsp;</h2>
+<h3 id="the-foundations-laid-by-private-prototype-methods">The foundations laid by private prototype methods&nbsp;&nbsp;</h3>
+<p>Support for static methods and accessors is based on mechanisms that were introduced for prototype methods and accessors (<a href="https://2ality.com/2019/07/private-methods-accessors-in-classes.html#how-are-private-methods-handled-in-the-ecmascript-specification%3F-(advanced)">more information</a>).</p>
+<p>We will only examine private methods, but everything we discover also applies to private getters and setters.</p>
+<h4 id="storing-private-methods">Storing private methods&nbsp;&nbsp;</h4>
+<p>Consider a method <code>.#privateMethod()</code> that is created “inside” an object <code>HomeObj</code>. This method is stored externally, in a specification data structure called <a href="https://tc39.es/proposal-private-methods/#sec-private-names"><em>private name</em></a>. Private names are also used to represent other private class elements. They are looked up via <em>private environments</em>, which map identifiers to private names and exist next to environments for variables. Private environments are explained later.</p>
+<p>In this case, the private name has the following slots:</p>
+<ul>
+<li><code>.[[Description]] = "#privateMethod"</code></li>
+<li><code>.[[Kind]] = "method"</code></li>
+<li><code>.[[Brand]] = HomeObj</code></li>
+<li><code>.[[Value]]</code> points to the method object (a function)</li>
+</ul>
+<p>The <em>brand</em> of a private method is the object it was created in.</p>
+<h4 id="the-private-brands-of-objects">The private brands of objects&nbsp;&nbsp;</h4>
+<p>Each object <code>Obj</code> has an internal slot <code>Obj.[[PrivateBrands]]</code> which contains the brands of all methods that can be invoked on <code>Obj</code>. There are two ways in which elements are added to the private brands of an object:</p>
+<ul>
+<li>
+<p>When a class <code>C</code> is <code>new</code>-invoked, it adds <code>C.prototype</code> to the private brands of <code>this</code>. That means that <code>C</code>’s private prototype methods (whose brand is <code>C.prototype</code>) can be invoked on <code>this</code>.</p>
+</li>
+<li>
+<p>If a class <code>C</code> has private static methods, <code>C</code> is added to the private brands of <code>C</code>. That means that <code>C</code>’s private static methods (whose brand is <code>C</code>) can be invoked on <code>C</code>.</p>
+</li>
+</ul>
+<h4 id="private-brands-vs.-prototype-chains">Private brands vs. prototype chains&nbsp;&nbsp;</h4>
+<p>Therefore, the private brands of an object are related to the prototype chain of an object. Why has this mechanism been introduced if it is so similar?</p>
+<ul>
+<li>
+<p>Private methods are designed to be actually private and to have integrity. That means that they shouldn’t be affected by outside changes. If the private brands of an object were determined by its prototype chain, we could enable or disable private methods by changing the chain. We could also observe part of the executions of private methods by observing the traversal of the prototype chain via a Proxy.</p>
+</li>
+<li>
+<p>This approach guarantees that, when we invoke a private method on an object, its private fields also exist (as created by constructors and evaluations of class definitions). Otherwise, we could use <code>Object.create()</code> to create an instance without private instance fields to which we could apply private methods.</p>
+</li>
+</ul>
+<h4 id="lexical-scoping-of-private-identifiers">Lexical scoping of private identifiers&nbsp;&nbsp;</h4>
+<p>Execution contexts now have three environments:</p>
+<ul>
+<li><code>LexicalEnvironment</code> points to the environment for <code>let</code> and <code>const</code> (block scoping).</li>
+<li><code>VariableEnvironment</code> points to the environment for <code>var</code> (function scoping).</li>
+<li><code>PrivateEnvironment</code> points to an environment that maps identifiers prefixed with <code>#</code> to <em>private name</em> records.</li>
+</ul>
+<p>Functions now have two lexical environments:</p>
+<ul>
+<li><code>[[Environment]]</code> refers to the environment of the scope in which the function was created.</li>
+<li><code>[[PrivateEnvironment]]</code> refers to the environment with the private names that was active when the function was created.</li>
+</ul>
+<p>The operation <code>ClassDefinitionEvaluation</code> temporarily changes the current execution context for the body of a class:</p>
+<ul>
+<li>The <code>LexicalEnvironment</code> is set to <code>classScope</code>, a new declarative environment.</li>
+<li>The <code>PrivateEnvironment</code> is set to <code>classPrivateEnvironment</code>, a new declarative environment.</li>
+</ul>
+<p>For each identifier <code>dn</code> of the <code>PrivateBoundIdentifiers</code> of the class body, one entry is added to the <code>EnvironmentRecord</code> of <code>classPrivateEnvironment</code>. The key of that entry is <code>dn</code>, the value is a new private name.</p>
+<h3 id="the-specification-for-private-static-constructs">The specification for private static constructs&nbsp;&nbsp;</h3>
+<p>The following parts of the runtime semantics rule <a href="https://tc39.es/proposal-static-class-features/#runtime-semantics-class-definition-evaluation"><code>ClassDefinitionEvaluation</code></a> are relevant for static private constructs (<code>F</code> refers to the constructor):</p>
+<ul>
+<li>
+<p>Step 28.b.i: Perform <a href="https://tc39.es/proposal-class-fields/#sec-method-definitions-runtime-semantics-propertydefinitionevaluation"><code>PropertyDefinitionEvaluation(F, false)</code></a> for each static <code>ClassElement</code></p>
+<ul>
+<li>Step 28.d.ii: If the result is not empty, it is added to a list <code>staticFields</code> (so that it can be attached to <code>F</code> later).</li>
+</ul>
+</li>
+<li>
+<p>Step 33.a: If there is a static method or accessor <code>P</code> in <code>PrivateBoundIdentifiers</code> of <code>ClassBody</code> and <code>P</code>’s <code>.[[Brand]]</code> is <code>F</code>: Execute <code>PrivateBrandAdd(F, F)</code>. Intuitively, that means: object <code>F</code> can be receiver of methods stored in object <code>F</code></p>
+</li>
+<li>
+<p>Step 34.a: For each <code>fieldRecord</code> in <code>staticFields</code>: <code>DefineField(F, fieldRecord)</code></p>
+</li>
+</ul>
+<h3 id="the-internal-representation-of-private-static-methods-and-private-instance-fields-illustrated-in-javascript">The internal representation of private static methods and private instance fields illustrated in JavaScript&nbsp;&nbsp;</h3>
+<p>Let’s look at an example. Consider the following code from earlier in this post:</p>
+<pre><code>class Point {
+  static create(x, y) {
+    return Point.#createInternal(x, y);
+  }
+  static createZero() {
+    return Point.#createInternal(0, 0);
+  }
+  static #createInternal(x, y) {
+    const p = new Point();
+    p.#x = x;
+    p.#y = y;
+    return p;
+  }
+  
+  #x;
+  #y;
+
+  toArray() {
+    return [this.#x, this.#y];
+  }
+}
+</code></pre>
+<p>Internally, it is roughly represented as follows:</p>
+<pre><code>{ 
+
+  <span><span>class</span> <span>Object</span> </span>{
+    
+    __PrivateFieldValues__ = <span>new</span> <span>Map</span>();
+    
+    
+    __PrivateBrands__ = [];
+  }
+
+  
+  <span>const</span> __x = {
+    <span>__Description__</span>: <span>'#x'</span>,
+    <span>__Kind__</span>: <span>'field'</span>,
+  };
+  
+  <span>const</span> __y = {
+    <span>__Description__</span>: <span>'#y'</span>,
+    <span>__Kind__</span>: <span>'field'</span>,
+  };
+
+  <span><span>class</span> <span>Point</span> <span>extends</span> <span>Object</span> </span>{
+    <span>static</span> __PrivateBrands__ = [Point];
+    <span>static</span> __PrivateBrand__ = Point.prototype;
+    <span>static</span> __Fields__ = [__x, __y];
+
+    <span>static</span> create(x, y) {
+      PrivateBrandCheck(Point, __createInternal);
+      <span>return</span> __createInternal.__Value__.call(Point, x, y);
+    }
+    <span>static</span> createZero() {
+      PrivateBrandCheck(Point, __createInternal);
+      <span>return</span> __createInternal.__Value__.call(Point, <span>0</span>, <span>0</span>);
+    }
+
+    <span>constructor</span>() {
+      <span>super</span>();
+      
+      InitializeInstanceElements(<span>this</span>, Point);
+
+      
+    }
+    toArray() {
+      <span>return</span> [
+        <span>this</span>.__PrivateFieldValues__.get(__x),
+        <span>this</span>.__PrivateFieldValues__.get(__y),
+      ];
+    }
+
+    dist() {
+      PrivateBrandCheck(<span>this</span>, __computeDist);
+      __computeDist.__Value__.call(<span>this</span>);
+    }
+  }
+
+  
+  <span>const</span> __createInternal = {
+    <span>__Description__</span>: <span>'#createInternal'</span>,
+    <span>__Kind__</span>: <span>'method'</span>,
+    <span>__Brand__</span>: Point,
+    <span>__Value__</span>: <span><span>function</span> (<span>x, y</span>) </span>{
+      <span>const</span> p = <span>new</span> Point();
+      p.__PrivateFieldValues__.set(__x, x);
+      p.__PrivateFieldValues__.set(__y, y);
+      <span>return</span> p;
+    },
+  };
+} 
+
+<span><span>function</span> <span>InitializeInstanceElements</span>(<span>O, constructor</span>) </span>{
+  <span>if</span> (<span>constructor</span>.__PrivateBrand__) {
+    O.__PrivateBrands__.push(<span>constructor</span>.__PrivateBrand__);
+  }
+  const fieldRecords = <span>constructor</span>.__Fields__;
+  for (const fieldRecord of fieldRecords) {
+    O.__PrivateFieldValues__.set(fieldRecord, <span>undefined</span>);
+  }
+}
+
+<span><span>function</span> <span>PrivateBrandCheck</span>(<span>obj, privateName</span>) </span>{
+  <span>if</span> (! obj.__PrivateBrands__.includes(privateName.__Brand__)) {
+    <span>throw</span> <span>new</span> <span>TypeError</span>();
+  }
+}
+</code></pre>
+<hr>
+<p><strong>Acknowledgements:</strong></p>
+<ul>
+<li>Thanks for feedback: <a href="https://twitter.com/littledan/">Daniel Ehrenberg</a></li>
+<li>Thanks for feedback: <a href="https://twitter.com/rimunroe/">Ricky Munroe</a></li>
+</ul>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
