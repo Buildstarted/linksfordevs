@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 19 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 19 - linksfor.dev(s)"/>
+    <meta property="og:description" content="Code for this episode is"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/06/29/life-part-19/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 19</title>
+<div class="readable">
+        <h1>Life, part 19</h1>
+            <div>Reading time: 15-19 minutes</div>
+        <div>Posted here: 01 Jul 2020</div>
+        <p><a href="https://ericlippert.com/2020/06/29/life-part-19/">https://ericlippert.com/2020/06/29/life-part-19/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p>Code for this episode is <a href="https://github.com/ericlippert/ConwaysLife/tree/episode19">here</a>.</p>
+<hr>
+<p>Today we can finish off our C# implementation of Stafford’s algorithm. Last time we turned the first pass into a table lookup; it might be a bit harder to optimize the second pass. Let’s take a look at the inner loop of the second pass; I’ll take out the comments and the debugging sanity checks:</p>
+<pre>Triplet t = triplets[x, y];
+if (!t.Changed)
+  continue;
+if (t.LeftNext)
+  BecomeAlive(x * 3, y);
+else
+  BecomeDead(x * 3, y);
+if (t.MiddleNext)
+  BecomeAlive(x * 3 + 1, y);
+else
+  BecomeDead(x * 3 + 1, y);
+if (t.RightNext)
+  BecomeAlive(x * 3 + 2, y);
+else
+  BecomeDead(x * 3 + 2, y);
+changes.Add((x, y));</pre>
+<p>The key to understanding why this is very suboptimal is to look at what the code actually does in a common case. Let’s suppose the “current” triplet state is “dead-alive-alive” and the “next” triplet state is “alive-alive-dead”. That is, the left cell is going to <em>become</em> alive, the middle cell is going to <em>stay</em> alive, and the right cell is going to <em>die</em>.&nbsp; What happens? Let’s go through it line by line.</p>
+<pre>if (!t.Changed)</pre>
+<p>Do some bit twiddling to discover that the current state and the next state are in fact different.</p>
+<pre>if (t.LeftNext)</pre>
+<p>Do some bit twiddling to discover that the next state is “alive”. Call BecomeAlive. What does it do?</p>
+<pre>if (t.LeftCurrent) return false;</pre>
+<p>Do some more bit twiddling to discover that yes, a change needs to be made.</p>
+<pre>triplets[tx - 1, y - 1] = triplets[tx - 1, y - 1].UUP();
+triplets[tx, y - 1] = triplets[tx, y - 1].PPU();
+triplets[tx - 1, y] = triplets[tx - 1, y].UUP();
+triplets[tx, y] = t.SetLeftCurrent(true);
+triplets[tx - 1, y + 1] = triplets[tx - 1, y + 1].UUP();
+triplets[tx, y + 1] = triplets[tx, y + 1].PPU();
+</pre>
+<p>Do some bit twiddling to set the current bit to alive; do five additions to five neighbouring triplets to update their living neighbour counts — in parallel, for the cases where there are two counts to update — and return to the inner loop:</p>
+<pre>if (t.MiddleNext)</pre>
+<p>Do some bit twiddling to discover that the middle cell “next” state is alive, and call BecomeAlive:</p>
+<pre>if (t.MiddleCurrent) return false;</pre>
+<p>Do more bit twiddling to discover that the middle cell is already alive, so there’s no work to do. Go back to the inner loop:</p>
+<pre>if (t.RightNext)</pre>
+<p>Do some bit twiddling to discover that the right cell “next” state is dead; call BecomeDead:</p>
+<pre>if (!t.RightCurrent) return false;</pre>
+<p>Do some bit twiddling to discover that it is currently alive and so neighbour counts need to be updated.</p>
+<pre>triplets[tx, y - 1] = triplets[tx, y - 1].UMM();
+triplets[tx + 1, y - 1] = triplets[tx + 1, y - 1].MUU();
+triplets[tx, y] = t.SetRightCurrent(false);
+triplets[tx + 1, y] = triplets[tx + 1, y].MUU();
+triplets[tx, y + 1] = triplets[tx, y + 1].UMM();
+triplets[tx + 1, y + 1] = triplets[tx + 1, y + 1].MUU();
+</pre>
+<p>Twiddle bits to set the current bit to dead; update the neighbour counts of five neighbouring triplets, <em>two of which we just updated when we did the left cell!</em></p>
+<p>Also, did you notice that when we did the left cell, we <em>added</em> one to the middle neighbour counts of the above and below triplets, and just now we <em>subtracted</em> one from that same count? We are doing work and then undoing it a few nanoseconds later.</p>
+<p>The observations to make here are:</p>
+<ul>
+<li>On the good side, the idempotency check at the top of the algorithm is quite cheap. The cost of having duplicates on the “current changes” list is really low. But everything else is terrible.</li>
+<li>We are doing way too much bit twiddling still, and<em> it is almost all in the service of control flow</em>. That is, most of those bit twiddles are all in “if” statements that choose a path through the algorithm to selectively run different operations.</li>
+<li>If the left and right cells both changed then we need to update all eight neighbouring triplets, but we actually do <em>ten </em>updates.</li>
+<li>Worse, if the left, right <em>and</em> middle cells changed, we need to update eight neighbouring triplets but we actually would do <em>twelve </em>updates!</li>
+<li>We twiddle bits to set the current state up to three times, but we know what the final current state is going to be; it is the same as the “next” state.</li>
+</ul>
+<p>How can we fix these problems?</p>
+<p>The thing to notice here is <strong>there are only 27 possible control flows through this algorithm</strong>.They are:</p>
+<ul>
+<li>The idempotency check says that we already processed this change. Continue the loop.</li>
+<li>The left and middle cells are unchanged; the right cell is going from dead to alive.</li>
+<li>The left and middle cells are unchanged; the right cell is going from alive to dead.</li>
+<li>The left and right cells are unchanged; the middle cell is going from dead to alive.</li>
+<li>… and so on; you don’t need me to list all 27.</li>
+</ul>
+<p>Let’s come up with a notation; I’ll say that “A” is “was dead, becomes alive”, “D” is “was alive, becomes dead”, and “U” is “no change”. The 27 possible control flows are therefore notated UUU, UUA, UUD, UAU, UAA, UAD, UDU, UDA, UDD, and so on, up to DDD. There are three positions each with three choices, so that’s three-to-the-three = 27 possibilities.</p>
+<p>Since there are only 27 control flows, let’s just make a helper method for each! The control flow I just spelled out would be notated AUD, and so:</p>
+<pre>private bool AUD(int tx, int y)
+{
+  triplets[tx - 1, y - 1] = triplets[tx - 1, y - 1].UUP();
+  triplets[tx, y - 1] = triplets[tx, y - 1].PUM();
+  triplets[tx + 1, y - 1] = triplets[tx + 1, y - 1].MUU();
+  triplets[tx - 1, y] = triplets[tx - 1, y].UUP();
+  triplets[tx + 1, y] = triplets[tx + 1, y].MUU();
+  triplets[tx - 1, y + 1] = triplets[tx - 1, y + 1].UUP();
+  triplets[tx, y + 1] = triplets[tx, y + 1].PUM();
+  triplets[tx + 1, y + 1] = triplets[tx + 1, y + 1].MUU();
+  return true;
+}
+</pre>
+<p>There are eight neighbouring triplets that need updating; we update all of them exactly once. We will see why it returns a bool in a minute.</p>
+<p>You might be wondering what happens for something like “DDU” — left dies, middle dies, right unchanged. In that case there are neighbouring cells in other triplets that need to have their counts adjusted by two. We could write:</p>
+<pre>private bool DDU(int tx, int y)
+{
+  triplets[tx - 1, y - 1] = triplets[tx - 1, y - 1].UUM();
+  triplets[tx, y - 1] = triplets[tx, y - 1].MMM().MMU();
+  ...
+</pre>
+<p>But we notice here that we could save an addition by again, making the compiler fold the constant math:</p>
+<pre>private bool DDU(int tx, int y)
+{
+  triplets[tx - 1, y - 1] = triplets[tx - 1, y - 1].UUM();
+  triplets[tx, y - 1] = triplets[tx, y - 1].M2M2M();
+  ...
+</pre>
+<p>where we define a helper on the triplet struct:</p>
+<pre>public Triplet M2M2M() =&gt;
+  new Triplet(-2 * lcountone - 2 * mcountone - rcountone + triplet);
+</pre>
+<p>We can implement all 27 methods easily enough and we need 12 new helper methods to do the additions. These methods are all tedious, so I won’t labour the point further except to say that method UUU — no change — is implemented like this:</p>
+<pre>public bool UUU(int tx, int y) =&gt; false;</pre>
+<p>Meaning “there was no change”. All the other methods return true.</p>
+<p>So it is all well and good to say that we should make one method for every workflow; how do we dispatch those methods?</p>
+<p>We observe that there are only 64 possible combinations of current state and next state, and each one corresponds to one of these 27 workflows, so let’s just make another lookup;<strong> this one is a lookup of functions.</strong></p>
+<p>We will treat the current state as the low three bits of a six-bit integer, and the next state as the high three bits; that gives us our 64 possibilities. If, say, the next state is alive-alive-dead (AAD) and the current state is dead-alive-alive (DAA) then the change is “become dead-unchanged-become alive” (DUA):</p>
+<pre>lookup2 = new Func&lt;int, int, bool&gt;[]
+{
+  /* NXT CUR */
+  /* DDD DDD */ UUU, /* DDD DDA */ UUD, /* DDD DAD */ UDU, /* DDD DAA */ UDD,
+  /* DDD ADD */ DUU, /* DDD ADA */ DUD, /* DDD AAD */ DDU, /* DDD AAA */ DDD,
+  /* DDA DDD */ UUA, /* DDA DDA */ UUU, /* DDA DAD */ UDA, /* DDA DAA */ UDU,
+  /* DDA ADD */ DUA, /* DDA ADA */ DUU, /* DDA AAD */ DDA, /* DDA AAA */ DDU,
+  /* DAD DDD */ UAU, /* DAD DDA */ UAD, /* DAD DAD */ UUU, /* DAD DAA */ UUD,
+  /* DAD ADD */ DAU, /* DAD ADA */ DAD, /* DAD AAD */ DUU, /* DAD AAA */ DUD,
+  /* DAA DDD */ UAA, /* DAA DDA */ UAU, /* DAA DAD */ UUA, /* DAA DAA */ UUU,
+  /* DAA ADD */ DAA, /* DAA ADA */ DAU, /* DAA AAD */ DUA, /* DAA AAA */ DUU,
+  /* ADD DDD */ AUU, /* ADD DDA */ AUD, /* ADD DAD */ ADU, /* ADD DAA */ ADD,
+  /* ADD ADD */ UUU, /* ADD ADA */ UUD, /* ADD AAD */ UDU, /* ADD AAA */ UDD,
+  /* ADA DDD */ AUA, /* ADA DDA */ AUU, /* ADA DAD */ ADA, /* ADA DAA */ ADU,
+  /* ADA ADD */ UUA, /* ADA ADA */ UUU, /* ADA AAD */ UDA, /* ADA AAA */ UDU,
+  /* AAD DDD */ AAU, /* AAD DDA */ AAD, /* AAD DAD */ AUU, /* AAD DAA */ AUD,
+  /* AAD ADD */ UAU, /* AAD ADA */ UAD, /* AAD AAD */ UUU, /* AAD AAA */ UUD,
+  /* AAA DDD */ AAA, /* AAA DDA */ AAU, /* AAA DAD */ AUA, /* AAA DAA */ AUU,
+  /* AAA ADD */ UAA, /* AAA ADA */ UAU, /* AAA AAD */ UUA, /* AAA AAA */ UUU
+};</pre>
+<p>We can extract the key to this lookup table from a triplet with a minimum of bit twiddling:</p>
+<pre>public int LookupKey2 =&gt; triplet &gt;&gt; 9;</pre>
+<p>And we need one final bit twiddle to set the current state to the next state:</p>
+<pre>public Triplet NextToCurrent() =&gt; 
+  new Triplet((triplet &amp; ~currentm) | ((triplet &amp; nextm) &gt;&gt; 3));</pre>
+<p>Put it all together and our second pass loop body is greatly simplified in its action, though rather harder to understand what it is doing:</p>
+<pre>int key2 = triplets[x, y].LookupKey2;
+Func&lt;int, int, bool&gt; helper = lookup2[key2];
+bool changed = helper(x, y);
+if (changed)
+{
+  triplets[x, y] = triplets[x, y].NextToCurrent();
+  changes.Add((x, y));
+}</pre>
+<p>We determine what work needs to be done via table lookup; if the answer is “none”, the helper returns false and we do nothing. Otherwise the helper does two to eight additions, each updating one to three neighbour counts in parallel. Finally, if necessary we update the current state to the next state and make a note of the changed triplet for next time.</p>
+<p>We’re down to a single control flow decision, and almost all the bit operations are simple additions, so we will likely have considerably improved performance.</p>
+<p>It was a long road to get here. I sure hope it was worth it…</p>
+<pre>Algorithm           time(ms)  ticks  size(quad)    megacells/s
+Naïve (Optimized):   4000       5K      8               82
+Abrash                550       5K      8              596
+Abrash w/ changes     190       5K      8             1725 
+Abrash, O(c)          240       5K      8             1365
+Stafford v1           340       5K      8              963
+Stafford v2           210       5K      8             1560
+Stafford final        180       5K      8             1820
+</pre>
+<p>A new record for this series, so… yay?</p>
+<p>Also, it is still an O(change) algorithm, and it is significantly more space-efficient at three cells per two bytes, instead of one cell per byte, so that’s good; we can store larger grids in the same amount of memory if we want.</p>
+<p><strong>But oh my goodness, that was a lot of work to get around a 25% speedup over the one-byte-per-cell O(change) algorithm.</strong></p>
+<hr>
+<p>Reading Abrash’s original article from the 1990s describing Stafford’s algorithm, it is a little difficult to parse out exactly how fast it is, and how much faster that is than Abrash’s original algorithm. If I read it right, the numbers are approximately:</p>
+<ul>
+<li>200×200 grid of cells</li>
+<li>20MHz-33MHz 486</li>
+<li>Measure performance of the computation, not the display (as we are also doing)</li>
+<li>Roughly 20 ticks per second for Abrash’s O(cells) “maintain neighbour counts” algorithm.</li>
+<li>Roughly 200 ticks per second for Stafford’s O(changes) implementation.</li>
+</ul>
+<p>Dave Stafford attained a 10x speedup by applying optimizations:</p>
+<ul>
+<li>Store the next state, current state, and neighbour counts in a triplet short</li>
+<li>Maintain a deduplicated change list of previously-changed triplets</li>
+<li>Table lookup to compute next state of possibly-changed triplet</li>
+<li>Branch to a routine that does no more work than necessary to update neighbour counts</li>
+</ul>
+<p>Obviously machines are a lot faster 25 years later. Stafford’s algorithm running on a 20MHz 486 does 200 ticks per second, and the same algorithm written in C# running on a 2GHz i7 does over 25000 ticks per second even with a 50%+ larger grid size. But we should expect that a machine with 100x clock speed, better processor caches, and so on, should do on the order of 100x more work per second.</p>
+<p>(Aside: though we are doing 65536 cells in a grid instead of their 40000, Abrash and Stafford’s implementations also implemented wrap-around behaviour for the edges, which I have not; that complicates their implementations and I avoided the penalty of writing code to deal with those complications. So this is not a purely apples-to-apples comparison in many ways.)</p>
+<p>What is a little surprising here is: my implementation of the two algorithms in C# shows a 3x speedup between the two algorithms that were originally compared, not a 10x speedup as was original observed.</p>
+<p>Figuring out why exactly would require rather more analysis of the original code than I’m willing to do, but I have a few conjectures.</p>
+<p>First, we don’t know what the test case was. If it had a small number of changes per tick then certainly an O(changes) algorithm is potentially much better than an O(cells) implementation. Perhaps the test case was biased towards O(changes) algorithms.</p>
+<p>Second, I have implemented the <em>spirit</em> of both algorithms but there are a <em>lot</em> of differences. My favourite, by way of example, is that Stafford’s original machine code implementation does not use a lookup array for the second-pass optimization, like I do here. The triplet value <em>itself</em> (with some bits masked out) is the address of the code that is invoked. Let me repeat that in case it was not clear: it’s machine code so you have total authority to decide where in memory the helper functions are, and they are placed in memory such that <em>the triplet itself is a pointer to the helper function</em>. There is no table indirection penalty because there is no table.</p>
+<p>These are the sorts of tricks that machine language programmers back in the 1990s lived for, and though I can admire it, that’s just not how we do stuff in high level languages. We could spend a bunch of time tweaking the C# versions of these algorithms to use pointers instead of offsets, or arrays with high water marks instead of lists, and so on. We’d get some wins, but they’d be marginal, and I’m not going to bother tuning this further. (As always, if anyone wants to, please make the attempt and leave a comment!)</p>
+<p>The third conjecture is: yes, the rising tide of a 100x processor speed improvement lifted all boats, but it also changed the landscape of performance optimization because not all code is gated on processor speed. RAM latency, amount of available RAM, cache sizes, and so on, have also changed in that time but not at the same rate, and not to the same effect. Figuring out whether any of those changes had the effect of bringing these two algorithms’ performance closer together in the last 25 years is really hard to say.</p>
+<hr>
+<p><strong>Next time on FAIC:</strong> I want to do some experiments to look more directly at the scalability of these algorithms; do costs actually grow as O(change)? What happens if we make some larger grids where lots of stuff is changing?</p>
+<p><strong>Coming up after that:</strong> Every algorithm we’ve looked at so far uses some sort of two-dimensional array as the backing store, which limits us to grids that are, in the grand scheme of things, pretty small. Can we come up with storage solutions that are less constrained, and at what performance cost?</p>
+<hr>
+<p>For today’s extra content: a <em>puffer</em> whose debris is <em>spaceships</em> is called a <em>rake</em>; the first rake discovered back in the 1970s is called <em>spacerake</em>. (Image from the <a href="https://www.conwaylife.com/wiki/Space_rake">wiki</a>.)</p>
+<p><a href="https://ericlippert.files.wordpress.com/2020/06/spacerake.gif"><img data-attachment-id="7342" data-permalink="https://ericlippert.com/2020/06/29/life-part-19/spacerake/" data-orig-file="https://ericlippert.files.wordpress.com/2020/06/spacerake.gif" data-orig-size="290,186" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="Spacerake" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/06/spacerake.gif?w=290" data-large-file="https://ericlippert.files.wordpress.com/2020/06/spacerake.gif?w=290" src="https://ericlippert.files.wordpress.com/2020/06/spacerake.gif?w=584" alt=""></a></p>
+<p>Again we see that you can do interesting things by sticking a bunch of c/2 spaceships together. Here’s a wider view snapshot that maybe makes it a little more clear how it comes to resemble “raking” the plane:</p>
+<p><a href="https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg"><img data-attachment-id="7344" data-permalink="https://ericlippert.com/2020/06/29/life-part-19/yp2gfqrw3vf/" data-orig-file="https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg" data-orig-size="348,235" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="yp2gfqrw3vf" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg?w=300" data-large-file="https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg?w=348" src="https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg?w=584" alt="" srcset="https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg 348w, https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg?w=150 150w, https://ericlippert.files.wordpress.com/2020/06/yp2gfqrw3vf.jpg?w=300 300w" sizes="(max-width: 348px) 100vw, 348px"></a></p>
+<p>And again, this is an example of a pattern which causes the number of changes per tick to grow linearly over time.</p>
+			</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
