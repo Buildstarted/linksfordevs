@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Cancelling a Windows Runtime asynchronous operation, part 1: C# | The Old New Thing - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Cancelling a Windows Runtime asynchronous operation, part 1: C# | The Old New Thing - linksfor.dev(s)"/>
+    <meta property="article:author" content="Raymond ChenFollow"/>
+    <meta property="og:description" content="The Windows Runtime has a lot of asynchronous operations, and the typical way of dealing with them is to schedule a continuation when the operation completes. Depending on the language, it might be Promise.then or task.then() or await or co_await. They all boil down to &#x201C;Return from the function immediately,"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://devblogs.microsoft.com/oldnewthing/20200701-00/?p=103916"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Cancelling a Windows Runtime asynchronous operation, part 1: C# | The Old New Thing</title>
+<div class="readable">
+        <h1>Cancelling a Windows Runtime asynchronous operation, part 1: C# | The Old New Thing</h1>
+            <div>by Raymond ChenFollow</div>
+            <div>Reading time: 4-5 minutes</div>
+        <div>Posted here: 02 Jul 2020</div>
+        <p><a href="https://devblogs.microsoft.com/oldnewthing/20200701-00/?p=103916">https://devblogs.microsoft.com/oldnewthing/20200701-00/?p=103916</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="featured"><div><div><div><div><p><img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="58" height="58" alt="Raymond Chen"></p><p>Raymond</p></div></div></div><p>July 1st, 2020</p><p>The Windows Runtime has a lot of asynchronous operations, and the typical way of dealing with them is to schedule a continuation when the operation completes. Depending on the language, it might be <code>Promise.then</code> or <code>task.then()</code> or <code>await</code> or <code>co_await</code>. They all boil down to “Return from the function immediately, and resume execution when this asynchronous thing produces a value.”</p><p>Windows Runtime asynchronous operations can be cancelled, and then things get interesting.</p><p>Invoking the <code>Cancel</code> method is, technically, merely a request and not a demand. Operations are advised to support cancellation, but it is not strictly required. An operation might choose to ignore your cancellation request outright. Or it could process the cancellation request by causing the operation to complete immediately with partial results.</p><p>But let’s assume that the operation accepted your cancel request and indeed completed the operation with a status of <code>Canceled</code>.</p><p>What does your code see as the result of the cancellation?</p><p>Let’s start with C#. In order to cancel the operation, you have to wrap it in a task, and then cancel the task.</p><pre>var picker = new FileOpenPicker { FileTypeFilter = { ".txt" } };
+<span>var cts = new CancellationTokenSource();
+cts.CancelAfter(TimeSpan.FromSeconds(3));</span>
+
+StorageFile file;
+try {
+    file = await picker.PickSingleFileAsync()<span>.AsTask(cts.Token)</span>;
+} <span>catch (TaskCanceledException)</span> {
+    file = null;
+}
+
+if (file != null) {
+    DoSomething(file);
+}
+</pre><p>We cancel the file picker dialog after three seconds. This is done by taking the <code>IAsyncOperation</code> returned by <code>Pick­Single­File­Async()</code>, convert it to a <code>Task</code> with <code>AsTask</code>, and associate it with a cancellation token source that has been configured to cancel after three seconds.</p><p>When this operation is canceled, you get a <code>Task­Canceled­Exception</code>. This was the result of the Windows Runtime asynchronous operation completing with a status of <code>Canceled</code>. The C# projection then converts this to a <code>Task­Canceled­Exception</code>.</p><p>This is the behavior that C# asynchronous code expects, so it’s natural that the C# projection of Windows Runtime asynchronous operations into tasks behaves this way.</p><p>Next time, we’ll look at C++/CX with PPL.</p><p><b>Bonus chatter</b>: You can also cancel the task by talking directly to the <code>IAsyncOperation</code> instead of converting it into a C# Task.</p><pre>async void CancelAfter(IAsyncInfo info, TimeSpan delay)
+{
+    await Task.delay(delay);
+    info.Cancel();
+}
+
+var picker = new FileOpenPicker { FileTypeFilter = { ".txt" } };
+StorageFile file;
+try {
+    <span>var op = picker.PickSingleFileAsync();
+    CancelAfter(op, TimeSpan.FromSeconds(3));
+    file = await op</span>;
+} <span>catch (TaskCanceledException)</span> {
+    file = null;
+}
+
+if (file != null) {
+    DoSomething(file);
+}
+</pre><p>You could try to earn some style points by moving the <code>CancelAfter</code> code inline.</p><pre>var picker = new FileOpenPicker { FileTypeFilter = { ".txt" } };
+StorageFile file;
+try {
+    var op = picker.PickSingleFileAsync();
+    <span>((Action)(async () =&gt; { await Task.Delay(TimeSpan.FromSeconds(3)); op.Cancel(); }))();</span>
+    file = await op;
+} catch (TaskCanceledException) {
+    file = null;
+}
+</pre><p>Or perhaps more usefully, let <code>CancelAfter</code> return the original asynchronous operation, so you can cancel it and await it at one go.</p><pre>public static class Helpers
+{
+    static async void CancelAfterHelper(IAsyncInfo info, TimeSpan delay)
+    {
+        await Task.Delay(delay);
+        info.Cancel();
+    }
+
+    static public IAsyncAction CancelAfter(this IAsyncAction action, TimeSpan delay)
+    {
+        CancelAfterHelper(action, delay);
+        return action;
+    }
+
+    static public IAsyncOperation&lt;T&gt;
+        CancelAfter&lt;T&gt;(this IAsyncOperation&lt;T&gt; op, TimeSpan delay)
+    {
+        CancelAfterHelper(op, delay);
+        return op;
+    }
+}
+
+var picker = new FileOpenPicker { FileTypeFilter = { ".txt" } };
+StorageFile file;
+try {
+    file = await picker.PickSingleFileAsync()<span>.CancelAfter(TimeSpan.FromSeconds(3))</span>;
+} catch (TaskCanceledException) {
+    file = null;
+}
+</pre></div></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+The Road to Cross-Platform Setup&#xA0;&amp;&#xA0;Bootstrapping in .NET - Matthias Koch - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="The Road to Cross-Platform Setup&#xA0;&amp;&#xA0;Bootstrapping in .NET - Matthias Koch - linksfor.dev(s)"/>
+    <meta property="og:description" content="TL;DR: PowerShell and Bash scripts are indispensable for developers. While benefiting from being transparent compared to executables, they&#x2019;re not exactly eas..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ithrowexceptions.com/2020/07/01/road-to-cross-platform-setup-and-bootstrapping-in-dotnet.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - The Road to Cross-Platform Setup&#xA0;&amp;&#xA0;Bootstrapping in .NET - Matthias Koch</title>
+<div class="readable">
+        <h1>The Road to Cross-Platform Setup&#xA0;&amp;&#xA0;Bootstrapping in .NET - Matthias Koch</h1>
+            <div>Reading time: 11-13 minutes</div>
+        <div>Posted here: 02 Jul 2020</div>
+        <p><a href="https://ithrowexceptions.com/2020/07/01/road-to-cross-platform-setup-and-bootstrapping-in-dotnet.html">https://ithrowexceptions.com/2020/07/01/road-to-cross-platform-setup-and-bootstrapping-in-dotnet.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody"><p><strong><em>TL;DR: PowerShell and Bash scripts are indispensable for developers. While benefiting from being transparent compared to executables, they’re not exactly easy to read by users nor easy to write by maintainers, and also suffer from duplication for different operating systems. With the .NET Core SDK, this issue is mostly solved using .NET Global Tools. Nevertheless, global tools come at the cost of requiring the SDK to be pre-installed. Several workarounds for local and build server environments exist, however, shell scripts are really the only solid solution. Single-entry scripts can help to erase the last relics from PowerShell and Bash scripts for documentation and end-users.</em></strong></p>
+
+<p>When I started with <a href="https://nuke.build/">NUKE</a>, part of the hardest work was to provide a convenient setup experience. NUKE was one of the first build systems to use conventional <a href="https://docs.microsoft.com/en-us/dotnet/core/tutorials/with-visual-studio-code">console applications</a> in order to support first-class development experience. <a href="https://github.com/adamralph/bullseye">BullsEye</a> and <a href="https://github.com/dotnetcore/FlubuCore">FlubuCore</a> followed shortly after. Noteworthy, they come in a more simple form where the build project is isolated from the main solution by default. In contrast but not necessarily, NUKE allows us to <strong>add the build project to the solution</strong> besides other projects to make it more accessible. This approach works really great, but it does require some <strong>tedious tweaks that are good to automate</strong>. Another natural consequence of using build projects, is that they <strong>require a .NET Core SDK installation</strong> to build and run, which is crucial for build servers and new project contributors.</p>
+
+<p>In the next sections, we’ll look at how the setup experience in NUKE evolved from complex PowerShell and Bash scripts to using .NET Global Tools, and how the .NET Core bootstrapping via shell scripts makes everything more cross-platform and self-contained.</p>
+
+<h2 id="hacking-shell-scripts">Hacking Shell Scripts</h2>
+
+<p>Back in 2017, in the times of <code>netstandard1.6</code>, .NET Core was still on its journey of getting widely adopted in the .NET ecosystem. It was also the time when I made my first steps with <a href="https://jetbrains.com/rider">JetBrains Rider</a>, and moved to macOS for the major part of my development. But of course, many developers still relied on the .NET Framework, so for me it was crucial to make NUKE’s setup process to support both platforms. Nobody likes to <strong>download and run arbitrary executables from the web</strong>, especially when the projet is barely known. Therefore, I went with the more <strong>transparent PowerShell and Bash scripts</strong>, which can be easily investigated before execution:</p>
+
+<figure data-lang="batch"><pre><code data-lang="batch"><table><tbody><tr><td><pre>1
+2
+3
+4
+5
+6
+</pre></td><td><pre><span>powershell</span> <span>-Command </span><span>iwr</span> <span>https</span>://nuke.build/powershell <span>-OutFile </span><span>setup</span>.ps1
+<span>powershell</span> <span>-ExecutionPolicy </span><span>ByPass</span> <span>-File </span>.\setup.ps1
+
+<span>curl</span> <span>-Lsfo </span><span>setup</span>.sh <span>https</span>://nuke.build/bash
+<span>chmod</span> <span>+x </span><span>setup</span>.s
+./setup.sh
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>Writing the PowerShell <a href="https://github.com/nuke-build/nuke/blob/1b5070b72cea385dad12c43c392e0b7992936bc9/bootstrapping/setup.ps1">setup.ps1</a> script was mostly effortless, but the Bash <a href="https://github.com/nuke-build/nuke/blob/1b5070b72cea385dad12c43c392e0b7992936bc9/bootstrapping/setup.sh">setup.sh</a> script had some <strong>really horrible code</strong> in it. For instance, downloading a file, replacing placeholders with actual values and writing everything to disk:</p>
+
+<figure data-lang="batch"><pre><code data-lang="batch"><table><tbody><tr><td><pre>1
+2
+3
+4
+5
+6
+7
+8
+</pre></td><td><pre><span>sed</span> <span>-e </span><span>'s~_TARGET_FRAMEWORK_~'</span><span>"$TARGET_FRAMEWORK"</span><span>'~g'</span> \
+    <span>-e </span><span>'s~_BUILD_PROJECT_GUID_~'</span><span>"$PROJECT_GUID"</span><span>'~g'</span> \
+    <span>-e </span><span>'s~_BUILD_PROJECT_NAME_~'</span><span>"$BUILD_PROJECT_NAME"</span><span>'~g'</span> \
+    <span>-e </span><span>'s~_SOLUTION_DIRECTORY_~'</span><span>"${SOLUTION_DIRECTORY_RELATIVE//\//\\}"</span><span>'~g'</span> \
+    <span>-e </span><span>'s~_NUKE_VERSION_~'</span><span>"$NUKE_VERSION"</span><span>'~g'</span> \
+    <span>-e </span><span>'s~_NUKE_VERSION_MAJOR_MINOR_~'</span><span>"${NUKE_VERSION_PARTS[0]}.${NUKE_VERSION_PARTS[1]}"</span><span>'~g'</span> \
+    <span>&lt;&lt;&lt;</span><span>"$(curl -Lsf $BOOTSTRAPPING_URL/.build.$PROJECT_FORMAT.csproj)"</span> \
+    <span>&gt;</span> <span>"$BUILD_PROJECT_FILE"</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>Another example, that scans an existing file for specific lines, and adds additional lines after them:</p>
+
+<figure data-lang="batch"><pre><code data-lang="batch"><table><tbody><tr><td><pre>1
+2
+</pre></td><td><pre><span>awk</span> <span>"/MinimumVisualStudioVersion/{print \$0 RS \"</span>$PROJECT_DEFINITION\<span>";next}1"</span> <span>"$SOLUTION_FILE"</span> <span>&gt;</span> <span>"$SOLUTION_FILE.bak"</span>
+<span>awk</span> <span>"/ProjectConfigurationPlatforms/{print \$0 RS \"</span>$PROJECT_CONFIGURATION\<span>";next}1"</span> <span>"$SOLUTION_FILE.bak"</span> <span>&gt;</span> <span>"$SOLUTION_FILE"</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>Using the <a href="https://plugins.jetbrains.com/plugin/4230-bashsupport">Bash support</a> and <a href="https://plugins.jetbrains.com/plugin/10249-powershell">PowerShell support</a> plugins for JetBrains Rider, made it a lot more bearable to work with those languages that I’m generally not fluent with. Especially, when it comes to syntax highlighting, code completion, navigation, renaming variables, fixing minor code issues, or quickly adding comments:</p>
+
+<p><img src="https://ithrowexceptions.com/assets/images/2020-07-01-road-to-cross-platform-setup-and-bootstrapping-in-dotnet/language-support.gif" alt="PowerShell Support in JetBrains Rider" width="700px"></p>
+
+<p>Even though the plugins helped a lot, honestly, I can’t say that I really enjoyed maintaining the setup scripts. I’ve <strong>never felt familiar with the code</strong> after coming back, and there were plenty of stupid and surprising issues, like <a href="https://github.com/nuke-build/nuke/pull/28">missing parentheses</a> or <a href="https://github.com/nuke-build/nuke/issues/11">crashes if IE wasn’t started once before</a>.</p>
+
+
+
+<p>With <code>netcoreapp2.1</code> the .NET Core SDK introduced <a href="https://docs.microsoft.com/en-us/dotnet/core/tools/global-tools">.NET Global Tools</a> and since NUKE meanwhile established a reasonable community, I’ve decided that it’s okay <a href="https://github.com/nuke-build/nuke/issues/26">moving towards a unified executable</a>:</p>
+
+<p><img src="https://ithrowexceptions.com/assets/images/2020-07-01-road-to-cross-platform-setup-and-bootstrapping-in-dotnet/global-tools.png" alt="Moving to Global Tools" width="600px"></p>
+
+<p>Global tools are built from a single source and can be installed and executed on Windows, Linux and macOS. So no matter what the environment was, the setup experience for NUKE became as easy as:</p>
+
+<figure data-lang="batch"><pre><code data-lang="batch"><table><tbody><tr><td><pre>1
+2
+</pre></td><td><pre><span>dotnet</span> <span>tool</span> <span>install</span> <span>Nuke</span>.GlobalTool <span>-</span><span>-global
+</span><span>nuke</span> <span>:setup</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>That day the <a href="https://github.com/nuke-build/nuke/commit/2481d251d9d4a7b090632a879a0c93221c146ee0">shell scripts have been replaced by a global tool</a>, I could delete 400 LOC that were basically duplicated and hard to maintain, and replace them with roughly 300 lines of clean C# code.</p>
+
+<h2 id="bootstrapping-net-core-sdk">Bootstrapping .NET Core SDK</h2>
+
+<p>Another difference compared to BullsEye and FlubuCore, is that NUKE provides bootstrapping scripts that will install the .NET Core SDK without any further requirements. As an example, here is the <code>build.sh</code> script:</p>
+
+<figure data-lang="bash"><pre><code data-lang="bash"><table><tbody><tr><td><pre>1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+</pre></td><td><pre><span>#!/usr/bin/env bash</span>
+
+<span>echo</span> <span>$(</span>bash <span>--version</span> 2&gt;&amp;1 | <span>head</span> <span>-n</span> 1<span>)</span>
+
+<span>set</span> <span>-eo</span> pipefail
+<span>SCRIPT_DIR</span><span>=</span><span>$(</span><span>cd</span> <span>"</span><span>$(</span> <span>dirname</span> <span>"</span><span>${</span><span>BASH_SOURCE</span><span>[0]</span><span>}</span><span>"</span> <span>)</span><span>"</span> <span>&amp;&amp;</span> <span>pwd</span><span>)</span>
+
+<span>###########################################################################</span>
+<span># CONFIGURATION</span>
+<span>###########################################################################</span>
+
+<span>BUILD_PROJECT_FILE</span><span>=</span><span>"</span><span>$SCRIPT_DIR</span><span>/_BUILD_DIRECTORY_/_BUILD_PROJECT_NAME_.csproj"</span>
+<span>TEMP_DIRECTORY</span><span>=</span><span>"</span><span>$SCRIPT_DIR</span><span>/_ROOT_DIRECTORY_/.tmp"</span>
+
+<span>DOTNET_GLOBAL_FILE</span><span>=</span><span>"</span><span>$SCRIPT_DIR</span><span>/_ROOT_DIRECTORY_/global.json"</span>
+<span>DOTNET_INSTALL_URL</span><span>=</span><span>"https://dot.net/v1/dotnet-install.sh"</span>
+<span>DOTNET_CHANNEL</span><span>=</span><span>"Current"</span>
+
+<span>export </span><span>DOTNET_CLI_TELEMETRY_OPTOUT</span><span>=</span>1
+<span>export </span><span>DOTNET_SKIP_FIRST_TIME_EXPERIENCE</span><span>=</span>1
+
+<span>###########################################################################</span>
+<span># EXECUTION</span>
+<span>###########################################################################</span>
+
+<span>function </span>FirstJsonValue <span>{</span>
+    perl <span>-nle</span> <span>'print $1 if m{"'</span><span>$1</span><span>'": "([^"]+)",?}'</span> <span>&lt;&lt;&lt;</span> <span>${</span><span>@</span>:2<span>}</span>
+<span>}</span>
+
+<span># If global.json exists, load expected version</span>
+<span>if</span> <span>[[</span> <span>-f</span> <span>"</span><span>$DOTNET_GLOBAL_FILE</span><span>"</span> <span>]]</span><span>;</span> <span>then
+    </span><span>DOTNET_VERSION</span><span>=</span><span>$(</span>FirstJsonValue <span>"version"</span> <span>$(</span><span>cat</span> <span>"</span><span>$DOTNET_GLOBAL_FILE</span><span>"</span><span>))</span>
+    <span>if</span> <span>[[</span> <span>"</span><span>$DOTNET_VERSION</span><span>"</span> <span>==</span> <span>""</span>  <span>]]</span><span>;</span> <span>then
+        </span><span>unset </span>DOTNET_VERSION
+    <span>fi
+fi</span>
+
+<span># If dotnet is installed locally, and expected version is not set or installation matches the expected version</span>
+<span>if</span> <span>[[</span> <span>-x</span> <span>"</span><span>$(</span><span>command</span> <span>-v</span> dotnet<span>)</span><span>"</span> <span>&amp;&amp;</span> <span>(</span><span>-z</span> <span>${</span><span>DOTNET_VERSION</span><span>+x</span><span>}</span> <span>||</span> <span>$(</span>dotnet <span>--version</span> 2&gt;&amp;1<span>)</span> <span>==</span> <span>"</span><span>$DOTNET_VERSION</span><span>"</span><span>)</span> <span>]]</span><span>;</span> <span>then
+    </span><span>export </span><span>DOTNET_EXE</span><span>=</span><span>"</span><span>$(</span><span>command</span> <span>-v</span> dotnet<span>)</span><span>"</span>
+<span>else
+    </span><span>DOTNET_DIRECTORY</span><span>=</span><span>"</span><span>$TEMP_DIRECTORY</span><span>/dotnet-unix"</span>
+    <span>export </span><span>DOTNET_EXE</span><span>=</span><span>"</span><span>$DOTNET_DIRECTORY</span><span>/dotnet"</span>
+
+    <span># Download install script</span>
+    <span>DOTNET_INSTALL_FILE</span><span>=</span><span>"</span><span>$TEMP_DIRECTORY</span><span>/dotnet-install.sh"</span>
+    <span>mkdir</span> <span>-p</span> <span>"</span><span>$TEMP_DIRECTORY</span><span>"</span>
+    curl <span>-Lsfo</span> <span>"</span><span>$DOTNET_INSTALL_FILE</span><span>"</span> <span>"</span><span>$DOTNET_INSTALL_URL</span><span>"</span>
+    <span>chmod</span> +x <span>"</span><span>$DOTNET_INSTALL_FILE</span><span>"</span>
+
+    <span># Install by channel or version</span>
+    <span>if</span> <span>[[</span> <span>-z</span> <span>${</span><span>DOTNET_VERSION</span><span>+x</span><span>}</span> <span>]]</span><span>;</span> <span>then</span>
+        <span>"</span><span>$DOTNET_INSTALL_FILE</span><span>"</span> <span>--install-dir</span> <span>"</span><span>$DOTNET_DIRECTORY</span><span>"</span> <span>--channel</span> <span>"</span><span>$DOTNET_CHANNEL</span><span>"</span> <span>--no-path</span>
+    <span>else</span>
+        <span>"</span><span>$DOTNET_INSTALL_FILE</span><span>"</span> <span>--install-dir</span> <span>"</span><span>$DOTNET_DIRECTORY</span><span>"</span> <span>--version</span> <span>"</span><span>$DOTNET_VERSION</span><span>"</span> <span>--no-path</span>
+    <span>fi
+fi
+
+</span><span>echo</span> <span>"Microsoft (R) .NET Core SDK version </span><span>$(</span><span>"</span><span>$DOTNET_EXE</span><span>"</span> <span>--version</span><span>)</span><span>"</span>
+
+<span>"</span><span>$DOTNET_EXE</span><span>"</span> build <span>"</span><span>$BUILD_PROJECT_FILE</span><span>"</span> /nodeReuse:false <span>-nologo</span> <span>-clp</span>:NoSummary <span>--verbosity</span> quiet
+<span>"</span><span>$DOTNET_EXE</span><span>"</span> run <span>--project</span> <span>"</span><span>$BUILD_PROJECT_FILE</span><span>"</span> <span>--no-build</span> <span>--</span> <span>"</span><span>$@</span><span>"</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>The bootstrapping scripts are very important to run on build servers, since the required .NET Core SDK might not be installed. Now, many will say that there is the <a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/tool/dotnet-core-tool-installer?view=azure-devops"><em>Use .NET Core</em> task</a> that will perform an <a href="https://docs.microsoft.com/en-us/dotnet/core/tools/global-json?tabs=netcore3x#globaljson-schema">install according to the <code>global.json</code></a> file, but this approach has several disadvantages. Firstly, a similar task <strong>might not exist on the particular build server</strong> we’re using. Also, predefined tasks tend to be <strong>very inflexible</strong> and eventually force us to use <a href="https://github.com/actions/setup-dotnet/issues/25#issuecomment-646925506">hacky workarounds</a> or reconsider going back to shell scripts:</p>
+
+
+
+<p>Even more importantly, with the rapid evolution of C# as a language, chances are good that we might not have the required SDK installed for a repository we’ve just forked. <a href="https://twitter.com/joe_mighty">Joseph Woodward</a> came up with the <a href="https://www.nuget.org/packages/installsdkglobaltool">InstallSdkGlobalTool</a> to partially solve that for local machines at least. So in a repository with <code>global.json</code> file, we can just invoke <code>dotnet-install-sdk</code> and it will do its magic:</p>
+
+
+
+<p>Remember that this requires at least some .NET Core SDK to be installed. Also keep in mind that this is a manual step and the tool needs to be installed on our colleagues or contributors machine.</p>
+
+<!--
+- https://github.com/cake-build/cake/blob/0eaee7e2a7d95611b1de58b40493f550ced31c78/build.ps1
+- https://github.com/cake-build/cake/blob/0eaee7e2a7d95611b1de58b40493f550ced31c78/build.sh
+-->
+
+<h2 id="single-entry-scripts">Single-Entry Scripts</h2>
+
+<p>So far, the experience was looking quite good already. But one thing that always bothered me, was that <code>build.sh</code> and <code>build.ps1</code> were exclusive to UNIX and Windows systems. Can’t we have a single-entry script that can be invoked cross-platform? That would solve the following issues:</p>
+
+<ul>
+  <li><strong>Documentation</strong> – <a href="https://github.com/dotnet/maui/blob/85ee7fe836dc005d44eb0ba6b4660b1c6341d59c/build.cake#L9-L15">Duplicated invocation snippets</a> for both <code>build.sh</code> and <code>build.ps1</code> are a waste of time while reading, annoying when writing documentation, and also more prone to becoming outdated.</li>
+  <li><strong>Multi-platform pipelines</strong> – Many build servers enable us to write <a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/get-started-multiplatform">multi-platform pipelines</a> where a set of common build steps is executed for different operating systems using a matrix approach. This works great with pre-defined tasks, but it falls short when we need to <a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/get-started-multiplatform">call different scripts</a>.</li>
+</ul>
+
+<p>Based on a <a href="https://stackoverflow.com/questions/17510688/single-script-to-run-in-both-windows-batch-and-linux-bash">Stack Overflow question</a>, I’ve found that the <code>:</code> colon character can be used to effectively skip code in Batch scripts, while POSIX shells simply evaluate them to <code>true</code>:</p>
+
+<figure data-lang="batch"><pre><code data-lang="batch"><table><tbody><tr><td><pre>1
+2
+3
+4
+5
+6
+7
+</pre></td><td><pre>:<span>;</span> <span>set</span> <span>-eo </span><span>pipefail</span>
+:<span>;</span> <span>SCRIPT_DIR</span><span>=</span>$<span>(</span><span>cd</span> <span>"$( dirname "</span>$<span>{</span><span>BASH_SOURCE</span><span>[</span><span>0</span><span>]}</span><span>" )"</span> <span>&amp;&amp;</span> <span>pwd</span><span>)</span>
+:<span>;</span> $<span>{</span><span>SCRIPT_DIR</span><span>}</span><span>/build</span>.sh <span>"$@"</span>
+:<span>;</span> <span>exit</span> $<span>?</span>
+
+@ECHO <span>OFF</span>
+<span>powershell</span> <span>-ExecutionPolicy </span><span>ByPass</span> <span>-NoProfile </span><span>%</span><span>0</span>\..\build.ps1 <span>%</span><span>*</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>Depending on our current operating system, calling <code>build.cmd</code> will either delegate to <code>build.sh</code> or <code>build.ps1</code>. It’s probably obvious, that for larger and more complex scripts, this approach doesn’t scale very well. <strong>Most of the IDE tooling won’t work</strong> apart from very simple <a href="https://www.jetbrains.com/help/idea/auto-completing-code.html#hippie_completion">hippie completion</a>.</p>
+
+<p>After some time <a href="https://twitter.com/georgdangl">Georg Dangl</a> discovered an issue that the <a href="https://blog.dangl.me/archive/executing-nuke-build-scripts-on-linux-machines-with-correct-file-permissions/">generated scripts are not executable by default</a>. When invoking the scripts, the error message <code>permission denied: ./build.cmd</code> was returned. Meanwhile, this has been addressed so that the setup in NUKE now executes the following commands:</p>
+
+<ul>
+  <li><code>chmod +x build.cmd</code> – Allow local execution</li>
+  <li><code>git update-index --add --chmod=+x build.cmd</code> – Mark file to be executable in Git</li>
+  <li><code>svn propset svn:executable on build.cmd</code> – Mark file to be executable in Subversion</li>
+</ul>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>With .NET Core running cross-platform, it is important to ensure shell scripts to work cross-platform as well. Setup routines are perfectly qualified to be moved into global tools, whereas bootstrapping tasks, like bootstrapping the .NET Core SDK, should remain in PowerShell and Bash scripts to improve the experience for build servers and first-time contributors.</p>
+
+<p><strong>Build your projects frictionless with <a href="https://nuke.build/">NUKE</a>!</strong></p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
