@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+EF Core In depth &#x2013; Soft deleting data with Global Query Filters &#x2013; The Reformed Programmer - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="EF Core In depth &#x2013; Soft deleting data with Global Query Filters &#x2013; The Reformed Programmer - linksfor.dev(s)"/>
+    <meta property="og:description" content="Created: July 2, 2020"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.thereformedprogrammer.net/ef-core-in-depth-soft-deleting-data-with-global-query-filters/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - EF Core In depth &#x2013; Soft deleting data with Global Query Filters &#x2013; The Reformed Programmer</title>
+<div class="readable">
+        <h1>EF Core In depth &#x2013; Soft deleting data with Global Query Filters &#x2013; The Reformed Programmer</h1>
+            <div>Reading time: 22-28 minutes</div>
+        <div>Posted here: 02 Jul 2020</div>
+        <p><a href="https://www.thereformedprogrammer.net/ef-core-in-depth-soft-deleting-data-with-global-query-filters/">https://www.thereformedprogrammer.net/ef-core-in-depth-soft-deleting-data-with-global-query-filters/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+		<p><span>Created: July 2, 2020</span>
+					</p>
+
+		
+<p>This article is about a way to seemingly delete data, but in fact EF Core hides it for you and you can get it back if you need to. This type of feature is known as <em>soft delete</em> and it has many good features, and the issues to be aware of too. In this article I use EF Core to implement the normal soft delete and a more powerful (and complex) cascade soft delete. Along the way I give you tips on how write reusable code to speed up your development of a soft delete solution.</p>
+
+
+
+<p>I do assume you know EF Core, but I start with a look at using EF Core to make sure we have the basics of deleting and soft deleting covered before looking at solutions.</p>
+
+
+
+<p>This article is part of a “EF Core In depth” series. Here is the current list of articles in this series:</p>
+
+
+
+<ul><li><a href="https://www.thereformedprogrammer.net/ef-core-in-depth-what-happens-when-ef-core-reads-from-the-database/">EF Core In depth – what happens when EF Core reads from the database?</a></li><li><a href="https://www.thereformedprogrammer.net/ef-core-in-depth-what-happens-when-ef-core-writes-to-the-database/">EF Core In depth – what happens when EF Core writes to the database?</a></li><li>EF Core In depth – Soft deleting data with Global Query Filters <strong>(this article)</strong></li></ul><p>This “EF Core In depth” series is inspired by what I found while updating my book “<a href="https://bit.ly/EfCoreBook2">Entity Framework Core in Action</a>” to cover EF Core 5. I am also added a LOT of new content from my experiences of working with EF Core on client applications over the last 2½ years.</p>
+
+
+
+<blockquote><p>NOTE: There is a GitHub repo at <a href="https://github.com/JonPSmith/EfCore.SoftDeleteServices">https://github.com/JonPSmith/EfCore.SoftDeleteServices</a> that contains all the code used in this article.</p></blockquote>
+
+
+
+<h2 id="tldr-summary">TL;DR – summary<a href="#tldr-summary"></a></h2>
+
+
+
+<ul><li>You can add a soft delete feature to your EF Core application using <a href="https://docs.microsoft.com/en-us/ef/core/querying/filters">Global Query Filters</a> (referred to as <em>Query Filters</em> for now on).</li><li>The main benefits of using soft delete in your application are inadvertent deletes can be restored and history is preserved.</li><li>There are three parts to adding the soft delete feature to your application<ul><li>Add a new soft delete property to every entity class you want to soft delete.</li></ul><ul><li>Configure the Query Filters in your application’s DbContext</li></ul><ul><li>You create code to set and reset the soft delete property.</li></ul></li><li>You can combine soft delete with other uses of Query Filters, like multi-tenant uses but you need to be more careful when you are looking for soft deleted entries.</li><li>Don’t soft delete a one-to-one entity class as it can cause problems.</li><li>For entity classes that has relationships you need to consider what should happen to the dependant relationships when the top entity class is soft deleted.</li><li>I introduce a way to implement a cascade soft delete that works for entities where you need its dependant relationships soft deleted too.</li></ul><h2 id="setting-the-scene-why-soft-delete-is-such-a-good-idea">Setting the scene – why soft delete is such a good idea<a href="#setting-the-scene-why-soft-delete-is-such-a-good-idea"></a></h2>
+
+
+
+<p>When you hard delete (I use the term <em>hard delete</em> from now on, so its obvious what sort of delete I’m talking about), then it gone from your database. Also, hard deleting might also hard delete rows that rely on the row you just hard deleted (known as <em>dependant relationships</em>). And as the saying says “When it’s gone, then it’s gone” – no getting it back unless you have a backup.</p>
+
+
+
+<p>But nowadays we are more used to “I deleted it, but I can get it back” – On windows it’s in the recycle bin, if you deleted some text in an editor you can get it back with ctrl-Z, and so on. Soft delete is EF Core’s version of windows recycle bin – the <em>entity class</em> (the term for classes mapped to the database via EF Core) is gone from normal usage, but you can get it back.</p>
+
+
+
+<p>Two of my client’s applications used soft delete extensively. Any “delete” the normal user did set the soft delete flag, but an admin user could reset the soft delete flag to get the item back for the user. In fact, one of my clients used the terms “delete” for a soft delete and “destroy” for a hard delete. The other benefit of keeping soft-deleted data is history – you can see what changed in the past even its soft deleted. Most client’s keeps soft deleted data in the database for some time and only backup/remove that data many months (years?) later.</p>
+
+
+
+<p>You can implement the soft delete feature using EF Core <em>Query Filters</em>. Query Filters are also used for multi-tenant systems, where each tenant’s data can only be accessed by users who belong to the same tenant. This means EF Core Query Filters are designed to be very secure when it comes to hiding things – in this case data that has been soft deleted.</p>
+
+
+
+<p>I should also say there are some down sides of using soft delete. The main one is performance – an extra, hidden SQL WHERE clause is included in every query of entity classes using soft delete.</p>
+
+
+
+<p>There is also a difference between how soft delete handles dependant relationships when compared with hard delete. By default, if you soft delete an entity class then its dependant relationships are NOT soft deleted, whereas a hard delete of an entity class would normally delete the dependant relationships. This means if I soft delete a Book entity class then the Book’s Reviews will still be visible, which might be a problem in some cases. At the end of this article I show you how to handle that and talk about a prototype library to handle this issue.</p>
+
+
+
+<h2 id="adding-soft-delete-to-your-ef-core-application">Adding soft delete to your EF Core application<a href="#adding-soft-delete-to-your-ef-core-application"></a></h2>
+
+
+
+<p>In this section I’m going to go through each for the steps to add soft delete to your application</p>
+
+
+
+<ol type="1"><li>Add soft delete property to your entity classes that need soft delete</li><li>Add code to your DbContext to apply a query filter to these entity classes</li><li>How to set/reset Soft Delete</li></ol><p>In the next sections I describe these stages in detail. I assume a typical EF Core class with normal read/write properties, but you can adapt it to other entity class styles, like Domain-Driven Design (DDD) styled entity classes.</p>
+
+
+
+<h3 id="1-adding-soft-delete-property-to-your-entity-classes">1. Adding soft delete property to your entity classes<a href="#1-adding-soft-delete-property-to-your-entity-classes"></a></h3>
+
+
+
+<p>For the standard soft delete implementation, you need a boolean flag to control soft delete. For instance, here is a Book entity with a SoftDeleted property highlighted.</p>
+
+
+<div><div id="highlighter_344263"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p></td><td><div><p><code>public</code> <code>class</code> <code>Book : ISoftDelete&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>int</code> <code>BookId { </code><code>get</code><code>; </code><code>set</code><code>; }</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>string</code> <code>Title { </code><code>get</code><code>; </code><code>set</code><code>; }</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>bool</code> <code>SoftDeleted { </code><code>get</code><code>; </code><code>set</code><code>; }</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>You can tell by its name, SoftDeleted, that if it is true, then its soft deleted. This means when you create a new entity it is not soft deleted.</p>
+
+
+
+<p>You other thing I added was an ISoftDelete interface to the Book class (line 1). This interface says the class must have a public SoftDeleted property which can be read and written to. This interface is going to make it much easier to configure the delete query filters in your DbContext.</p>
+
+
+
+<h3 id="2-configuring-the-soft-delete-query-filters-in-your-dbcontext">2. Configuring the soft delete query filters in your DbContext<a href="#2-configuring-the-soft-delete-query-filters-in-your-dbcontext"></a></h3>
+
+
+
+<p>You must tell EF Core which entity classes needs a query filter and provide a query which will be true if you want it to be seen. You can do this manually using the following code in your DbContext – see highlighted line in the following listing.</p>
+
+
+<div><div id="highlighter_461116"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p></td><td><div><p><code>public</code> <code>class</code> <code>EfCoreContext : DbContext</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>EfCoreContext(DbContextOptions&lt;EfCoreContext&gt; option)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>: </code><code>base</code><code>(options)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{}</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>protected</code> <code>override</code> <code>OnModelCreating(ModelBuilder modelBuilder) </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>modelBuilder.Entity&lt;Book&gt;().HasQueryFilter(p =&gt; !p.SoftDeleted);</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>That’s fine but let me show you a way to automate adding query filters. This uses</p>
+
+
+
+<ol type="1"><li>The modelBuilder.Model.GetEntityTypes() feature available in the OnModelCreating method</li><li>A little bit of generic magic to create the correct query filter</li></ol><p>Here are two part:</p>
+
+
+
+<h4 id="1-automating-the-configuring-of-the-soft-delete-query-filters">1. Automating the configuring of the soft delete query filters<a href="#1-automating-the-configuring-of-the-soft-delete-query-filters"></a></h4>
+
+
+
+<p>The OnModelCreating method in your DbContext is where you can configure EF Core via what are known as Fluent API configuration commands – you saw that in the last listing. But there is also a way you can look at each entity class and decide if you want to configure it.</p>
+
+
+
+<p>In the code below you can see the foreach loop that goes through each entity class in turn. You will see a test to see if the entity class implements the ISoftDelete interface and if it does it calls a extension method I created to configure a query filter with the correct soft delete filter.</p>
+
+
+<div><div id="highlighter_179570"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p></td><td><div><p><code>protected</code> <code>override</code> <code>void</code> <code>OnModelCreating(ModelBuilder modelBuilder)</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>foreach</code> <code>(</code><code>var</code> <code>entityType </code><code>in</code> <code>modelBuilder.Model.GetEntityTypes())</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>if</code> <code>(</code><code>typeof</code><code>(ISoftDelete).IsAssignableFrom(entityType.ClrType))</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>entityType.AddSoftDeleteQueryFilter();&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}&nbsp;&nbsp;&nbsp; </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+
+
+<h4 id="2-creating-the-addsoftdeletequeryfilter-extension-method">2. Creating the AddSoftDeleteQueryFilter extension method<a href="#2-creating-the-addsoftdeletequeryfilter-extension-method"></a></h4>
+
+
+
+<p>There are many configurations you can apply directly to the type that the GetEntityTypes method returns but setting up the Query Filter needs a bit more work. That’s because LINQ query in the Query Filter needs the type of the entity class to create the correct LINQ expression. For this I created a small extension class that can dynamically create the correct LINQ expression to configure the Query Filter.</p>
+
+
+<div><div id="highlighter_538502"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p></td><td><div><p><code>public</code> <code>static</code> <code>class</code> <code>SoftDeleteQueryExtension</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>static</code> <code>void</code> <code>AddSoftDeleteQueryFilter(</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>this</code> <code>IMutableEntityType entityData)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>var</code> <code>methodToCall = </code><code>typeof</code><code>(SoftDeleteQueryExtension)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.GetMethod(nameof(GetSoftDeleteFilter),</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>BindingFlags.NonPublic | BindingFlags.Static)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.MakeGenericMethod(entityData.ClrType);</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>var</code> <code>filter = methodToCall.Invoke(</code><code>null</code><code>, </code><code>new</code> <code>object</code><code>[] { });</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>entityData.SetQueryFilter((LambdaExpression)filter);</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>private</code> <code>static</code> <code>LambdaExpression GetSoftDeleteFilter&lt;TEntity&gt;()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>where</code> <code>TEntity : </code><code>class</code><code>, ISoftDelete</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>Expression&lt;Func&lt;TEntity, </code><code>bool</code><code>&gt;&gt; filter = x =&gt; !x.SoftDeleted;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>return</code> <code>filter;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>I really like this because I a) saves me time, and b) I can’t forget to configure a query filter.</p>
+
+
+
+<h3 id="3-how-to-set-reset-soft-delete">3. How to set/reset Soft Delete<a href="#3-how-to-set-reset-soft-delete"></a></h3>
+
+
+
+<p>Setting the SoftDeleted property to true is easy – the user picks an entry and clicks “Soft Delete”, which send back the entities primary key. Then your code to implement that is.</p>
+
+
+<div><div id="highlighter_244052"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p></td><td><div><p><code>var</code> <code>entity = context.Books.Single(x =&gt; x.BookId == id);</code></p><p><code>entity.SoftDeleted = </code><code>true</code><code>;</code></p><p><code>context.SaveChanges();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>Resetting the SoftDeleted property is a little bit more complex. First you most likely want to show the user a list of JUST the soft deleted entities – think of it as showing the trash can/recycle bin for an individual entity class type, e.g. Book. To do this need to add the IgnoreQueryFilters method to your query which means you will get ALL the entities, ones that aren’t soft deleted and ones that are, but you then pick out the ones where the SoftDeleted property is true.</p>
+
+
+<div><div id="highlighter_904802"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p></td><td><div><p><code>var</code> <code>softDelEntities = _context.Books.IgnoreQueryFilters()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Where(x =&gt; x.SoftDeleted)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.ToList();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>And when you get a request to reset the SoftDeleted property this typically contains the entity classes primary key. To load this entry you need include the IgnoreQueryFilters method in your query to get the entity class you want to reset.</p>
+
+
+<div><div id="highlighter_411494"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p></td><td><div><p><code>var</code> <code>entity = context.Books.IgnoreQueryFilters()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Single(x =&gt; x.BookId == id);</code></p><p><code>entity.SoftDeleted = </code><code>false</code><code>;</code></p><p><code>context.SaveChanges();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<h2 id="things-to-be-aware-of-if-you-use-soft-delete">Things to be aware of if you use Soft delete<a href="#things-to-be-aware-of-if-you-use-soft-delete"></a></h2>
+
+
+
+<p>First, I should say that Query Filters are very secure, by that I mean if the query filter returns false then that specific entity/row won’t be returned in a query, a Find, an Include of a relationship etc. You can get around it by using direct SQL, but other than that EF Core is going to hide things that you soft delete.</p>
+
+
+
+<p>But there are a couple of things you do need to be aware of.</p>
+
+
+
+<h3 id="watch-out-for-mixing-soft-delete-with-other-query-filter-usages">Watch out for mixing soft delete with other Query Filter usages<a href="#watch-out-for-mixing-soft-delete-with-other-query-filter-usages"></a></h3>
+
+
+
+<p>Query Filters are great for soft delete, but Query Filters are even better for controlling access to groups of data. For instance, say you wanted to build a web application that to provide a service, like payroll, to lots of companies. In that case you need make sure that company “A” couldn’t see company “B” data, and vis versa. This type of system is called a <em>multi-tenant application</em>, and Query Filters are a perfect fit for this.</p>
+
+
+
+<blockquote><p>NOTE: See my article <a href="https://www.thereformedprogrammer.net/part-2-handling-data-authorization-asp-net-core-and-entity-framework-core/">Part 2: Handling data authorization in ASP.NET Core and Entity Framework Core</a> for using query filters to control access to data.</p></blockquote>
+
+
+
+<p>The problem is you are only allowed one query filter per entity type, so if you want to use soft delete with a multi-tenant system then you must combine both parts to form the query filter – here is an example of what the query filter might look like</p>
+
+
+<div><div id="highlighter_912002"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p></td><td><div><p><code>modelBuilder.Entity&lt;MyEntity&gt;()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.HasQueryFilter(x =&gt; !x.SoftDeleted </code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>&amp;&amp; x.TenantId == currentTenantId);</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>That work fine, but when you use the IgnoreQueryFilters method, say to reset a soft deleted flag, then it ignores the whole query filter, including the multi-tenant part. So, if you’re not careful you could show multi-tenant data too!</p>
+
+
+
+<p>The answer is to build yourself an application-specific IgnoreSoftDeleteFilter method something like this.</p>
+
+
+<div><div id="highlighter_190751"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p></td><td><div><p><code>public</code> <code>static</code> <code>IQueryable&lt;TEntity&gt; IgnoreSoftDeleteFilter&lt;TEntity&gt;(</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>this</code> <code>IQueryable&lt;TEntity&gt; baseQuery, </code><code>string</code> <code>currentTenantId)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>where</code> <code>TEntity : </code><code>class</code><code>, ITenantId</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>return</code> <code>baseQuery.IgnoreQueryFilters()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.Where(x =&gt; x.TenantId == currentTenantId)</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>This ignores all the filters and then add back the multi-tenant part of the filter. That will make it much easier to safely handle showing/resetting soft deleted entities</p>
+
+
+
+<h3 id="dont-soft-delete-a-one-to-one-relationship">Don’t soft delete a one-to-one relationship<a href="#dont-soft-delete-a-one-to-one-relationship"></a></h3>
+
+
+
+<p>I was called in to help on a very interesting client system that used soft delete on every entity class. My client had found that you really shouldn’t soft delete a one-to-one relationship. The problem he found was if you soft delete a one-to-one relationship and try to add a replacement one-to-one entity, then it fails. That’s because a one-to-one relationship has a unique foreign key and that is already set by the soft deleted entity so, at the database level, you just can’t provide another one-to-one relationship because there is one already.</p>
+
+
+
+<p>One-to-one relationships are rare, so it might not be a problem in your system. But if you really need to soft delete a one-to-one relationship, then I suggest turn it into a one-to-many relationship where you make sure only one of the entities has a soft delete turned off, which I cover in the next problem area.</p>
+
+
+
+<h3 id="handling-multiple-versions-where-some-are-soft-deleted">Handling multiple versions where some are soft deleted<a href="#handling-multiple-versions-where-some-are-soft-deleted"></a></h3>
+
+
+
+<p>There are business cases where you might create an entity, then soft delete it, and then create a new version. For example, say you were creating invoice for order 1234, then you are told the order has been stopped, so you soft delete it (that way you keep the history). Then later someone else (who doesn’t know about the soft deleted version) is told to create an invoice for 1234. Now you have two versions of the invoice 1234. For something like an invoice that could cause a problem business-wise, especially if someone reset the soft deleted version.</p>
+
+
+
+<p>You have a few ways to handle this:</p>
+
+
+
+<ul><li>Add a LastUpdated property of type DateTime to your invoice entity class and the latest, not soft-deleted, entry is the one to use.</li><li>Each new entry has a version number, so in our case the first invoice wold be 1234-1 and the section would be 1234-2. Then, like the LastUpdated version, the invoice with the highest version number, and is not soft deleted, is the one to use.</li><li>Make sure there is only one not soft-deleted version by using a <em>unique filtered index</em>. This works by creating a unique index for all entries that aren’t soft deleted, which means you would get an exception if you tried to reset a soft-deleted invoice but there was an existing non-soft deleted invoice already there. But at the same time, you could have lots of soft-deleted version for your history. Microsoft SQL Server RDBMS, PostgreSQL RDBMS, SQLite RDBMS have this feature (PostgreSQL and SQLite call it <em>partial indexes</em>) and I am told you can something like this in MySQL too. The code below is the SQL Server version of a filtered unique index.</li></ul><div><div id="highlighter_318478"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p></td><td><div><p><code>CREATE</code> <code>UNIQUE</code> <code>INDEX</code> <code>UniqueInvoiceNotSoftDeleted&nbsp; </code></p><p><code>ON</code> <code>[Invoices] (InvoiceNumber)&nbsp; </code></p><p><code>WHERE</code> <code>SoftDeleted = 0&nbsp; </code></p></div></td></tr></tbody></table></div></div>
+
+
+<blockquote><p>NOTE: For handling the exception that would happen with the unique index issue see my article called “<a href="https://www.thereformedprogrammer.net/entity-framework-core-validating-data-and-catching-sql-errors/">Entity Framework Core – validating data and catching SQL errors</a>” which shows you how to convert a SQL exception into a user-friendly error string.</p></blockquote>
+
+
+
+<h2 id="what-about-relationships">What about relationships?<a href="#what-about-relationships"></a></h2>
+
+
+
+<p>Up to now we have been looking at soft deleting/resetting a single entity, but EF Core is all about relationships. So, what should I do about any relationships linked to the entity class that you just soft deleted? To help us, lets look at two different relationships that have different business needs.</p>
+
+
+
+<h3 id="relationship-example-1-a-book-with-its-reviews">Relationship example 1 – A Book with its Reviews<a href="#relationship-example-1-a-book-with-its-reviews"></a></h3>
+
+
+
+<p>In my book “<a href="https://bit.ly/EfCoreBook2">Entity Framework Core in Action</a>” I build a super-simple book selling web site with books, author, reviews etc. And in that application, I can soft delete a Book. It turns out that once I delete the Book then there really isn’t another way to get to the Reviews. So, in this case I don’t have to worry about the Reviews of a soft deleted book.</p>
+
+
+
+<p>But to make things interesting in chapter 5, which is about using EF Core with ASP.NET Core, I added a background task that counts the number of reviews. Here is the code I wrote to count the Reviews</p>
+
+
+<div><div id="highlighter_144920"><table><tbody><tr><td><p>1</p></td><td><div><p><code>var</code> <code>numReviews = </code><code>await</code> <code>context.Set&lt;Review&gt;().CountAsync();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>This, of course, gave the same count irrespective of whether the Book is soft deleted, which is different to what happens if I hard deleted the Book (because that would also delete the book’s Review). I cover how to get around this problem later.</p>
+
+
+
+<h3 id="relationship-example-2-a-company-with-its-quotes">Relationship example 2 – A Company with its Quotes<a href="#relationship-example-2-a-company-with-its-quotes"></a></h3>
+
+
+
+<p>In this example I have many companies that I sell to and each Company has set of Quotes we sent to that company. This is the same one-to-many relationship that the Book/Reviews has, but in this case, we have a list of companies and AND a separate list of Quotes. So, if I soft delete a Company then all the Quotes attached to that company should be soft deleted too.</p>
+
+
+
+<p>I have come up with three useful solutions to both soft delete relationships examples I have just described.</p>
+
+
+
+<h3 id="solution-1-do-nothing-because-it-doesnt-matter">Solution 1 – do nothing because it doesn’t matter<a href="#solution-1-do-nothing-because-it-doesnt-matter"></a></h3>
+
+
+
+<p>Sometimes it doesn’t matter that you soft deleted something, and its relationships are still available. Until I added the background task that counts Reviews my application worked fine if I soft deleted a book.</p>
+
+
+
+<h3 id="solution-2-use-the-aggregates-root-approach">Solution 2 – Use the Aggregates/Root approach<a href="#solution-2-use-the-aggregates-root-approach"></a></h3>
+
+
+
+<p>The solution to the background task Reviews count I used was to apply a Domain-Driven Design (DDD) approach called <a href="https://martinfowler.com/bliki/DDD_Aggregate.html">Aggregate</a>. This says a that you get grouping of entities that work together, in this case the Book, Review, and the BookAuthor linking table to the Author. In a group like this there is a <em>Root</em> entity, in this case the Book.</p>
+
+
+
+<p>What Eric Evans, who is the person that define DDD, says is you should always access the aggregates via the Root aggregate. There are lots of DDD reasons for saying that, but in this case, it also solves our soft delete issue, as if I only get the Reviews through the Book then when it is soft deleted then the Reviews count is gone. So, the code below is the replacement to go in background task Reviews count</p>
+
+
+<div><div id="highlighter_984412"><table><tbody><tr><td><p>1</p><p>2</p></td><td><div><p><code>var</code> <code>numReviews = </code><code>await</code> <code>context.Books</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>.SelectMany(x =&gt; x.Reviews).CountAsync();</code></p></div></td></tr></tbody></table></div></div>
+
+
+<p>You could also do a version of the review count query to list the Quotes via the Company, but there is another option – <a>mimicking the way that database handles cascade deletes</a>, which I cover next.</p>
+
+
+
+<h3 id="solution-3-mimicking-the-way-that-cascade-deletes-works">Solution 3 – mimicking the way that cascade deletes works<a href="#solution-3-mimicking-the-way-that-cascade-deletes-works"></a></h3>
+
+
+
+<p>Databases have a delete setting called CASCADE, and EF Core has two DeleteBehaviours, Cascade and ClientCascade. These behaviours causes the hard delete of a row to also hard delete any rows that rely on that row. For instance, in my book-selling application the Book is what is called the <em>principal entity</em> and the Review, and the BookAuthor linking table are <em>dependant entities</em> because they rely on the Book’s Primary key. So, if you hard delete a Book then all the Review, and BookAuthor rows link to that Book row are deleted too. And if those dependant entities had their own dependants, then they would be deleted too – the delete cascades down all the dependant entities.</p>
+
+
+
+<p>So, if we duplicate that cascade delete down the dependant entities but setting the SoftDeleted property to true, then it would soft delete all the dependant too. That works, but it gets a bit more complex when you want to reset the soft delete. Read the next section for what you really need to do.</p>
+
+
+
+<h2 id="building-solution-3-cascade-softdeleteservice">Building solution 3 – Cascade SoftDeleteService<a href="#building-solution-3-cascade-softdeleteservice"></a></h2>
+
+
+
+<p>I decided I wanted to write a service that would provide a cascade soft delete solution. Once I started to really build this, I found all sorts of interesting things to that I had to solve because we when we reset the soft delete we want the related entities to come it back to their original soft deleted state. I turns out that I bit more complex, so let’s first explore this problem I found with an example.</p>
+
+
+
+<p>Going back to our Company/Quotes example let’s see what happens if we do cascade the setting of the SoftDeleted boolean down from the Company to the Quotes (hint – it doesn’t work in some scenarios). The starting point is we have a company called XYZ, which has two quotes XYZ-1 and XYZ-2. Then:</p>
+
+
+
+<figure><table><tbody><tr><td>What</td><td>Company</td><td>Quotes</td></tr><tr><td>Starting</td><td>XYZ</td><td>XYZ-1 XYZ-2</td></tr><tr><td>Soft delete the quote XYZ-1</td><td>XYZ</td><td>XYZ-2</td></tr><tr><td>Soft delete Company XZ</td><td>– none –</td><td>– none –</td></tr><tr><td>Reset the soft delete on the company XYZ</td><td>XYZ</td><td><strong>XYZ-1 (wrong!)</strong> XYZ-2</td></tr></tbody></table></figure><p>What has happened here is when I reset Company XYZ it also resets ALL the Quotes, and that’s not what the original state was. It turns out we need a byte, not a boolean so that we can know what to reset and what to keep still soft deleted.</p>
+
+
+
+<p>What we need to do is have a soft delete <em>level</em>, where the level tells you how far down was this soft delete setting set. Using this we can work out whether we should reset the soft delete or not. This gets pretty complex, so I have a figure that shows how this works. Light coloured rectangle represent entities that are soft deleted, with the change from the last step shown in red.</p>
+
+
+
+<figure><img src="https://www.thereformedprogrammer.net/wp-content/uploads/2020/07/CascadeDeleteExample-1019x1024.png" alt="" srcset="https://www.thereformedprogrammer.net/wp-content/uploads/2020/07/CascadeDeleteExample-1019x1024.png 1019w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/07/CascadeDeleteExample-300x300.png 300w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/07/CascadeDeleteExample-150x150.png 150w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/07/CascadeDeleteExample-768x772.png 768w, https://www.thereformedprogrammer.net/wp-content/uploads/2020/07/CascadeDeleteExample.png 1267w" sizes="(max-width: 1019px) 100vw, 1019px"></figure><p>So, you can handle cascade soft deletes/resets and it works really well. There are lots of little rules you cover in the code, like you can’t start a reset of an entity if its SoftDeleteLevel isn’t 1, because a higher-level entity soft deleted it.</p>
+
+
+
+<p>I think this cascade soft delete approach is useful and I have built some prototype code to do this, but it’s going to take quite a bit more work to turn it into a NuGet library that can work with any system (here is my <a href="https://github.com/JonPSmith/EfCore.SoftDeleteServices/blob/master/ReleaseNotes.md">current list of things to do</a>).</p>
+
+
+
+<p>If people are interested in me turning the prototype code into a NuGet library this then please star the repo <a href="https://github.com/JonPSmith/EfCore.SoftDeleteServices">https://github.com/JonPSmith/EfCore.SoftDeleteServices</a> – note it is built on EF Core 5 preview.</p>
+
+
+
+<h2 id="conclusion">Conclusion<a href="#conclusion"></a></h2>
+
+
+
+<p>Well we have well and truly looked at soft delete and what it can (and cannot) do. As I said at the beginning, I have used soft delete on two of my client’s systems and it makes so much sense to me. The main benefits are inadvertent deletes can be restored and history is preserved. The main downside is the soft delete filter might slow queries down but adding an index on the soft deleted property will help.</p>
+
+
+
+<p>I know from my experiences that soft delete works really well in business applications. I also know that cascade soft deletes would have helped in one of my client’s systems which had some hierarchical parts – deleting a higher level would then marked all child parts as soft deleted too which would make things faster when querying the data.</p>
+
+
+
+<p>Hopefully I will get some time to look building a soft delete library someday. But in the meantime the prototype code is available at <a href="https://github.com/JonPSmith/EfCore.SoftDeleteServices">https://github.com/JonPSmith/EfCore.SoftDeleteServices</a> in case any part is useful to you.</p>
+
+
+
+<p>Happy coding.</p>
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
