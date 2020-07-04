@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+A real-time Event Grid viewer with serverless SignalR - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="A real-time Event Grid viewer with serverless SignalR - linksfor.dev(s)"/>
+    <meta property="og:description" content="A step by step guide to build an Event Grid viewer using serverless SignalR and Azure Functi..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://dev.to/davidgsola/a-real-time-event-grid-viewer-with-serverless-signalr-35ke"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - A real-time Event Grid viewer with serverless SignalR</title>
+<div class="readable">
+        <h1>A real-time Event Grid viewer with serverless SignalR</h1>
+            <div>Reading time: 9-12 minutes</div>
+        <div>Posted here: 04 Jul 2020</div>
+        <p><a href="https://dev.to/davidgsola/a-real-time-event-grid-viewer-with-serverless-signalr-35ke">https://dev.to/davidgsola/a-real-time-event-grid-viewer-with-serverless-signalr-35ke</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div data-article-id="357348" id="article-body">
+          <h2>
+  <a name="a-step-by-step-guide-to-build-an-event-grid-viewer-using-serverless-signalr-and-azure-functions" href="#a-step-by-step-guide-to-build-an-event-grid-viewer-using-serverless-signalr-and-azure-functions">
+  </a>
+  A step by step guide to build an Event Grid viewer using serverless SignalR and Azure Functions
+</h2>
+
+<p>In a microservice architecture we might have several decoupled microservices driven by events (aka event-based architecture). At some point, a developer might want to see the current status of the system, just a big picture of what is going on. In a classic monolithic system it might be easy since we only have one big service to look at. In an event-based architecture we can use an <strong>event viewer</strong>, a simple tool for printing the different events that are occurring in our system in live time.</p>
+
+<p>In this post you will find a step by step guide to build a real-time event viewer for Azure Event Grid based on a serverless SignalR service.</p>
+
+<h2>
+  <a name="the-technology" href="#the-technology">
+  </a>
+  The technology
+</h2>
+
+<p>First, let's take a look to the different services and tools we are going to use in this guide:</p>
+
+<ul>
+<li><p><strong><a href="https://docs.microsoft.com/en-us/azure/event-grid/overview">Azure Event Grid:</a></strong> a service for managing events. It takes care of routing the incoming events to the specific subscription based on filters.</p></li>
+<li><p><strong><a href="https://docs.microsoft.com/en-us/azure/azure-functions/functions-overview">Azure Function:</a></strong> a serverless computing service.</p></li>
+<li><p><strong><a href="https://docs.microsoft.com/en-us/azure/azure-signalr/signalr-overview">Azure SignalR:</a></strong> a service for enabling real-time web functionality to applications.</p></li>
+</ul>
+
+<p>So, how do all these pieces fit together?</p>
+
+<ol>
+<li><p>SignalR Client application (in this case an Angular based app) must connect to the SignalR service. It makes use of a negotiation API exposed in an Azure Function to get the information to connect to the SignalR service, the SignalR url and a corresponding token.</p></li>
+<li><p>Our Azure Function will be triggered by new events in the system through Event Grid. Using Functions output binding it will push each event into the serverless SignalR service.</p></li>
+<li><p>Client application will receive in real-time those events using WebSockets.</p></li>
+</ol>
+
+<p><a href="https://res.cloudinary.com/practicaldev/image/fetch/s--ZJ2M6pWV--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/bmznfolcxvblm16lfinp.PNG"><img src="https://res.cloudinary.com/practicaldev/image/fetch/s--ZJ2M6pWV--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/bmznfolcxvblm16lfinp.PNG" alt="Solution" loading="lazy"></a></p>
+
+<p>Now let's move on to explaining the whole process step by step in detail.</p>
+
+<h2>
+  <a name="1-creating-the-azure-function-app" href="#1-creating-the-azure-function-app">
+  </a>
+  1. Creating the Azure Function App
+</h2>
+
+<p>To create the Azure Function App we will use the <a href="https://github.com/Azure/azure-functions-core-tools">Azure Function Core tools</a>.<br>
+</p>
+
+<div><pre><code>npm i <span>-g</span> azure-functions-core-tools@3 <span>--unsafe-perm</span> <span>true</span>
+</code></pre></div>
+
+
+
+<p>In a fresh new folder we will create the Function App and the Function:<br>
+</p>
+
+<div><pre><code>func init
+func new -&gt; <span>select </span>http-trigger -&gt; choose a name
+</code></pre></div>
+
+
+
+<p>Now we have a fresh new Azure Function ready to be launched and tested:<br>
+</p>
+
+<div><pre><code>func start
+curl http://localhost:7071/api/CloudEventSubscription
+</code></pre></div>
+
+
+
+<h2>
+  <a name="2-subscribing-to-event-grid" href="#2-subscribing-to-event-grid">
+  </a>
+  2. Subscribing to Event Grid
+</h2>
+
+<p>Azure Event Grid supports two different event schemas:</p>
+
+<ul>
+<li>Event Grid Schema</li>
+<li><a href="https://github.com/cloudevents/spec">Cloud Event Schema v1.0</a></li>
+</ul>
+
+<p>In this guide, we are going to use Cloud Event Schema v1.0. If you want to use Event Grid Schema you will need to make some minor changes to the validation subscription logic.</p>
+
+<p>Azure Functions have a built-in trigger for Event Grid. However, it only works with Event Grid Schema. Cloud Events subscriptions must be done using a http trigger and doing the subscription validation manually.</p>
+
+<p>To receive events in our Function we need to update the <em>HttpTrigger</em> input binding to allow <strong>OPTIONS</strong> and <strong>POST</strong> requests. With CloudEvents schema, <strong>OPTIONS</strong> verb is used for validating  the subscription and <strong>POST</strong> for receiving the events.<br>
+</p>
+
+<div><pre><code><span>[</span><span>HttpTrigger</span><span>(</span><span>AuthorizationLevel</span><span>.</span><span>Function</span><span>,</span> <span>"options"</span><span>,</span> <span>"post"</span><span>,</span> <span>Route</span> <span>=</span> <span>null</span><span>)]</span> <span>HttpRequest</span> <span>req</span>
+</code></pre></div>
+
+
+
+<p>Then add the logic to validate the subscription.<br>
+</p>
+
+<div><pre><code><span>/*
+Handle EventGrid subscription validation for CloudEventSchema v1.0
+Validation request contains a key in the Webhook-Request-Origin
+header, that key must be set in the Webhook-Allowed-Origin response
+header to prove to Event Grid that this endpoint is capable of handling CloudEvents events.
+*/</span>
+<span>if</span> <span>(</span><span>HttpMethods</span><span>.</span><span>IsOptions</span><span>(</span><span>req</span><span>.</span><span>Method</span><span>))</span>
+<span>{</span>
+    <span>if</span><span>(</span><span>req</span><span>.</span><span>Headers</span><span>.</span><span>TryGetValue</span><span>(</span><span>"Webhook-Request-Origin"</span><span>,</span> <span>out</span> <span>var</span> <span>headerValues</span><span>))</span>
+    <span>{</span>
+        <span>var</span> <span>originValue</span> <span>=</span> <span>headerValues</span><span>.</span><span>FirstOrDefault</span><span>();</span>
+        <span>if</span><span>(!</span><span>string</span><span>.</span><span>IsNullOrEmpty</span><span>(</span><span>originValue</span><span>))</span>
+        <span>{</span>
+            <span>req</span><span>.</span><span>HttpContext</span><span>.</span><span>Response</span><span>.</span><span>Headers</span><span>.</span><span>Add</span><span>(</span><span>"Webhook-Allowed-Origin"</span><span>,</span> <span>originValue</span><span>);</span>
+            <span>return</span> <span>new</span> <span>OkResult</span><span>();</span>
+        <span>}</span>
+
+        <span>return</span> <span>new</span> <span>BadRequestObjectResult</span><span>(</span><span>"Missing 'Webhook-Request-Origin' header"</span><span>);</span>
+    <span>}</span>
+<span>}</span>
+</code></pre></div>
+
+
+
+<p>The Function is ready to be subscribed to Event Grid, but we don't have the Event Grid resource created in Azure yet.</p>
+
+<p>We are going to create the Azure resources directly from the console using <a href="https://docs.microsoft.com/en-us/cli/azure/install-azure-cli?view=azure-cli-latest">Azure CLI</a>. Let's start creating a new resource group.<br>
+</p>
+
+<div><pre><code>az group create <span>--name</span> event-grid-viewer-serverless <span>--location</span> northeurope
+</code></pre></div>
+
+
+
+<p>Now we can create the Event Grid Topic in that resource. To do that we need to make use of an <a href="https://github.com/Azure/azure-cli-extensions">Azure CLI extension</a>.<br>
+</p>
+
+<div><pre><code>az extension add <span>-n</span> eventgrid
+az eventgrid topic create <span>--resource-group</span> event-grid-viewer-serverless <span></span>
+   <span>--name</span> topic <span>--location</span> northeurope <span>--input-schema</span> cloudeventschemav1_0
+</code></pre></div>
+
+
+
+<p>To create the subscription we need to expose the Azure Function using <code>ngrok</code> or any other similar tool.<br>
+</p>
+
+<div><pre><code>az eventgrid event-subscription create <span> </span>
+   <span>--source-resource-id</span> /subscriptions/&lt;your subscription <span>id</span><span>&gt;</span>/resourceGroups/event-grid-viewer-serverless/providers/Microsoft.EventGrid/topics/topic <span></span>
+   <span>--name</span> serverless-signalr-function <span></span>
+   <span>--endpoint</span> &lt;your public Azure Function url&gt;/api/CloudEventSubscription <span> </span>
+   <span>--endpoint-type</span> webhook <span></span>
+   <span>--event-delivery-schema</span> cloudeventschemav1_0
+</code></pre></div>
+
+
+
+<p>Then we can test our fresh new subscription sending an event through Event Grid. To make the command easier we can create a sample CloudEvent event in a JSON file.<br>
+</p>
+
+<div><pre><code><span>{</span><span>
+   </span><span>"specversion"</span><span>:</span><span>"1.0"</span><span>,</span><span>
+   </span><span>"type"</span><span>:</span><span>"com.serverless.event"</span><span>,</span><span>
+   </span><span>"source"</span><span>:</span><span>"mysource/"</span><span>,</span><span>
+   </span><span>"subject"</span><span>:</span><span>"123"</span><span>,</span><span>
+   </span><span>"id"</span><span>:</span><span>"A234-1234-1234"</span><span>,</span><span>
+   </span><span>"time"</span><span>:</span><span>"2020-06-14T12:00:00Z"</span><span>,</span><span>
+   </span><span>"datacontenttype"</span><span>:</span><span>"application/json"</span><span>,</span><span>
+   </span><span>"data"</span><span>:</span><span>"{</span><span>"</span><span>eventProperty</span><span>"</span><span>:</span><span>"</span><span>eventValue</span><span>"</span><span>}"</span><span>
+</span><span>}</span><span>
+</span></code></pre></div>
+
+
+
+<p>The event can be sent using <code>curl</code> but we need to specify the Topic URL and Key that can be retrieved directly from the command line.<br>
+</p>
+
+<div><pre><code>// Get the Topic URL
+az eventgrid topic show <span>--name</span> topic <span></span>
+   <span>-g</span> event-grid-viewer-serverless <span></span>
+   <span>--query</span> <span>"endpoint"</span> <span>--output</span> tsv
+
+// Get the Topic key
+az eventgrid topic key list <span>--name</span> topic <span></span>
+   <span>-g</span> event-grid-viewer-serverless <span></span>
+   <span>--query</span> <span>"key1"</span> <span>--output</span> tsv
+
+// Send the event
+curl <span>--request</span> POST <span></span>
+   <span>--header</span> <span>"Content-Type: application/cloudevents+json; charset=utf-8"</span> <span></span>
+   <span>--header</span> <span>"aeg-sas-key: &lt;Topic Key&gt;"</span> <span></span>
+   <span>--data</span> @event.json &lt;Topic URL&gt;
+</code></pre></div>
+
+
+
+<h2>
+  <a name="3-enabling-realtime" href="#3-enabling-realtime">
+  </a>
+  3. Enabling real-time
+</h2>
+
+<p>As explained at the beginning of the post, we will use SignalR for enabling real-time in our web application. Since we don't have a back-end but a serverless Azure Function for handling the SignalR connection we will use SignalR in serverless mode. We can create it easily with Azure CLI.<br>
+</p>
+
+<div><pre><code>az signalr create <span>--name</span> serverless-signalr <span></span>
+   <span>--resource-group</span> event-grid-viewer-serverless <span></span>
+   <span>--sku</span> Free_F1 <span>--service-mode</span> Serverless <span></span>
+   <span>--location</span> northeurope
+</code></pre></div>
+
+
+
+<p>Then we must install the <a href="https://github.com/Azure/azure-functions-signalrservice-extension">Azure Functions Binding for SignalR</a>. It will be used to ease the interaction between the Function and SignalR.<br>
+</p>
+
+<div><pre><code>func extensions <span>install</span> <span>-p</span> Microsoft.Azure.WebJobs.Extensions.SignalRService <span>-v</span> 1.0.0
+</code></pre></div>
+
+
+
+<p>Client applications need some credentials to connect to the SignalR service. We need a new  <code>negotiate</code> Function that, by making use of the Azure Functions Binding for SignalR, will return the credentials information to connect to SignalR.<br>
+</p>
+
+<div><pre><code><span>[</span><span>FunctionName</span><span>(</span><span>"negotiate"</span><span>)]</span>
+<span>public</span> <span>static</span> <span>SignalRConnectionInfo</span> <span>GetSignalRInfo</span><span>(</span>
+    <span>[</span><span>HttpTrigger</span><span>(</span><span>AuthorizationLevel</span><span>.</span><span>Anonymous</span><span>,</span> <span>"post"</span><span>)]</span> <span>HttpRequest</span> <span>req</span><span>,</span>
+    <span>[</span><span>SignalRConnectionInfo</span><span>(</span><span>HubName</span> <span>=</span> <span>"hubName"</span><span>)]</span> <span>SignalRConnectionInfo</span> <span>connectionInfo</span><span>)</span>
+<span>{</span>
+    <span>return</span> <span>connectionInfo</span><span>;</span>
+<span>}</span>
+</code></pre></div>
+
+
+
+<p>By default, these bindings expect the SignalR <strong>ConnectionString</strong> to be set in a specific value on the application settings. To enable it locally we must add a new property to the <code>local.settings.json</code> file.<br>
+</p>
+
+<div><pre><code><span>{</span><span>
+    </span><span>"IsEncrypted"</span><span>:</span><span> </span><span>false</span><span>,</span><span>
+    </span><span>"Values"</span><span>:</span><span> </span><span>{</span><span>
+        </span><span>"AzureWebJobsStorage"</span><span>:</span><span> </span><span>"UseDevelopmentStorage=true"</span><span>,</span><span>
+        </span><span>"FUNCTIONS_WORKER_RUNTIME"</span><span>:</span><span> </span><span>"dotnet"</span><span>,</span><span>
+        </span><span>"AzureSignalRConnectionString"</span><span>:</span><span> </span><span>"&lt;Your SignalR Connection String&gt;"</span><span>
+    </span><span>}</span><span>
+</span><span>}</span><span>
+</span></code></pre></div>
+
+
+
+<p>Then, we want to push the incoming events from Event Grid to SignalR. First, we need to update the original Function to add an output binding for SignalR.<br>
+</p>
+
+<div><pre><code><span>[</span><span>SignalR</span><span>(</span><span>HubName</span> <span>=</span> <span>"hubName"</span><span>)]</span> <span>IAsyncCollector</span><span>&lt;</span><span>SignalRMessage</span><span>&gt;</span> <span>signalRMessages</span>
+</code></pre></div>
+
+
+
+<p>And add the logic to push the event to the SignalR service.<br>
+</p>
+
+<div><pre><code><span>if</span><span>(</span><span>HttpMethods</span><span>.</span><span>IsPost</span><span>(</span><span>req</span><span>.</span><span>Method</span><span>))</span>
+<span>{</span>
+    <span>string</span> <span>@event</span> <span>=</span> <span>await</span> <span>new</span> <span>StreamReader</span><span>(</span><span>req</span><span>.</span><span>Body</span><span>).</span><span>ReadToEndAsync</span><span>();</span>
+    <span>await</span> <span>signalRMessages</span><span>.</span><span>AddAsync</span><span>(</span><span>new</span> <span>SignalRMessage</span>
+    <span>{</span>
+        <span>Target</span> <span>=</span> <span>"newEvent"</span><span>,</span>
+        <span>Arguments</span> <span>=</span> <span>new</span><span>[]</span> <span>{</span> <span>@event</span> <span>}</span>
+    <span>});</span>
+<span>}</span>
+</code></pre></div>
+
+
+
+<h2>
+  <a name="4-client-application" href="#4-client-application">
+  </a>
+  4. Client application
+</h2>
+
+<p>The last piece of the puzzle is the client application. First, it will negotiate the credentials with the Function, and then it will wait for new incoming messages from SignalR. In this tutorial we are going to use Angular (and Angular CLI) to create the client application.<br>
+</p>
+
+
+
+
+
+<p>There is a npm package <a href="https://www.npmjs.com/package/@aspnet/signalr">@aspnet/signalr</a> that makes the use of SignalR in the client side very easy.<br>
+</p>
+
+<div><pre><code>npm i @aspnet/signalr <span>--save</span>
+</code></pre></div>
+
+
+
+<p>This package handles for you the negotiation step and the connection to SignalR. We can add some simple logic to receive the events from a specific hub and log it into the console.<br>
+</p>
+
+<div><pre><code><span>import</span> <span>*</span> <span>as</span> <span>SignalR</span> <span>from</span> <span>'</span><span>@aspnet/signalr</span><span>'</span><span>;</span>
+
+<span>export</span> <span>class</span> <span>AppComponent</span> <span>{</span>
+
+  <span>title</span> <span>=</span> <span>'</span><span>viewer-app</span><span>'</span><span>;</span>
+
+  <span>private</span> <span>hubConnection</span><span>:</span> <span>SignalR</span><span>.</span><span>HubConnection</span><span>;</span>
+
+  <span>constructor</span><span>()</span> <span>{</span>
+    <span>// Create connection</span>
+    <span>this</span><span>.</span><span>hubConnection</span> <span>=</span> <span>new</span> <span>SignalR</span><span>.</span><span>HubConnectionBuilder</span><span>()</span>
+      <span>.</span><span>withUrl</span><span>(</span><span>"</span><span>http://localhost:7071/api</span><span>"</span><span>)</span>
+      <span>.</span><span>build</span><span>();</span>
+
+    <span>// Start connection. This will call the negotiate endpoint</span>
+    <span>this</span><span>.</span><span>hubConnection</span>
+      <span>.</span><span>start</span><span>();</span>
+
+    <span>// Handle incoming events for the specific target</span>
+    <span>this</span><span>.</span><span>hubConnection</span><span>.</span><span>on</span><span>(</span><span>"</span><span>newEvent</span><span>"</span><span>,</span> <span>(</span><span>event</span><span>)</span> <span>=&gt;</span> <span>{</span>
+      <span>console</span><span>.</span><span>log</span><span>(</span><span>event</span><span>)</span>
+    <span>});</span>
+  <span>}</span>
+<span>}</span>
+</code></pre></div>
+
+
+
+<h2>
+  <a name="to-wrap-up" href="#to-wrap-up">
+  </a>
+  To wrap up
+</h2>
+
+<p>In this tutorial we have created a simple but effective real-time event viewer for Event Grid using some cool stuff like serverless SignalR. This client application can be easily enhanced to show the events in the page rather than the console.</p>
+
+<p>You can find a full example working with some minor UI enhancements on the following repo: <a href="https://github.com/DavidGSola/serverless-eventgrid-viewer">https://github.com/DavidGSola/serverless-eventgrid-viewer</a></p>
+
+
+        </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
