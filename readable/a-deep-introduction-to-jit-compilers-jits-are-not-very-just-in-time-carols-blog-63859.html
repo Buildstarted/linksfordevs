@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+A Deep Introduction to JIT Compilers: JITs are not very Just-in-time | Carol&#x27;s Blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="A Deep Introduction to JIT Compilers: JITs are not very Just-in-time | Carol&#x27;s Blog - linksfor.dev(s)"/>
+    <meta property="og:description" content="Carol Chen&#x27;s blog about stuff she does or reads about or observes"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://carolchen.me/blog/jits-intro/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - A Deep Introduction to JIT Compilers: JITs are not very Just-in-time | Carol&#x27;s Blog</title>
+<div class="readable">
+        <h1>A Deep Introduction to JIT Compilers: JITs are not very Just-in-time | Carol&#x27;s Blog</h1>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 06 Jul 2020</div>
+        <p><a href="https://carolchen.me/blog/jits-intro/">https://carolchen.me/blog/jits-intro/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section id="js-article">
+    
+<p><em>If you are familiar with how JITs generally work (if you get what the title is referring to), I recommend skimming this or going straight to reading <a href="https://carolchen.me/blog/jits-impls">How JIT Compilers are Implemented and Fast: Julia, Pypy, LuaJIT, Graal and More</a></em> </p>
+<p>My mentor, <a href="https://chrisseaton.com/">Chris</a>, who took me from “what is a JIT” to where I am now once told me that compilers were just bytes in bytes out and not at all low-level and scary. This is actually fairly true, and it's fun to learn about compiler internals and often useful for programmers everywhere!</p>
+<p>This blog post gives background on how programming languages are implemented and how JITs work. It'll introduce the implementation details of the Julia language, though it won't talk about specific implementation details or optimizations made by more traditional JITs. Check out <a href="https://carolchen.me/blog/jits-impls">How JIT Compilers are Implemented and Fast: Julia, Pypy, LuaJIT, Graal and More</a> to read about how meta-tracing is implemented, how Graal supports C extensions, the relationship of JITs with LLVM and more!</p>
+<h2 id="how-programming-languages-are-implemented">How Programming Languages are Implemented<a href="#how-programming-languages-are-implemented" aria-label="Anchor link for: how-programming-languages-are-implemented"> </a>
+</h2>
+<p>When we run a program, it’s either interpreted or compiled in some way. The compiler/interpreter is sometimes referred to as the "implementation" of a language, and one language can have many implementations. You may have heard things like "Python is interpreted", but that really means the reference(standard/default) implementation of Python is an interpreter. Python is a language specification and <em>CPython</em> is the interpreter and implementation of Python. </p>
+<p>An interpreter is a program that directly executes your code. Well-known interpreters are usually written in C. Ruby, Python and PHP are written in C. Below is a function that loosely models how an interpreter might work:</p>
+<pre><code><span>func </span><span>interpret</span><span>(</span><span>code </span><span>string</span><span>) {
+  </span><span>if </span><span>code </span><span>== </span><span>"print('Hello, World!')" </span><span>{
+    </span><span>print</span><span>(</span><span>"Hello, World"</span><span>);
+  } </span><span>else if </span><span>code </span><span>==</span><span> “</span><span>x </span><span>= </span><span>0</span><span>; </span><span>x </span><span>+= </span><span>4</span><span>; </span><span>print</span><span>(</span><span>x</span><span>)” {
+    variable_x </span><span>:= </span><span>0 
+    </span><span>variable_x </span><span>+= </span><span>4
+    </span><span>print</span><span>(</span><span>x</span><span>)
+  }
+}
+</span></code></pre>
+<p>A compiler is a program that translates code from some language to another language, though it usually refers to a destination language that is a machine code. Examples of compiled languages are C, Go and Rust.</p>
+<pre><code><span>func </span><span>compile</span><span>(</span><span>code </span><span>string</span><span>) {
+  []</span><span>byte </span><span>compiled_code </span><span>= </span><span>get_machine_code</span><span>(</span><span>code</span><span>);
+  </span><span>write_to_executable</span><span>(</span><span>compiled_code</span><span>);
+}
+</span></code></pre>
+<p>The difference between a compiled and interpreted language is actually much more nuanced. C, Go and Rust are clearly compiled, as they output a machine code file - which can be understood natively by the computer. The compile and run steps are fully distinct.</p>
+<p>However, compilers can translate to any target language (this is sometimes called transpiling). Java for example, has a two-step implementation. The first is compiling Java source to bytecode, which is an Intermediate Representation (IR). The bytecode is then JIT compiled - which involves interpretation.</p>
+<p>Python and Ruby also execute in two steps. Despite being known as interpreted languages, their reference implementations actually compile the source down to a bytecode. You may have seen .pyc files (not anymore in Python3) which contain Python bytecode! The bytecode is then interpreted by a virtual machine. These interpreters use bytecode because programmers tend to care less about compile time, and creating a bytecode language allows the engineers to specify a bytecode that is as efficient to interpret as possible. </p>
+<p>Having bytecode is how languages check syntax before execution (though they could technically just do a pass before starting the interpreter). An example below shows why you would want to check syntax before runtime.</p>
+<pre><code><span>sleep</span><span>(</span><span>1000</span><span>)
+bad syntax beep boop beep boop
+</span></code></pre>
+<p>Another important note is that interpreted languages are typically slower for various reasons, the most obvious being that they're executed in a higher level language that has overhead execution time. The main reason is that the dynamic-ness of the languages they tend to implement means that they need many extra instructions to decide what to do next and how to route data. People still choose to build interpreters over compilers because they're easier to build and are more suited to handle things like dynamic typing, scopes etc (though you could build a compiler that has the same features). </p>
+<h3 id="so-what-is-a-jit">So What is a JIT?<a href="#so-what-is-a-jit" aria-label="Anchor link for: so-what-is-a-jit"> </a>
+</h3>
+<p>A JIT compiler doesn't compile code Ahead-Of-Time (AOT), but still compiles source code to machine code and therefore is not an interpreter. JITs compile code at runtime, while your program is executing. This gives the JITs flexibility for dynamic language features, while maintaining speed from optimized machine code output. JIT-compiling C would make it slower as we'd just be adding the compilation time to the execution time. JIT-compiling Python would be fast, as compilation + executing machine code can often be faster than interpreting, especially since the JIT has no need to write to a file (disk writing is expensive, memory/RAM/register writing is fast). JITs also improve in speed by being able to optimize on information that is only available at runtime.</p>
+<h3 id="julia-a-jit-compiler-that-s-just-in-time">Julia: a JIT Compiler that's Just-in-time<a href="#julia-a-jit-compiler-that-s-just-in-time" aria-label="Anchor link for: julia-a-jit-compiler-that-s-just-in-time"> </a>
+</h3>
+<p>A common theme between compiled languages is that they're statically typed. That means when the programmer creates or uses a value, they’re telling the computer what type it is and that information is guaranteed at compile time.</p>
+<p>Julia is dynamically typed, but internally Julia is much closer to being statically typed.</p>
+<pre><code><span>function </span><span>multiply</span><span>(x, y)
+  x </span><span>*</span><span> y
+</span><span>end
+</span></code></pre>
+<p>Here is an example of a Julia function, which could be used to multiply integers, floats, vectors, strings etc (Julia allows operator overloading). Compiling out the machine code for <em>all</em> these cases is not very productive for a variety of reasons, which is what we'd have to do if we wanted Julia to be a compiled language. Idiomatic programming means that the function will probably only be used by a few combinations of types and we don't want to compile something that we don't use yet since that's not very jitty (this is not a real term).</p>
+<p>If I were to code <code>multiply(1, 2)</code>, then Julia will compile a function that multiplies integers. If I then wrote <code>multiply(2, 3)</code>, then the already-compiled code will be used. If I then added <code>multiply(1.4, 4)</code>, another version of the function will be compiled. We can observe what the compilation does with <code>@code_llvm multiply(1, 1)</code>, which generates LLVM Bitcode (not quite machine code, but a lower-level Intermediate Representation).</p>
+<pre><code><span>define i64 @julia_multiply_17232(i64, i64) {
+top</span><span>:</span><span>
+; ┌ @ int</span><span>.</span><span>jl</span><span>:</span><span>54</span><span> within `*'
+   </span><span>%</span><span>2 </span><span>=</span><span> mul i64 </span><span>%</span><span>1</span><span>, </span><span>%</span><span>0</span><span>
+; └
+  ret i64 </span><span>%</span><span>2</span><span>
+}
+</span></code></pre>
+<p>And with <code>multiply(1.4, 4)</code>, you can see how complicated it can get to compile even one more function. In AOT compiled Julia, all (some optimizations can be made to reduce) of these combinations would have to live in the compiled code even if only one was used, along with the control flow to delegate. </p>
+<pre><code><span>define double @julia_multiply_17042(double, i64) {
+top</span><span>:</span><span>
+; ┌ @ promotion</span><span>.</span><span>jl</span><span>:</span><span>312</span><span> within `*'
+; │┌ @ promotion</span><span>.</span><span>jl</span><span>:</span><span>282</span><span> within `promote'
+; ││┌ @ promotion</span><span>.</span><span>jl</span><span>:</span><span>259</span><span> within `_promote'
+; │││┌ @ number</span><span>.</span><span>jl</span><span>:</span><span>7</span><span> within `convert'
+; ││││┌ @ float</span><span>.</span><span>jl</span><span>:</span><span>60</span><span> within `</span><span>Float64</span><span>'
+       </span><span>%</span><span>2 </span><span>=</span><span> sitofp i64 </span><span>%</span><span>1</span><span> to double
+; │└└└└
+; │ @ promotion</span><span>.</span><span>jl</span><span>:</span><span>312</span><span> within `*' @ float</span><span>.</span><span>jl</span><span>:</span><span>405
+   </span><span>%</span><span>3 </span><span>=</span><span> fmul double </span><span>%</span><span>2</span><span>, </span><span>%</span><span>0</span><span>
+; └
+  ret double </span><span>%</span><span>3</span><span>
+}
+</span></code></pre>
+<p>The general strategy of “assume a type and compile/behave based on that” is called type inferencing, which Julia mildly uses in the examples above. There are a lot of other compiler optimizations that are made, though none of them are very specific to JITs as Julia may be better described as a lazy AOT compiler.</p>
+<p>The simplicity of this kind of jitting makes it easy for Julia to also supply AOT compilation. It also helps Julia to benchmark very well, definitely a tier above languages like Python and comparable to C (I'd cite numbers, but those are always nuanced and I don't want to get into that).</p>
+<h3 id="so-what-is-a-jit-take-two">So What is a JIT? Take Two.<a href="#so-what-is-a-jit-take-two" aria-label="Anchor link for: so-what-is-a-jit-take-two"> </a>
+</h3>
+<p>Julia is actually the jittiest JIT I'll discuss, but not the most interesting as a "JIT". It actually compiles code right before the code needs to be used -- just in time. Most JITs however (Pypy, Java, JS Engines), are not actually about compiling code just-in-time, but compiling <em>optimal code</em> at an optimal time. In some cases that time is actually never. In other cases, compilation occurs more than once. In a vast majority of the cases compilation doesn't occur until after the source code has been executed numerous times, and the JIT will stay in an interpreter as the overhead to compilation is too high to be valuable.</p>
+<p><img src="https://carolchen.me/blog/img/jits/jitbrr.jpg" alt=""></p>
+<p>The other aspect at play is generating <em>optimal code</em>. Assembly instructions are not created equal, and compilers will put a lot of effort into generating well-optimized machine code. Usually, it is possible for a human to write better assembly than a compiler (though it would take a fairly smart and knowledgeable human), because the compiler cannot dynamically analyze your code. By that, I mean things like knowing the possible range of your integers or what keys are in your map, as these are things that a computer could only know after (partially) executing your program. A JIT compiler can actually do those things because it interprets your code first and gathers data from the execution. Thus, JITs are expensive in that they interpret, and add compilation time to execution time, but they make it up in highly optimised compiled code. With that, the timing of compilation is also dependent on whether the JIT has gathered enough valuable information.</p>
+<p>The cool part about JITs is that I was sort of lying when I said a JIT implementation of C could not be faster than existing compiled implementations. It would not be feasible to try, but jit-compiling C in the way I just described is not a strict superset of compiling a language and thus it is not logically impossible to compile code fast enough to make up for the compile+profile+interpreting time. If I "JIT compiled" C similarly to how Julia does it (statically compile each function as it's called), it would be impossible to make it faster than compiled-C as the compile-time is non-negative and the generated machine code is essentially the same.</p>
+<blockquote>
+<h2 id="pogo">Pogo<a href="#pogo" aria-label="Anchor link for: pogo"> </a>
+</h2>
+<p>Though jitting C is not feasible, one can find a middle ground through Profile Guided Optimization (PGO, cutely [and uncommonly] pronounced “pogo”). Instead of profiling while executing, you compile a program with PGO profiling, run that program and then recompile the original program with profiled data passed in. This is effective at reducing compiled-code size and improving branch prediction. </p>
+</blockquote>
+<h3 id="warm-it-up">Warm it up<a href="#warm-it-up" aria-label="Anchor link for: warm-it-up"> </a>
+</h3>
+<p>JITs have a concept of warming up. Because intepretation and profiling time is expensive, JITs will start by executing a program slowly and then work towards "peak performance". For JITs with interpreted counterparts like Pypy, the JIT without warmup performs much worse at the beginning of execution due to the overhead of profiling. It's also the reason that JITs will consume signifcantly more memory. </p>
+<p><img src="https://carolchen.me/blog/img/jits/warmingup.png" alt=""></p>
+<p>Warmup adds complexity to measuring efficiency of a JIT! It's fine if you're measuring the performance of generating the mandelbrot set, but becomes painful if you're serving a web application and the first N requests are painfully slow. It’s complicated by the fact that the performance doesn’t strictly increase. If Pypy decides it needs to compile many things all at once after JITs compiling som functions, then you might have a slow-down in the middle. It also makes benchmark results more ambiguous, as you have to check if the jitted languages were given time to warmup, but you’d also want to know if it took an unseemly amount of time to warmup. Optimizing your compiled code <em>and</em> warmup speed is unfortunately zero-sum(or at least small-sum) by nature. If you try to get your code to compile sooner, less data will be available, the compiled code will not be as efficient and peak performance will be lower. Aiming for higher peak performance of course, often means higher profiling costs.</p>
+<p>Java and Javascript engines are examples of JITs that have put really good care into warmup time, but you may find that languages built for academic uses have monstrous warmup times in favour of snazzy peak performances.</p>
+<h3 id="next-post-in-series-how-jit-compilers-are-implemented-and-fast-julia-pypy-luajit-graal-and-more">&gt; Next Post in Series: <a href="https://carolchen.me/blog/jits-impls">How JIT Compilers are Implemented and Fast: Julia, Pypy, LuaJIT, Graal and More</a><a href="#next-post-in-series-how-jit-compilers-are-implemented-and-fast-julia-pypy-luajit-graal-and-more" aria-label="Anchor link for: next-post-in-series-how-jit-compilers-are-implemented-and-fast-julia-pypy-luajit-graal-and-more"> </a>
+</h3>
+<ul>
+<li>Talks about implementation of tracing JITs and meta-tracing JITs, specifically LuaJIT and Pypy</li>
+<li>Introduces GraalVM, Hotspot and goes deeper into Javascript Engines. Goes through Tiering, Seas of Nodes, deoptimization and inlining.</li>
+</ul>
+
+
+  </section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
