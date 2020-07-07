@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+D-Bus and Polkit, No More Mysticism and Confusion - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="D-Bus and Polkit, No More Mysticism and Confusion - linksfor.dev(s)"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://venam.nixers.net/blog/unix/2020/07/06/dbus-polkit.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - D-Bus and Polkit, No More Mysticism and Confusion</title>
+<div class="readable">
+        <h1>D-Bus and Polkit, No More Mysticism and Confusion</h1>
+            <div>Reading time: 38-48 minutes</div>
+        <div>Posted here: 07 Jul 2020</div>
+        <p><a href="https://venam.nixers.net/blog/unix/2020/07/06/dbus-polkit.html">https://venam.nixers.net/blog/unix/2020/07/06/dbus-polkit.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article>
+    <p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/freedesktop_logo.png" alt="freedesktop logo"></p>
+
+<p>Dbus and Polkit are two technologies that emanate an aura of
+confusion. While their names are omnipresent in discussions, and the
+internet has its share of criticism and rants about them, not many have
+an actual grasp of what they actually do. In this article I’ll give an
+overview of these technologies.</p>
+
+<p>D-Bus, or Desktop Bus, is often described as a software that allows other
+processes to communicate with one another, to perform inter-process
+communication (IPC). However, this term is generic and doesn’t convey
+what it is used for. Many technologies exist that can perform IPC, from
+plain socket, to messaging queue, so what differentiates D-Bus from them.</p>
+
+<p>D-Bus can be considered a middleware, a software glue that sits
+in the middle to provide services to software through a sort
+of plugin/microkernel architecture. That’s what the bus metaphor
+represents, it replicates the functionality of hardware buses, with
+components attaching themselves to known interfaces that they implement,
+and providing a mean of communication between them. With D-Bus these can
+be either procedure calls aka methods or signals aka notifications.</p>
+
+<p>While D-Bus does offer 1-to-1 and 1-to-many IPC, it’s more of a byproduct
+of its original purpose than a mean of efficient process to process data
+transfer — it isn’t meant to be fast. D-Bus emerges from the world of
+desktop environments where blocks are well known, and each implements a
+functionality that should be accessible from other processes if needed
+without having to reinvent the transfer mechanism for each and every
+software.<br>
+This is the problem it tackles: having components in a desktop environment
+that are distributed in many processes, each fulfilling a specific job. In
+such case, if a process implements the behavior needed, instead of
+reimplementing it, it can instead harness the feature already provided
+by that other process.</p>
+
+<p>Its design is heavily influenced by Service Oriented Architectures
+(SOA), Enterprise Service Buses (ESB), and microkernel architectures.<br>
+A bus permits abstracting communication between software, replacing
+all direct contact, and only allowing them to happen on the bus
+instead.<br>
+Additionally, the SOA allows software to expose objects that have
+methods that can be called remotely, and also allows other software to
+subscribe/publish events happening in remote objects residing in
+other software.<br>
+Moreover, D-Bus provides an easy plug-and-play, a loose coupling,
+where any software could detach itself from the bus and allow another
+process to be plugged, containing objects that implement the same features
+the previous process implemented.<br>
+In sum, it’s an abstraction layer for functionalities that could be
+implemented by any software, a standardized way to create pluggable
+desktop components. This is what D-Bus is about, this is the role it
+plays, and it explains the difficulty in grasping the concepts that
+gave rise to it.</p>
+
+<p>The big conceptual picture goes as follows.<br>
+We have a D-Bus daemon running at an address and services that implement
+well known behaviors. These services attach to the D-Bus daemon and the
+attachment edge has a name, a bus name.<br>
+Inside these services, there are objects that implement the well known
+behavior. These objects also have a path leading to them so that you
+can target which object within that service implements the specific
+interface needed.<br>
+Then, the interface methods and events can be called or registered
+on this object inside this service, connected to this bus name, from
+another service that requires the behavior implemented by that interface
+to be executed.</p>
+
+<p>This is how these particular nested components interact with one another,
+and it gives rise to the following:</p>
+
+<div><div><pre><code>Address of D-Bus daemon -&gt;
+Bus Name that the service attached to -&gt;
+Path of the object within this service -&gt;
+Interface that this object implements -&gt;
+Method or Signal concrete implementation
+</code></pre></div></div>
+
+<p>Or in graphical form:</p>
+
+<p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/dbus_method_invocation.png" alt="D-Bus ecosystem"></p>
+
+<p>Instead of having everyone talk to one another:</p>
+
+<p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/processes_without_dbus.png" alt="p2p interaction"></p>
+
+<p>Let’s take a method call example that shows these 3 required pieces
+of information.</p>
+
+<div><div><pre><code>org.gnome.SessionManager 
+/org/gnome/SessionManager 
+org.gnome.SessionManager.CanShutdown
+
+   boolean true
+</code></pre></div></div>
+
+<p>Here, we have the service bus name <code>org.gnome.SessionManager</code>, the
+object path <code>/org/gnome/SessionManager</code>, and the interface/method name
+<code>org.gnome.SessionManager.CanShutdown</code>, all separated by spaces. If the
+<code>/org/gnome/SessionManager</code> only implements a single interface then we
+could call it as such <code>CanShutdown</code>, but here it doesn’t.</p>
+
+<p>Let’s dive deeper into the pieces we’ve mentioned. They are akin to
+the ones in an SOA ecosystem, but with the addition of the bus name,
+bus daemon, and the abstraction for the plug-and-play.</p>
+
+<ul>
+  <li>Objects</li>
+</ul>
+
+<p>An object is an entity that resides in a process/service and that
+effectuates some work. It is identified by a path name. The path name is
+usually written, though not mandatory, in a namespace format where it
+is grouped and divided by slashes <code>/</code>, just like Unix file system path.</p>
+
+<p>For example: <code>/org/gnome/Nautilus/window/1</code>.</p>
+
+<p>Objects have methods and signals, methods take input and return output,
+while signals are events that processes can subscribe to.</p>
+
+<ul>
+  <li>Interfaces</li>
+</ul>
+
+<p>These methods and signals are concrete implementations of interfaces,
+the same definition as in OOP.<br>
+As with OOP, interfaces are a group of abstractions that have to be
+defined in the object that implements them. The members, methods and
+signals, are also namespaced under this interface name.</p>
+
+<p>Example:</p>
+
+<div><div><pre><code>interface=org.gnome.Shell.Introspect
+member method=GetRunningApplications
+absolute name of method=org.gnome.Shell.Introspect.GetRunningApplications
+</code></pre></div></div>
+
+<p>Some interfaces are commonly implemented by objects, such as the
+<code>org.freedesktop.Introspectable</code> interface, which, as the name implies,
+makes the object introspectable. It allows to query the object about
+its capabilities, features, and other interfaces it implements. This is
+a very useful feature because it allows discovery.<br>
+It’s also worth mentioning that dbus can be used in a generic
+way to set and get properties of services’ objects through the
+<code>org.freedesktop.DBus.Properties</code> interface.</p>
+
+<p>Interfaces can be described as standard, and for documentation, in D-Bus
+XML configuration files so that other programmers can use the reference
+to implement them properly. These files can also be used to auto-generate
+classes from the XML, making it quicker to implement and less error-prone.<br>
+These files can usually be found under <code>/usr/share/dbus-1/interfaces/</code>.
+Our <code>org.gnome.Shell.Introspect</code> of earlier is there in the
+file <code>org.gnome.Shell.Introspect.xml</code> along with our method
+<code>GetRunningApplications</code>. Here’s an excerpt of the relevant section.</p>
+
+<div><div><pre><code>&lt;!--
+	GetRunningApplications:
+	@short_description: Retrieves the description of all running applications
+
+	Each application is associated by an application ID. The details of
+	each application consists of a varlist of keys and values. Available
+	keys are listed below.
+
+	'active-on-seats' - (as)   list of seats the application is active on
+								(a seat only has at most one active
+								application)
+--&gt;
+&lt;method name="GetRunningApplications"&gt;
+	&lt;arg name="apps" direction="out" type="a{sa{sv}}" /&gt;
+&lt;/method&gt;
+</code></pre></div></div>
+
+<p>Notice the <code>type=</code> part, which describes the format of the output,
+we’ll come back to what this means in the message format section,
+but in short each letter represents a basic type. The <code>out</code> direction
+means that it’s the type of an output value of the method, similarly
+<code>in</code> is for method parameters. See the following example taken from
+<code>org.gnome.Shell.Screenshot.xml</code>.</p>
+
+<div><div><pre><code>&lt;!--
+	ScreenshotArea:
+	@x: the X coordinate of the area to capture
+	@y: the Y coordinate of the area to capture
+	@width: the width of the area to capture
+	@height: the height of the area to capture
+	@flash: whether to flash the area or not
+	@filename: the filename for the screenshot
+	@success: whether the screenshot was captured
+	@filename_used: the file where the screenshot was saved
+
+	Takes a screenshot of the passed in area and saves it
+	in @filename as png image, it returns a boolean
+	indicating whether the operation was successful or not.
+	@filename can either be an absolute path or a basename, in
+	which case the screenshot will be saved in the $XDG_PICTURES_DIR
+	or the home directory if it doesn't exist. The filename used
+	to save the screenshot will be returned in @filename_used.
+--&gt;
+&lt;method name="ScreenshotArea"&gt;
+	&lt;arg type="i" direction="in" name="x"/&gt;
+	&lt;arg type="i" direction="in" name="y"/&gt;
+	&lt;arg type="i" direction="in" name="width"/&gt;
+	&lt;arg type="i" direction="in" name="height"/&gt;
+	&lt;arg type="b" direction="in" name="flash"/&gt;
+	&lt;arg type="s" direction="in" name="filename"/&gt;
+	&lt;arg type="b" direction="out" name="success"/&gt;
+	&lt;arg type="s" direction="out" name="filename_used"/&gt;
+&lt;/method&gt;
+</code></pre></div></div>
+
+<ul>
+  <li>Proxies</li>
+</ul>
+
+<p>Proxies are the nuts and bolts of an RPC ecosystem, they represent
+remote objects, along with their methods, in your native code as if
+they were local. Basically, these are wrappers to make it more simple
+to manipulate things on D-Bus programmatically instead of worrying about
+all the components we’ve mentioned above. Programming with proxies might
+look like this.</p>
+
+<div><div><pre><code>Proxy proxy = new Proxy(getBusConnection(), "/remote/object/path");
+Object returnValue = proxy.MethodName(arg1, arg2);
+</code></pre></div></div>
+
+<ul>
+  <li>Bus names</li>
+</ul>
+
+<p>The bus name, or also sometimes called connection name, is the name
+of the connection that an application gets assigned when it connects
+to D-Bus. Because D-Bus is a bus architecture, it requires that each
+assigned name be unique, you can’t have two applications using the
+same bus name. Usually, it is the D-Bus daemon that generates this
+random unique value, one that begins with a colon by convention,
+however, applications may ask to own well-known names instead. These
+well-known names, as reverse domain names, are for cases when people
+want to agree on a standard unique application that should implement
+a certain behavior. Let’s say for instance a specification for a
+<code>com.mycompany.TextEditor</code> bus name, where the mandatory object path
+should be <code>/com/mycompany/TextFileManager</code>, and supporting interface
+<code>org.freedesktop.FileHandler</code>. This makes the desktop environment more
+predictable and stable. However, today this is still only a dream and
+has nothing to do with current desktop environment implementations.</p>
+
+<ul>
+  <li>Connection and address of D-Bus daemon</li>
+</ul>
+
+<p>The D-Bus daemon is the core of D-Bus, it is what everything else attaches
+itself to. Thus, the address that the daemon uses and listens to should
+be well known to clients. The mean of communication can be varied from
+UNIX domain sockets to TCP/IP sockets if used remotely.<br>
+In normal scenarios, there are two daemons running, a system-wide daemon
+and a per-session daemon, one for system-level applications and one for
+session related applications such as desktop environments. The address of
+the session bus can be discovered by reading the environment variable
+<code>$DBUS_SESSION_BUS_ADDRESS</code>, while the address of the system D-Bus
+daemon is discovered by checking a predefined UNIX domain socket path,
+though it can be overridden by using another environment variable, namely
+<code>$DBUS_SYSTEM_BUS_ADDRESS</code>.<br>
+Keep in mind that it’s always possible to start private buses, private
+daemons for non-standard use.</p>
+
+<ul>
+  <li>Service</li>
+</ul>
+
+<p>A service is the application daemon connected to a bus that provides
+some utility to clients via the objects it contains that implement some
+interfaces. Normally we talk of services when the bus name is well-known,
+as in not auto-generated but using a reverse domain name. Due to D-Bus
+nature, services are singleton and owner of the bus name, and thus are
+the only applications that can fulfill specific requests. If any other
+application wants to use the particular bus name they have to wait in
+a queue of aspiring owner until the first one relinquishes it.</p>
+
+<p>Within the D-Bus ecosystem, you can request that the D-Bus daemon
+automatically start a program, if not already started, that provides
+a given service (well-known name) whenever it’s needed. We call this
+<em>service activation</em>. It’s quite convenient as you don’t have to remember
+what application does what, nor care if it’s already running, but instead
+send a generic request to D-Bus and rely on it to launch it.</p>
+
+<p>To do this we have to define a service file in the
+<code>/usr/share/dbus-1/services/</code> directory that describes what and how the
+service will run.<br>
+A simple example goes as follows.</p>
+
+<div><div><pre><code>[D-BUS Service]
+Name=org.gnome.ServiceName
+Exec=program-providing-servicename
+</code></pre></div></div>
+
+<p>You can also specify the user with which the command will be executed
+using a <code>User=</code> line, and even specify if it’s in relation with a systemd
+service using <code>SystemdService=</code>.</p>
+
+<p>Additionally, if you are creating a full service, it’s a good practice
+to define its interfaces explicitly in the <code>/usr/share/dbus-1/interfaces</code>
+as we previously mentioned.</p>
+
+<p>Now when calling the <code>org.gnome.ServiceName</code>, D-Bus will check to see
+if the service exists already on the bus, if not it will block the
+method call, search for the service in the directory, if it matches,
+start the service as specified to take ownership of the bus name,
+and finally continue with the method call. If there’s no service file,
+an error is returned. It’s possible programmatically to make such call
+asynchronous to avoid blocking.</p>
+
+<p>This is actually a mechanism that systemd can use for service activation
+when the application acquires a name on dbus (Service <code>Type=dbus</code>). For
+example, <code>polkit</code> and <code>wpa_supplicant</code>.  When the dbus daemon is started
+with <code>--systemd-activation</code>, as shown below, then systemd services can
+be started on the fly whenever they are needed. That’s also related to
+<code>SystemdService=</code> we previously mentioned, as both a systemd unit file
+and a dbus daemon service file are required in tandem.</p>
+
+<div><div><pre><code>dbus         498       1  0 Jun05 ?        00:01:41 /usr/bin/dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+vnm          810     795  0 Jun05 ?        00:00:19 /usr/bin/dbus-daemon --session --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+</code></pre></div></div>
+
+<p>And the systemd unit file for <code>polkit</code>.</p>
+
+<div><div><pre><code>[Unit]
+Description=Authorization Manager
+Documentation=man:polkit(8)
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.PolicyKit1
+ExecStart=/usr/lib/polkit-1/polkitd --no-debug
+</code></pre></div></div>
+
+<p>Here’s an exploratory example of service activation.<br>
+Let’s say we found a service file for Cheese (A webcam app) in the
+<code>/service</code> directory that is called <code>org.gnome.Cheese.service</code>.</p>
+
+<p>We have no clue what interfaces and methods it implements because its
+interfaces aren’t described in the <code>/interfaces</code> directory, so we send
+it any message.</p>
+
+<div><div><pre><code>$ dbus-send --session 
+--dest=org.gnome.Cheese 
+/ org.gnome.Cheese.nonexistent
+</code></pre></div></div>
+
+<p>If we now take a look at the processes, we can clearly see it has been
+started by the dbus daemon.</p>
+
+<div><div><pre><code>$ ps -ef | grep cheese
+vnm       514882  514877  0 09:43 pts/21   00:00:00 grep cheese
+</code></pre></div></div>
+
+<p>Cheese probably implements introspect so let’s try to see which methods
+it has.</p>
+
+<div><div><pre><code>$ gdbus introspect --session 
+--dest org.gnome.Cheese 
+--object-path /org/gnome/Cheese | less
+</code></pre></div></div>
+
+<p>We can see that it implements the
+<code>org.freedesktop.Application</code> interface that is described
+<a href="https://specifications.freedesktop.org/desktop-entry-spec/desktop-entry-spec-latest.html#dbus">here</a>,
+but that I couldn’t find the interface description of in
+<code>/usr/share/dbus-1/interfaces/</code>. So let’s try to call one of them, the
+<code>org.freedesktop.Application.Activate</code> seems interesting, it should
+start the application for us.</p>
+
+<div><div><pre><code>$ gdbus call --session --dest org.gnome.Cheese 
+--object-path /org/gnome/Cheese 
+--method org.freedesktop.Application.Activate  '{}'
+</code></pre></div></div>
+
+<p><em>NB</em>: I’m using <code>gdbus</code> instead of <code>dbus-send</code> because <code>dbus-send</code>
+has limitation with complex types such as <code>(a{sv})</code>, a dictionary of
+key with type “string” and value of type “variant”. We’ll explain the
+types in the next section.</p>
+
+<p>And cheese will open.<br>
+So this call is based on pure service activation.</p>
+
+<p>What kind of messages are sent, and what’s up with the <code>type</code> we
+mentioned.</p>
+
+<p>Messages, the unit of data transfer in D-Bus, are composed of header and
+data. The header contains information regarding the sender, receiver,
+and the message type, while the data is the payload of the message.</p>
+
+<p>The D-Bus message type, not to be confused with the type format of the
+data payload, could be either a signal (<code>DBUS_MESSAGE_TYPE_SIGNAL</code>),
+a method call(<code>DBUS_MESSAGE_TYPE_SIGNAL</code>), or an error
+(<code>DBUS_MESSAGE_TYPE_ERROR</code>).</p>
+
+<p>D-Bus is fully typed and type-safe as far as the payload is concerned,
+that means the types are predefined and are checked to see if they fit
+the signatures.</p>
+
+<p>The following types are available:</p>
+
+<div><div><pre><code>&lt;contents&gt;   ::= &lt;item&gt; | &lt;container&gt; [ &lt;item&gt; | &lt;container&gt;...]
+&lt;item&gt;       ::= &lt;type&gt;:&lt;value&gt;
+&lt;container&gt;  ::= &lt;array&gt; | &lt;dict&gt; | &lt;variant&gt;
+&lt;array&gt;      ::= array:&lt;type&gt;:&lt;value&gt;[,&lt;value&gt;...]
+&lt;dict&gt;       ::= dict:&lt;type&gt;:&lt;type&gt;:&lt;key&gt;,&lt;value&gt;[,&lt;key&gt;,&lt;value&gt;...]
+&lt;variant&gt;    ::= variant:&lt;type&gt;:&lt;value&gt;
+&lt;type&gt;       ::= string | int16 | uint16 | int32 | uint32 | int64 | uint64 | double | byte | boolean | objpath
+</code></pre></div></div>
+
+<p>These are what is represented in the previous example with the <code>type=</code>
+in the interface definition. Here are some descriptions.</p>
+
+<div><div><pre><code>b           ::= boolean
+s           ::= string
+i           ::= int
+u           ::= uint
+d           ::= double
+o           ::= object path
+v           ::= variant (could be different types)
+a{keyvalue} ::= dictionary of key-value type
+a(type)     ::= array of value of type
+</code></pre></div></div>
+
+<p>As was said, the actual method of transfer of the information isn’t
+mandated by the protocol, but it can usually be done locally via UNIX
+sockets, pipes, or via TCP/IP.</p>
+
+<p>It wouldn’t be very secure to have anyone on the machine be able to send
+messages to the dbus daemon and do service activation, or call any and
+every method, some of them could be dealing with sensitive data and
+activities. It wouldn’t be very secure either to have this data sent in
+plain text.<br>
+On the transfer side, that is why D-Bus implements a simple protocol
+based on SASL profiles for authenticating one-to-one connections. For
+the authorization, the dbus daemon controls access to interfaces by a
+security system of policies.</p>
+
+<p>The policies are read and represented in XML files that can be
+found in multiple places, including <code>/usr/share/dbus-1/session.conf</code>,
+<code>/usr/share/dbus-1/system.conf/</code>, <code>/usr/share/dbus-1/session.d/*</code>, and
+<code>/usr/share/dbus-1/system.d/*</code>.<br>
+These files mainly control which user can talk to which
+interface. If you are not able to talk with a D-Bus service or get an
+<code>org.freedesktop.DBus.Error.AccessDeniederror</code>, then it’s probably due
+to one of these files.</p>
+
+<p>For example:</p>
+
+<div><div><pre><code><span>&lt;!DOCTYPE busconfig PUBLIC
+ "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd"&gt;</span>
+<span>&lt;busconfig&gt;</span>
+	<span>&lt;policy</span> <span>user=</span><span>"vnm"</span><span>&gt;</span>
+		<span>&lt;allow</span> <span>own=</span><span>"net.nixers"</span><span>/&gt;</span>
+		<span>&lt;allow</span> <span>send_destination=</span><span>"net.nixers"</span><span>/&gt;</span>
+		<span>&lt;allow</span> <span>send_interface=</span><span>"net.nixers.Blog"</span> <span>send_member=</span><span>"GetPosts"</span><span>/&gt;</span>
+	<span>&lt;/policy&gt;</span>
+<span>&lt;/busconfig&gt;</span>
+</code></pre></div></div>
+
+<p>In this example, the user “vnm” can:</p>
+
+<ul>
+  <li>Own the interface <code>net.nixers</code></li>
+  <li>Send messages to the owner of the given service</li>
+  <li>Call <code>GetPosts</code> from interface <code>net.nixers.Blog</code></li>
+</ul>
+
+<p>If services need more granularity when it comes to permission, then
+polkit can be used instead.</p>
+
+<p>There’s a lot more that can be configured in the dbus daemon,
+namely in the configuration files for the session wide daemon in
+<code>/usr/share/dbus-1/session.conf</code>, and the system wide daemon in
+<code>/usr/share/dbus-1/system.conf</code>. Such as the way it listens to
+connections, the limits regarding messages, and where they read other
+files.</p>
+
+<p>So how do we integrate and harness dbus in our client or service programs.</p>
+
+<p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/libdbus.png" alt="libdbus schema"></p>
+
+<p>We do this using libraries, of course, which there are many. The most
+low-level one being <code>libdbus</code>, the reference implementation of the
+specification. However, it’s quite hard to use so people rely on other
+libraries such as GDBus (part of GLib in GNOME), QtDBus (part of Qt so
+KDE too), dbus-java, and sd-bus (which is part of systemd).<br>
+Some of these libraries offer the proxy capability we’ve talked,
+namely manipulating dbus objects as if they were local. They also could
+offer ways to generate classes in the programming language of choice
+by inputting an interface definition file (see <code>gdbus-codegen</code> and
+<code>qdbusxml2cpp</code> for an idea).</p>
+
+<p>Let’s name a few projects that rely on D-Bus.</p>
+
+<ul>
+  <li>KDE: A desktop environment based on Qt</li>
+  <li>GNOME:  A desktop environment based on gtk</li>
+  <li>Systemd:  An init system</li>
+  <li>Bluez:  A project adding Bluetooth support under Linux</li>
+  <li>Pidgin:  An instant messaging client</li>
+  <li>Network-manager:  A daemon to manage network interfaces</li>
+  <li>Modem-manager:  A daemon to provide an API to dial with modems - works with Network-Manager</li>
+  <li>Connman:  Same as Network-Manager but works with Ofono for modem</li>
+  <li>Ofono:  A daemon that exposing features provided by telephony devices such as modems</li>
+</ul>
+
+<p>One thing that is nice about D-Bus is that there is a lot of tooling to
+interact with it, it’s very exploratory.</p>
+
+<p>Here’s a bunch of useful ones:</p>
+
+<ul>
+  <li>dbus-send: send messages to dbus</li>
+  <li>dbus-monitor: monitor all messages</li>
+  <li>gdbus: manipulate dbus with gtk</li>
+  <li>qdbus: manipulate dbus with qt</li>
+  <li>QDBusViewer: exploratory gui</li>
+  <li>D-Feet: exploratory gui</li>
+</ul>
+
+<p>I’ll list some examples.</p>
+
+<p>Monitor all the method calls in the <code>org.freedesktop</code> namespace.</p>
+
+<div><div><pre><code>$ dbus-monitor --session type=method_call 
+interface=org.freedesktop
+</code></pre></div></div>
+
+<p>For instance, we can debug what happens when we use the command line tool
+<code>notify-send(1)</code>.</p>
+
+<p>This is equivalent to this line of <code>gdbus(1)</code>.</p>
+
+<div><div><pre><code>$ gdbus call --session --dest org.freedesktop.Notifications 
+--object-path /org/freedesktop/Notifications 
+--method org.freedesktop.Notifications.Notify 
+my_app_name 42 
+gtk-dialog-info "The Summary" 
+"Here's the body of the notification" '[]' '{}' 5000
+</code></pre></div></div>
+
+<p>Or as we’ve seen, we can use <code>dbus-send(1)</code>, however it has some
+limitations with dictionaries and variant types. Here are some more
+examples of it.</p>
+
+<div><div><pre><code>$ dbus-send --system --print-reply 
+--dest=org.freedesktop.systemd1 
+/org/freedesktop/systemd1/unit/apache2_2eservice 
+org.freedesktop.DBus.Properties.Get 
+string:'org.freedesktop.systemd1.Unit' 
+string:'ActiveState'
+
+$ dbus-send --system --print-reply --type=method_call 
+--dest=org.freedesktop.systemd1 
+/org/freedesktop/systemd1 
+org.freedesktop.systemd1.Manager.GetUnit 
+string:'apache2.service'
+</code></pre></div></div>
+
+<p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/dfeet.png" alt="D-Feet">
+<img src="https://venam.nixers.net/blog/assets/dbus_polkit/qdbusviewer.png" alt="QDBusViewer"></p>
+
+<p>D-Feet and QDBusViewer are GUI that are driven by the introspectability
+of objects. You can also introspect using gbus and qdbus.</p>
+
+<p>Either through calling <code>org.freedesktop.DBus.Introspectable.Introspect</code>.</p>
+
+<p>With <code>gdbus</code>:</p>
+
+<div><div><pre><code>$ gdbus call --session --dest org.freedesktop.Notifications 
+--object-path /org/freedesktop/Notifications 
+--method org.freedesktop.DBus.Introspectable.Introspect
+</code></pre></div></div>
+
+<p>With <code>dbus-send</code>:</p>
+
+<div><div><pre><code>$ dbus-send --session --print-reply 
+--dest=org.freedesktop.Notifications 
+/org/freedesktop/Notifications 
+org.freedesktop.DBus.Introspectable.Introspect
+</code></pre></div></div>
+
+<p>Or by using the introspect feature of the tool, here <code>gdbus</code>, which will
+output it in a fancy colored way:</p>
+
+<div><div><pre><code>$ gdbus introspect --session 
+--dest org.freedesktop.Notifications 
+--object-path /org/freedesktop/Notifications
+</code></pre></div></div>
+
+<p>D-Bus is not without limitations and critics. As we said in the
+introduction, it isn’t meant for high performance IPC, it’s meant for
+control, and not data transfer. So it’s fine to use it to activate a
+chat application, for instance, but not to have a whole media stream
+pass on it.<br>
+D-Bus has also been criticized as being bloated and over-engineered,
+though those claims are often unsubstantiated and only come from online
+rants. It remains that D-Bus is still heavily popular and that there’s
+no replacement that is a real contender.</p>
+
+<p>Now, let’s turn our attention to Polkit.</p>
+
+<p>Polkit, formerly PolicyKit, is a service running on dbus that offers
+clients a way to perform granular system-wide privilege authentication,
+something dbus default policies are not able to do, nor sudo.<br>
+Unlike sudo, that switches the user and grants permission to the whole
+process, polkit delimits distinct actions, categorizes users by group
+or name, and decides whether the action is allowed or not. This is all
+offered system-wide, so that dbus services can query polkit to know if
+clients have privileges or not.<br>
+In polkit parlance, we talk of <code>MECHANISMS</code>, privileged services, that
+offer actions to <code>SUBJECTS</code>, which are unprivileged programs.</p>
+
+<p>The polkit authority is a system daemon, usually dbus service activated,
+named “polkitd”, and running as the polkitd user UID.</p>
+
+<div><div><pre><code>$ ps -ef | grep polkitd
+polkitd   904  1  0 Jun05 ?  00:00:34 /usr/lib/polkit-1/polkitd --no-debug
+</code></pre></div></div>
+
+<p>The privileged services (MECHANISMS) can define a set of actions for which
+authentication is required. If another process wants to access the method
+of such privileged service, maybe through dbus method call, the privilege
+service will query polkit. Polkit will then consult two things, the
+<em>action policy</em> defined by that service and a set of <em>programmatic rules</em>
+that generally apply. If needed, polkit will initiate an authentication
+agent to verify that the user is who they say they are. Finally, polkit
+sends its result back to the privilege service and let it know if the
+user is allowed to perform the action or not.</p>
+
+<p>In summary, the following definitions apply:</p>
+
+<ul>
+  <li>Subject - a user</li>
+  <li>Action - a privileged duty that (generally) requires some
+ authentication.</li>
+  <li>Result - the action to take given a subject/action pair and a set of
+ rules. This may be to continue, to deny, or to prompt for a password.</li>
+  <li>Rule - a piece of logic that maps a subject/action pair to a result.</li>
+</ul>
+
+<p>And they materialize in these files:</p>
+
+<ul>
+  <li><code>/usr/share/polkit-1/actions</code> - Default policies for each action. These
+ tell polkit whether to allow, deny, or prompt for a password.</li>
+  <li><code>/etc/polkit-1/rules.d</code> - User-supplied rules. These are JavaScript
+ scripts.</li>
+  <li><code>/usr/share/polkit-1/rules.d</code> - Distro-supplied rules. Do not change
+ these because they will be overwritten by the next upgrade.</li>
+</ul>
+
+<p>Which can be summarized in this picture:</p>
+
+<p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/polkit-architecture.png" alt="polkit architecture"></p>
+
+<p>Thus, polkit works along a per-session authentication agent, usually
+started by the desktop environment. This is another service that is used
+whenever a user needs to be prompted for a password to prove its identity.<br>
+The polkit package contains a textual authentication agent called
+<code>pkttyagent</code>, which is used as a general fallback but lacks in features. I
+advise anyone that is trying the examples in this post to install a decent
+authentication agent instead.</p>
+
+<p>Here’s a list of popular ones:</p>
+
+<ul>
+  <li><code>lxqt-policykit</code> - which provides <code>/usr/bin/lxqt-policykit-agent</code></li>
+  <li><code>lxsession</code> - which provides <code>/usr/bin/lxpolkit</code></li>
+  <li><code>mate-polkit</code> - which provides <code>/usr/lib/mate-polkit/polkit-mate-authentication-agent-1</code></li>
+  <li><code>polkit-efl</code> - which provides <code>/usr/bin/polkit-efl-authentication-agent-1</code></li>
+  <li><code>polkit-gnome</code> - which provides <code>/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1</code></li>
+  <li><code>polkit-kde-agent</code> - which provides <code>/usr/lib/polkit-kde-authentication-agent-1</code></li>
+  <li><code>ts-polkitagent</code> - which provides <code>/usr/lib/ts-polkitagent</code></li>
+  <li><code>xfce-polkit</code> - which provides <code>/usr/lib/xfce-polkit/xfce-polkit</code></li>
+</ul>
+
+<p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/authenticate.png" alt="Authentication agent"></p>
+
+<p>Services/mechanisms have to define the set of actions for which clients
+require authentication. This is done through defining a policy XML file
+in the <code>/usr/share/polkit-1/actions/</code> directory. The actions are defined
+in a namespaced format, and there can be multiple ones per policy file.<br>
+A simple, <code>grep '&lt;action id' * | less</code> in this directory should give an
+idea of the type of actions that are available. You can also list all
+the installed polkit actions, using the <code>pkaction(1)</code> command.</p>
+
+<p>For example:</p>
+
+<div><div><pre><code>org.xfce.thunar.policy: &lt;action id="org.xfce.thunar"&gt;
+org.freedesktop.policykit.policy:  &lt;action id="org.freedesktop.policykit.exec"&gt;
+</code></pre></div></div>
+
+<p><em>NB</em>: File names aren’t required to be the same as the action id
+namespace.</p>
+
+<p>This file defines metadata information for each action, such as
+the vendor, the vendor URL, the icon name, the message that will be
+displayed when requiring authentication in multiple languages, and
+the description. The important sections in the <code>action</code> element are the
+<code>defaults</code> and <code>annotate</code> elements.</p>
+
+<p>The <code>defaults</code> element is the one that polkit inspects to know if a
+client is authorized or not. It is composed of 3 mandatory sub-elements:
+<code>allow_any</code> for authorization policy that applies to any client,
+<code>allow_inactive</code> for policy that apply to clients in inactive session
+on local console, and <code>allow_active</code> for client in the currently active
+session on local consoles.<br>
+These elements take as value one of the following:</p>
+
+<ul>
+  <li><code>no</code> - Not authorized</li>
+  <li><code>yes</code> - Authorized.</li>
+  <li><code>auth_self</code> - The owner of the current session should authenticate
+ (usually the user that logged in, your user password)</li>
+  <li><code>auth_admin</code> - Authentication by the admin is required (root)</li>
+  <li><code>auth_self_keep</code> - Same as <code>auth_self</code> but the authentication is kept
+ for some time that is defined in polkit configurations.</li>
+  <li><code>auth_admin_keep</code> - Same as <code>auth_admin</code> but also keeps it for some time</li>
+</ul>
+
+<p>The <code>annotate</code> element is used to pass extra key-value
+pair to the action. There can be multiple key-value that are
+passed. Some annotations/key-values are well known, such as the
+<code>org.freedesktop.policykit.exec.path</code> which, if passed to the pkexec
+program that is shipped by default with polkit, will tell it how to
+execute a certain program.<br>
+Another defined annotation is the <code>org.freedesktop.policykit.imply</code>
+which will tell polkit that if a client was authorized for the action
+it should also be authorized for the action in the <code>imply</code> annotation.<br>
+One last interesting annotation is the <code>org.freedesktop.policykit.owner</code>,
+which will let polkitd know who has the right to interrogate it about
+whether other users are currently authorized to do certain actions or not.</p>
+
+<p>Other than policy actions, polkit also offers a rule system that
+is applied every time it needs to resolve authentication. The rules
+are defined in two directories, <code>/etc/polkit-1/rules.d/</code> and
+<code>/usr/share/polkit-1/rules.d/</code>. As users, we normally add custom rules
+to the <code>/etc/</code> directory and leave the <code>/usr/share/</code> for distro packages
+rules.<br>
+Rules within these files are defined in javascript and come with a preset
+of helper methods that live under the <code>polkit</code> object.</p>
+
+<p>The <code>polkit</code> javascript object comes with the following methods, which
+are self-explanatory.</p>
+
+<ul>
+  <li><code>void addRule( polkit.Result function(action, subject) {...});</code></li>
+  <li><code>void addAdminRule( string[] function(action, subject) {...});</code> called
+ when administrator authentication is required</li>
+  <li><code>void log( string message);</code></li>
+  <li><code>string spawn( string[] argv);</code></li>
+</ul>
+
+<p>The <code>polkit.Result</code> object is defined as follows:</p>
+
+<div><div><pre><code>polkit.Result = {
+    NO              : "no",
+    YES             : "yes",
+    AUTH_SELF       : "auth_self",
+    AUTH_SELF_KEEP  : "auth_self_keep",
+    AUTH_ADMIN      : "auth_admin",
+    AUTH_ADMIN_KEEP : "auth_admin_keep",
+    NOT_HANDLED     : null
+};
+</code></pre></div></div>
+
+<p>Note that the rule files are processed in alphabetical order, and thus
+if a rule is processed before another and returns any value other than
+<code>polkit.Result.NOT_HANDLED</code>, for example <code>polkit.Result.YES</code>, then
+polkit won’t bother continuing processing the next files. Thus, file
+name convention does matter.</p>
+
+<p>The functions <code>polkit.addRule</code>, and <code>polkit.addAdminRule</code>, have the same
+arguments, namely an action and a subject. Respectively being the <code>action</code>
+being requested, which has an <code>id</code> attribute, and a <code>lookup()</code> method to
+fetch annotations values, and the <code>subject</code> which has as attributes the
+<code>pid</code>, <code>user</code>, <code>groups</code>, <code>seat</code>, <code>session</code>, etc, and methods such as
+<code>isInGroup</code>, and <code>isInNetGroup</code>.</p>
+
+<p>Here are some examples taken from the official documentation:</p>
+
+<p>Log the action and subject whenever the action
+<code>org.freedesktop.policykit.exec</code> is requested.</p>
+
+<div><div><pre><code>polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.policykit.exec") {
+        polkit.log("action=" + action);
+        polkit.log("subject=" + subject);
+    }
+});
+</code></pre></div></div>
+
+<p>Allow all users in the admin group to perform user administration without
+changing policy for other users.</p>
+
+<div><div><pre><code>polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.accounts.user-administration" &amp;&amp;
+        subject.isInGroup("admin")) {
+        return polkit.Result.YES;
+    }
+});
+</code></pre></div></div>
+
+<p>Define administrative users to be the users in the wheel group:</p>
+
+<div><div><pre><code>polkit.addAdminRule(function(action, subject) {
+    return ["unix-group:wheel"];
+});
+</code></pre></div></div>
+
+<p>Run an external helper to determine if the current user may reboot the system:</p>
+
+<div><div><pre><code>polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.login1.reboot") == 0) {
+        try {
+            // user-may-reboot exits with success (exit code 0)
+            // only if the passed username is authorized
+            polkit.spawn(["/opt/company/bin/user-may-reboot",
+                          subject.user]);
+            return polkit.Result.YES;
+        } catch (error) {
+            // Nope, but do allow admin authentication
+            return polkit.Result.AUTH_ADMIN;
+        }
+    }
+});
+</code></pre></div></div>
+
+<p>The following example shows how the authorization decision can depend
+on variables passed by the pkexec(1) mechanism:</p>
+
+<div><div><pre><code>polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.policykit.exec" &amp;&amp;
+        action.lookup("program") == "/usr/bin/cat") {
+        return polkit.Result.AUTH_ADMIN;
+    }
+});
+</code></pre></div></div>
+
+<p>Keep in mind that polkit will track changes in both the policy and
+rules directories, so there’s no need to worry about restarting polkit,
+changes will appear immediately.</p>
+
+<p>We’ve mentioned a tool called <code>pkexec(1)</code> that comes pre-installed along
+polkit. This program lets you execute a command as another user, by
+default executing it as root. It is a sort of <code>sudo</code> replacement but that
+may appear confusing to most users who have no idea about polkit. However,
+the integration with authentication agent is quite nice.</p>
+
+<p>So how do we integrate and harness polkit in our subject and mechanism
+software. We do this using libraries, of course, which there is are many
+to integrate with different desktop environments.<br>
+The <code>libpolkit-agent-1</code>, or the <code>libpolkit-gobject-1</code>
+(gtk), libraries are used by the mechanisms, and this is
+most of what is needed. The portion of code that requires
+authentication can be wrapped with a check on polkit.<br>
+For instance, the
+<a href="https://www.freedesktop.org/software/polkit/docs/latest/PolkitAuthority.html#polkit-authority-check-authorization">polkit_authority_check_authorization()</a>
+is used to check whether a subject is authorized.</p>
+
+<p>As for writing an
+authentication agent, it will have to implement the <a href="https://www.freedesktop.org/software/polkit/docs/latest/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html#eggdbus-method-org.freedesktop.PolicyKit1.Authority.RegisterAuthenticationAgent">registration
+methods</a>
+to be able to receive requests from polkit.</p>
+
+<p>Remember, polkit is a dbus service, and thus all <a href="https://www.freedesktop.org/software/polkit/docs/latest/ref-dbus-api.html">its interfaces are well
+known</a>
+and can be introspected. That means that you can possibly interact with
+it directly through dbus instead of using a helper library.</p>
+
+<p>Polkit also offers some excellent manpages that are extremely useful,
+be sure to check <code>polkit(8)</code>, <code>polkitd(8)</code>, <code>pkcheck(1)</code>, <code>pkaction(1)</code>,
+<code>pkexec(1)</code>.</p>
+
+<p>The following tools are of help:</p>
+
+<ul>
+  <li><code>polkit-explorer</code> or <code>polkitex</code> - a GUI to inspect policy files</li>
+  <li><a href="https://github.com/papajoker/pkcreate/blob/master/pkcreate">pkcreate</a> -
+ a WIP tool to easily create policy files, but it seems it is lacking</li>
+  <li><code>pkcheck</code> - Check whether a subject has privileges or not</li>
+  <li><code>pkexec</code> - Execute a command as another user</li>
+</ul>
+
+<p>Let’s test through some examples.</p>
+
+<p>First <code>pkaction(1)</code>, to query the policy file.</p>
+
+<div><div><pre><code>$ pkaction -a org.xfce.thunar -v
+
+org.xfce.thunar:
+  description:       Run Thunar as root
+  message:           Authentication is required to run Thunar as root.
+  vendor:            Thunar
+  vendor_url:        https://xfce.org/
+  icon:              system-file-manager
+  implicit any:      auth_self_keep
+  implicit inactive: auth_self_keep
+  implicit active:   auth_self_keep
+  annotation:        org.freedesktop.policykit.exec.path -&gt; /usr/bin/thunar
+  annotation:        org.freedesktop.policykit.exec.allow_gui -&gt; true
+</code></pre></div></div>
+
+<p>Compared to <code>polkitex</code>:</p>
+
+<p><img src="https://venam.nixers.net/blog/assets/dbus_polkit/polkitex.png" alt="freedesktop logo"></p>
+
+<p>We can get the current shell PID.</p>
+
+<div><div><pre><code>$ ps
+    PID TTY          TIME CMD
+ 421622 pts/21   00:00:00 zsh
+ 421624 pts/21   00:00:00 ps
+</code></pre></div></div>
+
+<p>And then give ourselves temporary privileges to
+<code>org.freedesktop.systemd1.manage-units</code> permission.</p>
+
+<div><div><pre><code>$ pkcheck --action-id 'org.freedesktop.systemd1.manage-units' --process 421622 -u
+$ pkcheck --list-temp
+authorization id: tmpauthz10
+action:           org.freedesktop.systemd1.manage-units
+subject:          unix-process:421622:195039910 (zsh)
+obtained:         26 sec ago (Sun Jun 28 10:53:39 2020)
+expires:          4 min 33 sec from now (Sun Jun 28 10:58:38 2020)
+</code></pre></div></div>
+
+<p>As you can see, if the <code>auth_admin_keep</code> or <code>auth_self_keep</code> are set, the
+authorization will be kept for a while and can be listed using <code>pkcheck</code>.</p>
+
+<p>You can try to exec a process as another user, just like sudo:</p>
+
+
+
+<p>If you want to override the currently running authentication agent, you
+can test having <code>pkttyagent</code> running in another terminal passing it the
+<code>-p</code> argument for the process it will listen to.</p>
+
+<div><div><pre><code># terminal 1
+$ pkttyagent -p 423619
+# terminal 2
+$ pkcheck --action-id 'org.xfce.thunar' --process 423619 -u
+# will display in terminal 1
+polkit.temporary_authorization_id=tmpauthz13
+polkit.retains_authorization_after_challenge=true
+==== AUTHENTICATING FOR org.xfce.thunar ====
+Authentication is required to run Thunar as root.
+Authenticating as: vnm
+Password: 
+==== AUTHENTICATION COMPLETE ====
+</code></pre></div></div>
+
+<p>So this is it for polkit, but what’s the deal with <code>consolekit</code> and
+<code>systemd logind</code>, and what’s the relation with polkit.</p>
+
+<p>Remember we’ve talked about sessions when discussing the <code>&lt;default&gt;</code>
+element of polkit policy files, this is where these two come in. Let’s
+quote again:</p>
+
+<ul>
+  <li><code>auth_self</code> - The owner of the current session should authenticate
+ (usually the user that logged in, your user password)</li>
+  <li><code>allow_active</code> - for client in the currently active session on local
+ consoles</li>
+</ul>
+
+<p>The two programs <code>consolekit</code> and <code>systemd logind</code> have as purpose
+to be services on dbus that can be interrogated about the status of
+the current session, its users, its seats, its login. It can also be
+used to manage the session with methods for shutting down, suspending,
+restarting, and hibernating the machine.</p>
+
+<div><div><pre><code>$ loginctl show-session $XDG_SESSION_ID
+Id=2
+Name=vnm
+Timestamp=Fri 2020-06-05 21:06:43 EEST
+[...snip...]
+Remote=no
+Active=yes
+State=active
+
+# in another terminal we monitor using
+$ dbus-monitor --system
+# and the output
+method call time=1593360621.762509 sender=:1.59516 
+-&gt; destination=org.freedesktop.login1 serial=2 
+path=/org/freedesktop/login1; 
+interface=org.freedesktop.login1.Manager; 
+member=GetSession
+
+method call time=1593360621.763069 sender=:1.59516 
+-&gt; destination=org.freedesktop.login1 serial=3 
+path=/org/freedesktop/login1/session/_32; 
+interface=org.freedesktop.DBus.Properties; 
+member=GetAll
+</code></pre></div></div>
+
+<p>As can be seen, this is done through the <code>org.freedesktop.login1.Manager</code>
+bus name.</p>
+
+<p>And so, polkit uses data gathered from <code>systemd logind</code> or <code>consolekit</code> to
+create the 3 domain rules we’ve seen, the <code>allow_any</code>, <code>allow_inactive</code>,
+and <code>allow_active</code>. This is where these two interact with one another.<br>
+The following condition applies for the returned value of <code>systemd
+logind</code>:</p>
+
+<ul>
+  <li><code>allow_any</code> mean any session (even remote sessions)</li>
+  <li><code>allow_inactive</code> means <code>Remote == false and Active == false</code></li>
+  <li><code>allow_active</code> means <code>Remote == false and Active == true</code></li>
+</ul>
+
+<pre>
+
+</pre>
+
+<p>In conclusion, all these technologies, <code>D-Bus</code>, <code>polkit</code>, and <code>systemd
+logind</code>, are inherently intertwined, and this is as much a positive aspect
+as it is a fragile point of failure. They each complete one another but
+if one goes down, there could be issues echoing all across the system.<br>
+I hope this post has removed the mystification around
+them and helped anyone to understand what they stand for:
+Yet another glue in the desktop environments, similar to <a href="https://venam.nixers.net/blog/unix/2019/01/07/win-automation.html">this
+post</a> but solving
+another problem.</p>
+
+<hr>
+
+<pre>
+
+
+
+</pre>
+
+<p>References:</p>
+
+<ul>
+  <li><a href="https://dbus.freedesktop.org/doc/dbus-tutorial.html">https://dbus.freedesktop.org/doc/dbus-tutorial.html</a></li>
+  <li><a href="https://linoxide.com/how-tos/d-bus-ipc-mechanism-linux/">https://linoxide.com/how-tos/d-bus-ipc-mechanism-linux/</a></li>
+  <li><a href="https://en.wikipedia.org/wiki/D-Bus">https://en.wikipedia.org/wiki/D-Bus</a></li>
+  <li><a href="https://en.wikipedia.org/wiki/Enterprise_service_bus">https://en.wikipedia.org/wiki/Enterprise_service_bus</a></li>
+  <li><a href="https://blog.fpmurphy.com/2013/05/exploring-systemd-d-bus-interface.html">https://blog.fpmurphy.com/2013/05/exploring-systemd-d-bus-interface.html</a></li>
+  <li><a href="https://wiki.freedesktop.org/www/Software/systemd/dbus/">https://wiki.freedesktop.org/www/Software/systemd/dbus/</a></li>
+  <li><a href="https://www.linuxjournal.com/article/10455">https://www.linuxjournal.com/article/10455</a></li>
+  <li><a href="https://www.freedesktop.org/wiki/Software/DBusBindings/">https://www.freedesktop.org/wiki/Software/DBusBindings/</a></li>
+  <li><a href="https://www.softprayog.in/programming/d-bus-tutorial">https://www.softprayog.in/programming/d-bus-tutorial</a></li>
+  <li><a href="https://bootlin.com/pub/conferences/2016/meetup/dbus/josserand-dbus-meetup.pdf">https://bootlin.com/pub/conferences/2016/meetup/dbus/josserand-dbus-meetup.pdf</a></li>
+  <li><a href="https://www.linuxjournal.com/article/7744">https://www.linuxjournal.com/article/7744</a></li>
+  <li><a href="https://techbase.kde.org/Development/Tutorials/D-Bus/Introduction">https://techbase.kde.org/Development/Tutorials/D-Bus/Introduction</a></li>
+  <li><a href="https://stackoverflow.com/questions/11170118/dbus-systembus-policies">https://stackoverflow.com/questions/11170118/dbus-systembus-policies</a></li>
+  <li><a href="https://dbus.freedesktop.org/doc/dbus-daemon.1.html">https://dbus.freedesktop.org/doc/dbus-daemon.1.html</a></li>
+  <li><a href="https://en.wikipedia.org/wiki/Middleware">https://en.wikipedia.org/wiki/Middleware</a></li>
+  <li><a href="https://dvdhrm.github.io/rethinking-the-dbus-message-bus/">https://dvdhrm.github.io/rethinking-the-dbus-message-bus/</a></li>
+  <li><a href="https://en.wikipedia.org/wiki/Polkit">https://en.wikipedia.org/wiki/Polkit</a></li>
+  <li><a href="https://www.freedesktop.org/software/polkit/docs/latest/polkit.8.html">https://www.freedesktop.org/software/polkit/docs/latest/polkit.8.html</a></li>
+  <li><a href="https://www.systutorials.com/docs/linux/man/8-polkit/">https://www.systutorials.com/docs/linux/man/8-polkit/</a></li>
+  <li><a href="https://github.com/linuxcsuf/linuxcsuf/wiki/Understanding-polkit">https://github.com/linuxcsuf/linuxcsuf/wiki/Understanding-polkit</a></li>
+  <li><a href="https://wiki.archlinux.org/index.php/Polkit">https://wiki.archlinux.org/index.php/Polkit</a></li>
+  <li><a href="https://www.systutorials.com/docs/linux/man/8-pklocalauthority/">https://www.systutorials.com/docs/linux/man/8-pklocalauthority/</a></li>
+  <li><a href="https://techbase.kde.org/Development/Tutorials/PolicyKit/Helper_HowTo">https://techbase.kde.org/Development/Tutorials/PolicyKit/Helper_HowTo</a></li>
+  <li><a href="http://raphael.slinckx.net/blog/documents/dbus-tutorial">http://raphael.slinckx.net/blog/documents/dbus-tutorial</a></li>
+  <li><a href="https://freedesktop.org/wiki/Specifications/">https://freedesktop.org/wiki/Specifications/</a></li>
+  <li><a href="https://freedesktop.org/wiki/Specifications/file-manager-interface/">https://freedesktop.org/wiki/Specifications/file-manager-interface/</a></li>
+  <li><a href="https://systemd.io/PASSWORD_AGENTS/">https://systemd.io/PASSWORD_AGENTS/</a></li>
+  <li><a href="https://wiki.archlinux.org/index.php/ConsoleKit">https://wiki.archlinux.org/index.php/ConsoleKit</a></li>
+  <li><a href="https://www.archlinux.org/news/consolekit-replaced-by-logind/">https://www.archlinux.org/news/consolekit-replaced-by-logind/</a></li>
+  <li><a href="https://wiki.archlinux.org/index.php/Display_manager#Using_systemd-logind">https://wiki.archlinux.org/index.php/Display_manager#Using_systemd-logind</a></li>
+</ul>
+
+
+	
+<br>
+<hr>
+
+<p>
+If you want to have a more in depth discussion I'm always available by <a href="https://venam.nixers.net/blog/about.html">email or irc</a>.
+We can discuss and argue about what you like and dislike, about new ideas to consider, opinions, etc..<br>
+If you don't feel like "having a discussion" or are intimidated by emails
+then you can simply say something small in the comment sections below
+and/or share it with your friends.
+</p>
+<br>
+
+
+
+<section id="isso-thread"><h4>No Comments Yet</h4><div><div><div><p>Type Comment Here (at least 3 chars)</p></div><section></section></div></div></section>
+
+
+  </article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
