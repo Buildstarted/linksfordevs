@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Custom validation logic on client AND server with Blazor? - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Custom validation logic on client AND server with Blazor? - linksfor.dev(s)"/>
+    <meta property="article:author" content="Jon Hilton"/>
+    <meta property="og:description" content="It would be pretty handy if you could write one validator and have your validation rules run seamlessly on both client and server..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://jonhilton.net/blazor-client-server-validation-with-fluentvalidation/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Custom validation logic on client AND server with Blazor?</title>
+<div class="readable">
+        <h1>Custom validation logic on client AND server with Blazor?</h1>
+            <div>by Jon Hilton</div>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 07 Jul 2020</div>
+        <p><a href="https://jonhilton.net/blazor-client-server-validation-with-fluentvalidation/">https://jonhilton.net/blazor-client-server-validation-with-fluentvalidation/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section><p>Blazor has some pretty handy built-in support for validating your forms.</p><p>You can use the <code>DataAnnotations</code> validator and decorate your model classes with attributes like <code>[Required]</code> or go a step further and wire up more involved validation rules using tools like <code>FluentValidation</code>.</p><p>For the most part this “just works”…</p><p>But…</p><p>How about those times when you need something a touch more complicated, like checking if an email address is already in use?</p><p>Turns out there is a way to create one set of validation rules which can run seamslessly on both the client and server…</p><p>Yep, you can have your cake AND eat it too :-)</p><h2 id="instant-validation---the-requirement">Instant validation - The requirement</h2><p>Let’s say you want to include an email input on your form and check, as soon as the user enters their email, if that email is already in use.</p><p>This sounds like a good way to catch any problems early and save users wasting time (perhaps they’ve already signed up and simply forgot they had an account, I mean we’ve all done it!)</p><section><p><strong>Security is complicated…</strong></p><p>One thing to watch here is that anything which indicates whether an account already exists can be exploited.</p><p>If someone’s trying to hack your site and has lists of emails/passwords, they can hammer your signup form with all the email addresses they have, until they find one which warns them that user already exists.</p><p>From here they’re free to try your login form with all the accounts they know definitely exist, focusing just on the password part of the puzzle!</p><p>It’s beyond the scope of this article, but limiting how many times someone can run this check in a given timeframe could help mitigate this and, as always, it’s a question of judgement how much of a risk this actually is for your site…</p></section><p>The good news is, it’s <strong>entirely possible to execute instant validation rules with Blazor</strong>, using the in-built validator support and the extremely handy FluentValidation library.</p><p>The challenging part is figuring out how to write a validator which checks the database (for an existing user with that email) which will work on the <strong>client</strong> (when Blazor WASM is running in the browser) but also on the <strong>server</strong> (so even if a duplicate somehow gets past client-side validation it still gets caught by your API).</p><p>Ideally we’d want to write one validator and have it run everywhere.</p><p>So, can it be done?</p><p>First up, here’s the architecture of a standard Blazor WASM application.</p><p><img src="https://jonhilton.net/img/BlazorWASMByExample/shared-blazor-models.png" alt="Blazor client and server project can share models" title="Blazor client and server apps sharing the same models from a .shared project"></p><p><img src="file:///D:/Code/jonhilton.net/jonhilton.net/static/img/BlazorWASMByExample/shared-blazor-models.png" alt=""></p><p>One of Blazor’s compelling advantages is that you can create C# classes in your application’s shared project and use them in both your Blazor WASM project (running in the browser) and the API project (running on the server).</p><p>If you add a reference to <code>FluentValidation</code> in your <strong>.Shared</strong> projects, you can also create validators for your shared models. Here’s a simple example.</p><p><strong>Account\SignUp.cs</strong></p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>SignUp</span>
+{
+    <span>public</span> <span>string</span> Email { <span>get</span>; <span>set</span>; }
+    <span>public</span> <span>bool</span> SubscribeToNewsletter { <span>get</span>; <span>set</span>; }
+}
+
+<span>public</span> <span>class</span> <span>SignUpValidator</span> : AbstractValidator&lt;SignUp&gt;
+{
+    <span>public</span> SignUpValidator()
+    {
+        RuleFor(x =&gt; x.Email).NotEmpty();
+    }
+}
+</code></pre></div><p>We have a simple C# model to represent the SignUp form, and a validator.</p><p>The validator comprises a single rule; that the value of email cannot be null or empty (and is therefore required).</p><p>Now we have a rule, but how do we make Blazor use it?</p><p>For this we can use Chris Sainty’s exceptionally useful <a href="https://github.com/Blazored/FluentValidation">Blazored.FluentValidation</a> package…</p><p>Over in the <strong>.Client</strong> project, if we add a reference to the package…</p><div><pre><code data-lang="powershell"><span>Install-Package</span> Blazored.FluentValidation
+</code></pre></div><p>.. we’re able to use the <code>&lt;FluentValidationValidator /&gt;</code> component in our forms.</p><p><strong>Markup</strong></p><div><pre><code data-lang="html">@using SharedValidationExample.Shared.Account
+@using Blazored.FluentValidation
+
+&lt;<span>EditForm</span> <span>Model</span><span>=</span><span>"SignUpModel"</span> <span>OnValidSubmit</span><span>=</span><span>"HandleValidSubmit"</span>&gt;
+    &lt;<span>FluentValidationValidator</span> /&gt;
+    
+    &lt;<span>label</span> <span>for</span><span>=</span><span>"email"</span>&gt;Your Email:&lt;/<span>label</span>&gt;
+    &lt;<span>InputText</span> <span>id</span><span>=</span><span>"email"</span> @<span>bind-Value</span><span>=</span><span>"SignUpModel.Email"</span>/&gt;
+    &lt;<span>button</span> <span>type</span><span>=</span><span>"submit"</span>&gt;Register&lt;/<span>button</span>&gt;
+    
+    &lt;<span>ValidationSummary</span> /&gt;
+&lt;/<span>EditForm</span>&gt;
+</code></pre></div><p><strong>Code</strong></p><div><pre><code data-lang="csharp">@code
+{
+    <span>protected</span> SignUp SignUpModel { <span>get</span>; <span>set</span>; } = <span>new</span> SignUp();
+
+    <span>protected</span> <span>void</span> HandleValidSubmit()
+    {
+        Console.WriteLine(<span>"Valid submit!"</span>);
+    }
+}
+</code></pre></div><p>Run this in the browser now and you’ll see errors if you try to leave the email blank.</p><p><img src="https://jonhilton.net/img/BlazorWASMByExample/email-empty.png" alt="Validation error because email is empty" title="Form with empty email input so validation error shown indicating that Email must not be empty"></p><h2 id="but-what-about-that-realtime-duplicate-email-checking">But what about that “realtime” duplicate email checking?</h2><p>Now for our next trick; implementing a rule to check if the entered email address is unique.</p><p>The challenging part here is that this rule could run on either the client or the server.</p><p><img src="https://jonhilton.net/img/BlazorWASMByExample/shared-validator.png" alt="Shared validator used in client and server projects" title="Validator in shared .dll file is shipped to both client and server apps"></p><p>Generally speaking, validation in Blazor WASM runs in the browser.</p><p>When someone launches your application, your validation rules are shipped to their browser via a .dll file.</p><p>Your Blazor application (running in the browser) then applies these rules to values entered into the form.</p><p>This works very nicely most of the time because your users get near-instant validation errors as they’re entering data into a form.</p><p>However, because the rules are applied in the browser we have no direct access to the database.</p><p>If we want to check for duplicate email addresses in the database our only realistic option is to call our API and let it do the checking for us.</p><p>This will provide fast feedback to our users but we should still check the validation rules again at the point of accepting the submitted form, as client-side validation is pretty weak and can’t be trusted!</p><section><p><strong>Better to be safe…</strong></p><p>Client-side validation should catch any issues but it’s generally bad practice to rely on it, for a few reasons including:</p><ul><li>The request may have been tampered with</li><li>Something may have changed whilst the screen was open on the user’s computer (before they eventually submitted the form)</li><li>Someone may be attempting to hack your API, in which case client-side validation is almost certainly useless!</li></ul></section><p>So how can we support both “modes” of running our validation rules?</p><p><img src="https://jonhilton.net/img/BlazorWASMByExample/2020-07-06-15-21-32.png" alt=""></p><ol><li>Near-instant checking for duplicates as the user interacts with our form (client)</li><li>Another check of the rules when the form is submitted (server)</li></ol><p>Turns out we need an interface with two implementations (thank you <a href="https://chrissainty.com/">Chris Sainty</a> for suggesting this approach!)</p><p>Here’s a modified version of the <code>SignUpValidator</code> which supports checking for duplicate emails.</p><p><strong>.Shared\Account\SignUp.cs</strong></p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>SignUpValidator</span> : AbstractValidator&lt;SignUp&gt;
+{
+    <span>private</span> <span>readonly</span> IValidateEmail _validateEmail;
+
+    <span>public</span> SignUpValidator(IValidateEmail validateEmail)
+    {
+        _validateEmail = validateEmail;
+
+        RuleFor(x =&gt; x.Email)
+            .NotEmpty()
+            .MustAsync(BeUnique).WithMessage(<span>"Email already registered"</span>);
+    }
+
+    <span>private</span> <span>async</span> Task&lt;<span>bool</span>&gt; BeUnique(<span>string</span> email, CancellationToken token)
+    {
+        <span>return</span> <span>await</span> _validateEmail.CheckIfUnique(email, token);
+    }
+}
+</code></pre></div><p>Now <code>SignUpValidator</code> takes an instance of <code>IValidateEmail</code> and calls it (via the <code>BeUnique</code> method) to check the entered email address.</p><p>The <code>IValidateEmail</code> interface is straightforward enough.</p><p><strong>IValidateEmail.cs</strong></p><div><pre><code data-lang="csharp"><span>public</span> <span>interface</span> IValidateEmail
+{
+    Task&lt;<span>bool</span>&gt; CheckIfUnique(<span>string</span> email, CancellationToken cancellationToken);
+}
+</code></pre></div><p>It should return <code>true</code> if the email is unique or <code>false</code> if it’s a duplicate (email already exists in the database).</p><h3 id="check-on-the-client">Check on the client</h3><p>Now we need to create and wire up our two implementations of <code>IValidateEmail</code>.</p><p>First, on the client we’ll need an implementation of <code>IValidateEmail</code> which performs the check via an HTTP call to the API.</p><p>This implementation needs to live in the <strong>.Client</strong> project.</p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>ValidateEmail</span> : IValidateEmail
+{
+    <span>private</span> <span>readonly</span> HttpClient _http;
+
+    <span>public</span> ValidateEmail(HttpClient http)
+    {
+        _http = http;
+    }
+    
+    <span>public</span> <span>async</span> Task&lt;<span>bool</span>&gt; CheckIfUnique(<span>string</span> email, CancellationToken token)
+    {
+        <span>var</span> requestUri = <span>$"account?email={email}"</span>;
+        
+        <span>var</span> existingAccounts = <span>await</span> 
+            _http.GetFromJsonAsync&lt;Search.Model&gt;(requestUri, token);
+        
+        <span>return</span> !existingAccounts.Accounts.Any();
+    }
+}
+</code></pre></div><p>This makes a simple HTTP Get to our API to search for any existing accounts (by email address) then returns a bool indicating whether we found any or not.</p><p>Before we can test this we need to tell Blazor to use this implementation when asked for an instance of <code>IValidateEmail</code>. We can set that up in <strong>Program.cs</strong>, in the <code>Main</code> method.</p><div><pre><code data-lang="csharp">builder.Services.AddTransient&lt;IValidateEmail, ValidateEmail&gt;();
+</code></pre></div><p>Now (and assuming there is something running at <strong>/account</strong> to do the actual checking) we’ll get validation errors when we enter an email which already exists.</p><p><img src="https://jonhilton.net/img/BlazorWASMByExample/existingemail.gif" alt="Entering existing email shows near-instant validation error" title="A value is entered into the email field which already exists so a validation error is shown almost instantly"></p><p>Pretty neat huh?</p><p>When the Email input loses focus:</p><ul><li>The validation rule is checked</li><li><code>IValidateEmail.CheckIfUnique()</code> is invoked</li><li>An HTTP GET is made to the API to see if the email is a duplicate</li><li>Blazor shows errors against the Email input if the email already exists</li></ul><h3 id="check-on-the-server">Check on the server</h3><p>Almost done, but now we need the same validation rules to run on the server.</p><p>At the moment we’d run into errors because the server has no corresponding implementation of <code>IValidateEmail</code>.</p><p>Let’s create one of those now in the <strong>.Server</strong> project.</p><div><pre><code data-lang="csharp"><span>public</span> <span>class</span> <span>ValidateEmail</span> : IValidateEmail
+{
+    <span>private</span> <span>readonly</span> FakeSearch _fakeSearch;
+
+    <span>public</span> ValidateEmail(FakeSearch fakeSearch)
+    {
+        _fakeSearch = fakeSearch;
+    }
+    
+    <span>public</span> <span>async</span> Task&lt;<span>bool</span>&gt; CheckIfUnique(<span>string</span> email, CancellationToken cancellationToken)
+    {
+        <span>var</span> existingAccounts = _fakeSearch.Handle(<span>new</span> Search.Query {Email = email});
+        <span>return</span> !existingAccounts.Accounts.Any();
+    }
+}
+</code></pre></div><p>This actually calls the exact same <code>FakeSearch</code> class as our API, so whether the client invokes this via the API or the server invokes it the same logic is executed in both cases.</p><p>We can wire this up in the <code>ConfigureServices</code> method in <strong>Startup.cs</strong> (in the <strong>.Server</strong> project).</p><div><pre><code data-lang="csharp">services.AddScoped&lt;IValidateEmail, ValidateEmail&gt;();
+</code></pre></div><p>And finally, we just need to run these validation rules when we’re actually attempting to create the account.</p><p>Happily FluentValidation makes this nice and simple.</p><p>So long as we reference the <code>FluentValidation.AspNetCore</code> package in our <strong>.Server</strong> project, we can configure our application to use it in <strong>Startup.cs</strong>.</p><div><pre><code data-lang="csharp"> services.AddControllersWithViews()
+         .AddFluentValidation(fv =&gt; fv.RegisterValidatorsFromAssemblyContaining&lt;SignUpValidator&gt;());
+</code></pre></div><p>We’ve told FluentValidator to look for validators in the assembly containing our <code>SignUpValidator</code>.</p><p>Now we can check <code>ModelState</code> in our controller actions and be confident that <code>FluentValidation</code> has our back!</p><div><pre><code data-lang="csharp"><span>[HttpPost]</span>
+<span>public</span> <span>async</span> Task&lt;IActionResult&gt; Create([FromBody] SignUp signUpRequest)
+{
+    <span>if</span> (!ModelState.IsValid)
+        <span>return</span> BadRequest();
+    
+    <span>// save here
+</span><span></span>    
+    <span>return</span> Ok();
+}
+</code></pre></div><p>Note we’re using the same <code>SignUp</code> model here as we were in the client.</p><p>That’s the magic, because now Fluent Validation will validate the incoming <code>signUpRequest</code> model against the very same validator we used in the browser.</p><p>It will locate the (server-side) instance of <code>ValidateEmail</code> and use that to check that the email is still OK.</p><p>Any issues with validation and we’ll get errors on <code>ModelState</code> and can return a <code>BadRequest</code> status code, otherwise all is well so we can go ahead and create the account in the database.</p><p>Finally, for reference, here’s the code which makes the HTTP call to create the new account (in our component on the client).</p><div><pre><code data-lang="csharp"><span>protected</span> <span>async</span> Task HandleValidSubmit()
+{    
+    <span>var</span> result = <span>await</span> Http.PostAsJsonAsync(<span>"account"</span>, SignUpModel);
+    <span>if</span> (result.StatusCode == HttpStatusCode.BadRequest)
+    {
+        <span>// oops, server-side validation found an issue...
+</span><span></span>    }
+}
+</code></pre></div><h2 id="in-summary">In Summary</h2><p>You CAN validate your models on both the client and server using Fluent Validation.</p><p>If you need to employ “dynamic” rules (such as checking whether the email has already been used) you can use an interface in the validator.</p><p>This leaves you free to implement two versions of the custom validation logic, one which operates via HTTP calls (on the client) and another which executes the query directly (on the server).</p><p>Fluent Validation can then operate in the browser to provide near-instant feedback to the user, and again on the server when the request is eventually posted to the API (just to ensure everything is still valid).</p><p>Check out the <a href="https://github.com/jonhilt/SharedBlazorValidation">source code</a> for this example.</p><p>Many thanks again to <a href="https://chrissainty.com/">Chris Sainty</a> for suggesting this approach in the first place. You should definitely check out his blog too!</p><h2>Next up</h2><span><a href="https://jonhilton.net/build-your-own-re-usable-blazor-components/">Go faster with your own re-usable Blazor components</a></span><p>You can easily avoid re-inventing the same wheels over and over when you break your UI down into re-usable components</p><span><a href="https://jonhilton.net/blazor-state-management/">3+1 ways to manage state in your Blazor application</a></span><p>As soon as you have more than one Blazor component you need to think how you’ll communicate between them.</p><span><a href="https://jonhilton.net/blazor-wasm-calling-a-api/">How easy is it to build a Marvel search engine with Blazor?</a></span><p>Blazor WASM is here, but just how quickly can you go from dotnet new to something useful up and running in the browser?</p></section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
