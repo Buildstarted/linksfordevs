@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Martin Bj&#xF6;rkstr&#xF6;m - gRPC Server Reflection in the .NET world - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Martin Bj&#xF6;rkstr&#xF6;m - gRPC Server Reflection in the .NET world - linksfor.dev(s)"/>
+    <meta property="og:description" content="Driving Digital Transformation on Serverless Containers..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://martinbjorkstrom.com/posts/2020-07-08-grpc-reflection-in-net"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+	<div class="devring" style="background: #222">
+		<div class="grid">
+			<div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+				<span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+				<a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+				<a href="https://devring.club/random" class="devring-random">Random</a>
+				<a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+			</div>
+		</div>
+	</div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Martin Bj&#xF6;rkstr&#xF6;m - gRPC Server Reflection in the .NET world</title>
+<div class="readable">
+        <h1>Martin Bj&#xF6;rkstr&#xF6;m - gRPC Server Reflection in the .NET world</h1>
+            <div>Reading time: 8-11 minutes</div>
+        <div>Posted here: 08 Jul 2020</div>
+        <p><a href="https://martinbjorkstrom.com/posts/2020-07-08-grpc-reflection-in-net">https://martinbjorkstrom.com/posts/2020-07-08-grpc-reflection-in-net</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="content">
+    <blockquote>
+<p>gRPC Server Reflection is an optional extension for servers to assist clients in runtime construction of requests without having stub information precompiled into the client.</p>
+<p>-- <cite><a href="https://github.com/grpc/grpc/blob/master/doc/server-reflection.md">gRPC Server Reflection Protocol</a></cite></p>
+</blockquote>
+<p>The primary use case for gRPC Server Reflection is debugging and testing tools. Think cURL or Postman, but for gRPC. However there's another interesting use case, especially in the .NET world where we have code-first support through <a href="https://github.com/protobuf-net/protobuf-net.Grpc">protobuf-net.Grpc</a>.</p>
+<p>If you've been using WCF you're probably familiar with a code-first approach that exposes metadata about the service using MEX or WSDL endpoints. These metadata endpoints could then be used to generate client stubs. Additionally, if you created a standard SOAP service, to be consumed over HTTP, interoperability with other programming languages was also possible by consuming the WSDL document. This is similar to what many of us do today with ASP.NET Core and OpenAPI. We create the controllers and models in C#, generate OpenAPI definition using <a href="https://github.com/domaindrivendev/Swashbuckle.AspNetCore">Swashbuckle</a> and then generate clients in TypeScript using <a href="https://github.com/Azure/autorest">Autorest</a>.</p>
+<p>While Google's way of working with protobuf and gRPC has always been contract-first, <a href="https://github.com/mgravell">Marc Gravell's</a> <a href="https://github.com/protobuf-net/protobuf-net">protobuf-net</a> has always had code-first development as first priority. With Google's protobuf, you define your services and messages in .proto format and then use the protobuf compiler (protoc) to generate messages, client, and server stubs in the language of your choice. However, with protobuf-net you can start out with C#, F# or VB.NET code. There's no need for a .proto file. Code-first with protobuf-net is great if you don't need interoperability with other languages outside the .NET ecosystem, and even if you did, there have been ways to to get the contract generated in .proto format for message types. However, up until recently, if you needed the proto contract for gRPC services you were on your own. This was however fixed last weekend.</p>
+  
+<p>protobuf-net.Grpc now supports <a href="https://github.com/protobuf-net/protobuf-net.Grpc/issues/5#issuecomment-653854482">proto contract generation for services types</a> and <a href="https://github.com/protobuf-net/protobuf-net.Grpc/pull/63">gRPC Server reflection</a>.</p>
+<h2 id="generating.proto-files-from-code-first-services-using-grpc-server-reflection">Generating .proto files from code-first services using gRPC server reflection</h2>
+<p>Let's take a look at how to use gRPC server reflection with protobuf-net.gRPC and how to generate .proto files using a command-line client. We start by creating a new ASP.NET Core application and install the NuGet packages needed:</p>
+<pre><code>dotnet new web -n Reflection.Sample
+
+cd Reflection.Sample
+
+dotnet add package protobuf-net.Grpc.AspNetCore
+dotnet add package protobuf-net.Grpc.AspNetCore.Reflection
+</code></pre>
+<p>We create a simple service and some messages.</p>
+<pre><code><span>using</span> System.ServiceModel;
+<span>using</span> System.Threading.Tasks;
+<span>using</span> ProtoBuf;
+
+<span>namespace</span> <span>Reflection.Sample</span>
+{
+    [<span>ServiceContract</span>]
+    <span>public</span> <span>interface</span> <span>IGreeter</span>
+    {
+        <span>ValueTask&lt;HelloReply&gt; <span>SayHello</span>(<span>HelloRequest request</span>)</span>;
+    }
+
+    [<span>ProtoContract</span>]
+    <span>public</span> <span>class</span> <span>HelloRequest</span>
+    {
+        [<span>ProtoMember(1)</span>]
+        <span>public</span> <span>string</span> Name { <span>get</span>; <span>set</span>; }
+    }
+
+    [<span>ProtoContract</span>]
+    <span>public</span> <span>class</span> <span>HelloReply</span>
+    {
+        [<span>ProtoMember(1)</span>]
+        <span>public</span> <span>string</span> Message { <span>get</span>; <span>set</span>; }
+    }
+
+    <span>public</span> <span>class</span> <span>Greeter</span> : <span>IGreeter</span>
+    {
+        <span><span>public</span> ValueTask&lt;HelloReply&gt; <span>SayHello</span>(<span>HelloRequest request</span>)</span>
+        {
+            <span>return</span> <span>new</span> ValueTask&lt;HelloReply&gt;(<span>new</span> HelloReply
+            {
+                Message = <span>"Hello "</span> + request.Name
+            });
+        }
+    }
+}
+</code></pre>
+<p>And then register our service in <code>Startup.cs</code></p>
+<pre><code>
+<span>using</span> Microsoft.AspNetCore.Builder;
+<span>using</span> Microsoft.AspNetCore.Hosting;
+<span>using</span> Microsoft.Extensions.DependencyInjection;
+<span>using</span> Microsoft.Extensions.Hosting;
+<span>using</span> ProtoBuf.Grpc.Server;
+
+<span>namespace</span> <span>Reflection.Sample</span>
+{
+    <span>public</span> <span>class</span> <span>Startup</span>
+    {
+        <span><span>public</span> <span>void</span> <span>ConfigureServices</span>(<span>IServiceCollection services</span>)</span>
+        {
+            <span><b>services.AddCodeFirstGrpc();</b></span>
+        }
+
+        <span><span>public</span> <span>void</span> <span>Configure</span>(<span>IApplicationBuilder app, IWebHostEnvironment env</span>)</span>
+        {
+            <span>if</span> (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+
+            app.UseRouting();
+
+            app.UseEndpoints(endpoints =&gt;
+            {
+                <span><b>endpoints.MapGrpcService&lt;Greeter&gt;();</b></span>
+            });
+        }
+    }
+}
+</code></pre>
+<p>The last thing we need to do is to enable gRPC server reflection. This is also done in our <code>Startup.cs</code></p>
+<pre><code>
+<span>using</span> Microsoft.AspNetCore.Builder;
+<span>using</span> Microsoft.AspNetCore.Hosting;
+<span>using</span> Microsoft.Extensions.DependencyInjection;
+<span>using</span> Microsoft.Extensions.Hosting;
+<span>using</span> ProtoBuf.Grpc.Server;
+
+<span>namespace</span> <span>Reflection.Sample</span>
+{
+    <span>public</span> <span>class</span> <span>Startup</span>
+    {
+        <span><span>public</span> <span>void</span> <span>ConfigureServices</span>(<span>IServiceCollection services</span>)</span>
+        {
+            services.AddCodeFirstGrpc();
+            <span><b>services.AddCodeFirstGrpcReflection();</b></span>
+        }
+
+        <span><span>public</span> <span>void</span> <span>Configure</span>(<span>IApplicationBuilder app, IWebHostEnvironment env</span>)</span>
+        {
+            <span>if</span> (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+
+            app.UseRouting();
+
+            app.UseEndpoints(endpoints =&gt;
+            {
+                endpoints.MapGrpcService&lt;Greeter&gt;();
+                <span><b>endpoints.MapCodeFirstGrpcReflectionService();</b></span>
+            });
+        }
+    }
+}
+</code></pre>
+<h3 id="consuming-the-reflection-endpoint">Consuming the reflection endpoint</h3>
+<p>gRPC provides it's own CLI for consuming the server reflection API (<a href="https://github.com/grpc/grpc/blob/master/doc/command_line_tool.md">https://github.com/grpc/grpc/blob/master/doc/command_line_tool.md</a>) but it has some problems. You need to build it from source (at least I couldn't find a Windows binary) and it doesn't support generating .proto files. With this in mind, I decided to create <a href="https://github.com/mholo65/dotnet-grpc-cli/">a .NET global tool</a> for this instead.</p>
+<p>We start by installing the global tool from <a href="https://www.nuget.org/packages/dotnet-grpc-cli/">NuGet</a>.</p>
+<pre><code>dotnet tool install -g dotnet-grpc-cli
+</code></pre>
+<p>And with our newly created gRPC service running, we'll run the tool to inspect which services are available:</p>
+<pre><code>dotnet grpc-cli ls https://localhost:5001
+
+Reflection.Sample.Greeter
+grpc.reflection.v1alpha.ServerReflection
+</code></pre>
+<p>We can see the Greeter service we created, and also the server reflection service. As you can see, the reflection service is just another gRPC service. If you're curious, you can find the proto definition for the gRPC reflection service <a href="https://github.com/grpc/grpc/blob/598e171746576c5398388a4c170ddf3c8d72b80a/src/proto/grpc/reflection/v1alpha/reflection.proto">here</a>.</p>
+<p>Now that we know the name of the services, we can list the methods.</p>
+<pre><code>dotnet grpc-cli ls https://localhost:5001 Reflection.Sample.Greeter
+
+filename: Reflection.Sample.Greeter.proto
+package: Reflection.Sample
+service Greeter {
+  rpc SayHello(Reflection.Sample.HelloRequest) returns (Reflection.Sample.HelloReply) {}
+}
+</code></pre>
+<p>And also dump the output in .proto format</p>
+<pre><code>dotnet grpc-cli dump https://localhost:5001 Reflection.Sample.Greeter
+
+---
+File: Reflection.Sample.HelloRequest.proto
+---
+syntax = "proto3";
+package Reflection.Sample;
+
+message HelloRequest {
+  string Name = 1;
+}
+
+---
+File: Reflection.Sample.HelloReply.proto
+---
+syntax = "proto3";
+package Reflection.Sample;
+
+message HelloReply {
+  string Message = 1;
+}
+
+---
+File: Reflection.Sample.Greeter.proto
+---
+syntax = "proto3";
+import "Reflection.Sample.HelloRequest.proto";
+import "Reflection.Sample.HelloReply.proto";
+package Reflection.Sample;
+
+service Greeter {
+   rpc SayHello(HelloRequest) returns (HelloReply);
+}
+</code></pre>
+<p>We probably want this written to the filesystem, so we will then run the following.</p>
+<pre><code>dotnet grpc-cli dump https://localhost:5001 Reflection.Sample.Greeter -o ./protos
+</code></pre>
+<p>That's it! We now have .proto files, generated from our server reflection endpoint. These .proto files can now be used to generate client stubs in the language of your choice.</p>
+<h3 id="summary">Summary</h3>
+<p>As you can see, gRPC server reflection can be very useful in code-first scenarios, but it's also useful for testing and debugging. gRPC CLI supports invoking methods, and this is something I'm also planning on supporting in the .NET global tool. It is also worth mentioning that <a href="https://www.nuget.org/packages/protobuf-net.Protogen/">Protogen</a>, which is a tool for generating protobuf-net source code from proto files, also recently <a href="https://github.com/protobuf-net/protobuf-net/pull/676">got support for generating source from gRPC server reflection endpoints</a> with the new <code>--grpc</code> option.</p>
+<p>Code-first using protobuf-net.Grpc is in my opinion the simplest, and most straightforward way to port over your old WCF services to .NET Core and gRPC. It's way more simpler than the official guide over at <a href="https://docs.microsoft.com/en-us/dotnet/architecture/grpc-for-wcf-developers/migrate-wcf-to-grpc">Microsoft Docs</a> which uses Google's protobuf instead of protobuf-net. With protobuf-net.Grpc, you'll most likely get to keep all your data contracts intact, while only needing to add the <code>Order</code> property to your data member attributes. Your service contracts, however, will need some rework. But in the end, these are minimal changes compared to porting your data contracts and service contracts over to .proto format. If you also need interoperability from other programming languages, it's a peace of cake to generate .proto files from your gRPC service. So, what are you waiting for? Start porting over your WCF services to .NET Core now, and make sure to use protobuf-net.Grpc when you do it.</p>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+		<div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
