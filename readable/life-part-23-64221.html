@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 23 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 23 - linksfor.dev(s)"/>
+    <meta property="og:description" content="This series is getting much longer than I expected, but I&#x2019;m having a great time, so let&#x2019;s keep it going. I want to look at two more algorithms; for the next few episodes we&#x2019;ll loo&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/07/13/life-part-23/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 23</title>
+<div class="readable">
+        <h1>Life, part 23</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 13 Jul 2020</div>
+        <p><a href="https://ericlippert.com/2020/07/13/life-part-23/">https://ericlippert.com/2020/07/13/life-part-23/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p>This series is getting much longer than I expected, but I’m having a great time, so let’s keep it going. I want to look at two more algorithms; for the next few episodes we’ll look at the brilliant and subtle <a href="http://www.ibiblio.org/lifepatterns/lifeapplet.html">QuickLife</a> by Alan Hensel.</p>
+<p>This algorithm is a master class in bit twiddling solutions, and rather difficult to understand compared to the algorithms we’ve seen so far. The source code, unfortunately, does not make it easier. A typical fragment from the original 1990s-era Java source code, linked above, is:</p>
+<pre>int ix01 = (ix00 &amp; 0xf0f0) | (cN.q[14] &amp; 0x0f0f);
+int ix11 = (ix10 &amp; 0xf0f0) | (cN.q[15] &amp; 0x0f0f);
+int ix03 = (ix02 &amp; 0xf0f0) | (ix01 &amp; 0x0f00) | (cN.q[7] &amp; 0x000f);
+</pre>
+<p>What on Earth is this code doing? You can’t read it in isolation and have any clue. What is “q”? What are these masks for? Why are 14, 15 and 7 important? What do the variables represent?</p>
+<p>Long-time readers of this blog know that when I write code, I always try to make the code emphasize ideas in the <strong>business domain</strong> of the program. The Java implementation of QuickLife strongly emphasizes the <strong>mechanism domain</strong>; it is a program all about twiddling bits. In the code fragment above the only hint of business domain is that cN is a block of cells to the north of something else. The code is also rather hard to understand because there are practices such as “if” statements with 700 lines between the condition and the “else”.</p>
+<p>Now, to be fair, the point of the code was not pedagogic clarity, and Java’s lack of properties and user-defined value types makes it more difficult to capture bit twiddling in efficient unboxed types. Fort the purposes of this blog I do want to be pedagogically clear though, so <strong>I’m going to implement the same algorithm in C#, but broken down into small parts that are individually clear.</strong></p>
+<p>Also, I’m going to try something a little different this time; I’m not going to describe the overall algorithm or data structures up front. Rather, we’ll work our way up from tiny little boards to big ones, adding features and efficiencies as we go. And we’ll also see why throughout this series I’ve been pushing this notion of Life grids that are “quads” — squares where the side is a power of two.</p>
+<hr>
+<p>Let’s start as small as we can. We represent a board with a single cell — a 0-quad — as a single bit. I’m not going to make a data structure for that.</p>
+<p>A board with four cells — a 1-quad — is a four-bit unsigned integer. We’ll call the four bits “SE”, “SW”, “NE” and “NW” for obvious reasons. That is, bits 0, 1, 2 and 3 of our four-bit integer are logically:</p>
+<pre>NW   NE
+  3 2
+  1 0
+SW   SE
+</pre>
+<p>I’m also not going to make a data structure for a 1-quad.</p>
+<p>A 2-quad is four 1-quads, so that’s 16 bits. We can represent that as a 16 bit unsigned short integer, and this time I am going to make a data structure.</p>
+<p>The convention we’ll use is slightly different than the convention we used for 1-quads (and frankly I am not sure why that is; I am just following the conventions of the code as it was originally written!) For a 2-quad, the low four bits are the southeast corner, then the next four are northeast, then southwest, then northwest. That is, the bit numbers in a 2-quad are:</p>
+<pre>    NW         NE
+      f e | 7 6
+      d c | 5 4
+      ----+----
+      b a | 3 2
+      9 8 | 1 0
+    SW         SE 
+</pre>
+<p>I am going to make a data structure for this one! First thing is: I need a way to turn a ushort into one of these, and to turn it back into a ushort:</p>
+<pre>struct Quad2
+{
+  private readonly ushort cells;
+  public Quad2(ushort cells) =&gt; this.cells = cells;
+  public static explicit operator ushort(Quad2 x) =&gt; x.cells;
+</pre>
+<p>And now I am regretting my decision early on in this series to propose the jargon “n-quad” when I could have proposed “quad-n”. “2Quad” is not a legal identifier in C#. Forgive me if from now on I go back and forth between “n-quad” and “quad-n” for the rest of this series.</p>
+<p>A default value of “all dead” and a predicate to check for all-deadness are going to come in handy later, so I’ll just add them now.</p>
+<pre>  public static Quad2 AllDead = new Quad2(0);
+  public bool Dead =&gt; cells == 0;
+</pre>
+<p>We will need to access the component 1-quads, but rather than returning 4-bit integers, it turns out that in this algorithm we can almost always simply get the 4-quad masked out in place; that is, the NW property of a Quad2 should be a Quad2 that is zero everywhere but the northwest.</p>
+<p>This smart insight — that the operations on 1-quads can be done “in place” rather than having to mask-and-bit-shift them out — is one of the keys to the performance of this algorithm, so keep that in mind as we go through the next few episodes.</p>
+<p>As we will see in the next episode, we will also need to do the same for the 2×8 and 8×2 edges on each side:</p>
+<pre>  const uint NWMask = 0xf000;
+  const uint SWMask = 0x0f00;
+  const uint NEMask = 0x00f0;
+  const uint SEMask = 0x000f;
+  const uint EastEdgeMask = NEMask | SEMask;
+  const uint WestEdgeMask = NWMask | SWMask;
+  const uint SouthEdgeMask = SWMask | SEMask;
+  const uint NorthEdgeMask = NWMask | NEMask;
+  public Quad2 NW =&gt; new Quad2((ushort)(cells &amp; NWMask));
+  public Quad2 NE =&gt; new Quad2((ushort)(cells &amp; NEMask));
+  public Quad2 SW =&gt; new Quad2((ushort)(cells &amp; SWMask));
+  public Quad2 SE =&gt; new Quad2((ushort)(cells &amp; SEMask));
+  public Quad2 NorthEdge =&gt; new Quad2((ushort)(cells &amp; NorthEdgeMask));
+  public Quad2 SouthEdge =&gt; new Quad2((ushort)(cells &amp; SouthEdgeMask));
+  public Quad2 EastEdge =&gt; new Quad2((ushort)(cells &amp; EastEdgeMask));
+  public Quad2 WestEdge =&gt; new Quad2((ushort)(cells &amp; WestEdgeMask));
+</pre>
+<p>That does it for the component 1-quads, but we will also need to get at individual cells. We should talk about coordinates. Let’s say that for a 2-quad, the convention is that (0, 0) is the far southwest corner and (3, 3) is the far northeast corner, as usual.</p>
+<p>Of course I want structs to be immutable. I’m going to split “set” and “clear” up into two operations, one which sets a cell to alive and one which sets it to dead. I’ll omit the error checking that ensures that the coordinates are (0, 0) through (3, 3):</p>
+<pre>  private static readonly uint[] masks = new uint[]
+  {
+    1 &lt;&lt; 0x9, 1 &lt;&lt; 0x8, 1 &lt;&lt; 0x1, 1 &lt;&lt; 0x0,
+    1 &lt;&lt; 0xb, 1 &lt;&lt; 0xa, 1 &lt;&lt; 0x3, 1 &lt;&lt; 0x2,
+    1 &lt;&lt; 0xd, 1 &lt;&lt; 0xc, 1 &lt;&lt; 0x5, 1 &lt;&lt; 0x4,
+    1 &lt;&lt; 0xf, 1 &lt;&lt; 0xe, 1 &lt;&lt; 0x7, 1 &lt;&lt; 0x6
+  };
+  public bool Get(int x, int y) =&gt; 
+    (cells &amp; masks[x + y * 4]) != 0;
+  public Quad2 Set(int x, int y) =&gt; 
+    new Quad2((ushort)(cells | masks[x + y * 4]));
+  public Quad2 Clear(int x, int y) =&gt; 
+    new Quad2((ushort)(cells &amp; ~masks[x + y * 4]));
+</pre>
+<p>In the next episode I’m also going to need to be able to “or” two Quad2s together.</p>
+<pre>  public static Quad2 operator |(Quad2 x, Quad2 y) =&gt; 
+    new Quad2((ushort)(x.cells | y.cells));
+</pre>
+<p>And for debugging purposes, we can dump out a Quad2 in the “cells” file format:</p>
+<pre>  public override string ToString()
+  {
+    string s = "";
+    for (int y = 3; y &gt;= 0; y -= 1)
+    {
+      for (int x = 0; x &lt; 4; x += 1)
+        s += this.Get(x, y) ? 'O' : '.';
+      s += "
+";
+    }
+    return s;
+  }
+}
+</pre>
+<p>We will need just a few more operations in the next episode, but we’ll motivate them then.</p>
+<p>I know, this looks like a lot of code to write for what is a 16 bit unsigned short integer, but remember that fragment of bit twiddling code from the original Java source?</p>
+<pre>int ix01 = (ix00 &amp; 0xf0f0) | (cN.q[14] &amp; 0x0f0f);
+int ix11 = (ix10 &amp; 0xf0f0) | (cN.q[15] &amp; 0x0f0f);
+int ix03 = (ix02 &amp; 0xf0f0) | (ix01 &amp; 0x0f00) | (cN.q[7] &amp; 0x000f);
+</pre>
+<p>I already like it a lot better as:</p>
+<pre>Quad2 ix01 = ix00.NorthEdge | cN.q[14].SouthEdge;
+Quad2 ix11 = ix10.NorthEdge | cN.q[15].SouthEdge;
+Quad2 ix03 = ix02.NorthEdge | ix01.SW | cN.q[7].SE;
+</pre>
+<p>In this new form you can look at the code and, though it is still not clear what “ix01” and “q” and “14” mean, at least we now know what is happening: we are constructing three new 2-quads from the component 1-quads of six other 2-quads.</p>
+<p>Writing the code this way does not make it slower! Value types are not boxed in C#, and the jitter is smart about inlining operations like this. (And if it isn’t, then it is a lot easier to speed up code if it is written so that its business semantics are clear.)</p>
+<hr>
+<p><strong>Next time on FAIC:</strong> What is the step-forwards-one-tick algorithm for a 2-quad? It’s only 16 cells; how hard could it be?</p>
+
+
+
+			</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs" /></noscript>
+</body>
+</html>
