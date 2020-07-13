@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Generating the Premier League Table in F# - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Generating the Premier League Table in F# - linksfor.dev(s)"/>
+    <meta property="og:description" content="During lockdown, I&#x2019;ve made another effort at learning F#. This time I think I&#x2019;ve had a bit more success. Processing data is something that we as developers d..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.temporalcohesion.co.uk/2020/07/07/generate-premier-league-table-in-fsharp"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Generating the Premier League Table in F#</title>
+<div class="readable">
+        <h1>Generating the Premier League Table in F#</h1>
+            <div>Reading time: 15-19 minutes</div>
+        <div>Posted here: 13 Jul 2020</div>
+        <p><a href="https://www.temporalcohesion.co.uk/2020/07/07/generate-premier-league-table-in-fsharp">https://www.temporalcohesion.co.uk/2020/07/07/generate-premier-league-table-in-fsharp</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+            
+            <p>During lockdown, I’ve made another effort at learning F#. This time I think I’ve had a bit more success. Processing data is something that we as developers do on a weekly or even daily basis, so it seems quite natural to practice that in F#. As a big football fan, I’ve decided to use the English Premier League results for season 2019/2020, as it’s a dataset I implicitly understand.</p>
+
+<p>The EPL results set is available in CSV format from football-data.co.uk, and rather than having to parse it all by hand or hitting up <a href="https://joshclose.github.io/CsvHelper/">CsvHelper</a> and still having to write some C# code to actually use it, in F# we can use a Type Provider, specifically the <a href="https://fsharp.github.io/FSharp.Data/library/CsvProvider.html">CsvProvider</a> from <a href="https://fsharp.github.io/FSharp.Data/">FSharp.Data</a>.</p>
+
+<p><i></i>
+    It’s worth pointing out at this point that I’ve been learning for about two weeks, so the following F# should not be taken as a definitive example of good, idiomatic code.
+ </p>
+
+<h2 id="loading-and-parsing-the-data">Loading and parsing the data</h2>
+<p>FSharp.Data is easily added via NuGet, and using an <code>.fsx</code> script, we can easily reference the assembly and open the namespace:</p>
+
+<figure><pre><code data-lang="fsharp"><span>#r </span><span>"../../.nuget/packages/fsharp.data/3.3.3/lib/netstandard2.0/FSharp.Data.dll"</span>
+<span>open</span> FSharp<span>.</span>Data
+<span>open</span> System<span>.</span>Collections<span>.</span>Generic</code></pre></figure>
+
+<p>I didn’t have any luck in the script with referencing a more local copy of the assembly, such as one in the <code>/bin</code> folder, due to it complaining about not being able to find the <code>FSharp.Data.DesignTime.dll</code>, but going directly to the assembly in the NuGet packages folder seems to work just fine. It is also worth noting that I’m writing this on a Mac (in VS Code), so your path syntax might vary. Also note that we also open the BCL <code>System.Collections.Generic</code> namespace. We’ll need that later.</p>
+
+<p>Next, comes the part that blows my mind. Here is how we generate a type which knows how to load and parse a CSV file of a given structure:</p>
+
+<figure><pre><code data-lang="fsharp"><span>type</span> <span>Results</span> <span>=</span> CsvProvider<span>&lt;</span><span>"../../Downloads/epl1920.csv"</span><span>&gt;</span></code></pre></figure>
+
+<p>That’s it. It’s pretty amazing. The <code>Results</code> type is now also type safe, and it’s had a guess at infering what the types are for each column of the data. We could probably do something similar to this in C# using <code>CsvHelper</code> and either <code>Castle.DynamicProxy</code> or some magic with the new Roslyn compiler, but I think it would take quite a bit of code to create something that came close to what this can do.</p>
+
+<p>Skipping over some important stuff that we’ll get to in just short a while, we can now easily load the full results set:</p>
+
+<figure><pre><code data-lang="fsharp">Results<span>.</span><span>Load</span><span>(</span><span>"../../Downloads/epl1920.csv"</span><span>)</span></code></pre></figure>
+
+<p>This is fairly straightforward, and does exactly what it looks like. The data loaded from the file is available in a <code>.Rows</code> property, that we’ll use shortly.</p>
+
+<h2 id="parsing-the-data">Parsing the data</h2>
+<p>All good so far, but now things get a little more complicated. Now we need to think somewhat about the data, and if you look in the file… it’s got a LOT of information. Mostly related to betting information for the match, but there is also quite a lot of information about the match itself. For the purposes of calculating the league, most of thie information in the file is redundant. In order to just get the information we need, we can define a Record to hold to that information. A Record in F# is somewhat analagous to a C# POCO class, but with automatic type safety and full equality comparisons out of the box.</p>
+
+<figure><pre><code data-lang="fsharp"><span>type</span> <span>FullTimeResult</span> <span>=</span> <span>|</span> Home <span>|</span> Away <span>|</span> Draw
+<span>type</span> <span>MatchResult</span> <span>=</span> <span>{</span>HomeTeam <span>:</span> <span>string</span><span>;</span> AwayTeam<span>:</span> <span>string</span><span>;</span> HomeGoals<span>:</span> <span>int</span><span>;</span> AwayGoals<span>:</span> <span>int</span><span>;</span> Result<span>:</span> <span>FullTimeResult</span><span>}</span></code></pre></figure>
+
+<p>The <code>FullTimeResult</code> type is just like a C# enum, and is easier to read than the ‘A’, ‘H’ or ‘D’ we get from the CSV file for the FTR (Full Time Result) column. I think it also looks nicer to read when it comes to the pattern matching, but we’ll get to that. With those types defined, we can get to the real meat of this and actually parse the data:</p>
+
+<figure><pre><code data-lang="fsharp"><span>let</span> league <span>=</span> Results<span>.</span><span>Load</span><span>(</span><span>"../../Downloads/epl1920.csv"</span><span>)</span>
+                <span>.</span>Rows
+                <span>|&gt;</span> Seq<span>.</span>map toMatchResult
+                <span>|&gt;</span> Seq<span>.</span>fold processMatchResult <span>(</span>Dictionary<span>&lt;</span>string<span>,</span> LeagueRow<span>&gt;</span><span>(</span><span>)</span><span>)</span>
+                <span>|&gt;</span> Seq<span>.</span>sortByDescending <span>(</span><span>fun</span> <span>(</span><span>KeyValue</span><span>(</span>_<span>,</span> v<span>)</span><span>)</span> <span>-&gt;</span> v<span>.</span>Points<span>)</span></code></pre></figure>
+
+<p>Here, we load the file as we discussed earlier, but now, we forward pipe the data returned from the <code>.Rows</code> property to <code>Seq.map</code> through the <code>toMatchResult</code> function, which takes a <code>Row</code> and extracts the data we’re interested in and returns a new <code>MatchResult</code>. In C# this is the same as doing <code>.Rows.Select(new MatchResult {...})</code>. Then, the resulting sequence of <code>MatchResult</code>s is piped forward through the <code>processMatchResult</code> function, using the scary sounding <code>Seq.fold</code>, and it also passed a new instance of a BCL <code>Dictionary</code>, with a <code>string</code> key and a <code>LeagueRow</code> type as the value. I’ve not yet mentioned the <code>LeagueRow</code> type… it’s not super important to proceedings, it just a type which holds all the data you would expect to see in a football league table. For reference it’s included below in the full script.</p>
+
+<p>Amazingly, those five lines load the file, process all the data, and provide an object which contains a fairly accurate version of the English Premier League table. Obviously things are a little more involved than that.</p>
+
+<h2 id="examing-the-parsing-in-more-detail">Examing the parsing in more detail</h2>
+<p>As you’ll recall, the there is a lot of data in the CSV file that is irrelevant when it comes to generating the league table. We can map all the data we need into the <code>MatchResult</code> type, which we do by forward piping the data through <code>Seq.map</code> and the <code>toMatchResult</code> function:</p>
+
+<figure><pre><code data-lang="fsharp"><span>let</span> toMatchResult <span>(</span>row<span>:</span> <span>Results<span>.</span>Row</span><span>)</span> <span>=</span>
+    <span>let</span> fullTimeResult <span>=</span> 
+        <span>if</span> row<span>.</span>FTR <span>=</span> <span>"H"</span> <span>then</span> FullTimeResult<span>.</span>Home
+        <span>elif</span> row<span>.</span>FTR <span>=</span> <span>"A"</span> <span>then</span> FullTimeResult<span>.</span>Away
+        <span>else</span> FullTimeResult<span>.</span><span>Draw</span>
+    <span>{</span>
+        HomeTeam <span>=</span> row<span>.</span>HomeTeam
+        AwayTeam <span>=</span> row<span>.</span>AwayTeam
+        HomeGoals <span>=</span> row<span>.</span>FTHG
+        AwayGoals <span>=</span> row<span>.</span>FTAG
+        Result <span>=</span> fullTimeResult
+    <span>}</span></code></pre></figure>
+
+<p>This is mostly just a simple mapping from the results row into the new <code>MatchResult</code> type. You’ll notice we don’t need to explicitly ‘new’ anything up, don’t forget, we’re in a functional world now, so the <code>MatchResult</code> is returned as a side affect of what we’re doing. We also define a nested method which processes the full time result using a simple if/else construct. I <em>think</em> I could also have used pattern matching, but it’s simple enough that I’m not going to worry about it.</p>
+
+<p>Next, comes the scarying sounding fold. The method looks like this:</p>
+
+<figure><pre><code data-lang="fsharp"><span>let</span> processMatchResult <span>(</span>league <span>:</span> <span>Dictionary</span><span>&lt;</span>string<span>,</span> LeagueRow<span>&gt;</span><span>)</span> result  <span>=</span>
+    <span>match</span> result<span>.</span>Result <span>with</span>
+    <span>|</span> Home <span>-&gt;</span> <span>updateHomeWin</span><span>(</span>league<span>,</span> result<span>)</span>
+    <span>|</span> Away <span>-&gt;</span> <span>updateAwayWin</span><span>(</span>league<span>,</span> result<span>)</span>
+    <span>|</span> Draw <span>-&gt;</span> <span>updateDraw</span><span>(</span>league<span>,</span> result<span>)</span>
+    league</code></pre></figure>
+
+<p>What happens is that we tell <code>Seq.fold</code> to use this method to do the folding, and we give it an initial state of a new and empty <code>Dictionary&lt;string, LeagueRow&gt;()</code>. <code>Seq.fold</code> carries the state over to each subseqent ‘fold’ over the sequence of <code>MatchResults</code> it was piped. You’ll note that the final thing returned as a side effect of the method is the same dictionary which was passed in. This essentially forms the core of the algorithm to produce the league. The pattern matching of <code>match &lt;thing&gt; with</code> is equivalent to a C# switch statement on steroids. I am barely scratching the surface of what can be done with pattern matching in F#.</p>
+
+<p>The patten patch decides what kind of result we are dealing with, and delegates further processing to the relevant method. Here is the definition for <code>updateHomeWin</code>. The other two methods are exactly the same, except they distribute the points/goals/wins/losses/draws accordingly, so I won’t go into those in detail.</p>
+
+<figure><pre><code data-lang="fsharp"><span>let</span> updateHomeWin <span>(</span>league <span>:</span> <span>Dictionary</span><span>&lt;</span>string<span>,</span> LeagueRow<span>&gt;</span><span>,</span> result <span>:</span> <span>MatchResult</span><span>)</span> <span>=</span>
+    <span>updateTeam</span><span>(</span>league<span>,</span> result<span>.</span>HomeTeam<span>,</span> <span>3</span><span>,</span> result<span>.</span>HomeGoals<span>,</span> result<span>.</span>AwayGoals<span>,</span> <span>1</span><span>,</span> <span>0</span><span>,</span> <span>0</span><span>)</span>
+    <span>updateTeam</span><span>(</span>league<span>,</span> result<span>.</span>AwayTeam<span>,</span> <span>0</span><span>,</span> result<span>.</span>AwayGoals<span>,</span> result<span>.</span>HomeGoals<span>,</span> <span>0</span><span>,</span> <span>0</span><span>,</span> <span>1</span><span>)</span></code></pre></figure>
+
+<p>Each <code>MatchResult</code> consists of two teams, and we have to update each entry in the league for both of these teams, with the correct number of points, goals for, goals against, win, draw and loss. The real part of this is in the <code>updateTeam</code> function:</p>
+
+<figure><pre><code data-lang="fsharp"><span>let</span> updateTeam <span>(</span>league <span>:</span> <span>Dictionary</span><span>&lt;</span>string<span>,</span> LeagueRow<span>&gt;</span><span>,</span> team <span>:</span> <span>string</span><span>,</span> points <span>:</span> <span>int</span><span>,</span> forGoals <span>:</span> <span>int</span><span>,</span> againstGoals<span>:</span> <span>int</span><span>,</span> won <span>:</span> <span>int</span><span>,</span> drawn<span>,</span> lost<span>:</span> <span>int</span><span>)</span> <span>=</span>
+    <span>if</span> league<span>.</span>ContainsKey team <span>then</span>
+        <span>let</span> existing <span>=</span> league<span>.</span><span>[</span>team<span>]</span>
+        <span>let</span> updated <span>=</span> <span>{</span>existing <span>with</span> Played <span>=</span> existing<span>.</span>Played <span>+</span> <span>1</span><span>;</span> Won <span>=</span> existing<span>.</span>Won <span>+</span> won<span>;</span> Drawn <span>=</span> existing<span>.</span>Drawn <span>+</span> drawn<span>;</span> Lost <span>=</span> existing<span>.</span>Lost <span>+</span> lost<span>;</span> For <span>=</span> existing<span>.</span>For <span>+</span> forGoals<span>;</span> Against <span>=</span> existing<span>.</span>Against <span>+</span> againstGoals<span>;</span> Points <span>=</span> existing<span>.</span>Points <span>+</span> points<span>}</span>
+        league<span>.</span><span>[</span>team<span>]</span> <span>&lt;-</span> updated
+    <span>else</span>
+        <span>let</span> leagueRow <span>=</span> <span>{</span>Team <span>=</span> team<span>;</span> Played <span>=</span> <span>1</span><span>;</span> Won <span>=</span> won<span>;</span> Drawn <span>=</span> drawn<span>;</span> Lost <span>=</span> lost<span>;</span> GD <span>=</span> <span>0</span><span>;</span> For <span>=</span> forGoals<span>;</span> Against <span>=</span> againstGoals<span>;</span> Points <span>=</span> points<span>}</span>
+        league<span>.</span><span>Add</span><span>(</span>team<span>,</span> leagueRow<span>)</span></code></pre></figure>
+
+<p>This is just a simple dictionary update where we check if a team already has an entry, and if so, update it, otherwise we create it. Things of note here are that whilst F# is mostly immutable, types from <code>System.Collections.Generic</code> are mutable, which is how this whole thing works. I’m sure that someone much better at F# can come along and tell me how to do this with immutable F# collections. Also of note is the collection access of <code>league.[team]</code>, which is different than in C#. We also update the value in the dictionary by using <code>&lt;-</code>.</p>
+
+<p>After that, we can define a simple method to print out a row from the league for us, and then iterate through the entries in the dictionary, to get a league table:</p>
+
+<figure><pre><code data-lang="fsharp"><span>let</span> print league <span>=</span>
+    printfn <span>"Team: %s | Played: %d | Won: %d | Lost: %d | Drawn: %d | For: %d | Against: %d | GD: %d | Points: %d"</span> league<span>.</span>Team league<span>.</span>Played league<span>.</span>Won league<span>.</span>Lost league<span>.</span>Drawn league<span>.</span>For league<span>.</span>Against <span>(</span>league<span>.</span>For <span>-</span> league<span>.</span>Against<span>)</span> league<span>.</span>Points
+
+league
+<span>|&gt;</span> Seq<span>.</span>iter <span>(</span><span>fun</span> <span>(</span><span>KeyValue</span><span>(</span>_<span>,</span> v<span>)</span><span>)</span> <span>-&gt;</span> print v<span>)</span></code></pre></figure>
+
+<p>The <code>KeyValue</code> is an active pattern, which matches values of <code>KeyValuePair</code> objects from the BCL Dictionary, and this produces (with data correct as at the publication of this post):</p>
+
+<figure><pre><code data-lang="console">Team: Liverpool | Played: 33 | Won: 29 | Lost: 2 | Drawn: 2 | For: 72 | Against: 25 | GD: 47 | Points: 89
+Team: Man City | Played: 33 | Won: 21 | Lost: 9 | Drawn: 3 | For: 81 | Against: 34 | GD: 47 | Points: 66
+Team: Leicester | Played: 33 | Won: 17 | Lost: 9 | Drawn: 7 | For: 63 | Against: 31 | GD: 32 | Points: 58
+Team: Chelsea | Played: 33 | Won: 17 | Lost: 10 | Drawn: 6 | For: 60 | Against: 44 | GD: 16 | Points: 57
+Team: Man United | Played: 33 | Won: 15 | Lost: 8 | Drawn: 10 | For: 56 | Against: 33 | GD: 23 | Points: 55</code></pre></figure>
+
+<p>For completeness here is a gist of the full script:</p>
+
+<div id="gist104173314">
+    <div>
+      <div>
+        <div>
+  <div id="file-generatepremierleaguetable-fsx">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-generatepremierleaguetable-fsx-L1" data-line-number="1"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC1">#r <span><span>"</span>../../.nuget/packages/fsharp.data/3.3.3/lib/netstandard2.0/FSharp.Data.dll<span>"</span></span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L2" data-line-number="2"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC2"><span>open</span> <span>FSharp.<span>Data</span></span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L3" data-line-number="3"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC3"><span>open</span> <span>System.<span>Collections</span>.<span>Generic</span></span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L4" data-line-number="4"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC4">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L5" data-line-number="5"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC5"><span>type</span> <span>Results </span><span>=</span> CsvProvider<span>&lt;</span><span><span>"</span>../../Downloads/epl1920.csv<span>"</span></span><span>&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L6" data-line-number="6"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC6">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L7" data-line-number="7"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC7"><span>type</span> <span>LeagueRow </span><span>=</span> <span>{</span> </td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L8" data-line-number="8"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC8">    Team <span>:</span> string </td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L9" data-line-number="9"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC9">    Played <span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L10" data-line-number="10"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC10">    Won <span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L11" data-line-number="11"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC11">    Drawn <span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L12" data-line-number="12"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC12">    Lost <span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L13" data-line-number="13"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC13">    For <span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L14" data-line-number="14"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC14">    Against<span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L15" data-line-number="15"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC15">    GD <span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L16" data-line-number="16"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC16">    Points <span>:</span> int</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L17" data-line-number="17"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC17"><span>}</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L18" data-line-number="18"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC18">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L19" data-line-number="19"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC19"><span>type</span> <span>FullTimeResult </span><span>=</span> <span>|</span> Home <span>|</span> Away <span>|</span> Draw</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L20" data-line-number="20"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC20"><span>type</span> <span>MatchResult </span><span>=</span> <span>{</span>HomeTeam <span>:</span> string<span>;</span> AwayTeam<span>:</span> string<span>;</span> HomeGoals<span>:</span> int<span>;</span> AwayGoals<span>:</span> int<span>;</span> Result<span>:</span> FullTimeResult<span>}</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L21" data-line-number="21"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC21">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L22" data-line-number="22"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC22"><span>let</span> <span>updateTeam</span> (<span>league</span> : <span>Dictionary</span>&lt;<span>string</span>, <span>LeagueRow</span>&gt;, <span>team</span> : <span>string</span>, <span>points</span> : <span>int</span>, <span>forGoals</span> : <span>int</span>, <span>againstGoals</span>: <span>int</span>, <span>won</span> : <span>int</span>, <span>drawn</span>, <span>lost</span>: <span>int</span>) <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L23" data-line-number="23"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC23">    <span>if</span> league.ContainsKey team <span>then</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L24" data-line-number="24"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC24">        <span>let</span> <span>existing</span> <span>=</span> league.<span>[</span>team<span>]</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L25" data-line-number="25"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC25">        <span>let</span> <span>updated</span> <span>=</span> <span>{</span>existing <span>with</span> Played <span>=</span> existing.Played <span>+</span> <span>1</span><span>;</span> Won <span>=</span> existing.Won <span>+</span> won<span>;</span> Drawn <span>=</span> existing.Drawn <span>+</span> drawn<span>;</span> Lost <span>=</span> existing.Lost <span>+</span> lost<span>;</span> For <span>=</span> existing.For <span>+</span> forGoals<span>;</span> Against <span>=</span> existing.Against <span>+</span> againstGoals<span>;</span> Points <span>=</span> existing.Points <span>+</span> points<span>}</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L26" data-line-number="26"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC26">        league.<span>[</span>team<span>]</span> <span>&lt;-</span> updated</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L27" data-line-number="27"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC27">    <span>else</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L28" data-line-number="28"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC28">        <span>let</span> <span>leagueRow</span> <span>=</span> <span>{</span>Team <span>=</span> team<span>;</span> Played <span>=</span> <span>1</span><span>;</span> Won <span>=</span> won<span>;</span> Drawn <span>=</span> drawn<span>;</span> Lost <span>=</span> lost<span>;</span> GD <span>=</span> <span>0</span><span>;</span> For <span>=</span> forGoals<span>;</span> Against <span>=</span> againstGoals<span>;</span> Points <span>=</span> points<span>}</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L29" data-line-number="29"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC29">        league.Add(team, leagueRow)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L30" data-line-number="30"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC30">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L31" data-line-number="31"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC31"><span>let</span> <span>updateHomeWin</span> (<span>league</span> : <span>Dictionary</span>&lt;<span>string</span>, <span>LeagueRow</span>&gt;, <span>result</span> : <span>MatchResult</span>) <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L32" data-line-number="32"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC32">    updateTeam(league, result.HomeTeam, <span>3</span>, result.HomeGoals, result.AwayGoals, <span>1</span>, <span>0</span>, <span>0</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L33" data-line-number="33"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC33">    updateTeam(league, result.AwayTeam, <span>0</span>, result.AwayGoals, result.HomeGoals, <span>0</span>, <span>0</span>, <span>1</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L34" data-line-number="34"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC34">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L35" data-line-number="35"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC35"><span>let</span> <span>updateAwayWin</span> (<span>league</span> : <span>Dictionary</span>&lt;<span>string</span>, <span>LeagueRow</span>&gt;, <span>result</span> : <span>MatchResult</span>) <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L36" data-line-number="36"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC36">    updateTeam(league, result.HomeTeam, <span>0</span>, result.HomeGoals, result.AwayGoals, <span>0</span>, <span>0</span>, <span>1</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L37" data-line-number="37"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC37">    updateTeam(league, result.AwayTeam, <span>3</span>, result.AwayGoals, result.HomeGoals, <span>1</span>, <span>0</span>, <span>0</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L38" data-line-number="38"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC38">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L39" data-line-number="39"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC39"><span>let</span> <span>updateDraw</span> (<span>league</span> : <span>Dictionary</span>&lt;<span>string</span>, <span>LeagueRow</span>&gt;, <span>result</span> : <span>MatchResult</span>) <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L40" data-line-number="40"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC40">    updateTeam(league, result.HomeTeam, <span>1</span>, result.HomeGoals, result.AwayGoals, <span>0</span>, <span>1</span>, <span>0</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L41" data-line-number="41"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC41">    updateTeam(league, result.AwayTeam, <span>1</span>, result.AwayGoals, result.HomeGoals, <span>0</span>, <span>1</span>, <span>0</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L42" data-line-number="42"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC42">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L43" data-line-number="43"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC43"><span>let</span> <span>processMatchResult</span> (<span>league</span> : <span>Dictionary</span>&lt;<span>string</span>, <span>LeagueRow</span>&gt;) <span>result</span>  <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L44" data-line-number="44"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC44">    <span>match</span> result.Result <span>with</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L45" data-line-number="45"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC45">    <span>|</span> Home <span>-&gt;</span> updateHomeWin(league, result)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L46" data-line-number="46"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC46">    <span>|</span> Away <span>-&gt;</span> updateAwayWin(league, result)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L47" data-line-number="47"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC47">    <span>|</span> Draw <span>-&gt;</span> updateDraw(league, result)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L48" data-line-number="48"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC48">    league</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L49" data-line-number="49"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC49">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L50" data-line-number="50"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC50"><span>let</span> <span>toMatchResult</span> (<span>row</span>: <span>Results</span>.<span>Row</span>) <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L51" data-line-number="51"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC51">    <span>let</span> <span>fullTimeResult</span> <span>=</span> </td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L52" data-line-number="52"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC52">        <span>if</span> row.FTR <span>=</span> <span><span>"</span>H<span>"</span></span> <span>then</span> FullTimeResult.Home</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L53" data-line-number="53"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC53">        <span>elif</span> row.FTR <span>=</span> <span><span>"</span>A<span>"</span></span> <span>then</span> FullTimeResult.Away</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L54" data-line-number="54"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC54">        <span>else</span> FullTimeResult.Draw</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L55" data-line-number="55"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC55">    <span>{</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L56" data-line-number="56"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC56">        HomeTeam <span>=</span> row.HomeTeam</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L57" data-line-number="57"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC57">        AwayTeam <span>=</span> row.AwayTeam</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L58" data-line-number="58"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC58">        HomeGoals <span>=</span> row.FTHG</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L59" data-line-number="59"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC59">        AwayGoals <span>=</span> row.FTAG</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L60" data-line-number="60"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC60">        Result <span>=</span> fullTimeResult</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L61" data-line-number="61"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC61">    <span>}</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L62" data-line-number="62"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC62">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L63" data-line-number="63"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC63"><span>let</span> <span>league</span> <span>=</span> Results.Load(<span><span>"</span>../../Downloads/epl1920.csv<span>"</span></span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L64" data-line-number="64"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC64">                .Rows</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L65" data-line-number="65"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC65">                <span>|&gt;</span> Seq.map toMatchResult</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L66" data-line-number="66"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC66">                <span>|&gt;</span> Seq.fold processMatchResult (Dictionary<span>&lt;</span>string, LeagueRow<span>&gt;</span><span>()</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L67" data-line-number="67"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC67">                <span>|&gt;</span> Seq.sortByDescending (<span>fun</span> (KeyValue(<span>_</span>, v)) <span>-&gt;</span> v.Points)</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L68" data-line-number="68"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC68">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L69" data-line-number="69"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC69"><span>let</span> <span>print</span> <span>league</span> <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L70" data-line-number="70"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC70">    printfn <span><span>"</span>Team: %s | Played: %d | Won: %d | Lost: %d | Drawn: %d | For: %d | Against: %d | GD: %d | Points: %d<span>"</span></span> league.Team league.Played league.Won league.Lost league.Drawn league.For league.Against (league.For <span>-</span> league.Against) league.Points</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L71" data-line-number="71"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC71">
+</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L72" data-line-number="72"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC72">league</td>
+      </tr>
+      <tr>
+        <td id="file-generatepremierleaguetable-fsx-L73" data-line-number="73"></td>
+        <td id="file-generatepremierleaguetable-fsx-LC73"><span>|&gt;</span> Seq.iter (<span>fun</span> (KeyValue(<span>_</span>, v)) <span>-&gt;</span> print v)</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+        </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs" /></noscript>
+</body>
+</html>
