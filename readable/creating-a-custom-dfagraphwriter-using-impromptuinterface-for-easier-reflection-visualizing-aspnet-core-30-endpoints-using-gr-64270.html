@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Creating a custom DfaGraphWriter using ImpromptuInterface for easier reflection: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 3 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Creating a custom DfaGraphWriter using ImpromptuInterface for easier reflection: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 3 - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I show how you can use the library ImpromptuInterface to make it easier to call internal classes using reflection."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and%20reflection/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Creating a custom DfaGraphWriter using ImpromptuInterface for easier reflection: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 3</title>
+<div class="readable">
+        <h1>Creating a custom DfaGraphWriter using ImpromptuInterface for easier reflection: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 3</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 14 Jul 2020</div>
+        <p><a href="https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and%20reflection/">https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and%20reflection/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>In this post I lay the groundwork for creating a custom implementation of <code>DfaGraphWriter</code>. <code>DfaGraphWriter</code> is public, so you can use it in your application as I showed <a href="https://andrewlock.net/adding-an-endpoint-graph-to-your-aspnetcore-application/">in my previous post</a>, but all the classes it <em>uses</em> are marked <code>internal</code>. That makes creating your own version problematic. To work around that, I use <a href="https://github.com/ekonbenefits/impromptu-interface">an open source reflection library, <em>ImpromptuInterface</em></a>, to make creating a custom <code>DfaGraphWriter</code> implementation easier.</p>
+<p>We'll start by looking at the existing <code>DfaGraphWriter</code>, to understand the <code>internal</code> classes it uses and the issues that causes us. Then we'll look at using some custom interfaces and the <code>ImpromptuInterface</code> library to allow us to call those classes. In the next post, we'll look at how to use our custom interfaces to create a custom version of the <code>DfaGraphWriter</code>.</p>
+<h2 id="exploring-the-existing-dfagraphwriter">Exploring the existing <code>DfaGraphWriter</code><a href="#exploring-the-existing-dfagraphwriter"></a></h2>
+<p><a href="https://github.com/dotnet/aspnetcore/blob/083f81d7604352822820f6313c3d4eb219c044a8/src/Http/Routing/src/Internal/DfaGraphWriter.cs">The <code>DfaGraphWriter</code> class lives inside one of the "pubternal" folders</a> in ASP.NET Core. It's registered as a singleton and uses an injected <code>IServiceProvider</code> to retrieve the helper service, <code>DfaMatcherBuilder</code>:</p>
+<pre><code> <span>public</span> <span>class</span> <span>DfaGraphWriter</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>IServiceProvider</span> _services<span>;</span>
+    <span>public</span> <span>DfaGraphWriter</span><span>(</span><span>IServiceProvider</span> services<span>)</span>
+    <span>{</span>
+        _services <span>=</span> services<span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>Write</span><span>(</span><span>EndpointDataSource</span> dataSource<span>,</span> <span>TextWriter</span> writer<span>)</span>
+    <span>{</span>
+        
+        <span>var</span> builder <span>=</span> _services<span>.</span><span><span>GetRequiredService</span><span>&lt;</span><span>DfaMatcherBuilder</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> endpoints <span>=</span> dataSource<span>.</span>Endpoints<span>;</span>
+        <span>for</span> <span>(</span><span>var</span> i <span>=</span> <span>0</span><span>;</span> i <span>&lt;</span> endpoints<span>.</span>Count<span>;</span> i<span>++</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>endpoints<span>[</span>i<span>]</span> <span>is</span> <span>RouteEndpoint</span> endpoint <span>&amp;&amp;</span> <span>(</span>endpoint<span>.</span>Metadata<span>.</span><span><span>GetMetadata</span><span>&lt;</span><span>ISuppressMatchingMetadata</span><span>&gt;</span></span><span>(</span><span>)</span><span>?</span><span>.</span>SuppressMatching <span>?</span><span>?</span> <span>false</span><span>)</span> <span>==</span> <span>false</span><span>)</span>
+            <span>{</span>
+                builder<span>.</span><span>AddEndpoint</span><span>(</span>endpoint<span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span>
+
+        
+        
+        <span>var</span> tree <span>=</span> builder<span>.</span><span>BuildDfaTree</span><span>(</span>includeLabel<span>:</span> <span>true</span><span>)</span><span>;</span>
+
+        
+        writer<span>.</span><span>WriteLine</span><span>(</span><span>"digraph DFA {"</span><span>)</span><span>;</span>
+
+        
+        tree<span>.</span><span>Visit</span><span>(</span>WriteNode<span>)</span><span>;</span>
+
+        
+        writer<span>.</span><span>WriteLine</span><span>(</span><span>"}"</span><span>)</span><span>;</span>
+
+        
+        <span>void</span> <span>WriteNode</span><span>(</span><span>DfaNode</span> node<span>)</span>
+        <span>{</span>
+            
+        <span>}</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>The code above shows everything the graph writer's <code>Write</code> method does, but in summary:</p>
+<ul>
+<li>Fetches a <code>DfaMatcherBuilder</code></li>
+<li>Writes all of the endpoints in the <code>EndpointDataSource</code> to the <code>DfaMatcherBuilder</code>.</li>
+<li>Calls <code>BuildDfaTree</code> on the <code>DfaMatcherBuilder</code>. This creates a graph of <code>DfaNode</code>s.</li>
+<li>Visit each <code>DfaNode</code> in the tree, and write it to the <code>TextWriter</code> output. We'll explore this method in the next post.</li>
+</ul>
+<p>The goal of creating our own custom writer is to customise that last step, by controlling how different nodes are written to the output, so we can create more descriptive graphs, as I showed previously:</p>
+<p><img src="https://andrewlock.net/content/images/2020/graph_07.png" alt="Using different styling for an endpoint graph"></p>
+<p>Our problem is that two key classes, <code>DfaMatcherBuilder</code> and <code>DfaNode</code>, are <code>internal</code> so we can't easily instantiate them, or write methods that use them. That gives one of two options:</p>
+<ul>
+<li>Reimplement the <code>internal</code> classes, including any further <code>internal</code> classes <em>they</em> depend on.</li>
+<li>Use reflection to create and invoke methods on the existing classes.</li>
+</ul>
+<p>Neither of those are great options, but given that the endpoint graph isn't a performance-critical thing, I decided using reflection would be the easiest. To make things even easier, I used the open source library, <a href="https://github.com/ekonbenefits/impromptu-interface"><em>ImpromptuInterface</em></a>.</p>
+<h2 id="making-reflection-easier-with-impromptuinterface">Making reflection easier with ImpromptuInterface<a href="#making-reflection-easier-with-impromptuinterface"></a></h2>
+<p><em>ImpromptuInterface</em> is a library that makes it easier to call dynamic objects, or to invoke methods on the underlying object stored in an <code>object</code> reference. It essentially adds easy duck/structural typing, by allowing you to use a stronlgy-typed interface for the object. It achieves that using the <a href="https://docs.microsoft.com/en-us/dotnet/framework/reflection-and-codedom/dynamic-language-runtime-overview">Dynamic Language Runtime</a> and <a href="https://docs.microsoft.com/en-us/dotnet/framework/reflection-and-codedom/emitting-dynamic-methods-and-assemblies"><code>Reflection.Emit</code></a>.</p>
+<p>For example, lets take the existing <code>DfaMatcherBuilder</code> class that we want to use. Even though we can't reference it directly, we can still get an instance of this class from the DI container as shown below:</p>
+<pre><code>
+<span>Type</span> matcherBuilder <span>=</span> <span>typeof</span><span>(</span>IEndpointSelectorPolicy<span>)</span><span>.</span>Assembly
+    <span>.</span><span>GetType</span><span>(</span><span>"Microsoft.AspNetCore.Routing.Matching.DfaMatcherBuilder"</span><span>)</span><span>;</span>
+
+<span>object</span> rawBuilder <span>=</span> _services<span>.</span><span>GetRequiredService</span><span>(</span>matcherBuilder<span>)</span><span>;</span>
+</code></pre>
+<p>The <code>rawBuilder</code> is an <code>object</code> reference, but it <em>contains</em> an instance of the <code>DfaMatcherBuilder</code>. We can't directly call methods on it, but we can invoke them using reflection by building <code>MethodInfo</code> and calling <code>Invoke</code> directly.</p>
+<p><em>ImpromptuInterface</em> makes that process a bit easier, by providing a static interface that you can <em>directly</em> call methods on. For example, for the <code>DfaMatcherBuilder</code>, we only need to call two methods, <code>AddEndpoint</code> and <code>BuildDfaTree</code>. The original class looks something like this:</p>
+<pre><code><span>internal</span> <span>class</span> <span>DfaMatcherBuilder</span> <span>:</span> <span>MatcherBuilder</span>
+<span>{</span>
+    <span>public</span> <span>override</span> <span>void</span> <span>AddEndpoint</span><span>(</span><span>RouteEndpoint</span> endpoint<span>)</span> <span>{</span>  <span>}</span>
+    <span>public</span> <span>DfaNode</span> <span>BuildDfaTree</span><span>(</span><span>bool</span> includeLabel <span>=</span> <span>false</span><span>)</span>
+<span>}</span>
+</code></pre>
+<p>We can create an interface that exposes these methods:</p>
+<pre><code><span>public</span> <span>interface</span> <span>IDfaMatcherBuilder</span>
+<span>{</span>
+    <span>void</span> <span>AddEndpoint</span><span>(</span><span>RouteEndpoint</span> endpoint<span>)</span><span>;</span>
+    <span>object</span> <span>BuildDfaTree</span><span>(</span><span>bool</span> includeLabel <span>=</span> <span>false</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>We can then use the <em>ImpromptuInterface</em> <code>ActLike&lt;&gt;</code> method to create a proxy object that implements the <code>IDfaMatcherBuilder</code>. This proxy wraps the <code>rawbuilder</code> object, so that when you invoke a method on the interface, it calls the equivalent method on the underlying <code>DfaMatcherBuilder</code>:</p>
+<p><img src="https://andrewlock.net/content/images/2020/impromptuinterface.png" alt="Using ImpromptuInterface to add a wrapper proxy"></p>
+<p>In code, that looks like:</p>
+<pre><code>
+<span>object</span> rawBuilder <span>=</span> _services<span>.</span><span>GetRequiredService</span><span>(</span>matcherBuilder<span>)</span><span>;</span>
+
+
+<span>IDfaMatcherBuilder</span> builder <span>=</span> rawBuilder<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaMatcherBuilder</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+
+<span>object</span> rawTree <span>=</span>  builder<span>.</span><span>BuildDfaTree</span><span>(</span><span>)</span><span>;</span>
+</code></pre>
+<p>There's an important difference between the original <code>DfaMatcherBuilder.BuildDfaTree()</code> method and the interface version: the original returns a <code>DfaNode</code>, but that's another <code>internal</code> class, so we can't reference it in our interface. </p>
+<p>Instead we create another <code>ImpromptuInterface</code> for <a href="https://github.com/dotnet/aspnetcore/blob/fae3dd12aeba7c9995f69bfaa1c9b74d82307ef1/src/Http/Routing/src/Matching/DfaNode.cs">the <code>DfaNode</code> class</a>, and expose the properties we're going to need (you'll see why we need them in the next post):</p>
+<pre><code><span>public</span> <span>interface</span> <span>IDfaNode</span>
+<span>{</span>
+    <span>public</span> <span>string</span> Label <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> List<span>&lt;</span>Endpoint<span>&gt;</span> Matches <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>IDictionary</span> Literals <span>{</span> <span>get</span><span>;</span> <span>}</span> 
+    <span>public</span> <span>object</span> Parameters <span>{</span> <span>get</span><span>;</span> <span>}</span> 
+    <span>public</span> <span>object</span> CatchAll <span>{</span> <span>get</span><span>;</span> <span>}</span> 
+    <span>public</span> <span>IDictionary</span> PolicyEdges <span>{</span> <span>get</span><span>;</span> <span>}</span> 
+<span>}</span>
+</code></pre>
+<p>We'll use these properties in the <code>WriteNode</code> method in the next post, but there's some complexities. In the original <code>DfaNode</code> class, the <code>Parameters</code> and <code>CatchAll</code> properties return <code>DfaNode</code> objects. In our <code>IDfaNode</code> version of the properties we have to return <code>object</code> instead. We can't reference a <code>DfaNode</code> (because it's <code>internal</code>) and we can't return an <code>IDfaNode</code>, because <code>DfaNode</code> <em>doesn't</em> implement <code>IDfaNode</code>, so you can't you can't implicitly cast the <code>object</code> reference to an <code>IDfaNode</code>. You have to use <em>ImpromptuInterface</em> to <em>explicitly</em> add a proxy that implements the interface.</p>
+<p>For example:</p>
+<pre><code>
+<span>IDfaMatcherBuilder</span> builder <span>=</span> rawBuilder<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaMatcherBuilder</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+
+<span>object</span> rawTree <span>=</span>  builder<span>.</span><span>BuildDfaTree</span><span>(</span><span>)</span><span>;</span>
+
+<span>IDfaNode</span> tree <span>=</span> rawTree<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+
+<span>object</span> rawParameters <span>=</span> tree<span>.</span>Parameters<span>;</span>
+
+<span>IDfaNode</span> parameters <span>=</span> rawParameters<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+</code></pre>
+<p>We have another problem with the properties that return <code>Dictionary</code> types: <code>Literals</code> and <code>PolicyEdges</code>. The actual types returned are <code>Dictionary&lt;string, DfaNode&gt;</code> and <code>Dictionary&lt;object, DfaNode&gt;</code> respectively, but we need to use a type that <em>doesn't</em> contain the <code>DfaNode</code> type. Unfortunately, that means we have to fall back to the .NET 1.1 <code>IDictionary</code> interface!</p>
+<blockquote>
+<p>You can't cast a <code>Dictionary&lt;string, DfaNode&gt;</code> to an <code>IDictionary&lt;string, object&gt;</code> is because doing so <a href="https://stackoverflow.com/questions/2149589/idictionarytkey-tvalue-in-net-4-not-covariant">would be an unsafe form of covariance</a>.</p>
+</blockquote>
+<p><code>IDictionary</code> is a non-generic interface, so the <code>key</code> and <code>value</code> are only exposed as <code>object</code>s. For the <code>string</code> key you can cast directly, and for the <code>DfaNode</code> we can use <em>ImpromptuInterface</em> to create the proxy wrapper for us:</p>
+<pre><code>
+<span>foreach</span> <span>(</span><span>DictionaryEntry</span> dictEntry <span>in</span> node<span>.</span>Literals<span>)</span>
+<span>{</span>
+    
+    <span>var</span> key <span>=</span> <span>(</span><span>string</span><span>)</span>dictEntry<span>.</span>Key<span>;</span>
+    
+    <span>IDfaNode</span> <span>value</span> <span>=</span> dictEntry<span>.</span>Value<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>We now have everything we need to create a custom <code>DfaWriter</code> implementation by implementing <code>WriteNode</code>, but this post is already a bit long, so we'll explore how to do that in the next post!</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I explored the <code>DfaWriter</code> implementation in ASP.NET Core, and the two <code>internal</code> classes it uses: <code>DfaMatcherBuilder</code> and <code>DfaNode</code>. The fact these class are internal makes it tricky to create our own implementation of the <code>DfaWriter</code>. To implement it cleanly we would have to reimplement both of these types and all the classes <em>they</em> depend on.</p>
+<p>Instead, I used the <em>ImpromptuInterface</em> library to create a wrapper proxy that implements similar methods to the object being wrapped. This uses reflection to invoke methods on the wrapped property, but allows us to work with a strongly typed interface. In the next post I'll show how to use these wrappers to create a custom <code>DfaWriter</code> for customising your endpoint graphs.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs" /></noscript>
+</body>
+</html>
