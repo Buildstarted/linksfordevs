@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Understanding How Assemblies Load in C# .NET - Michael&#x27;s Coding Spot - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Understanding How Assemblies Load in C# .NET - Michael&#x27;s Coding Spot - linksfor.dev(s)"/>
+    <meta property="article:author" content="https://www.facebook.com/michael.shpilt"/>
+    <meta property="og:description" content="We are constantly dealing with libraries and NuGet packages. These libraries depend on other popular libraries and there are a lot of shared dependencies. With a large enough web of dependencies, you&#x27;ll eventually get into conflicts or hard situations. The best way to deal with such issues is to understand how the mechanism works internally."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://michaelscodingspot.com/assemblies-load-in-dotnet/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Understanding How Assemblies Load in C# .NET - Michael&#x27;s Coding Spot</title>
+<div class="readable">
+        <h1>Understanding How Assemblies Load in C# .NET - Michael&#x27;s Coding Spot</h1>
+            <div>by https://www.facebook.com/michael.shpilt</div>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 14 Jul 2020</div>
+        <p><a href="https://michaelscodingspot.com/assemblies-load-in-dotnet/">https://michaelscodingspot.com/assemblies-load-in-dotnet/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article id="post-4761" itemtype="https://schema.org/CreativeWork" itemscope="itemscope">
+
+	
+	
+<div>
+
+	
+	<!-- .entry-header -->
+
+	
+	<div itemprop="text" data-content-ads-inserted="true">
+
+		
+		
+<p>For better or for worse, a senior .NET developer needs to understand how the .NET runtime loads assemblies. We are constantly dealing with libraries and NuGet packages. These libraries depend on other popular libraries and there are a lot of shared dependencies. With a large enough web of dependencies, you’ll eventually get into conflicts or hard situations.</p>
+<p>The best way to deal with such issues is to understand how the mechanism works internally. In this article, you’ll see how and when a .NET process loads a referenced assembly. You’ll understand which library version was loaded, what happens when there are several versions available, and why problems sometimes occur due to version conflicts. You’ll see how to debug these types of problems, see assembly binding logs (fusion logs), and see some ways to resolve conflicts.</p>
+<h2>Assembly, Module, and Reference</h2>
+<p>Let’s start with some basic terms around a .NET process.</p>
+<p>An <strong>Assembly</strong> in .NET is a DLL or EXE file. Each project in your Visual Studio solution is compiled into an assembly. Each assembly can contain multiple <strong>Modules</strong>, but in practice, we’ll almost always have one module in an assembly, which will have the same name as the assembly.</p>
+<p>When starting a process or hitting F5 in Visual Studio, your startup project assembly is going to be executed. It’s going to be the first assembly loaded except for .NET Framework or .NET Core assemblies. Afterward, the process is going to load other assemblies at runtime according to its need. It will load assemblies lazily, only when it needs to call a method or use a type from that assembly.</p>
+<p>Here are the modules loaded for a simple “Hello World” .NET Framework project (Modules and Assemblies are the same for all our intents and purposes). <strong>MyStartup.dll</strong> is the startup project here:</p>
+<p><img referrerpolicy="no-referrer" alt="Modules loaded at startup of .NET Core project" data-src="/wp-content/uploads/2020/07/dllhelll_loadmodules2.png" src="https://michaelscodingspot.com/wp-content/uploads/2020/07/dllhelll_loadmodules2.png" loading="lazy"></p>
+<p>When you reference a project from another project, at build time, the referenced project’s DLL or EXE are copied to the <strong>Bin</strong> folder of the startup project. It will usually be <strong>Bin\Debug</strong> or <strong>Bin\Release</strong>. At runtime, when you use a type from a referenced project for the first time, the CLR looks in the application directory for the DLL file with the same name and version it expects. It then loads that assembly into the process. This is also called <strong>binding</strong> to the assembly.</p>
+<p><strong>Here’s an example:</strong></p>
+<p>Let’s say that we have a simple Console application called <strong>MyStartup</strong> that referenced another project called <strong>Lib1</strong>. MyStartup uses some classes from the <strong>Lib1</strong> assembly.</p>
+<p>In <strong>MyStartup</strong>:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5f0d4625ab0c4649082222" data-settings=" touchscreen no-popup minimize scroll-mouseover wrap">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>class</span><span> </span><span>Program</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>static</span><span> </span><span>void</span><span> </span><span>Main</span><span>(</span><span>string</span><span>[</span><span>]</span><span> </span><span>args</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>int</span><span> </span><span>a</span><span> </span><span>=</span><span> </span><span>int</span><span>.</span><span>Parse</span><span>(</span><span>Console</span><span>.</span><span>ReadLine</span><span>(</span><span>)</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>int</span><span> </span><span>b</span><span> </span><span>=</span><span> </span><span>int</span><span>.</span><span>Parse</span><span>(</span><span>Console</span><span>.</span><span>ReadLine</span><span>(</span><span>)</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>"A + B = "</span><span> </span><span>+</span><span> </span><span>Add</span><span>(</span><span>a</span><span>,</span><span> </span><span>b</span><span>)</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>private</span><span> </span><span>static</span><span> </span><span>int</span><span> </span><span>Add</span><span>(</span><span>int</span><span> </span><span>a</span><span>,</span><span> </span><span>int</span><span> </span><span>b</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>var</span><span> </span><span>calculator</span><span> </span><span>=</span><span> </span><span>new</span><span> </span><span>Lib1</span><span>.</span><span>Calculator</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>return</span><span> </span><span>calculator</span><span>.</span><span>Sum</span><span>(</span><span>a</span><span>,</span><span> </span><span>b</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0004 seconds] -->
+
+<p>In <strong>Lib1</strong>:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5f0d4625ab0cd564972141" data-settings=" touchscreen no-popup minimize scroll-mouseover wrap">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>public</span><span> </span><span>class</span><span> </span><span>Calculator</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>int</span><span> </span><span>Sum</span><span>(</span><span>int</span><span> </span><span>a</span><span>,</span><span> </span><span>int</span><span> </span><span>b</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>return</span><span> </span><span>a</span><span> </span><span>+</span><span> </span><span>b</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0001 seconds] -->
+
+<p>When entering <code>Main</code> method, the <strong>Lib1</strong> assembly isn’t loaded yet. But when entering the <code>Add</code> method, the CLR tries to resolve the <code>Calculator</code> type, figures out it’s in a referenced assembly Lib1 and then tries to load that assembly.</p>
+<h2>Assemblies Binding in .NET</h2>
+<p>When the CLR needs to load an assembly, the logic is actually a bit more complicated than looking in the Bin folder. Here’s the actual logic executed (see <a href="https://docs.microsoft.com/en-us/dotnet/framework/deployment/how-the-runtime-locates-assemblies">Microsoft’s documentation</a> for elaboration):</p>
+<ol start="">
+<li><p>Determine the version of the assembly that needs to load according to configuration files (<strong>app.config</strong> or <strong>web.config</strong>). That configuration file name will be (after the build)  <code>[executable name].exe.config</code> or <code>web.config</code>. Here binding redirects come into play (more on that later).</p>
+</li>
+<li><p>See if the assembly is already loaded. If a different version is loaded, a <strong>FileLoadException</strong> will be thrown, unless it’s a strongly-named assembly that can be loaded in several versions side-by-side.</p>
+</li>
+<li><p>If it’s a strongly-named assembly, check the <a href="https://docs.microsoft.com/en-us/dotnet/framework/app-domains/gac">Global Assembly Cache</a> (GAC). The GAC is a place on the machine to share assemblies for multiple applications. An assemblies cache if you will. It can store only strongly-named assemblies. It can store different versions of the same assembly. You can install it to the GAC yourself with <a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/gacutil-exe-gac-tool">gacutil.exe</a>.</p>
+</li>
+<li><p>If it’s a strongly-named assembly and configuration files include <code>&lt;codeBase&gt;</code> nodes, it checks for the assembly location there. If the <code>&lt;codeBase&gt;</code> node exists and the assembly is not found, a <code>FileNotFoundException</code> will be thrown.</p>
+</li>
+<li><p>Checks for the assembly DLL or EXE according to a heuristic algorithm. This process is called <strong>Probing</strong>. The algorithm is as follows:</p>
+<ol start="">
+<li>Check the folder <code>[application base] / [assembly name].dll</code>. The application base is where the application executable is. Usually your Bin\Debug or Bin\Release folders.</li>
+<li>Check <code>[application base] / [assembly name] / [assembly name].dll</code></li>
+<li>If culture information is specified for the referenced assembly, only the following directories are checked:
+<code>[application base] / [culture] / [assembly name].dll</code>
+<code>[application base] / [culture] / [assembly name] / [assembly name].dll</code></li>
+<li>If the <code>&lt;probing&gt;</code> node exists in configuration files, then it looks for the assembly in the folder specified by the <code>privatePath</code> attribute of that node.</li>
+
+</ol>
+</li>
+
+</ol>
+<p>Why do they have to make everything so difficult, right?</p>
+<p>Actually, this logic is very much to help us develop, and not to make things difficult. It exists to achieve a few important goals:</p>
+<ul>
+<li>To make sure that if you reference a specific assembly and version, then that exact version will be loaded. Otherwise, an exception will be thrown. And if you know what you’re doing, then you can specify override rules in configuration files (binding redirects).</li>
+<li>To allow flexibility in which assembly you want to load. For example, if you want to load different assemblies according to different cultures (languages), then you can do so easily. 
+Or if you want to load different assemblies according to customer configuration, that’s also OK.</li>
+<li>For security, we have strongly-named assemblies. They make sure that you can’t “fake” assemblies. For example, if a process expects to load <strong>Lib1 v4.5</strong>, then you won’t be able to load a malware assembly with that same name and version. An exception will be thrown while loading it. That’s why the GAC, which is shared for all processes on the machine, only accepts strongly-named assemblies.</li>
+
+</ul>
+<p>In most applications, you don’t need to keep in mind the complex logic of assembly loading and probing. You don’t need to know or think about the GAC, strongly named assemblies, or manipulating configuration files. You <em>mostly</em> don’t need to think about library versions at all because possible conflicts are automatically solved with a mechanism called Binding Redirects. </p>
+<h2>Binding Redirects</h2>
+<p>If there’s one thing that’s really important to understand about this whole deal, it’s binding redirects. That’s the ability to tell the runtime which version it should actually load, regardless of the version it has a reference to.</p>
+<p>Here’s an example: Your process has two projects (modules): Project A and Project B. Project A references <strong>log4net.dll v1.1</strong> and project B references <strong>log4net.dll v1.2</strong>. Both log4net DLL files are copied to the output folder, but there can be only one <strong>log4net.dll</strong> file. Let’s say the file that was copied to the output folder was log4net.dll <strong>v1.2</strong>. Let’s say that the first code reached was the one in Project A, which references log4net v1.1. The runtime will look in the output folder, find a different version of log4net, and fail with a <code>FileLoadException</code>.</p>
+<p>There’s another scenario possible. Suppose the code from Project B was executed first and when trying to use log4net, it successfully loaded log4net.dll v1.2. After a while, the code from Project A will try to use log4net v1.1, see that the assembly is already loaded with a different version, and throw a <code>FileLoadException</code>.</p>
+<p>What you can do in this scenario, if you know which log4net version is going to be in the output folder, is to tell the runtime which version it should use. Simply add the following lines to your <code>app.config</code> file in the <code>runtime</code> section:</p>
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5f0d4625ab0d0820821102" data-settings=" touchscreen no-popup minimize scroll-mouseover wrap">
+		
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="hide">
+					
+				</td>
+						<td><div><p><span>&lt;?</span><span>xml </span><span>version</span><span>=</span><span>"1.0"</span><span> </span><span>encoding</span><span>=</span><span>"utf-8"</span><span> </span><span>?&gt;</span></p><p><span>&lt;</span><span>configuration</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>.</span><span>.</span><span>.</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;</span><span>runtime</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>.</span><span>.</span><span>.</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;</span><span>assemblyBinding </span><span>xmlns</span><span>=</span><span>"urn:schemas-microsoft-com:asm.v1"</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;</span><span>dependentAssembly</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;</span><span>assemblyIdentity </span><span>name</span><span>=</span><span>"log4net"</span><span> </span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>publicKeyToken</span><span>=</span><span>"669e0ddf0bb1aa2a"</span><span> </span><span>culture</span><span>=</span><span>"neutral"</span><span> </span><span>/</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;</span><span>bindingRedirect </span><span>oldVersion</span><span>=</span><span>"0.0.0.0-5.0.0.0"</span><span> </span><span>newVersion</span><span>=</span><span>"1.2.0"</span><span> </span><span>/</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;</span><span>/</span><span>dependentAssembly</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;</span><span>/</span><span>assemblyBinding</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;</span><span>/</span><span>runtime</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>.</span><span>.</span><span>.</span></p><p><span>&lt;</span><span>/</span><span>configuration</span><span>&gt;</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0009 seconds] -->
+
+<p>This means that whenever the runtime wants to bind to the assembly log4net with version range from <code>0.0.0.0</code> to <code>5.0.0.0</code>, it will instead try to bind to version <code>1.2.0</code>.</p>
+<p>In practice, you don’t have to add these redirects manually because they are added automatically. If you go to the Properties of your startup project, you’ll see the following setting:</p>
+<p><img referrerpolicy="no-referrer" alt="image-20200711101325128" data-src="/wp-content/uploads/2020/07/auto-generate-binding-redirects.png" src="https://michaelscodingspot.com/wp-content/uploads/2020/07/auto-generate-binding-redirects.png" loading="lazy"></p>
+<p>This option is checked by default. It automatically detects version conflicts and generates binding redirects in the <code>.config</code> file.</p>
+<h2>When Problems Start Happening</h2>
+<p>Binding redirects might appear like the answer to all your problems at first glance, but it’s far from the truth. When you’re using binding redirects, you’re basically using a different library version than intended. What if a method was removed? Or a method’s signature changed? In that case, when that method is called, the program will fail with a runtime error. After all, versions were created for a reason.</p>
+<p>If you do have these kinds of problems, there are ways to deal with them. Check out my article: <a href="https://michaelscodingspot.com/how-to-resolve-net-reference-and-nuget-package-version-conflicts/">How to resolve .NET reference and NuGet package version conflicts</a>.</p>
+<h2>Troubleshooting</h2>
+<p>When you have a <code>FileLoadException</code> or something similar, the first thing I recommend doing is look at your Modules window in Visual Studio. In there, you’ll see all the loaded modules and find out if the assembly that you’re trying to load is already loaded, with what version, and from which path. </p>
+<p>Besides that, you can view assembly binding logs, also called Fusion logs. These logs will show what exactly happened during the assembly binding attempts. You’ll see what assembly version the runtime looked for, which folders the runtime looked in, and the points of failure.</p>
+<p>There are several ways to see fusion logs. To start, you’ll have to enable them because they are disabled by default. You can enable them manually in the registry by setting the <code>HKLM\Software\Microsoft\Fusion\ForceLog</code> value to 1 and <code>HKLM\Software\Microsoft\Fusion\LogPath</code> value to <code>C:\FusionLogs</code>. The logs will appear automatically. Alternatively, you can use Fusion Log Viewer, which should be installed on your PC as <code>fuslogvw.exe</code>. I suggest using a program like <a href="https://www.voidtools.com/">Everything windows search</a> to find it. Make sure to run fusion log viewer with administrator privileges to be able to enable and disable logs. A more modern tool to do this that’s becoming popular recently is <a href="https://github.com/awaescher/Fusion/">Fusion++</a>.</p>
+<h2>Side note</h2>
+<p>Don’t know about you, but I used to hate having to deal with these kinds of issues. Give me a logical problem, let me build something, or even solve a production bug… but never this. Having no choice in the matter, I had to learn the inner works of assembly bindings the hard way. I discovered that like with everything else, once you understand something, it becomes less terrible and even enjoyable. So I hope this article made sense for you and will help you quickly along the path that I went through.</p>
+
+
+
+
+
+
+
+   <div>
+<p><span>Enjoy the blog? I would love you to subscribe!</span>
+<img data-src="https://michaelscodingspot.com/wp-content/uploads/2019/04/pdf-icon.png" src="https://michaelscodingspot.com/wp-content/uploads/2019/04/pdf-icon.png" loading="lazy">
+<span>Performance Optimizations in C#: 10 Best Practices (exclusive article)</span>
+</p>
+<div>
+<div id="myflex123">
+<p><img data-src="https://michaelscodingspot.com/wp-content/uploads/2017/06/black-small-optimized-flipped.gif" src="https://michaelscodingspot.com/wp-content/uploads/2017/06/black-small-optimized-flipped.gif" loading="lazy"></p><!--mailchimp here-->
+
+</div>
+</div>
+</div>
+   
+		
+		
+			</div><!-- .entry-content .clear -->
+</div>
+
+	
+</article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs" /></noscript>
+</body>
+</html>

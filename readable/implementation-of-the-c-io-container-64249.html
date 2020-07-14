@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Implementation of the C# IO container - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Implementation of the C# IO container - linksfor.dev(s)"/>
+    <meta property="article:author" content="Mark Seemann"/>
+    <meta property="og:description" content="Implementation details of the C# IO container."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.ploeh.dk/2020/07/13/implementation-of-the-c-io-container/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Implementation of the C# IO container</title>
+<div class="readable">
+        <h1>Implementation of the C# IO container</h1>
+            <div>by Mark Seemann</div>
+            <div>Reading time: 3-4 minutes</div>
+        <div>Posted here: 14 Jul 2020</div>
+        <p><a href="https://blog.ploeh.dk/2020/07/13/implementation-of-the-c-io-container/">https://blog.ploeh.dk/2020/07/13/implementation-of-the-c-io-container/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="post">
+	<p>
+		<em>Implementation details of the C# IO container.</em>
+	</p>
+	<p>
+		This article is part of <a href="https://blog.ploeh.dk/2020/06/08/the-io-container">an article series about the IO container in C#</a>. In the previous articles, you've seen how a type like <code>IO&lt;T&gt;</code> can be used to distinguish between <a href="https://en.wikipedia.org/wiki/Pure_function">pure functions</a> and impure actions.
+	</p>
+	<p>
+		The point of the article series is to illustrate the concept that <a href="https://www.haskell.org/">Haskell</a> uses to impose the <a href="https://blog.ploeh.dk/2018/11/19/functional-architecture-a-definition">functional interaction law</a> at compile time. The implementation details really aren't important. Still, I believe that I know my readership well enough that a substantial fraction would be left unsatisfied if I didn't share the implementation details.
+	</p>
+	<p>
+		I consider this an appendix to the article series. It's not really what this is all about, but here it is, nonetheless.
+	</p>
+	<h3 id="dcf2521a1b8c40df9d45e97a43cfc546">
+		Constructor <a href="#dcf2521a1b8c40df9d45e97a43cfc546" title="permalink">#</a>
+	</h3>
+	<p>
+		Based on the public API <a href="https://blog.ploeh.dk/2020/06/15/io-container-in-a-parallel-c-universe">already published</a>, the constructor implementation hardly comes as a surprise.
+	</p>
+	<pre><span>private</span>&nbsp;<span>readonly</span>&nbsp;<span>Lazy</span>&lt;<span>T</span>&gt;&nbsp;item;
+ 
+<span>public</span>&nbsp;<span>IO</span>(<span>Lazy</span>&lt;<span>T</span>&gt;&nbsp;item)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;<span>this</span>.item&nbsp;=&nbsp;item;
+}</pre>
+	
+	<p>
+		The <code>IO&lt;T&gt;</code> class is little more than a wrapper around <code>Lazy&lt;T&gt;</code>, with the restriction that while you can put a <code>Lazy&lt;T&gt;</code> object into an <code>IO</code> object, you can never get it out again. Thus, the <code>item</code> is a <code>private</code> class field instead of a public property.
+	</p>
+	<h3 id="50d90cc423f04f5bb4e31a0d6c9b12c8">
+		SelectMany <a href="#50d90cc423f04f5bb4e31a0d6c9b12c8" title="permalink">#</a>
+	</h3>
+	<p>
+		The <code>SelectMany</code> method is a little more tricky:
+	</p>
+	<pre><span>public</span>&nbsp;<span>IO</span>&lt;<span>TResult</span>&gt;&nbsp;SelectMany&lt;<span>TResult</span>&gt;(<span>Func</span>&lt;<span>T</span>,&nbsp;<span>IO</span>&lt;<span>TResult</span>&gt;&gt;&nbsp;selector)
+{
+&nbsp;&nbsp;&nbsp;&nbsp;<span>var</span>&nbsp;res&nbsp;=&nbsp;<span>new</span>&nbsp;<span>Lazy</span>&lt;<span>IO</span>&lt;<span>TResult</span>&gt;&gt;(()&nbsp;=&gt;&nbsp;selector(item.Value));
+&nbsp;&nbsp;&nbsp;&nbsp;<span>return</span>&nbsp;<span>new</span>&nbsp;<span>IO</span>&lt;<span>TResult</span>&gt;(
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span>new</span>&nbsp;<span>Lazy</span>&lt;<span>TResult</span>&gt;(()&nbsp;=&gt;&nbsp;res.Value.item.Value));
+}</pre>
+	
+	<p>
+		To guarantee <a href="https://en.wikipedia.org/wiki/Referential_transparency">referential transparency</a>, we don't want the method to trigger evaluation of the lazy value, so the <code>selector</code> has to run inside a new lazy computation. This produces a lazy <code>IO</code> value that the method then has to unwrap inside another lazy computation. Such a translation from <code>Lazy&lt;IO&lt;TResult&gt;&gt;</code> to a new <code>IO</code> object with a <code>Lazy&lt;TResult&gt;</code> inside it is reminiscent of what in Haskell is known as a <em>traversal</em>.
+	</p>
+	<h3 id="b6c088710f6340689376b0ddf3b7df01">
+		UnsafePerformIO <a href="#b6c088710f6340689376b0ddf3b7df01" title="permalink">#</a>
+	</h3>
+	<p>
+		Finally, the <code>UnsafePerformIO</code> method isn't part of the API, but as explained in the <a href="https://blog.ploeh.dk/2020/07/06/referential-transparency-of-io">previous article</a>, this is the special method that the hypothetical parallel-world framework calls on the <code>IO&lt;Unit&gt;</code> returned by <code>Main</code> methods.
+	</p>
+	<pre><span>internal</span>&nbsp;<span>T</span>&nbsp;UnsafePerformIO()
+{
+&nbsp;&nbsp;&nbsp;&nbsp;<span>return</span>&nbsp;item.Value;
+}</pre>
+	
+	<p>
+		Since only the framework is supposed to call this method, it's <code>internal</code> by design. The only thing it does is to force evaluation of the lazy <code>item</code>.
+	</p>
+	<h3 id="38830b00fbbf4911b8a7ebd723e138ea">
+		Conclusion <a href="#38830b00fbbf4911b8a7ebd723e138ea" title="permalink">#</a>
+	</h3>
+	<p>
+		Most of the implementation of <code>IO&lt;T&gt;</code> is straightforward, with the single exception of <code>SelectMany</code>, which has to jump through a few hoops to keep the behaviour lazy until it's activated.
+	</p>
+	<p>
+		Once more I want to point out that the purpose of this article series is to explain how a type system like Haskell's guarantees referential transparency. C# could do the same, but it'd require that all impure actions in all libraries in the entire .NET ecosystem were to return <code>IO</code> values. That's not going to happen, but something similar already has happened. Read on in the next article.
+	</p>
+	<p>
+		<strong>Next:</strong> Task asynchronous programming as an IO surrogate.
+	</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs" /></noscript>
+</body>
+</html>
