@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+End-to-End Integration Testing with NServiceBus: How It Works - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="End-to-End Integration Testing with NServiceBus: How It Works - linksfor.dev(s)"/>
+    <meta property="article:author" content="Jimmy Bogard"/>
+    <meta property="og:description" content="In my last post, I walked through setting up end-to-end integration testing with NServiceBus, and how we can use it to black box test message endpoints similar to how the ASP.NET Core integration testing works. In this post, I want to walk through how it all works underneath the"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://jimmybogard.com/end-to-end-integration-testing-with-nservicebus-how-it-works/?utm_source=feedburner&amp;utm_medium=feed&amp;utm_campaign=Feed%3A%20GrabBagOfT%20(Jimmy%20Bogard)"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - End-to-End Integration Testing with NServiceBus: How It Works</title>
+<div class="readable">
+        <h1>End-to-End Integration Testing with NServiceBus: How It Works</h1>
+            <div>by Jimmy Bogard</div>
+            <div>Reading time: 11-13 minutes</div>
+        <div>Posted here: 15 Jul 2020</div>
+        <p><a href="https://jimmybogard.com/end-to-end-integration-testing-with-nservicebus-how-it-works/?utm_source=feedburner&amp;utm_medium=feed&amp;utm_campaign=Feed%3A%20GrabBagOfT%20(Jimmy%20Bogard)">https://jimmybogard.com/end-to-end-integration-testing-with-nservicebus-how-it-works/?utm_source=feedburner&amp;utm_medium=feed&amp;utm_campaign=Feed%3A%20GrabBagOfT%20(Jimmy%20Bogard)</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="site-main">
+    <div>
+
+        <article>
+
+            
+
+
+            <section>
+                <div>
+                    <p>In my last post, I walked through <a href="https://jimmybogard.com/end-to-end-integration-testing-with-nservicebus/">setting up end-to-end integration testing with NServiceBus</a>, and how we can use it to black box test <a href="https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessageEndpoint.html">message endpoints</a> similar to how the <a href="https://docs.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-3.1">ASP.NET Core integration testing works</a>. In this post, I want to walk through how it all works underneath the covers.</p><p>The major challenge in testing an async messaging flow is observability - how do we know when the work is started or completed? Our tests are written in an imperative, top-down, "Arrange-Act-Assert" style but the system under test (SUT) is intentionally asynchronous.</p><p>In my <a href="https://jimmybogard.com/building-end-to-end-diagnostics-and-tracing-a-primer/">end-to-end diagnostics series</a>, I walked through adding observability to our message endpoints, and it turns out, we can leverage this same mechanism to observe our SUT in our integration tests.</p><h3 id="what-is-done">What is done?</h3><p>In order to know what we need to test, we need to understand what it means for the "Act" step in a test to complete successfully. In a normal synchronous interaction, the "Act" is guaranteed to complete when the method returns - whether this call is "awaited" or not, it's still blocking until the response is returned.</p><p>With async messaging, our calling code only blocks while until the message is "ack"d:</p><pre><code><span>var</span> firstMessage <span>=</span> <span>new</span> <span>FirstMessage</span> <span>{</span>Message <span>=</span> <span>"Hello World"</span><span>}</span><span>;</span>
+
+<span>var</span> session <span>=</span> _factory<span>.</span>Services<span>.</span><span><span>GetService</span><span>&lt;</span><span>IMessageSession</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+<span>await</span> _session<span>.</span><span>SendLocal</span><span>(</span>firstMessage<span>)</span><span>;</span>
+
+</code></pre><p>We could do something silly like an <code>await Task.Delay(something??)</code> but that's not terribly efficient. Those task delays easily add up, and we could have finished far earlier but just not known it.</p><p>In an end-to-end message endpoint scenario, there are some top-level indications my work is complete:</p><ul><li>When a specific message is processed</li><li>When a specific message is sent</li></ul><p>Depending on my scenario, when one of these conditions is met, it's now safe to make my assertions of the messages or the handler's expected side effects.</p><p>When we have an external source of signals we're waiting to receive, we don't want to wait forever. We'll still want a timeout - a maximum amount of time we wait for those observable conditions to be met, otherwise we'll just timeout.</p><p>For those that have used various BDD or QA testing tools, this is pretty common for UI tests. We wait for the browser to make its calls and update things, and wait for some expected UI state to move on, but not wait forever. It's not much different, except instead of waiting for some DOM element to show up, we're waiting for messages.</p><h3 id="observing-messages">Observing Messages</h3><p>To be notified for messages sent or processed, we can first look at our diagnostic events we created in the end-to-end tracing posts. Our "Act" code needs to look for specific messages sent/received. Unfortunately, the same diagnostic event we used for telemetry is a bit lower level than we want - for example, the messages are transport-oriented, with <code>byte[]</code> messages bodies and the like.</p><p>Luckily, NServiceBus has an <a href="https://docs.particular.net/nservicebus/pipeline/steps-stages-connectors">additional pipeline hook for logical messages sent/received</a>, and this context object has more relevant information we'd want in our tests. We can then expose more diagnostic events at the logical message level, instead of physical. First, a behavior for processing messages:</p><pre><code><span>public</span> <span>class</span> <span>IncomingLogicalMessageDiagnostics</span> <span>:</span> <span>Behavior</span><span>&lt;</span>IIncomingLogicalMessageContext<span>&gt;</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>DiagnosticListener</span> _diagnosticListener<span>;</span>
+    <span>private</span> <span>const</span> <span>string</span> EventName <span>=</span> ActivityNames<span>.</span>IncomingLogicalMessage <span>+</span> <span>".Processed"</span><span>;</span>
+
+    <span>public</span> <span>IncomingLogicalMessageDiagnostics</span><span>(</span><span>DiagnosticListener</span> diagnosticListener<span>)</span>
+        <span>=&gt;</span> _diagnosticListener <span>=</span> diagnosticListener<span>;</span>
+
+    <span>public</span> <span>IncomingLogicalMessageDiagnostics</span><span>(</span><span>)</span>
+        <span>:</span> <span>this</span><span>(</span><span>new</span> <span>DiagnosticListener</span><span>(</span>ActivityNames<span>.</span>IncomingLogicalMessage<span>)</span><span>)</span>
+    <span>{</span>
+    <span>}</span>
+
+    <span>public</span> <span>override</span> <span>async</span> <span>Task</span> <span>Invoke</span><span>(</span><span>IIncomingLogicalMessageContext</span> context<span>,</span> Func<span>&lt;</span>Task<span>&gt;</span> next<span>)</span>
+    <span>{</span>
+        <span>await</span> <span>next</span><span>(</span><span>)</span><span>.</span><span>ConfigureAwait</span><span>(</span><span>false</span><span>)</span><span>;</span>
+
+        <span>if</span> <span>(</span>_diagnosticListener<span>.</span><span>IsEnabled</span><span>(</span>EventName<span>)</span><span>)</span>
+        <span>{</span>
+            _diagnosticListener<span>.</span><span>Write</span><span>(</span>EventName<span>,</span> context<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+<span>}</span>
+</code></pre><p>In this example, I'm not using Activity information, I'm simply raising a single diagnostic event since the physical message behavior already does all of the telemetry work. We await the next step in the pipeline, and raise the event. This ensures our diagnostic event only raises when the message is successfully handled.</p><p>The parameter we include in the diagnostic event, the <code>IIncomingLogicalMessageContext</code>, includes the deserialized message and its type information. That way if we want to observe a specific message type with specific data, we can.</p><p>Next, we create a similar pipeline behavior for outgoing logical messages:</p><pre><code><span>public</span> <span>class</span> <span>OutgoingLogicalMessageDiagnostics</span> <span>:</span> <span>Behavior</span><span>&lt;</span>IOutgoingLogicalMessageContext<span>&gt;</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>DiagnosticListener</span> _diagnosticListener<span>;</span>
+    <span>private</span> <span>const</span> <span>string</span> EventName <span>=</span> ActivityNames<span>.</span>OutgoingLogicalMessage <span>+</span> <span>".Sent"</span><span>;</span>
+
+    <span>public</span> <span>OutgoingLogicalMessageDiagnostics</span><span>(</span><span>DiagnosticListener</span> diagnosticListener<span>)</span>
+        <span>=&gt;</span> _diagnosticListener <span>=</span> diagnosticListener<span>;</span>
+
+    <span>public</span> <span>OutgoingLogicalMessageDiagnostics</span><span>(</span><span>)</span>
+        <span>:</span> <span>this</span><span>(</span><span>new</span> <span>DiagnosticListener</span><span>(</span>ActivityNames<span>.</span>OutgoingLogicalMessage<span>)</span><span>)</span> <span>{</span> <span>}</span>
+
+    <span>public</span> <span>override</span> <span>async</span> <span>Task</span> <span>Invoke</span><span>(</span><span>IOutgoingLogicalMessageContext</span> context<span>,</span> Func<span>&lt;</span>Task<span>&gt;</span> next<span>)</span>
+    <span>{</span>
+        <span>await</span> <span>next</span><span>(</span><span>)</span><span>.</span><span>ConfigureAwait</span><span>(</span><span>false</span><span>)</span><span>;</span>
+
+        <span>if</span> <span>(</span>_diagnosticListener<span>.</span><span>IsEnabled</span><span>(</span>EventName<span>)</span><span>)</span>
+        <span>{</span>
+            _diagnosticListener<span>.</span><span>Write</span><span>(</span>EventName<span>,</span> context<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+<span>}</span>
+</code></pre><p>Almost exactly the same! With our diagnostic events defined and set up in behaviors (this is in the <a href="https://www.nuget.org/packages/NServiceBus.Extensions.Diagnostics/">NServiceBus.Extensions.Diagnostics</a> package), we can listen in on these events in our integration test.</p><h3 id="observing-diagnostics-events-in-a-test">Observing Diagnostics Events in a Test</h3><p>I boiled the "wait for an event" method to a single method in a fixture:</p><pre><code><span>private</span> <span>static</span> <span>async</span> Task<span>&lt;</span>ObservedMessageContexts<span>&gt;</span> <span><span>ExecuteAndWait</span><span>&lt;</span><span>TMessageContext</span><span>&gt;</span></span><span>(</span>
+    Func<span>&lt;</span>Task<span>&gt;</span> testAction<span>,</span>
+    Func<span>&lt;</span>TMessageContext<span>,</span> <span>bool</span><span>&gt;</span> predicate<span>,</span>
+    TimeSpan<span>?</span> timeout <span>=</span> <span>null</span><span>)</span>
+    <span>where</span> TMessageContext <span>:</span> IPipelineContext
+<span>{</span></code></pre><p>This method takes a generic parameter - an <code>IPipelineContext</code>, which is either the incoming or outgoing logical message contexts. I need the test action to perform as a <code>Func&lt;Task&gt;</code> as I will need to call this after setting up the event observation. Finally, I need to know when to "stop" observing, with a predicate around the pipeline context information and a timeout.</p><p>The return value is a collection of all the observed message contexts - so the "Assert" step can look at everything sent/received.</p><p>First, I want to default a timeout and initialize some collectors:</p><pre><code>timeout <span>=</span> Debugger<span>.</span>IsAttached
+    <span>?</span> <span>(</span>TimeSpan<span>?</span><span>)</span><span>null</span>
+    <span>:</span> timeout <span>??</span> TimeSpan<span>.</span><span>FromSeconds</span><span>(</span><span>10</span><span>)</span><span>;</span>
+
+<span>var</span> incomingMessageContexts <span>=</span> <span>new</span> <span><span>List</span><span>&lt;</span><span>IIncomingLogicalMessageContext</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>var</span> outgoingMessageContexts <span>=</span> <span>new</span> <span><span>List</span><span>&lt;</span><span>IOutgoingLogicalMessageContext</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>var</span> obs <span>=</span> Observable<span>.</span><span><span>Empty</span><span>&lt;</span><span>object</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span></code></pre><p>The Activity API is a two-level set of observables. The first is when the initial diagnostic listener starts up, and the second is when diagnostic events are published. It's a little confusing to be sure, but not terrible. We want to first subscribe to all listeners when the two listener names we care about are published:</p><pre><code><span>using</span> <span>var</span> allListenerSubscription <span>=</span> DiagnosticListener<span>.</span>AllListeners
+    <span>.</span><span>Subscribe</span><span>(</span>listener <span>=&gt;</span>
+    <span>{</span>
+        <span>switch</span> <span>(</span>listener<span>.</span>Name<span>)</span>
+        <span>{</span>
+            <span>case</span> ActivityNames<span>.</span>IncomingLogicalMessage<span>:</span>
+                
+
+                <span>break</span><span>;</span>
+            <span>case</span> ActivityNames<span>.</span>OutgoingLogicalMessage<span>:</span>
+                
+
+                <span>break</span><span>;</span>
+        <span>}</span>
+    <span>}</span><span>;</span>
+</code></pre><p>When we run our application, our <code>Subscribe</code> method will be called for all diagnostic listeners starting up - the ASP.NET Core ones, HttpClient ones, SqlClient ones etc. but we only care about the NServiceBus logical message listeners.</p><p>Once we have this set up, we need to do 2 things inside those each switch block:</p><ul><li>Capture the observable so that we can await it based on our predicate later</li><li>Capture all contexts in those lists</li></ul><p>For each, we can rely on Reactive Extensions via the <code>System.Reactive.Core</code> library. Here's the incoming logical message block:</p><pre><code><span>var</span> incomingObs <span>=</span> listener
+    <span>.</span><span>Select</span><span>(</span>e <span>=&gt;</span> e<span>.</span>Value<span>)</span>
+    <span>.</span><span><span>Cast</span><span>&lt;</span><span>IIncomingLogicalMessageContext</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+incomingObs<span>.</span><span>Subscribe</span><span>(</span>incomingMessageContexts<span>.</span>Add<span>)</span><span>;</span>
+
+<span>if</span> <span>(</span><span>typeof</span><span>(</span>TMessageContext<span>)</span> <span>==</span>  <span>typeof</span><span>(</span>IIncomingLogicalMessageContext<span>)</span><span>)</span>
+<span>{</span>
+    obs <span>=</span> obs<span>.</span><span>Merge</span><span>(</span>incomingObs<span>)</span><span>;</span>
+<span>}</span>
+
+<span>break</span><span>;</span>
+</code></pre><p>The <code>listener</code> passed in is an <code>IObservable&lt;KeyValuePair&lt;string, object&gt;&gt;</code> where the <code>object</code> is that message context object. The first thing we can do is use LINQ to treat this observable as <code>IObservable&lt;*message context type&gt;</code>. Next, we add a single subscription action to simply capture the <code>IIncomingLogicalMessageContext</code> values on the list we created earlier.</p><p>Next, because I can test <em>multiple</em> hosts and endpoints, we <code>Merge</code> the different listener observables into our single <code>obs</code> variable we declared earlier, as our diagnostic listener object is created per endpoint.</p><p>The outgoing message switch block looks almost identical:</p><pre><code><span>var</span> outgoingObs <span>=</span> listener
+    <span>.</span><span>Select</span><span>(</span>e <span>=&gt;</span> e<span>.</span>Value<span>)</span>
+    <span>.</span><span><span>Cast</span><span>&lt;</span><span>IOutgoingLogicalMessageContext</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+outgoingObs<span>.</span><span>Subscribe</span><span>(</span>outgoingMessageContexts<span>.</span>Add<span>)</span><span>;</span>
+
+<span>if</span> <span>(</span><span>typeof</span><span>(</span>TMessageContext<span>)</span> <span>==</span> <span>typeof</span><span>(</span>IOutgoingLogicalMessageContext<span>)</span><span>)</span>
+<span>{</span>
+    obs <span>=</span> obs<span>.</span><span>Merge</span><span>(</span>outgoingObs<span>)</span><span>;</span>
+<span>}</span>
+
+<span>break</span><span>;</span>
+</code></pre><p>The idea is we're only listening to incoming <em>or</em> outgoing messages, so I use that generic parameter to understand which one we care about.</p><p>Now that we've got our captured and merged observable, we can construct or final observable that includes the predicate and timeout, if exists (it won't if we're debugging):</p><pre><code><span>var</span> finalObs <span>=</span> obs<span>.</span><span><span>Cast</span><span>&lt;</span><span>TMessageContext</span><span>&gt;</span></span><span>(</span><span>)</span><span>.</span><span>TakeUntil</span><span>(</span>predicate<span>)</span><span>;</span>
+<span>if</span> <span>(</span>timeout <span>!=</span> <span>null</span><span>)</span>
+<span>{</span>
+    finalObs <span>=</span> finalObs<span>.</span><span>Timeout</span><span>(</span>timeout<span>.</span>Value<span>)</span><span>;</span>
+<span>}</span>
+</code></pre><p>With our observable in place, we can execute our test action and await for our observable to complete (either by satisfying our predicate or timing out):</p><pre><code><span>await</span> <span>testAction</span><span>(</span><span>)</span><span>;</span>
+
+
+<span>await</span> finalObs<span>;</span>
+
+<span>return</span> <span>new</span> <span>ObservedMessageContexts</span><span>(</span>
+    incomingMessageContexts<span>,</span> 
+    outgoingMessageContexts<span>)</span><span>;</span>
+</code></pre><p>Once the final observable sequence completes, we can return back to our test the list of observed incoming/outgoing message contexts we capture earlier.</p><p>With this in place, our tests have a simple filter they can pass in based on their logical message type, with all the sent/received messages to assert against:</p><pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>Should_execute_orchestration_saga</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> client <span>=</span> _fixture<span>.</span>WebAppHost<span>.</span><span>CreateClient</span><span>(</span><span>)</span><span>;</span>
+
+    <span>var</span> message <span>=</span> Guid<span>.</span><span>NewGuid</span><span>(</span><span>)</span><span>.</span><span>ToString</span><span>(</span><span>)</span><span>;</span>
+
+    <span>var</span> response <span>=</span>
+        <span>await</span> <span><span>ExecuteAndWaitForHandled</span><span>&lt;</span><span>SaySomethingResponse</span><span>&gt;</span></span><span>(</span><span>(</span><span>)</span> <span>=&gt;</span>
+            client<span>.</span><span>GetAsync</span><span>(</span>$<span>"saysomething?message={message}"</span><span>)</span><span>,</span> 
+            TimeSpan<span>.</span><span>FromSeconds</span><span>(</span><span>30</span><span>)</span><span>)</span><span>;</span>
+
+    <span>var</span> saySomethingResponses <span>=</span> response<span>.</span>ReceivedMessages<span>.</span><span><span>OfType</span><span>&lt;</span><span>SaySomethingResponse</span><span>&gt;</span></span><span>(</span><span>)</span><span>.</span><span>ToList</span><span>(</span><span>)</span><span>;</span>
+    saySomethingResponses<span>.</span>Count<span>.</span><span>ShouldBe</span><span>(</span><span>1</span><span>)</span><span>;</span>
+    saySomethingResponses<span>[</span><span>0</span><span>]</span><span>.</span>Message<span>.</span><span>ShouldContain</span><span>(</span>message<span>)</span><span>;</span>
+<span>}</span>
+</code></pre><p>It took a little bit to get the observables to work correctly, but once in, we can easily add end-to-end integration testing for complex messaging scenarios. Observability has a long tail of payoffs, as I found with integration testing.</p>
+                </div>
+            </section>
+
+
+            
+
+        </article>
+
+    </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs" /></noscript>
+</body>
+</html>
