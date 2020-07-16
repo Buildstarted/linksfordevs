@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Hacking Reolink cameras for fun and profit - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Hacking Reolink cameras for fun and profit - linksfor.dev(s)"/>
+    <meta property="og:description" content="Dragging Reolink, kicking and screaming, into the light of the open-standards day"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Hacking Reolink cameras for fun and profit</title>
+<div class="readable">
+        <h1>Hacking Reolink cameras for fun and profit</h1>
+            <div>Reading time: 18-23 minutes</div>
+        <div>Posted here: 16 Jul 2020</div>
+        <p><a href="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/">https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>Way back in <a href="https://www.thirtythreeforty.net/posts/2019/12/mastering-embedded-linux-part-2-hardware/">late 2019</a>, I dissected a Reolink B800 IP camera to demonstrate the various parts of an embedded Linux system.
+It’s fairly nice hardware, actually—it has a 4K video sensor, a microphone, power over Ethernet, and is nominally waterproof.
+And yes, it runs Linux.</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/b800.jpg" alt="Reolink B800"></figure><p>It came in a “kit” of six cameras and an NVR (a dedicated recording box that also powers the cameras).
+Unfortunately, the NVR is pretty anemic: it’s clearly an existing model with slight changes to support 4K cameras, and it struggles to support more than one viewer at a time.</p><p>However, I bought these cameras because I believed they supported open standards such as ONVIF, so I’d just swap the NVR for a copy of Blue Iris running on my server.
+At the time, the Reolink support page clearly indicated that all of their non-battery-powered cameras supported RTSP.
+After the system was installed, it became apparent that the cameras did not in fact support RTSP—the only port open on them was port 9000.
+Then, barely outside my return window, Reolink updated their support page to say that the cameras would only work with their 8-channel NVR or proprietary viewer apps.</p><p>This was, in the immortal words of Bill and Ted, bogus. Heinous. Most non-triumphant.</p><p>Bogus enough that I decided to pwn the camera, reverse engineer the protocol, and write my own software to get the video stream.
+The end result is a <a href="https://github.com/thirtythreeforty/neolink">new piece of open-source software called Neolink</a>, which allows Blue Iris, Shinobi, or other NVR software to receive video from <em>unmodified</em> Reolink cameras.</p><p>Here’s how I did it.</p><h2 id="sniffing-traffic">Sniffing traffic</h2><p>As a first step, I fired up Wireshark and captured traffic between the camera and its official <a href="https://reolink.com/software-and-manual/">Reolink PC client</a><sup id="fnref:1"><a href="#fn:1" role="doc-noteref">1</a></sup>.</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/login-traffic.png" alt="The login stream"></figure><p>The only thing that jumped out to me was the appearance of a sync word at the beginning of each packet, <code>0xf0debc0a</code>.
+(In <a href="https://en.wikipedia.org/wiki/Endianness#Little-endian">little endian</a>, this is <code>0x0abcdef0</code>.)
+On a lark, I Googled this, and actually found a <a href="https://github.com/nvella/sdvr">project on GitHub from 2015</a> which was attempting to retrieve data from Swann cameras!
+A quick look at the code told me that although they share the sync word and packet header, the protocols for my camera and these older cameras were very different.
+The payload appeared to be encrypted in my captures.
+Furthermore, the code wouldn’t even run due to some questionable pointer juggling.
+Time to extract what I could—the header layout was correct—and move on.</p><h3 id="dissecting-traffic-with-wireshark">Dissecting traffic with Wireshark</h3><p>Always, always spend time developing debug or analysis tools. In my experience, such tools immediately pay back your time investment by a factor of 4 or more.
+With what I knew, I was able to write a “Baichuan” protocol dissector for Wireshark using <a href="https://mika-s.github.io/wireshark/lua/dissector/2017/11/04/creating-a-wireshark-dissector-in-lua-1.html">Mika’s awesome tutorial</a>.
+This was easy and fun: Wireshark lets you write dissectors in Lua (<em>disclaimer: your definition of fun may vary</em>).
+Now Wireshark could show me the payload lengths and message IDs.
+Not much, but it was a start.</p><h2 id="inspecting-the-firmware">Inspecting the firmware</h2><p>In order to figure out whatever encryption and/or obfuscation the protocol was using, I planned to reverse engineer the firmware.
+I felt pretty confident that the underlying video was using a well-known protocol (especially since the camera seemed to have dedicated video encoding hardware).
+So “all” I’d have to do is reverse engineer the rest of the protocol.</p><p>Easy peasy, right?</p><h3 id="why-doesnt-this-camera-support-rtsp">Why doesn’t this camera support RTSP?</h3><p>As a quick aside, it’s natural to wonder why this camera doesn’t support RTSP and/or ONVIF.
+After all, <a href="https://support.reolink.com/hc/en-us/articles/360007010473-How-to-Live-View-Reolink-Cameras-via-VLC-Media-Player">plenty of other Reolink cameras</a> do.
+Because I’d like to give them the benefit of the doubt, I’ll propose the possibility that Reolink ran out of storage on this camera and had to axe some features.</p><p>After all, a 16MB flash chip would cost a whole 20 cents extra.
+This is just a cost-saving measure and definitely not vendor lock-in, hmmm?</p><h2 id="pwning-the-camera">Pwning the camera</h2><p>Right, onward.
+With the protocol not immediately accessible, it was time to crack this camera open.
+My <a href="https://www.thirtythreeforty.net/posts/2019/12/mastering-embedded-linux-part-2-hardware/">previous disassembly</a> of the camera has already indicated that it uses SPI NOR flash—bog standard for a small Linux system like this.
+I was wanting to try out a really neat little SOIC socket I had discovered and ordered on Taobao a little while back.
+I desoldered the flash and soldered on a socket instead.</p><p><iframe src="https://www.youtube.com/embed/YIMo3sy0qIw" allowfullscreen="" title="YouTube Video"></iframe></p><p>The camera was now pwned, permanently—there was nothing I could do to brick it (I could always just reflash it with <code>flashrom</code>) and there was nothing Reolink could do to stop me from running my own code on it (since I had control of the first instruction executed, if need be<sup id="fnref:2"><a href="#fn:2" role="doc-noteref">2</a></sup>).</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/socketed-flash.jpg" alt="The socketed flash"></figure><p>With the flash now conveniently socketed, I dumped it and used <code>binwalk</code> to inspect the layout.
+Here’s the flash layout—the nice round byte offsets that engineers tend to pick.<sup id="fnref:3"><a href="#fn:3" role="doc-noteref">3</a></sup>
+Bootloader, Linux uImage, squashfs rootfs, and JFFS2 persistent partition.</p><div><pre><code data-lang="text">DECIMAL       HEXADECIMAL     DESCRIPTION
+--------------------------------------------------------------------------------
+67266         0x106C2         eCos RTOS string reference
+1769472       0x1B0000        uImage header
+3604480       0x370000        Squashfs filesystem, little endian
+7798784       0x770000        JFFS2 filesystem, little endian
+</code></pre></div><p>This also lines up nicely with this visualization of the flash image, made by <a href="https://binvis.io/">a neat little tool called BinVis</a>.</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/stock.png" alt="The flash layout"></figure><p><code>binwalk</code> also conveniently offers to unpack the filesystems it finds.</p><h3 id="low-hanging-fruit-first">Low hanging fruit first</h3><p>My first order of business was to find the actual camera binary.
+It was pretty easy to find; it’s sitting in its own directory at <code>/mnt/app/dvr</code>.
+The <code>dvr</code> binary also had an accompanying <code>dvr.xml</code>, which looked like a configuration file.
+A little grepping later, and… sure enough, here were the magic words <code>ONVIF</code> and <code>RTSP</code>!</p><div><pre><code data-lang="ini"><span># ....</span>
+<span>push_server</span><span>=</span><span>"pushx.reolink.com"</span>
+<span>push_server_port</span><span>=</span><span>"9501"</span>
+<span>support_3gnet</span><span>=</span><span>"0"</span>
+<span>support_intelligence</span><span>=</span><span>"0"</span>
+<span>support_smartsearch</span><span>=</span><span>"0"</span>
+<span>support_onvif</span><span>=</span><span>"0"</span>
+<span><span>support_rtsp</span><span>=</span><span>"0"</span>
+</span><span>support_bc</span><span>=</span><span>"1"</span>
+<span>support_3dnr_config_interface</span><span>=</span><span>"1"</span>
+<span>default_3dnr_config</span><span>=</span><span>"1"</span>
+<span># ....</span>
+</code></pre></div><p>I suspected these were simply feature flags dictating to the software which features to enable.
+What if I just changed these zeros to ones?</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/1to0.png" alt="Rick Sanchez changing a 1 to a 0"></figure><p>Rebuilding the rootfs wasn’t quite as easy as extracting it, but I cobbled together a command through trial and error.
+I wanted to get the squashfs format exactly the same as the one reported by binwalk, so that I could be sure that the stock kernel would mount it.
+Since I was mostly flying blind without a UART console, I didn’t want any trouble.</p><div><pre><code data-lang="text">$ mksquashfs new-squashfs-root/ new-squashfs.img -comp xz -b 262144 -all-root -noappend
+$ dd if=new-squashfs.img of=pwned.bin bs=1 seek=$((0x370000)) conv=notrunc
+$ flashrom -p ft2232_spi:type=2232H,port=A -w pwned.bin
+</code></pre></div><p>Alas, it was not to be this easy.
+The camera exhibited a remarkable lack of behavioral reform: no new ports opened, nothing.</p><p>For comparison, I downloaded and unpacked a firmware update for a different Reolink camera that did support RTSP.
+The <code>dvr</code> binary for that camera was nearly 8 megabytes, while my victim’s was only a little over 3.
+Clearly, the engineers compiled out the unneeded bits.</p><h3 id="getting-root">Getting root</h3><p>Fine.
+If Reolink has compiled the extra functionality out, then the least the camera could do is give me a shell.
+While I was here, I decided I’d make some, ahem, extra modifications.</p><p>A quick Google did not yield prebuilt binaries of the tools I was looking for.
+Instead, I checked out a fresh copy of Buildroot and quickly set it up for a baseline MIPS configuration with static linking, then asked for copies of <code>gdbserver</code>, <code>busybox</code> with all the fixin’s, and <code>strace</code>:</p><div><pre><code data-lang="text">$ make qemu_mips32r2el_malta_defconfig
+$ make menuconfig  # (with appropriate edits made)
+$ make busybox gdb strace
+</code></pre></div><p>Thirty minutes later, I had my tools.
+In the rootfs tree that <code>binwalk</code> had extracted, there’s the usual assortment of startup scripts in <code>/etc/init.d</code>.
+With my tricked-out Busybox copied to <code>/bin</code>, and a symlink created named <code>telnetd</code>, I added an extra line to one of the startup scripts:</p><div><pre><code data-lang="bash"><span># Get a shell</span>
+/bin/telnetd -l /bin/sh
+</code></pre></div><p>Fingers crossed, I reinstalled the flash and powered the camera.</p><div><pre><code data-lang="text">$ telnet 192.168.1.187
+Trying 192.168.1.187...
+Connected to 192.168.1.187.
+Escape character is '^]'.
+
+/mnt/app #
+</code></pre></div><p>Mwahahaha.</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/i-am-root.jpg" alt="I am root"></figure><h2 id="reversing-the-protocol">Reversing the protocol</h2><p>What to do with my newfound power?
+I planned to start with a static analysis of the firmware, first reverse engineering the encryption scheme.
+If I got stuck, I could interrogate the camera binary as it executed.</p><p>Once I could undo the encryption, I’d be able to see what the actual protocol was like.</p><h3 id="static-analysis-with-ghidra">Static analysis with Ghidra</h3><p>The traditional hobbyist tool for static analysis, <a href="https://www.hex-rays.com/products/ida/support/download_freeware/">IDA free edition</a>, is no good here, because my binary is for MIPS, which the free IDA refuses to disassemble.
+Instead, the tool of choice is <a href="https://ghidra-sre.org/">Ghidra</a>, an astoundingly good open-source reverse engineering suite released by the NSA.
+Now, normally saying “I ran a binary the NSA gave me” will get you laughed out of the room.
+But Ghidra has been open source for a while now, so I feel reasonably safe installing it from the Arch Linux repository.</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/ghidra-website.png" alt="The Ghidra website"><figcaption><p>If this website looks like it’s made by a government agency, it’s because it is.</p></figcaption></figure><p>Ghidra is awesome.
+Seriously, this is a piece of software you’d have to pay $10000 for, and it should be your go-to for reverse engineering work.
+In addition to the disassembler and analyzer, Ghidra also includes a decompiler, which prints pseudo-C code instead of leaving you digging through MIPS assembly.
+It also re-analyzes in realtime as you annotate function arguments with type information and names.
+These features easily cut my time spent reverse engineering in half.</p><p>So, armed with Ghidra and a false sense of confidence stemming from never having done any reverse engineering before, I went spelunking in the Baichuan binaries.</p><h4 id="strings-a-bounty-of-information">Strings: a bounty of information</h4><p>There’s a reason most reverse engineers start by examining the strings in an unknown binary—it’s a technique that works.
+In my case, checking for strings in the desktop client and the firmware’s server yielded debug print statements, function names (which Ghidra automatically annotated), and a couple other oddball strings that I’ll talk about in a minute.
+Both codebases were clearly built around a shared proprietary “BCSDK” library.</p><p>Searching for <code>crypt</code> yielded a couple of candidate functions that purported to perform encryption:</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/crypt.png" alt="Functions matching crypt search"></figure><p>Well, no RSA here, or anything resembling “real” encryption, except AES.
+(And I could find any AES keys embedded in the app in short order.)</p><p>But what’s this string stuck nonchalantly in the middle of the others?</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/charlie.png" alt="A string referencing Charlie"></figure><p>That’s not a function name.
+I hit find-references and read the code that uses it.</p><h4 id="the-charlie-scrambler">The Charlie Scrambler</h4><p>Ghidra took me to this gem of a function:</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/charlie-scrambler.png" alt="The Charlie Scrambler in all its glory"><figcaption><p>Technically, this is the decryption function; there’s another one that works in reverse.</p></figcaption></figure><p>It only takes a second to understand what’s going on here: the “encryption” scheme is simply:</p><ul><li>XOR the data with the string <code>Charlie is the designer of P2P!!</code>, then</li><li>mix up the bytes.</li></ul><p>This isn’t encryption.
+This is just a scrambler.</p><p>Bravo, Charlie, your “design” is permanently encoded in this protocol for all time.
+Don’t roll your own crypto, kids.</p><p>Unfortunately, the Charlie Scrambler is only called from UDP functions (see the cross-reference at the bottom of the Ghidra window).
+This meant it wasn’t my pigeon; my camera uses TCP.
+At this point I had no idea which of the other “encryption” functions were the right one for my camera, so it was time to bring out my next weapon.</p><h3 id="dynamic-analysis-with-gdb">Dynamic analysis with gdb</h3><p>With my shell access waiting, my next move was to attach a debugger and control the dvr program remotely from my workstation using my cross-compiled <code>gdbserver</code> and <code>strace</code> tools.
+My Busybox included an FTP server and a TCP wrapper:</p><div><pre><code data-lang="text">$ /bin/busybox tcpsvd -vE 0.0.0.0 21 ftpd / -w -A
+tcpsvd: listening on 0.0.0.0:21
+</code></pre></div><p>With this setup I could push whatever tools I wanted to the camera filesystem, even though I hadn’t packed them into the firmware.
+I went through this process manually about twice before it became really tedious.
+This is the kind of thing it’s possible to automate with <code>expect</code>, a Tcl (!) program that pretends to be a console user.
+I <a href="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/start-debug.exp">scripted these interactions</a>, which reduced the connect, tool push, and gdb setup to a simple:</p><p>An added benefit of this setup is that I could stick whatever gdb commands I wanted to run at startup at the end of the script, instead of writing a dedicated GDB script.
+These <a href="https://doc.ecoscentric.com/gnutools/doc/gdb/Dynamic-Printf.html">dynamic printf commands</a> simply print in the GDB console when the camera hits a breakpoint, helpful for knowing which functions are being called without halting the camera:</p><div><pre><code data-lang="text">send_gdb "dprintf *0x478908, "_Nets_Without_Password_Login_V20
+""
+send_gdb "dprintf *0x4780ac, "FUN_004780ac
+""
+send_gdb "dprintf *0x6310f0, "Md5_string_encrypt
+""
+</code></pre></div><h4 id="feeding-the-watchdog">Feeding the watchdog</h4><p>After attaching and halting the dvr daemon, the camera promptly crashed and reset.
+After some quick investigation, the camera had a watchdog enabled at <code>/dev/watchdog</code>—a very common setup for embedded devices.
+I was doing open heart surgery on this software—I didn’t need some two-bit peripheral wandering by and hitting it with an AED!</p><p>Busybox ships with a watchdog minder, so I simply fired it up:</p><p>Problem solved.</p><h4 id="charlie-strikes-again">Charlie strikes again</h4><p>After my breakpoint was hit, I knew which encryption function I was dealing with: <code>Nets_XmlEncryption</code>.
+This was immediately good news, because after figuring out the encryption, I was likely dealing with nice ordinary XML, not some crazy half-baked bag of C <code>structs</code>.</p><p>I took a look at the decompiled function in question in Ghidra, annotating as I went.
+Sure did look familiar…</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/Nets_XmlEncryption.png" alt="The Nets_XmlEncryption disassembly"></figure><p>No engineering lessons had been learned during the redesign, and the influence of Charlie was alive and well!
+Here is the Charlie Scrambler back in force, but without the mixing step, and with a shorter key.</p><p>Fine, whatever.
+Implementing the Scrambler in my Wireshark dissector didn’t take very long—although I was briefly baffled by a header of <em>varying length</em> depending on the message type.
+Once implemented, I was greeted with this glorious sight:</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/baichuan-login.png" alt="The decrypted login message in Wireshark"><figcaption><p>Again, I highly recommend writing plugins for Wireshark. You can do it in Lua (or C if you’re that hardcore), and it only takes a couple hours to have a really nice debug tool.</p></figcaption></figure><h3 id="a-brief-history-of-the-baichuan-protocol">A brief history of the Baichuan protocol</h3><p>I won’t bore you with the gory details, but I’ll summarize my findings.
+The Baichuan protocol has had several iterations over the years.
+The very oldest seem to be UDP-based, using a proprietary SDK called TUTK, illicit copies of which can conveniently be found on GitHub.
+This is no longer used; it’s not even present in the camera code.</p><p>The next variant is indeed a plaintext “bag of structs”, which consists of a header and a body specified by a message ID in the header.
+This “legacy variant” is briefly used on the B800 so that both clients can negotiate an upgrade to the “modern variant,” which is the scrambled XML-based scheme you see above.</p><p>On top of this, modern messages can optionally have a payload.
+A certain XML message switches the entire message ID into “binary mode,” which supplies a raw data stream in subsequent messages.
+When the client sends a video-start command, the camera replies with a binary stream containing raw H.265 video.
+On top of <em>that</em>, the payload can also be <em>more</em> encrypted XML, separate from the main XML for some reason.</p><p>On the whole, it’s really quite a pain to parse.</p><h2 id="neolink-a-new-client">Neolink: a new client</h2><p>Once my Wireshark dissector was humming along, it was time to write a new client.
+I wanted my software to be fast, high-level, and correct, since it would be part of a security system setup.</p><p>That’s right: I rewrote Reolink’s software in Rust.</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/riir.png" alt="Rust evangelism strike force badge"></figure><p>Well, not exactly.
+Neolink is a new client completely from scratch.
+It speaks the same Baichuan protocol as the camera, and it extracts the video and forwards it to another real NVR client like Blue Iris over RTSP.
+The parsing code is somewhat hairy<sup id="fnref:4"><a href="#fn:4" role="doc-noteref">4</a></sup>, but other than that, it’s straightforward.</p><h3 id="getting-the-video-data">Getting the video data</h3><p>Here’s all the client is capable of right now.
+It’s pretty easy to read if you want to <a href="https://github.com/thirtythreeforty/neolink/blob/master/src/bc_protocol.rs">look at the source</a>.</p><ol><li>Send a legacy login message to get the camera to “upgrade” to modern messages.
+Note: this uses plain MD5 encryption for your password, another, um, interesting design choice.
+Use a password that isn’t in a rainbow table!</li><li>Send a modern login message to actually authenticate to the camera.</li><li>Send a start video request:</li></ol><div><pre><code data-lang="rust"><span>let</span><span> </span>start_video<span> </span><span>=</span><span> </span>Bc::new_from_xml(<span>
+</span><span>    </span>BcMeta<span> </span>{<span>
+</span><span>        </span>msg_id: <span>MSG_ID_VIDEO</span>,<span>
+</span><span>        </span>client_idx: <span>0</span>,<span>
+</span><span>        </span>encrypted: <span>true</span>,<span>
+</span><span>        </span>class: <span>0x6414</span>,<span>
+</span><span>    </span>},<span>
+</span><span>    </span>BcXml<span> </span>{<span>
+</span><span>        </span>preview: <span>Some</span>(Preview<span> </span>{<span>
+</span><span>            </span>version: <span>xml_ver</span>(),<span>
+</span><span>            </span>channel_id: <span>0</span>,<span>
+</span><span>            </span>handle: <span>0</span>,<span>
+</span><span>            </span>stream_type: <span>"mainStream"</span>.to_string(),<span>
+</span><span>        </span>}),<span>
+</span><span>        </span>..<span>Default</span>::default()<span>
+</span><span>    </span>});<span>
+</span><span>
+</span><span></span>sub_video.send(start_video)<span>?</span>;<span>
+</span></code></pre></div><ol start="4"><li>Spit out the binary data when it’s received:</li></ol><div><pre><code data-lang="rust"><span>loop</span><span> </span>{<span>
+</span><span>    </span><span>let</span><span> </span>msg<span> </span><span>=</span><span> </span>sub_video.rx.recv_timeout(self.rx_timeout)<span>?</span>;<span>
+</span><span>    </span><span>if</span><span> </span><span>let</span><span> </span>BcBody::ModernMsg(ModernMsg<span> </span>{<span> </span>binary: <span>Some</span>(binary),<span> </span>..<span> </span>})<span> </span><span>=</span><span> </span>msg.body<span> </span>{<span>
+</span><span>        </span>data_out.write_all(binary.as_slice())<span>?</span>;<span>
+</span><span>    </span>}<span>
+</span><span></span>}<span>
+</span></code></pre></div><h3 id="wrap-it-in-maroon-and-white-er-rtspmaroon">Wrap it in <del>maroon and white</del>, er, RTSP<sup id="fnref:5"><a href="#fn:5" role="doc-noteref">5</a></sup></h3><p>For this part of the program I reached for Gstreamer, which ships with an RTSP server.
+Gstreamer is… complex.
+However, their examples are fantastic; they even provided a <a href="https://gitlab.freedesktop.org/gstreamer/gstreamer-rs/-/blob/master/examples/src/bin/rtsp-server.rs">sample RTSP server <em>in Rust</em></a>!</p><p>The general approach for feeding Gstreamer data from an arbitrary part of your program is to use a <a href="https://gstreamer.freedesktop.org/documentation/app/appsrc.html">block called an <code>appsrc</code></a>.
+This lets you get a callback whenever Gstreamer wants data, or alternatively just push data whenever you have some and let Gstreamer handle scheduling it.
+The latter approach is the one I went with here, since the camera doesn’t wait for a signal to send video data.</p><p>I wrapped everything in a Gstreamer pipeline:</p><div><pre><code data-lang="text">appsrc name=baichuan is-live=true emit-signals=false max-bytes=0 ! h265parse ! rtph265pay name=pay0
+</code></pre></div><h3 id="testing-it-with-blue-iris">Testing it with Blue Iris</h3><p>The moment of truth arrived… could Blue Iris connect to my RTSP server and actually display the video?</p><p>You bet.</p><figure><img src="https://www.thirtythreeforty.net/posts/2020/05/hacking-reolink-cameras-for-fun-and-profit/blueiris.png" alt="The Neolink stream in Blue Iris"><figcaption><p>I present… me! In glorious 4K!</p></figcaption></figure><h2 id="future-work">Future work</h2><p>I’ve been soak-testing Neolink for a while now and I think it’s pretty stable.
+Going forward I’m packaging it up as a real Windows service (not a command line program) to run alongside Blue Iris on my server.
+<a href="https://github.com/thirtythreeforty/neolink">Go look at it and download it for yourself!</a></p><p>I’m also interested in getting Neolink working with other “NVR only” Reolink cameras, of which there are quite a few.
+So far I haven’t purchased any other hardware, so if you have one of these cameras, please get in touch so we can test it.
+It might Just Work out of the box.
+Port scan your cameras!
+If they have port 9000 available, chances are good that they speak the Baichuan protocol.</p><p>This project was a “just right” intro to reverse engineering.
+Low-security systems like these let you teach yourself the principles without actively trying to thwart reverse engineering.
+I taught myself a lot, and I hope it provides a lot of value for folks who own these cameras.</p><p>Finally, some shameless self-promotion: embedded Linux systems are actually pretty approachable!
+If you’d like to learn how to do this kind of thing, you might be interested in my <a href="https://www.thirtythreeforty.net/posts/2019/08/mastering-embedded-linux-part-1-concepts/">Mastering Embedded Linux series</a>, designed to help you become an expert in hacking low-cost embedded Linux systems just like this camera.</p><p>If you enjoyed this, you can <a href="https://www.thirtythreeforty.net/subscribe/">subscribe to my blog updates</a>, or leave a comment below.
+Thanks for reading!</p><section role="doc-endnotes"><hr><ol><li id="fn:1" role="doc-endnote"><p>The Reolink support forums always claim that their pages were “updated 8 hours ago.” This is obvious nonsense. They do update fairly frequently, but not constantly. <a href="#fnref:1" role="doc-backlink">↩︎</a></p></li><li id="fn:2" role="doc-endnote"><p>This is exactly the point of secure boot schemes, where the immutable boot ROM validates code against immutable encryption keys, preventing tampering.
+Needless to say, this camera does <em>not</em> implement such niceties. <a href="#fnref:2" role="doc-backlink">↩︎</a></p></li><li id="fn:3" role="doc-endnote"><p><code>binwalk</code> also turns up a bunch of false positives, which are easy to ignore because they don’t have nice round offsets. <a href="#fnref:3" role="doc-backlink">↩︎</a></p></li><li id="fn:4" role="doc-endnote"><p>Seriously, having packet decode be <em>stateful</em> is just ridiculous. <a href="#fnref:4" role="doc-backlink">↩︎</a></p></li><li id="fn:5" role="doc-endnote"><p>Yes, I’m a proud <a href="https://en.wikipedia.org/wiki/Mississippi_State_Bulldogs_football">Mississippi State University bulldog</a>.
+You too can attend and become a computer engineer! <a href="#fnref:5" role="doc-backlink">↩︎</a></p></li></ol></section></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function () {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs" /></noscript>
+</body>
+</html>
