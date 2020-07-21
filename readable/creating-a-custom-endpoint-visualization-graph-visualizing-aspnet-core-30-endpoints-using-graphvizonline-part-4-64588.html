@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Creating a custom endpoint visualization graph: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 4 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Creating a custom endpoint visualization graph: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 4 - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I show how you can create custom endpoint graphs for your application to better understand the routes used in your application."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/creating-a-custom-endpoint-visualization-graph/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Creating a custom endpoint visualization graph: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 4</title>
+<div class="readable">
+        <h1>Creating a custom endpoint visualization graph: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 4</h1>
+            <div>Reading time: 12-16 minutes</div>
+        <div>Posted here: 21 Jul 2020</div>
+        <p><a href="https://andrewlock.net/creating-a-custom-endpoint-visualization-graph/">https://andrewlock.net/creating-a-custom-endpoint-visualization-graph/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>In <a href="https://andrewlock.net/visualizing-asp-net-core-endpoints-using-graphvizonline-and-the-dot-language/">this series</a>, I've been laying the groundwork for building a custom endpoint visualization graph, as I showed <a href="https://andrewlock.net/visualizing-asp-net-core-endpoints-using-graphvizonline-and-the-dot-language/">in my first post</a>. This graph shows the different parts of the endpoint routes: literal values, parameters, verb constraints, and endpoints that generate a result:</p>
+<p><img src="https://andrewlock.net/content/images/2020/graph_07.png" alt="A ValuesController endpoint routing application with different styling"></p>
+<p>In this post I show how you can create an endpoint graph like this for your own application, by creating a custom <code>DfaGraphWriter</code>.</p>
+<blockquote>
+<p>This post uses techniques and classes from the previous posts in the series, so I strongly suggest reading those before continuing.</p>
+</blockquote>
+<h2 id="adding-configuration-for-the-endpoint-graph">Adding configuration for the endpoint graph<a href="#adding-configuration-for-the-endpoint-graph"></a></h2>
+<p>The first thing we'll look at is how to configure what the final endpoint graph will look like. We'll add configuration for two types of node and four types of edge. The edges are:</p>
+<ul>
+<li>Literal edges: Literal matches for route sections, such as <code>api</code> and <code>values</code> in the route <code>api/values/{id}</code>.</li>
+<li>Parameters edges: Parameterised sections for routes, such as <code>{id}</code> in the route <code>api/values/{id}</code>.</li>
+<li>Catch all edges: Edges that correspond to the catch-all route parameter, such as <code>{**slug}</code>.</li>
+<li>Policy edges: Edges that correspond to a constraint other than the URL. For example, the HTTP verb-based edges in the graph, such as <code>HTTP: GET</code>.</li>
+</ul>
+<p>and the nodes are:</p>
+<ul>
+<li>Matching node: A node that is associated with an endpoint match, so will generate a response.</li>
+<li>Default node: A node that is <em>not</em> associated with an endpoint match.</li>
+</ul>
+<p>Each of these nodes and edges can have <a href="https://www.graphviz.org/doc/info/attrs.html">any number of Graphviz attributes</a> to control their display. The <code>GraphDisplayOptions</code> below show the default values I used to generate the graph at the start of this post:</p>
+<pre><code><span>public</span> <span>class</span> <span>GraphDisplayOptions</span>
+<span>{</span>
+    
+    
+    
+    <span>public</span> <span>string</span> LiteralEdge <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span> <span>=</span> <span>string</span><span>.</span>Empty<span>;</span>
+
+    
+    
+    
+    <span>public</span> <span>string</span> ParametersEdge <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span> <span>=</span> <span>"arrowhead=diamond color="blue""</span><span>;</span>
+
+    
+    
+    
+    <span>public</span> <span>string</span> CatchAllEdge <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span> <span>=</span> <span>"arrowhead=odot color="green""</span><span>;</span>
+
+    
+    
+    
+    <span>public</span> <span>string</span> PolicyEdge <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span> <span>=</span> <span>"color="red" style=dashed arrowhead=open"</span><span>;</span>
+
+    
+    
+    
+    <span>public</span> <span>string</span> MatchingNode <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span> <span>=</span> <span>"shape=box style=filled color="brown" fontcolor="white""</span><span>;</span>
+
+    
+    
+    
+    <span>public</span> <span>string</span> DefaultNode <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span> <span>=</span> <span>string</span><span>.</span>Empty<span>;</span>
+<span>}</span>
+</code></pre>
+<p>We can now create our custom graph writer using this object to control the display, and using the <em>ImpromptuInterface</em> "proxy" technique shown in <a href="https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and-reflection/">the previous post</a>.</p>
+<h2 id="creating-a-custom-dfagraphwriter">Creating a custom DfaGraphWriter<a href="#creating-a-custom-dfagraphwriter"></a></h2>
+<p>Our custom graph writer (cunningly called <code>CustomDfaGraphWriter</code>) is heavily based on <a href="https://github.com/dotnet/aspnetcore/blob/0889a62250e56066055d45a6fce99413d3f48d56/src/Http/Routing/src/Internal/DfaGraphWriter.cs">the <code>DfaGraphWriter</code> included in ASP.NET Core</a>. The bulk of this class is the same as the original, with the following changes:</p>
+<ul>
+<li>Inject the <code>GraphDisplayOptions</code> into the class to customise the display.</li>
+<li>Use the <em>ImpromptuInterface</em> library to work with the internal <code>DfaMatcherBuilder</code> and <code>DfaNode</code> classes, <a href="https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and-reflection/">as shown in the previous post</a>.</li>
+<li>Customise the <code>WriteNode</code> function to use our custom styles.</li>
+<li>Add a <code>Visit</code> function to work with the <code>IDfaNode</code> interface, instead of using the <code>Visit()</code> method on the internal <code>DfaNode</code> class.</li>
+</ul>
+<p>The whole <code>CustomDfaGraphWriter</code> is shown below, focusing on the main <code>Write()</code> function. I've kept the implementation almost identical to <a href="https://github.com/dotnet/aspnetcore/blob/0889a62250e56066055d45a6fce99413d3f48d56/src/Http/Routing/src/Internal/DfaGraphWriter.cs">the original</a>, only updating the parts we have to. </p>
+<pre><code><span>public</span> <span>class</span> <span>CustomDfaGraphWriter</span>
+<span>{</span>
+    
+    <span>private</span> <span>readonly</span> <span>IServiceProvider</span> _services<span>;</span>
+    <span>private</span> <span>readonly</span> <span>GraphDisplayOptions</span> _options<span>;</span>
+    <span>public</span> <span>CustomDfaGraphWriter</span><span>(</span><span>IServiceProvider</span> services<span>,</span> <span>GraphDisplayOptions</span> options<span>)</span>
+    <span>{</span>
+        _services <span>=</span> services<span>;</span>
+        _options <span>=</span> options<span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>Write</span><span>(</span><span>EndpointDataSource</span> dataSource<span>,</span> <span>TextWriter</span> writer<span>)</span>
+    <span>{</span>
+        
+        <span>Type</span> matcherBuilder <span>=</span> <span>typeof</span><span>(</span>IEndpointSelectorPolicy<span>)</span><span>.</span>Assembly
+            <span>.</span><span>GetType</span><span>(</span><span>"Microsoft.AspNetCore.Routing.Matching.DfaMatcherBuilder"</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> rawBuilder <span>=</span> _services<span>.</span><span>GetRequiredService</span><span>(</span>matcherBuilder<span>)</span><span>;</span>
+        <span>IDfaMatcherBuilder</span> builder <span>=</span> rawBuilder<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaMatcherBuilder</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> endpoints <span>=</span> dataSource<span>.</span>Endpoints<span>;</span>
+        <span>for</span> <span>(</span><span>var</span> i <span>=</span> <span>0</span><span>;</span> i <span>&lt;</span> endpoints<span>.</span>Count<span>;</span> i<span>++</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>endpoints<span>[</span>i<span>]</span> <span>is</span> <span>RouteEndpoint</span> endpoint <span>&amp;&amp;</span> <span>(</span>endpoint<span>.</span>Metadata<span>.</span><span><span>GetMetadata</span><span>&lt;</span><span>ISuppressMatchingMetadata</span><span>&gt;</span></span><span>(</span><span>)</span><span>?</span><span>.</span>SuppressMatching <span>?</span><span>?</span> <span>false</span><span>)</span> <span>==</span> <span>false</span><span>)</span>
+            <span>{</span>
+                builder<span>.</span><span>AddEndpoint</span><span>(</span>endpoint<span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span>
+
+        
+        <span>var</span> rawTree <span>=</span> builder<span>.</span><span>BuildDfaTree</span><span>(</span>includeLabel<span>:</span> <span>true</span><span>)</span><span>;</span>
+        <span>IDfaNode</span> tree <span>=</span> rawTree<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> visited <span>=</span> <span>new</span> <span><span>Dictionary</span><span>&lt;</span><span>IDfaNode</span><span>,</span> <span>int</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        writer<span>.</span><span>WriteLine</span><span>(</span><span>"digraph DFA {"</span><span>)</span><span>;</span>
+        <span>Visit</span><span>(</span>tree<span>,</span> WriteNode<span>)</span><span>;</span>
+        writer<span>.</span><span>WriteLine</span><span>(</span><span>"}"</span><span>)</span><span>;</span>
+
+        <span>void</span> <span>WriteNode</span><span>(</span><span>IDfaNode</span> node<span>)</span>
+        <span>{</span>
+            
+            
+        <span>}</span>
+    <span>}</span>
+
+    <span>static</span> <span>void</span> <span>Visit</span><span>(</span><span>IDfaNode</span> node<span>,</span> Action<span>&lt;</span>IDfaNode<span>&gt;</span> visitor<span>)</span>
+    <span>{</span>
+        
+        
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>I've elided the <code>Visit</code> and <code>WriteNode</code> functions here for brevity, but we'll look into them soon. We'll start with the <code>Visit</code> function, as that flies closest to the original.</p>
+<h2 id="updating-the-visit-function-to-work-with-idfanode">Updating the Visit function to work with IDfaNode<a href="#updating-the-visit-function-to-work-with-idfanode"></a></h2>
+<p>As I discussed in <a href="https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and-reflection/">my previous post</a>, one of the biggest problems creating a custom <code>DfaGraphWriter</code> is its use of <code>internal</code> classes. To work around that I used <em>ImpromptuInterface</em> to create proxy objects that wrap the original:</p>
+<p><img src="https://andrewlock.net/content/images/2020/impromptuinterface.png" alt="Using ImpromptuInterface to add a wrapper proxy"></p>
+<p>The original <code>Visit()</code> method is <a href="https://github.com/dotnet/aspnetcore/blob/0889a62250e56066055d45a6fce99413d3f48d56/src/Http/Routing/src/Matching/DfaNode.cs#L80">a method on the <code>DfaNode</code></a> class. It recursively visits every node in the endpoint tree, calling a provided <code>Action&lt;&gt;</code> function for each node.</p>
+<blockquote>
+<p>As <code>DfaNode</code> is <code>internal</code>, I implemented the <code>Visit</code> function as a static method on <code>CustomDfaGraphWriter</code> instead. </p>
+</blockquote>
+<p>Our custom implementation is broadly the same as <a href="https://github.com/dotnet/aspnetcore/blob/0889a62250e56066055d45a6fce99413d3f48d56/src/Http/Routing/src/Matching/DfaNode.cs#L80">the original</a>, but we have to do some somewhat arduous conversions between the "raw" <code>DfaNode</code>s and our <code>IDfaNode</code> proxies. The updated method is shown below. The method takes two parameters—the node being checked, and an <code>Action&lt;&gt;</code> to run on each.</p>
+<pre><code><span>static</span> <span>void</span> <span>Visit</span><span>(</span><span>IDfaNode</span> node<span>,</span> Action<span>&lt;</span>IDfaNode<span>&gt;</span> visitor<span>)</span>
+<span>{</span>
+    
+    <span>if</span> <span>(</span>node<span>.</span>Literals<span>?</span><span>.</span>Values <span>!=</span> <span>null</span><span>)</span>
+    <span>{</span>
+        
+        <span>foreach</span> <span>(</span><span>var</span> dictValue <span>in</span> node<span>.</span>Literals<span>.</span>Values<span>)</span>
+        <span>{</span>
+            
+            <span>IDfaNode</span> <span>value</span> <span>=</span> dictValue<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>Visit</span><span>(</span><span>value</span><span>,</span> visitor<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    
+    
+    <span>if</span> <span>(</span>node<span>.</span>Parameters <span>!=</span> <span>null</span> <span>&amp;&amp;</span> <span>!</span><span>ReferenceEquals</span><span>(</span>node<span>,</span> node<span>.</span>Parameters<span>)</span><span>)</span>
+    <span>{</span>
+        
+        <span>IDfaNode</span> parameters <span>=</span> node<span>.</span>Parameters<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+        <span>Visit</span><span>(</span>parameters<span>,</span> visitor<span>)</span><span>;</span>
+    <span>}</span>
+
+    
+    
+    <span>if</span> <span>(</span>node<span>.</span>CatchAll <span>!=</span> <span>null</span> <span>&amp;&amp;</span> <span>!</span><span>ReferenceEquals</span><span>(</span>node<span>,</span> node<span>.</span>CatchAll<span>)</span><span>)</span>
+    <span>{</span>
+        
+        <span>IDfaNode</span> catchAll <span>=</span> node<span>.</span>CatchAll<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+        <span>Visit</span><span>(</span>catchAll<span>,</span> visitor<span>)</span><span>;</span>
+    <span>}</span>
+
+    
+    <span>if</span> <span>(</span>node<span>.</span>PolicyEdges<span>?</span><span>.</span>Values <span>!=</span> <span>null</span><span>)</span>
+    <span>{</span>
+        
+        <span>foreach</span> <span>(</span><span>var</span> dictValue <span>in</span> node<span>.</span>PolicyEdges<span>.</span>Values<span>)</span>
+        <span>{</span>
+            <span>IDfaNode</span> <span>value</span> <span>=</span> dictValue<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>Visit</span><span>(</span><span>value</span><span>,</span> visitor<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    
+    <span>visitor</span><span>(</span>node<span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>The <code>Visit</code> function uses a post-order traversal, so it traverses "deep" into a node's child nodes first before writing the node using the <code>visitor</code> function. This is the same as <a href="https://github.com/dotnet/aspnetcore/blob/0889a62250e56066055d45a6fce99413d3f48d56/src/Http/Routing/src/Matching/DfaNode.cs#L80">the original <code>DfaNode.Visit()</code> function</a>.</p>
+<p>We're almost there now. We have a class that builds the endpoint node tree, traverses all the nodes in the tree, and runs a function for each. All that remains is to define the visitor function, <code>WriteNode()</code>.</p>
+<h2 id="defining-a-custom-writenode-function">Defining a custom WriteNode function<a href="#defining-a-custom-writenode-function"></a></h2>
+<p>We've <em>finally</em> got to the meaty part, controlling how the endpoint graph is displayed. All of the customisation and effort so far has been to enable us to customise the <code>WriteNode</code> function.</p>
+<p><code>WriteNode()</code> is <a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/local-functions">a local function</a> that writes a node to the <code>TextWriter</code> output, along with any connected edges, using the <a href="https://en.wikipedia.org/wiki/DOT_(graph_description_language)">DOT graph description language</a>. </p>
+<p>Our custom <code>WriteNode()</code> function is, again, almost the same as <a href="https://github.com/dotnet/aspnetcore/blob/0889a62250e56066055d45a6fce99413d3f48d56/src/Http/Routing/src/Internal/DfaGraphWriter.cs#L56-L94">the original</a>. There are two main differences:</p>
+<ul>
+<li>The original graph writer works with <code>DfaNode</code>s, we have to convert to using the <code>IDfaNode</code> proxy.</li>
+<li>The original graph writer uses the same styling for all nodes and edges. We customise the display of nodes and edges based on the configured <code>GraphDisplayOptions</code>.</li>
+</ul>
+<blockquote>
+<p>As <code>WriteNode</code> is a local function, it can access variables from the enclosing function. This includes the <code>writer</code> parameter, used to write the graph to output and the <code>visited</code> dictionary of previously written nodes.</p>
+</blockquote>
+<p>The following shows our (heavily commented) custom version of the <code>WriteNode()</code> method.</p>
+<pre><code><span>void</span> <span>WriteNode</span><span>(</span><span>IDfaNode</span> node<span>)</span>
+<span>{</span>
+    
+    
+    <span>if</span> <span>(</span><span>!</span>visited<span>.</span><span>TryGetValue</span><span>(</span>node<span>,</span> <span>out</span> <span>var</span> label<span>)</span><span>)</span>
+    <span>{</span>
+        label <span>=</span> visited<span>.</span>Count<span>;</span>
+        visited<span>.</span><span>Add</span><span>(</span>node<span>,</span> label<span>)</span><span>;</span>
+    <span>}</span>
+
+    
+    
+
+    
+    <span>if</span> <span>(</span>node<span>.</span>Literals <span>!=</span> <span>null</span><span>)</span>
+    <span>{</span>
+        <span>foreach</span> <span>(</span><span>DictionaryEntry</span> dictEntry <span>in</span> node<span>.</span>Literals<span>)</span>
+        <span>{</span>
+            
+            <span>var</span> edgeLabel <span>=</span> <span>(</span><span>string</span><span>)</span>dictEntry<span>.</span>Key<span>;</span>
+            <span>IDfaNode</span> <span>value</span> <span>=</span> dictEntry<span>.</span>Value<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>int</span> nodeLabel <span>=</span> visited<span>[</span><span>value</span><span>]</span><span>;</span>
+
+            
+            writer<span>.</span><span>WriteLine</span><span>(</span>$<span>"{label} -&gt; {nodeLabel} [label="/{edgeLabel}" {_options.LiteralEdge}]"</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    
+    <span>if</span> <span>(</span>node<span>.</span>Parameters <span>!=</span> <span>null</span><span>)</span>
+    <span>{</span>
+        <span>IDfaNode</span> parameters <span>=</span> node<span>.</span>Parameters<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+        <span>int</span> nodeLabel <span>=</span> visited<span>[</span>catchAll<span>]</span><span>;</span>
+
+        
+        writer<span>.</span><span>WriteLine</span><span>(</span>$<span>"{label} -&gt; {nodeLabel} [label="/**" {_options.CatchAllEdge}]"</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    
+    <span>if</span> <span>(</span>node<span>.</span>CatchAll <span>!=</span> <span>null</span> <span>&amp;&amp;</span> node<span>.</span>Parameters <span>!=</span> node<span>.</span>CatchAll<span>)</span>
+    <span>{</span>
+        <span>IDfaNode</span> catchAll <span>=</span> node<span>.</span>CatchAll<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+        <span>int</span> nodeLabel <span>=</span> visited<span>[</span>catchAll<span>]</span><span>;</span>
+
+        
+        writer<span>.</span><span>WriteLine</span><span>(</span>$<span>"{label} -&gt; {nodelLabel} [label="/**" {_options.CatchAllEdge}]"</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    
+    <span>if</span> <span>(</span>node<span>.</span>PolicyEdges <span>!=</span> <span>null</span><span>)</span>
+    <span>{</span>
+        <span>foreach</span> <span>(</span><span>DictionaryEntry</span> dictEntry <span>in</span> node<span>.</span>PolicyEdges<span>)</span>
+        <span>{</span>
+            
+            <span>var</span> edgeLabel <span>=</span> <span>(</span><span>object</span><span>)</span>dictEntry<span>.</span>Key<span>;</span>
+            <span>IDfaNode</span> <span>value</span> <span>=</span> dictEntry<span>.</span>Value<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>int</span> nodeLabel <span>=</span> visited<span>[</span><span>value</span><span>]</span><span>;</span>
+
+            
+            writer<span>.</span><span>WriteLine</span><span>(</span>$<span>"{label} -&gt; {nodeLabel} [label="{key}" {_options.PolicyEdge}]"</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    
+    <span>var</span> matchCount <span>=</span> node<span>?</span><span>.</span>Matches<span>?</span><span>.</span>Count <span>?</span><span>?</span> <span>0</span><span>;</span>
+
+    <span>var</span> extras <span>=</span> matchCount <span>&gt;</span> <span>0</span> 
+        <span>?</span> _options<span>.</span>MatchingNode 
+        <span>:</span> _options<span>.</span>DefaultNode<span>;</span> 
+
+    
+    writer<span>.</span><span>WriteLine</span><span>(</span>$<span>"{label} [label="{node.Label}" {extras}]"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>Tracing the flow of these interactions can be a little confusing, because of the way we write the nodes from the "leaf" nodes back to the root of the tree. For example if we look at the output for the basic app shown at the start of this post, you can see the "leaf" endpoints are all written first: the <code>healthz</code> health check endpoint and the terminal match generating endpoints with the longest route:</p>
+<pre><code>digraph <span>DFA</span> <span>{</span>
+  <span>1</span> <span>[</span>label<span>=</span><span>"/healthz/"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span> fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>2</span> <span>[</span>label<span>=</span><span>"/api/Values/{...}/ HTTP: GET"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span> fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>3</span> <span>[</span>label<span>=</span><span>"/api/Values/{...}/ HTTP: PUT"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span> fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>4</span> <span>[</span>label<span>=</span><span>"/api/Values/{...}/ HTTP: DELETE"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span>  fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>5</span> <span>[</span>label<span>=</span><span>"/api/Values/{...}/ HTTP: *"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span> fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>6</span> <span>-</span><span>&gt;</span> <span>2</span> <span>[</span>label<span>=</span><span>"HTTP: GET"</span> color<span>=</span><span>"red"</span> style<span>=</span>dashed arrowhead<span>=</span>open<span>]</span>
+  <span>6</span> <span>-</span><span>&gt;</span> <span>3</span> <span>[</span>label<span>=</span><span>"HTTP: PUT"</span> color<span>=</span><span>"red"</span> style<span>=</span>dashed arrowhead<span>=</span>open<span>]</span>
+  <span>6</span> <span>-</span><span>&gt;</span> <span>4</span> <span>[</span>label<span>=</span><span>"HTTP: DELETE"</span> color<span>=</span><span>"red"</span> style<span>=</span>dashed arrowhead<span>=</span>open<span>]</span>
+  <span>6</span> <span>-</span><span>&gt;</span> <span>5</span> <span>[</span>label<span>=</span><span>"HTTP: *"</span> color<span>=</span><span>"red"</span> style<span>=</span>dashed arrowhead<span>=</span>open<span>]</span>
+  <span>6</span> <span>[</span>label<span>=</span><span>"/api/Values/{...}/"</span><span>]</span>
+  <span>7</span> <span>[</span>label<span>=</span><span>"/api/Values/ HTTP: GET"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span> fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>8</span> <span>[</span>label<span>=</span><span>"/api/Values/ HTTP: POST"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span> fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>9</span> <span>[</span>label<span>=</span><span>"/api/Values/ HTTP: *"</span> shape<span>=</span>box style<span>=</span>filled color<span>=</span><span>"brown"</span> fontcolor<span>=</span><span>"white"</span><span>]</span>
+  <span>10</span> <span>-</span><span>&gt;</span> <span>6</span> <span>[</span>label<span>=</span><span>"/*"</span> arrowhead<span>=</span>diamond color<span>=</span><span>"blue"</span><span>]</span>
+  <span>10</span> <span>-</span><span>&gt;</span> <span>7</span> <span>[</span>label<span>=</span><span>"HTTP: GET"</span> color<span>=</span><span>"red"</span> style<span>=</span>dashed arrowhead<span>=</span>open<span>]</span>
+  <span>10</span> <span>-</span><span>&gt;</span> <span>8</span> <span>[</span>label<span>=</span><span>"HTTP: POST"</span> color<span>=</span><span>"red"</span> style<span>=</span>dashed arrowhead<span>=</span>open<span>]</span>
+  <span>10</span> <span>-</span><span>&gt;</span> <span>9</span> <span>[</span>label<span>=</span><span>"HTTP: *"</span> color<span>=</span><span>"red"</span> style<span>=</span>dashed arrowhead<span>=</span>open<span>]</span>
+  <span>10</span> <span>[</span>label<span>=</span><span>"/api/Values/"</span><span>]</span>
+  <span>11</span> <span>-</span><span>&gt;</span> <span>10</span> <span>[</span>label<span>=</span><span>"/Values"</span><span>]</span>
+  <span>11</span> <span>[</span>label<span>=</span><span>"/api/"</span><span>]</span>
+  <span>12</span> <span>-</span><span>&gt;</span> <span>1</span> <span>[</span>label<span>=</span><span>"/healthz"</span><span>]</span>
+  <span>12</span> <span>-</span><span>&gt;</span> <span>11</span> <span>[</span>label<span>=</span><span>"/api"</span><span>]</span>
+  <span>12</span> <span>[</span>label<span>=</span><span>"/"</span><span>]</span>
+<span>}</span>
+</code></pre>
+<p>Even though the leaf nodes are written to the graph output first, the Graphviz visualizer will generally draw the graph with the leaf nodes at the <em>bottom</em>, and the edges pointing down. You can visualize the graph online at <a href="https://dreampuf.github.io/GraphvizOnline/">https://dreampuf.github.io/GraphvizOnline/</a>:</p>
+<p><img src="https://andrewlock.net/content/images/2020/graph_07.png" alt="A ValuesController endpoint routing application with different styling"></p>
+<p>If you want to change how the graph is rendered you can customize the <code>GraphDisplayOptions</code>. If you use the "test" approach I described in a previous post, you can pass these options in directly when generating the graph. If you're using the "middleware" approach, you can register the <code>GraphDisplayOptions</code> using the <code>IOptions&lt;&gt;</code> system instead, and control the display using the configuration system.</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I showed how to create a custom <code>DfaGraphWriter</code> to control how an application's endpoint graph is generated. To interoperate with the <code>internal</code> classes we used <em>ImpromptuInterface</em>, as described in <a href="https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and-reflection/">the previous post</a>, to create proxies we can interact with. We then had to write a custom <code>Visit()</code> function to work with the <code>IDfaNode</code> proxies. Finally, we created a custom <code>WriteNode</code> function that uses custom settings defined in a <code>GraphDisplayOptions</code> object to display each type of node and edge differently.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
