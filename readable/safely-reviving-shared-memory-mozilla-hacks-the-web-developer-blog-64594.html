@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Safely reviving shared memory &#x2013; Mozilla Hacks - the Web developer blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Safely reviving shared memory &#x2013; Mozilla Hacks - the Web developer blog - linksfor.dev(s)"/>
+    <meta property="article:author" content="By&#xA;                                        Anne van Kesteren"/>
+    <meta property="og:description" content="At Mozilla, we want the web to be capable of running high-performance applications so that users and content authors can choose the safety, agency, and openness of the web platform. ..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://hacks.mozilla.org/2020/07/safely-reviving-shared-memory/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Safely reviving shared memory &#x2013; Mozilla Hacks - the Web developer blog</title>
+<div class="readable">
+        <h1>Safely reviving shared memory &#x2013; Mozilla Hacks - the Web developer blog</h1>
+            <div>by By&#xA;                                        Anne van Kesteren</div>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 21 Jul 2020</div>
+        <p><a href="https://hacks.mozilla.org/2020/07/safely-reviving-shared-memory/">https://hacks.mozilla.org/2020/07/safely-reviving-shared-memory/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article role="article">
+    <p>At Mozilla, we want the web to be capable of running high-performance applications so that users and content authors can choose the safety, agency, and openness of the web platform. One essential low-level building block for many high-performance applications is shared-memory multi-threading. That’s why it was so exciting to <a href="https://hacks.mozilla.org/2016/05/a-taste-of-javascripts-new-parallel-primitives/">deliver shared memory to JavaScript and WebAssembly</a> in 2016. This provided extremely fast communication between threads.</p>
+<p>However, we also want the web to be secure from attackers. Keeping users safe is paramount, which is why shared memory and high-resolution timers were effectively <a href="https://blog.mozilla.org/security/2018/01/03/mitigations-landing-new-class-timing-attack/" target="_blank">disabled at the start of 2018</a>, in light of <a href="https://en.wikipedia.org/wiki/Spectre_(security_vulnerability)" target="_blank">Spectre</a>. Unfortunately, Spectre-attacks are made significantly more effective with high-resolution timers. And such timers can be created with shared memory. (This is accomplished by having one thread increment a shared memory location in a tight loop that another thread can sample as a nanosecond-resolution timer.)</p>
+<h2>Back to the drawing board</h2>
+<p>Fundamentally, for a Spectre attack to work, an attacker and victim need to reside in the same process. Like most applications on your computer, browsers used to use a single process. This would allow two open sites, say <code>attacker.example</code> and <code>victim.example</code>, to Spectre-attack each other’s data as well as other data the browser might keep such as bookmarks or history. Browsers have long since become multi-process. With Chrome’s Site Isolation and Firefox’s <a href="https://wiki.mozilla.org/Project_Fission" target="_blank">Project Fission</a>, browsers will isolate each <a href="https://html.spec.whatwg.org/multipage/origin.html#site" target="_blank">site</a> into its own process. This is possible due to the web platform’s retrofitted <a href="https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy" target="_blank">same-origin policy</a>.</p>
+<p>Unfortunately, isolating each site into its own process is still not sufficient for these reasons:</p>
+<ol>
+<li>The same-origin policy has a number of holes, two of which strongly informed our thinking during the design process:
+<ol>
+<li><code>attacker.example</code> can fetch arbitrary <code>victim.example</code> resources into <code>attacker.example</code>’s process, e.g., through the <code>&lt;img&gt;</code> element.</li>
+<li>Due to the existence of <code>document.domain</code>, the minimal isolation boundary is a site (roughly the scheme and <a href="https://url.spec.whatwg.org/#host-registrable-domain" target="_blank">registrable domain</a> of a website’s host) and not an <a href="https://html.spec.whatwg.org/multipage/origin.html#concept-origin" target="_blank">origin</a> (roughly a website’s scheme, host, and port).</li>
+</ol>
+</li>
+<li>At this point, we don’t know if it’s feasible to isolate each site into its own process across all platforms. It is still a challenging endeavor on mobile. While possibly not a long-term problem, we would prefer a solution that allows reviving shared memory on mobile <em>soon</em>.</li>
+</ol>
+<h2>Distilling requirements</h2>
+<p>We need to address the issues above to revive shared memory and high-resolution timers. As such, we have been working on a system that meets the following requirements:</p>
+<ol>
+<li>It allows a website to process-isolate itself from attackers and thereby shield itself from intra-process high-resolution timer attacks.</li>
+<li>If a website wants to use these high-performance features, it also needs to process-isolate itself from victims. In particular, this means that it has to give up the ability to fetch arbitrary subresources from any site (e.g., through an <code>&lt;img&gt;</code> element) because these end up in the same process. Instead, it can only fetch cross-origin resources from consenting origins.</li>
+<li>It allows a browser to run the entire website, including all of its frames and popups, in a single process. This is important to keep the web platform a consistent system across devices.</li>
+<li>It allows a browser to run each participating origin (i.e., not site) in its own process. This is the ideal end state across devices and it is important for the design to not prevent this.</li>
+<li>The system maintains backwards compatibility. We cannot ask billions of websites to rewrite their code.</li>
+</ol>
+<p>Due to these requirements, the system must provide an opt-in mechanism. We cannot forbid websites from fetching cross-origin subresources, as this would not be backwards compatible. Sadly, restricting <code>document.domain</code> is not backwards compatible either. More importantly, it would be unsafe to allow a website to embed cross-origin documents via an <code>&lt;iframe&gt;</code> element and have those cross-origin resources end up in the same process without opting in.</p>
+<h2>Cross-origin isolated</h2>
+<h3>New headers</h3>
+<p>Together with others in the WHATWG community, we <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer/Planned_changes" target="_blank">designed a set of headers</a> that meet these requirements.</p>
+<p>The <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Opener-Policy" target="_blank"><code>Cross-Origin-Opener-Policy</code></a> header allows you to process-isolate yourself from attackers. It also has the desirable effect that attackers cannot have access to your global object if they were to open you in a popup. This prevents <a href="https://github.com/xsleaks/xsleaks" target="_blank">XS-Leaks</a> and various navigation attacks. Adopt this header even if you have no intention of using shared memory!</p>
+<p>The <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Embedder-Policy" target="_blank"><code>Cross-Origin-Embedder-Policy</code></a> header with value <code>require-corp</code> tells the browser to only allow this document to fetch cross-origin subresources from consenting websites. Technically, the way that this works is that those cross-origin resources need to specify the <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Resource-Policy" target="_blank"><code>Cross-Origin-Resource-Policy</code></a> header with value <code>cross-origin</code> to indicate consent.</p>
+<h3>Impact on documents</h3>
+<p>If the <code>Cross-Origin-Opener Policy</code> and <code>Cross-Origin-Embedder-Policy</code> headers are set for a top-level document with the <code>same-origin</code> and <code>require-corp</code> values respectively, then:</p>
+<ol>
+<li>That document will be cross-origin isolated.</li>
+<li>Any descendant documents that also set <code>Cross-Origin-Embedder-Policy</code> to <code>require-corp</code> will be cross-origin isolated. (Not setting it results in a network error.)</li>
+<li>Any popups these documents open will either be cross-origin isolated or will not have a direct relationship with these documents. This is to say that there is no direct access through <code>window.opener</code> or equivalent (i.e., it’s as if they were created using <code>rel="noopener"</code>).</li>
+</ol>
+<p>A document that is cross-origin isolated will have access to shared memory, both in JavaScript and WebAssembly. It will only be able to share memory with same-origin documents and dedicated workers in the same “tab” and its popups (technically, same-origin agents in a single <a href="https://html.spec.whatwg.org/multipage/browsers.html#browsing-context-group" target="_blank">browsing context group</a>). It will also have access to the highest-resolution <code>performance.now()</code> available. Evidently, it will not have access to a functional <code>document.domain</code>.</p>
+<p>The way these headers ensure mutual consent between origins gives browsers the freedom to put an entire website into a single process or put each of the origins into their own process, or something in between. While process-per-origin would be ideal, this is not always feasible on all devices. So having everything that is pulled into these one-or-more processes consent is a decent middle ground.</p>
+<h2>Safety backstop</h2>
+<p>We created a safety backstop to be able to deal with novel cross-process attacks. And used an approach that avoids having to disable shared memory entirely to remain web compatible.</p>
+<p>The result is Firefox’s <a href="https://searchfox.org/mozilla-central/source/dom/workers/JSExecutionManager.h" target="_blank"><code>JSExecutionManager</code></a>. This allows us to regulate the execution of different JavaScript contexts with relation to each other. The <code>JSExecutionManager</code> can be used to throttle CPU and power usage by background tabs. Using the <code>JSExecutionManager</code>, we created a dynamic switch (<code>dom.workers.serialized-sab-access</code> in <code>about:config</code>) that prevents all JavaScript threads that share memory from ever running code concurrently, effectively executing these threads as if on a single-core machine. Because creating a high-resolution timer using shared memory requires two threads to run simultaneously, this switch effectively prevents the creation of a high-resolution timer without breaking websites.</p>
+<p>By default, this switch is off, but in the case of a novel cross-process attack, we could quickly flip it on. With this switch as a backstop, we can feel confident enabling shared memory in cross-origin isolated websites even when considering unlikely future worst-case scenarios.</p>
+<h2>Acknowledgments</h2>
+<p>Many thanks to Bas Schouten and Luke Wagner for their contributions to this post. And also, in no particular order, many thanks to Nika Layzell, Tom Tung, Valentin Gosu, Eden Chuang, Jens Manuel Stutte, Luke Wagner, Bas Schouten, Neha Kochar, Andrew Sutherland, Andrew Overholt, 蔡欣宜 (Hsin-Yi Tsai), Perry Jiang, Steve Fink, Mike Conca, Lars Thomas Hansen, Jeff Walden, Junior Hsu, Selena Deckelmann, and Eric Rescorla for their help getting this done in Firefox!</p>
+    <section>
+                                
+                      <p>Standards person with an interest in privacy &amp; security boundaries, as well as web platform architecture · he/him</p>
+                                <p><a href="https://hacks.mozilla.org/author/avankesterenmozilla-com/">More articles by Anne van Kesteren…</a></p>
+                  </section>
+  </article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
