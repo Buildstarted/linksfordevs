@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Understanding the SynchronizationContext in .NET with C# - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Understanding the SynchronizationContext in .NET with C# - linksfor.dev(s)"/>
+    <meta property="article:author" content="honey the codewitch"/>
+    <meta property="og:description" content="Take control of which thread your code gets executed on, and how it does."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.codeproject.com/Articles/5274751/Understanding-the-SynchronizationContext-in-NET-wi"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Understanding the SynchronizationContext in .NET with C#</title>
+<div class="readable">
+        <h1>Understanding the SynchronizationContext in .NET with C#</h1>
+            <div>by honey the codewitch</div>
+            <div>Reading time: 15-20 minutes</div>
+        <div>Posted here: 27 Jul 2020</div>
+        <p><a href="https://www.codeproject.com/Articles/5274751/Understanding-the-SynchronizationContext-in-NET-wi">https://www.codeproject.com/Articles/5274751/Understanding-the-SynchronizationContext-in-NET-wi</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><p>This article explores what a SynchronizationContext is, how to use it, and even how to implement it to control where your code gets executed from.</p><div id="contentdiv">
+						
+
+
+
+<ul>
+	<li><a href="https://www.codeproject.com/KB/dotnet/5274751/Tasks.zip">Download Tasks.zip - 25.6&nbsp;KB</a></li></ul>
+
+<p><img alt="SynchronizationContext Demo" src="https://www.codeproject.com/KB/dotnet/5274751/synchctx.jpg" data-sizes="auto" data-srcset="/KB/dotnet/5274751/synchctx-r-400.jpg 400w, /KB/dotnet/5274751/synchctx.jpg 477w" sizes="477px" srcset="/KB/dotnet/5274751/synchctx-r-400.jpg 400w, /KB/dotnet/5274751/synchctx.jpg 477w"></p>
+
+<h2>Introduction</h2>
+
+<p>Here I intend to shed some light on another dark corner of the .NET framework - synchronization contexts. I will take you through understanding why they exist, what they do, and how they work. In the end we are even going to implement our own. This article assumes at least a passing familiarity with multithreading. It doesn't require that you have written much if any multithreaded code before, as long as understand the core principles and caveats of it. I'll be covering a little bit of it anyway.</p>
+
+<p><strong>Note:</strong>&nbsp;This article's source code includes the rest of my Tasks framework as it exists so far. The relevant projects are <em>SyncContextDemo</em>, and <em>Tasks</em>. Under Tasks you'll find <em>MessagingSynchronizationContext.cs</em>, which uses <em>MessageQueue.cs&nbsp;</em>which is auxiliary.</p>
+
+<h2>Conceptualizing this Mess</h2>
+
+<h3>What is a Synchronization Context?</h3>
+
+<p>First let's talk about the problem it solves. With multithreaded code you can't simply read and write values across threads with impunity, which also implies you can't just call methods and properties across threads either because you might cause a race condition, which are one of the worst things to have to debug in programming. Writing multithreaded code is complicated, easy to get wrong, and hard to debug. There's got to be an easier way!</p>
+
+<p>I'd like you entertain a funny idea: consider that there are "boundaries" between threads - invisible walls you have to get through. Between those walls is where your (member) data lives. Don't cross those boundaries without preparation. If you've written multithreaded code this should be easy to grasp if not utterly familiar.</p>
+
+<p>How do we cross those boundaries? It depends. There are many ways to do so, a couple of primary ones being somewhat crude synchronization primitives (like mutexes and semaphores), and much more advanced message passing (which actually builds on synchronization primitives.)</p>
+
+<p>The question is, can we abstract something that is flexible that allows us to communicate across thread boundaries regardless of the underlying implementation, and present a facade to the developer that makes it easy to use?</p>
+
+<p>The answer is essentially yes, and that's what Microsoft did with the <code>SynchronizationContext</code>. This is basically a contract class, because you derive from it in order to make it do anything. The default implementation just hops over the wall without doing any synchronization.</p>
+
+<p>However, you're sometimes not dealing with the default synchronization context. WinForms has its own that it uses to help you for example, safely run <code>BackgroundWorker</code>&nbsp;tasks and report back to the UI even though the reporting starts off in separate thread than the UI thread. Remember you can't just cross a thread boundary like that.</p>
+
+<p>The <code>SynchronizationContext</code>&nbsp;and its derivatives work like a message queue, or at least that's the facade they present to the developer. With it you can execute delegates in one of two ways on the target thread - the one where our message loop "lives". We'll get to the message loop in a bit. The first way to dispatch a delegate to a target thread is <code>Post()</code> and it's asynchronous, but it doesn't let you know when it finished. The second way is <code>Send()</code> which is synchronous and blocks the sender until the receipient completes execution of the delegate. That's not great, but it's what we have. Due to the nature of message queues bidirectional communication isn't possible - they're one way so you'd need two. That's why <code>Post()</code>&nbsp;doesn't notify you.&nbsp;</p>
+
+<p>The other thing about a synchronization context is each thread can be associated with one. This is sometimes but not always the same thread with the message loop that looks for incoming messages.&nbsp;Delegates can be dispatched to the thread running a message loop so that the thread may execute them. We'll cover what it looks like further down.</p>
+
+<h3>Why Abstract it at All?</h3>
+
+<p>This is a good question. The answer is that you can extend it and some of the framework can consume it. The <code>await</code> mechanism inserts calls to it into the code for your <code>async</code> routine in order to make sure the code before <code>await</code> and the code after <code>await</code> execute in the same context (on the same thread). Other times, the framework will provide its own, like the one WinForms implements, which keeps the UI thread safe when for example, a <code>BackgroundWorker</code> (which consumes it) communicates with it.</p>
+
+<h2>Coding this Mess</h2>
+
+<h3>How Do We Use It?</h3>
+
+<p>You can get the current synchronization context for a thread by retrieving <code>SynchronizationContext.Current</code>. You can set it by calling <code>SetSynchronizationContext()</code>.</p>
+
+<p>Once you have it you can call <code>Post()</code> to fire and forget a delegate on the <code>SynchronizationContext</code>'s associated message loop thread, or you can call <code>Send()</code> to block until the foreign execution is complete.</p>
+
+<p>If you create a new thread, you can set its synchronization context to the one that's driven by your UI thread - the thread with your <code>Form</code>s on it, where you called <code>Application.Run()</code>&nbsp;because that's where the WinForms synchronization context runs. So you do like:</p>
+
+<p><span id="prehide30057" onclick="processCodeBlocks.togglePre(30057);">Hide</span>  &nbsp; <span id="copycode30057" onclick="return processCodeBlocks.copyCode(30057);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre30057">
+<span>var</span> sctx = SynchronizationContext.Current;
+<span>var</span> thread = <span>new</span> Thread(() =<span>&gt;</span> {
+    
+&nbsp;   
+    
+&nbsp;   SynchronizationContext.SetSynchronizationContext(sctx); 
+&nbsp;   
+});
+thread.Start();</pre>
+
+<p>You don't really need to set the thread's synchronization context in the case where we used it above, because we have access to <code>sctx</code> directly so we didn't have to query <code>SynchronizationContext.Current</code>&nbsp;but other things, like <code>await</code>&nbsp;rely on it, so you really should set it.</p>
+
+<p>Once you have one, either by retrieving the <code>Current</code> property, or by hoisting like we did above we can call <code>Post()</code> and <code>Send()</code>.</p>
+
+<p>Your message, which is typically transmitted from another thread, is then dispatched on the receiving context's associated message loop thread. The transmitting of messages looks like this:</p>
+
+<p><span id="prehide749364" onclick="processCodeBlocks.togglePre(749364);">Hide</span>  &nbsp; <span id="copycode749364" onclick="return processCodeBlocks.copyCode(749364);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre749364">
+sctx.Post((<span>object</span> state) =<span>&gt;</span> { MessageBox.Show(<span>string</span>.Format(<span>"</span><span>Hello from thread {0} (via Post)"</span>, Thread.CurrentThread.ManagedThreadId)); }, <span>null</span>);</pre>
+
+<p>The anonymous method executes on the target thread. In this case the UI thread, where calls to <code>MessageBox.Show()</code> are safe.</p>
+
+<p><code>Send()</code>&nbsp;works exactly the same way except it blocks until the target delegate has completed executing.</p>
+
+<p>We can use these to basically shift code to other threads as long as those threads have&nbsp;message loop and a synchronization context.</p>
+
+<h3>How Does it Work?</h3>
+
+<p>It's not magic, it's just messaging, I promise. First to understand it, let's take a look at a message loop for a particular implementation of a <code>SynchronizationContext</code> I built:</p>
+
+<p><span id="prehide200378" onclick="processCodeBlocks.togglePre(200378);">Hide</span>  &nbsp; <span id="copycode200378" onclick="return processCodeBlocks.copyCode(200378);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre200378">Message msg;
+<span>do</span>
+{
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;msg = _messageQueue.Receive();
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;msg.Callback?.Invoke(msg.State);
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;if (<span>null</span> != msg.FinishedEvent)
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;msg.FinishedEvent.Set();
+&nbsp;&nbsp; &nbsp;
+} <span>while</span> (<span>null</span> != msg.Callback);</pre>
+
+<p>I don't especially like the name <code>Callback</code> but I used it because that's what Microsoft calls it in their default implementation and the delegate <code>Send()</code> and <code>Post()</code> take. What it is is the delegate (usually to an anonymous method) containing the code to execute, like we did with <code>Post()</code> and <code>Send()</code>&nbsp;before. If it's <code>null</code> that signifies to stop the message loop but this detail is specific to my implementation. Finally we simply call the delegate we received in the message, since now we're on the target thread.&nbsp;</p>
+
+<p>Now let's look at the demo, which is illustrative, if contrived:</p>
+
+<p><span id="prehide775230" onclick="processCodeBlocks.togglePre(775230);">Hide</span>  &nbsp; <span id="preShrink775230" onclick="processCodeBlocks.shrinkExpand(775230);">Shrink</span> <img id="preimg775230" src="https://www.codeproject.com/images/arrow-up-16.png" onclick="processCodeBlocks.shrinkExpand(775230);">  &nbsp; <span id="copycode775230" onclick="return processCodeBlocks.copyCode(775230);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre775230" processed="true">
+
+
+Console.WriteLine(<span>"</span><span>Current thread id is {0}"</span>, Thread.CurrentThread.ManagedThreadId);
+Console.WriteLine(<span>"</span><span>Synchronization context is {0}set"</span>,SynchronizationContext.Current == <span>null</span>?<span>"</span><span>not "</span>:<span>"</span><span>"</span>);
+
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+
+<span>var</span> sc = <span>new</span> MessagingSynchronizationContext();
+Console.WriteLine(<span>"</span><span>Setting context to MessageQueueSynchronizationContext"</span>);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+
+
+Console.WriteLine(<span>"</span><span>Starting message loop for thread {0}"</span>,Thread.CurrentThread.ManagedThreadId);
+<span>var</span> thread = <span>new</span> Thread(() =<span>&gt;</span> {
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;SynchronizationContext.SetSynchronizationContext(sc);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;Console.WriteLine(<span>"</span><span>Hello from thread {0}"</span>, Thread.CurrentThread.ManagedThreadId);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;sc.Post((<span>object</span> state) =<span>&gt;</span> { Console.WriteLine(<span>"</span><span>Hello from thread {0} (via Post)"</span>, Thread.CurrentThread.ManagedThreadId); }, <span>null</span>);
+});
+
+thread.Start();
+<span>var</span> task = Task.Run(<span>async</span> () =<span>&gt;</span>
+{
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;Thread.Sleep(<span>50</span>);
+&nbsp;&nbsp; &nbsp;Console.WriteLine(<span>"</span><span>Awaiting task"</span>);
+&nbsp;&nbsp; &nbsp;await Task.Delay(<span>50</span>);
+&nbsp;&nbsp; &nbsp;
+    
+&nbsp;&nbsp; &nbsp;Console.WriteLine(<span>"</span><span>Hello from thread {0} (via await)"</span>, Thread.CurrentThread.ManagedThreadId);
+});
+
+
+sc.Start(); 
+
+<span>await</span> task;</pre>
+
+<p>It should output something like this:</p>
+
+<p><span id="prehide197009" onclick="processCodeBlocks.togglePre(197009);">Hide</span>  &nbsp; <span id="copycode197009" onclick="return processCodeBlocks.copyCode(197009);">Copy Code</span></p><pre lang="text" data-lang-orig="text" id="pre197009">Current thread id is 1
+Synchronization context is not set
+Setting context to MessageQueueSynchronizationContext
+Starting message loop for thread 1
+Hello from thread 3
+Hello from thread 1 (via Post)
+Awaiting task
+Hello from thread 4 (via await)</pre>
+
+<p>Now try commenting out this line (where it says "see what happens!"):</p>
+
+<p><span id="prehide3412" onclick="processCodeBlocks.togglePre(3412);">Hide</span>  &nbsp; <span id="copycode3412" onclick="return processCodeBlocks.copyCode(3412);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre3412">SynchronizationContext.SetSynchronizationContext(sc);</pre>
+
+<p>Now run the program. This time it said thread 1 (or whatever your current thread id said). You'll note that the await this time didn't cause the code to execute on a new thread. What's this sorcery? <code>await</code>s use the current synchronization context to execute code that comes after the&nbsp;<code>await</code>:</p>
+
+<p><span id="prehide197822" onclick="processCodeBlocks.togglePre(197822);">Hide</span>  &nbsp; <span id="copycode197822" onclick="return processCodeBlocks.copyCode(197822);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre197822"><span>var</span> sctx = SynchronizationContext.Current??<span>new</span> SynchronizationContext();
+
+sctx.Post(()=<span>&gt;</span>{  },<span>null</span>);</pre>
+
+<p>&nbsp;I'll explain more later.</p>
+
+<p>Note that <code>SynchronizationContext</code>&nbsp;does not have a <code>Start()</code> method on it. How the message loop a synchronization context uses is implemented is an opaque detail we're not supposed to consider. However, in our custom implementation we need something to serve as our message loop, and I essentially just provided a boilerplate one behind that method to keep things simple.</p>
+
+<p>If you don't quite understand how it works yet, let me go over it again. Somewhere there's a message loop. Where it is in your code or the bowels of the framework is an implementation detail. The point is that whatever thread it runs the message loop on is where the code will finally be executed. You call <code>Send()</code> and <code>Post()</code>&nbsp;from other threads with delegates "containing" your code to be "transported" and executed on that target thread. This allows for easy cross thread communication.</p>
+
+<h3>How Do You Make Your Own?</h3>
+
+<p>Sometimes, like when you're in a console app or Windows service you will not have a good <code>SynchronizationContext</code> to use. The problem is there's no message loop. If you want one you have to make one, and that's what this is for. It should be sufficient for custom threading scenarios where you need code executed on a thread of your choosing. We'll explore it here. First we have a nested <code>struct</code> declaration and an important member field:</p>
+
+<p><span id="prehide27808" onclick="processCodeBlocks.togglePre(27808);">Hide</span>  &nbsp; <span id="copycode27808" onclick="return processCodeBlocks.copyCode(27808);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre27808"><span>private</span> <span>struct</span> Message
+{
+&nbsp;&nbsp; &nbsp;public <span>readonly</span> SendOrPostCallback Callback;
+&nbsp;&nbsp; &nbsp;public <span>readonly</span> <span>object</span> State;
+&nbsp;&nbsp; &nbsp;public <span>readonly</span> ManualResetEventSlim FinishedEvent;
+&nbsp;&nbsp; &nbsp;public Message(SendOrPostCallback callback, <span>object</span> state, ManualResetEventSlim finishedEvent)
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;Callback = callback;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;State = state;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;FinishedEvent = finishedEvent;
+&nbsp;&nbsp; &nbsp;}
+&nbsp;&nbsp; &nbsp;public Message(SendOrPostCallback callback, <span>object</span> state) : <span>this</span>(callback, state, <span>null</span>)
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;}
+}
+MessageQueue&lt;Message&gt; _messageQueue = <span>new</span> MessageQueue&lt;Message&gt;();</pre>
+
+<p>The message contains the "callback" I mentioned earlier, a field for optional user state which you passed to <code>Send()</code> or <code>Post()</code> and finally a <code>ManualResetEventSlim</code>&nbsp;which I'll explain as we get further along. It is used for signalling to <code>Send()</code> that we've processed the message so that <code>Send()</code> is able to block until it's received. This type declares all the information we need to execute a delegate on the message loop thread.</p>
+
+<p>Next we have something called a <code>MessageQueue</code>&nbsp;that holds&nbsp;<code>Message</code> struct instances as declared above. This <code>class</code> provides a thread safe way to communicate by posting and receiving <code>Message</code>s. It does most of the heavy lifting, but we'll explore that as well eventually.</p>
+
+<p>The above is specific to our implementation of a <code>SynchronizationContext</code>. You may very well have your own way of communicating across threads, and you can implement whatever you like as long as it fulfills the necessary contract provided by <code>SynchronizationContext</code>.</p>
+
+<p>Here are the <code>Send()</code> and <code>Post()</code> implementations for our custom synchronization context:</p>
+
+<p><span id="prehide670925" onclick="processCodeBlocks.togglePre(670925);">Hide</span>  &nbsp; <span id="preShrink670925" onclick="processCodeBlocks.shrinkExpand(670925);">Shrink</span> <img id="preimg670925" src="https://www.codeproject.com/images/arrow-up-16.png" onclick="processCodeBlocks.shrinkExpand(670925);">  &nbsp; <span id="copycode670925" onclick="return processCodeBlocks.copyCode(670925);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre670925" processed="true"><span>public</span> <span>override</span> <span>void</span> Post(SendOrPostCallback callback, <span>object</span> state)
+{
+&nbsp;&nbsp; &nbsp;_messageQueue.Post(<span>new</span> Message(callback, state));
+}
+<span>public</span> <span>override</span> <span>void</span> Send(SendOrPostCallback callback, <span>object</span> state)
+{
+&nbsp;&nbsp; &nbsp;var ev = <span>new</span> ManualResetEventSlim(<span>false</span>);
+&nbsp;&nbsp; &nbsp;try
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;_messageQueue.Post(<span>new</span> Message(callback, state, ev));
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;ev.Wait();
+&nbsp;&nbsp; &nbsp;}
+&nbsp;&nbsp; &nbsp;finally
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;ev.Dispose();
+&nbsp;&nbsp; &nbsp;}
+}</pre>
+
+<p>You can see <code>Post()</code> is straightforward. <code>Send()</code>&nbsp;is slightly more complicated because we must get notified when it finally completes, which is what our <code>ManualResetEventSlim</code>&nbsp;from earlier was before. Here we create it, post it with the <code>Message</code>, and then wait on it. In our message loop, it gets <code>Set()</code> signalling we can continue. Finally, we <code>Dispose()</code> of the event. It might be more efficient to recycle these events but doing so is significantly more complicated and I'm not sure how much performance would be gained, if any.</p>
+
+<p>Note we can pass a <code>State</code> with the <code>Message</code>. It gets sent to the <code>Callback</code> for processing, and its value is arbitrarily defined by the consumer.</p>
+
+<p>Now let's look at our message loop in <code>Start()</code>&nbsp;again, hopefully it will be a little clearer this time:</p>
+
+<p><span id="prehide545268" onclick="processCodeBlocks.togglePre(545268);">Hide</span>  &nbsp; <span id="copycode545268" onclick="return processCodeBlocks.copyCode(545268);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre545268">Message msg;
+<span>do</span>
+{
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;msg = _messageQueue.Receive();
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;msg.Callback?.Invoke(msg.State);
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;if (<span>null</span> != msg.FinishedEvent)
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;msg.FinishedEvent.Set();
+&nbsp;&nbsp; &nbsp;
+} <span>while</span> (<span>null</span> != msg.Callback);</pre>
+
+<p>While <code>Stop()</code> looks like this:</p>
+
+<p><span id="prehide442369" onclick="processCodeBlocks.togglePre(442369);">Hide</span>  &nbsp; <span id="copycode442369" onclick="return processCodeBlocks.copyCode(442369);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre442369"><span>var</span> ev = <span>new</span> ManualResetEventSlim(<span>false</span>);
+<span>try</span>
+{
+&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;_messageQueue.Post(<span>new</span> Message(<span>null</span>, <span>null</span>, ev));
+&nbsp;&nbsp; &nbsp;ev.Wait();
+}
+<span>finally</span> {
+&nbsp;&nbsp; &nbsp;ev.Dispose();
+}</pre>
+
+<p>Note how we're waiting for the message to complete. The reason this doesn't use <code>Send()</code>, but does the same thing is I've been considering adding a check for a <code>null</code> <code>Callback</code> and throwing in <code>Send()</code> if it finds one. This code ensures that the behavior here won't break if I add that check.</p>
+
+<h3>What About the MessageQueue Class?</h3>
+
+<p>The <code>MessageQueue</code>&nbsp;provides the core functionality to post and recieve messages between threads. It uses <code>ConcurrentQueue&lt;T&gt;</code>&nbsp;and <code>SemaphoreSlim</code>&nbsp;to work it's magic. The principle is that every time something adds a message (of type <code>T</code>) to the queue, they also call <code>Release(1)</code>&nbsp;on the semaphore, allowing the next <code>Receive()</code> to go through without blocking. The upshot of it is that this will only block if the queue is empty, so <code>Receive()</code> only blocks if there are no messages. Otherwise it returns the next message in the queue, removing it:</p>
+
+<p><span id="prehide123902" onclick="processCodeBlocks.togglePre(123902);">Hide</span>  &nbsp; <span id="copycode123902" onclick="return processCodeBlocks.copyCode(123902);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre123902">T result;
+<span>while</span> (!_queue.TryDequeue(<span>out</span> result))
+&nbsp;&nbsp; &nbsp;_sync.Wait();
+<span>return</span> result;</pre>
+
+<p>Meanwhile, <code>Post()</code> (there is no <code>Send()</code> equivelent) simply works like this:</p>
+
+<p><span id="prehide186946" onclick="processCodeBlocks.togglePre(186946);">Hide</span>  &nbsp; <span id="copycode186946" onclick="return processCodeBlocks.copyCode(186946);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre186946">_queue.Enqueue(message);
+_sync.Release(<span>1</span>);</pre>
+
+<p>That's the meat of it. There are several variants that do awaitable operations and/or take <code>CancellationToken</code>s but they all do the same thing as the above effectively.</p>
+
+<h3>Await and SynchronizationContext</h3>
+
+<p>The <code>await</code>&nbsp;language feature generates code for you that uses the thread's synchronization context. Every time an <code>await</code> is found, a new state for the state machine it builds out of your method is created so that it can suspend the execution of the method. The method becomes restartable, and works very similarly to how C# iterators and <code>yield</code> work in terms of how it modifies and morphs your code. The problem is that your method is often "restarted" after the <code>await</code> on a different thread, due to being hooked into device I/O callbacks or being "awoken"/unsuspended by another OS thread. What you need is seamless transition of your code back to the original thread and that's exactly what <code>await</code> provides. It uses the thread's current <code>SynchronizationContext</code> to run the restarted method on the the thread the routine was originally called from, using either <code>Post()</code> or <code>Send()</code>. This is why it's important to set the <code>SynchronizationContext</code> especially if you're using <code>async</code>/<code>await</code>&nbsp;and you need a custom one, like the one above.</p>
+
+<h2>History</h2>
+
+<p>26<sup>th</sup> July, 2020 - Initial submission</p>
+
+
+						</div><p>This article, along with any associated source code and files, is licensed under <a href="http://www.opensource.org/licenses/mit-license.php" rel="license">The MIT License</a></p></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
