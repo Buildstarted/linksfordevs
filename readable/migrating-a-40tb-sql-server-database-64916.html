@@ -1,0 +1,2002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Migrating a 40TB SQL Server Database - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Migrating a 40TB SQL Server Database - linksfor.dev(s)"/>
+    <meta property="article:author" content="Taryn"/>
+    <meta property="og:description" content="Initially, I wasn&#x2019;t sure whether to write about this migration project, but when I randomly asked if people would be interested, the response was overwhelming. This was a long, kind of boring, very repetitive, and at times incredibly frustrating project, but I learned a lot, and maybe someone else will learn from this too. There may be far better ways to move this amount of data. In the path I went down, there was a huge amount of juggling that had to take place (I&#x2019;ll explain that later)."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.tarynpivots.com/post/migrating-40tb-sql-server-database/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Migrating a 40TB SQL Server Database</title>
+<div class="readable">
+        <h1>Migrating a 40TB SQL Server Database</h1>
+            <div>by Taryn</div>
+            <div>Reading time: 50-63 minutes</div>
+        <div>Posted here: 28 Jul 2020</div>
+        <p><a href="https://www.tarynpivots.com/post/migrating-40tb-sql-server-database/">https://www.tarynpivots.com/post/migrating-40tb-sql-server-database/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+      
+
+<p>Initially, I wasn’t sure whether to write about this migration project, but when I randomly asked <a href="https://twitter.com/tarynpivots/status/1234966141526671360" target="_blank">if people would be interested</a>, the response was overwhelming. This was a long, kind of boring, very repetitive, and at times incredibly frustrating project, but I learned a lot, and maybe someone else will learn from this too. There may be far better ways to move this amount of data. In the path I went down, there was a huge amount of juggling that had to take place  (I’ll explain that later). Thankfully, I’m a decent juggler.</p>
+
+<p>While most people are probably interested in what we do with our primary SQL Servers (the servers that run Stack Overflow and the Stack Exchange network of sites), this post isn’t about those servers. This post is about what I called a miscellaneous server in a <a href="https://www.tarynpivots.com/post/how-we-upgraded-stackoverflow-to-sql-server-2017/">previous post</a> - more specifically, it’s about the migration of our traffic log data.</p>
+
+<h2 id="background">Background<a href="#background"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>Our HAProxy<sup>1</sup> logs aka traffic logs, are currently stored on two SQL Servers, one in New York, and one in Colorado. While we store a minimal summary of the traffic data, we have a lot of it. At the beginning of 2019, we had about 4.5 years of data, totaling about 38TB. The database was initially designed to have a single table for each day. This meant that at the start of 2019 we had approximately 1600 tables in a single database with multiple database files (due to the <a href="https://docs.microsoft.com/en-us/sql/sql-server/maximum-capacity-specifications-for-sql-server?view=sql-server-ver15" target="_blank">16TB size limit of data files</a>). Each table had a <a href="https://docs.microsoft.com/en-us/sql/relational-databases/indexes/columnstore-indexes-overview?view=sql-server-ver15" target="_blank">clustered columnstore index</a>, which held anywhere from 100-400 million rows in it.</p>
+
+<p>I had to move the data from their existing daily tables into a new structure — one table for each month. This needed to be completed on both the NY and CO servers, and the data was stored on spinny drives (Eeek). No matter what, it was going to be painful and slow.</p>
+
+<p>Oh, and to make things even more complicated, this had to be done with minimal free disk space on the existing servers. The servers had a 44TB spinny drive partition, and we were using 36-38TB of it, depending on the server. This meant I’d be following these steps throughout the process:</p>
+
+<ul>
+<li>migrate data to the new format</li>
+<li>delete old data</li>
+<li>shrink old database files…yeah, I know, but I had no choice</li>
+<li>repeat over, and over, and over again</li>
+</ul>
+
+<p>I fully expected the process to take months, and it did — after hitting delays in getting new servers the entire project took about 11 months.</p>
+
+<hr>
+
+<p><sup>1 </sup>Note: If you’re interested, my colleague, Nick Craver (<a href="https://nickcraver.com/" target="_blank">b</a> | <a href="https://twitter.com/Nick_Craver/" target="_blank">t</a>), wrote extensively about our monitoring on his blog and gave an <a href="https://nickcraver.com/blog/2018/11/29/stack-overflow-how-we-do-monitoring/#logs-haproxy" target="_blank">overview of our HAProxy usage</a>.</p>
+
+<h3 id="things-to-remember">Things to Remember<a href="#things-to-remember"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>Before I get started there are a few things I need to mention which impacted the project:</p>
+
+<ul>
+<li>I work remote 100% of the time, so I would not be able to run any of the processes from my local computer. Everything needed to be executed on a machine that was constantly connected to the network, so there wouldn’t be any VPN failures.</li>
+<li>I needed to run this on two separate machines. I was doing this on SQL servers in two different datacenters, I needed a machine in the same location, so I wouldn’t have to deal with slowness over the network.</li>
+<li>We have jump boxes that we use for various things at Stack Overflow, and we have one in NY and in CO, which were perfect to run the migration</li>
+<li>The old database was still being used in a live production environment, meaning that as I was moving data, we were constantly adding a new table daily. In other words, I had a moving target</li>
+<li>The databases are in <code>simple recovery</code> so we don’t have to deal with transaction logs. Our backup is the original source log files and the pair of SQL Servers - NY and CO - are copies of each other.</li>
+</ul>
+
+<p>The bullets above were pain points throughout the project. Being disconnected from the VPN meant I’d have to reconnect to monitor the migration progress. Getting booted from a jumpbox, meant that whatever process was running would need to be kicked off again, after some clean-up. Since we were still inserting new data I was chasing the target, the longer it took, the more data I’d be moving in the end.</p>
+
+<h3 id="why-oh-why-would-you-do-this">Why, oh why would you do this?<a href="#why-oh-why-would-you-do-this"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>I like to be miserable. Kidding.</p>
+
+<p>There were lots of reasons this needed to be done, one being tech debt. We realized that the original daily table structure wasn’t ideal. If we needed to query something over several days or months, it was terrible — lots of <code>UNION ALL</code>s or loops to crawl through days or even months at a time was slow.</p>
+
+<h3 id="why-not-delete-or-purge-some-of-the-data">Why not delete or purge some of the data?<a href="#why-not-delete-or-purge-some-of-the-data"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>As I mentioned, we were dealing with very little free disk space on both servers. The plan was to eventually get new hardware to replace them, but we weren’t exactly sure when that would happen. The goal was to migrate the data to the new format, then when we got new servers it would be as simple as moving the drives to get the new database in place (or so we thought).</p>
+
+<p>Each server had the following drives and approximate free space:</p>
+
+<ul>
+<li>a 230GB C: drive for Windows - obviously we wouldn’t put data files here</li>
+<li>a 3.64GB NVMe D: drive - containing tempdb, one data file, and the log file for the existing HAProxyLogs database - it was approximately 85% full</li>
+<li>a 44TB E: drive filled with spinny disks - with the remaining 3 data files for the HAProxyLogs database - this was anywhere from 85-90% full</li>
+</ul>
+
+<p>There was not a lot of room to move terabytes of data to a new database on the same server.</p>
+
+<p>Since new servers were on down the road, I asked about the possibility of getting more disk space. Having more space would give me some breathing room to not be so crunched during the process. After some research, it was decided that we could fit a couple of additional NVMe SSDs into both servers. We only had PCIe slots available in the server, so we ended up using U.2 NVMe drives on PCIe adapters to get us some space. The SSDs gave us a brand spanking new F: drive that was <strong>14TB</strong> of free space. While I couldn’t move everything to the new drive, it gave me plenty of space to work with, at least, for a little bit.</p>
+
+<p>Now that we had free space to use, it was time to set up the new database and begin the migration. I wrote the script to create the new database:</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span><span>12
+</span><span>13
+</span><span>14
+</span><span>15
+</span><span>16
+</span><span>17
+</span><span>18
+</span><span>19
+</span><span>20
+</span><span>21
+</span><span>22
+</span><span>23
+</span><span>24
+</span><span>25
+</span><span>26
+</span><span>27
+</span><span>28
+</span><span>29
+</span><span>30
+</span><span>31
+</span><span>32
+</span><span>33
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>CREATE</span> <span>DATABASE</span> <span>[</span><span>TrafficLogs</span><span>]</span> <span>CONTAINMENT</span> <span>=</span> <span>NONE</span>
+<span>ON</span> <span>PRIMARY</span>
+<span>(</span>   <span>NAME</span> <span>=</span> <span>N</span><span>'TrafficLogs_Current'</span><span>,</span>
+   <span>FILENAME</span> <span>=</span> <span>N</span><span>'F:\Data\TrafficLogs_Current.mdf'</span><span>,</span>
+   <span>SIZE</span> <span>=</span> <span>102400000</span><span>KB</span><span>,</span>
+   <span>FILEGROWTH</span> <span>=</span> <span>5120000</span><span>KB</span>
+<span>),</span>
+<span>FILEGROUP</span> <span>[</span><span>TrafficLogs_Archive</span><span>]</span>
+<span>(</span>
+   <span>NAME</span> <span>=</span> <span>N</span><span>'TrafficLogs_Archive1'</span><span>,</span>
+   <span>FILENAME</span> <span>=</span> <span>N</span><span>'E:\Data\TrafficLogs_Archive1.ndf'</span> <span>,</span>
+   <span>SIZE</span> <span>=</span> <span>102400000</span><span>KB</span><span>,</span>
+   <span>FILEGROWTH</span> <span>=</span> <span>5120000</span><span>KB</span>
+<span>),</span>
+<span>(</span>
+   <span>NAME</span> <span>=</span> <span>N</span><span>'TrafficLogs_Archive2'</span><span>,</span>
+   <span>FILENAME</span> <span>=</span> <span>N</span><span>'E:\Data\TrafficLogs_Archive2.ndf'</span><span>,</span>
+   <span>SIZE</span> <span>=</span> <span>102400000</span><span>KB</span> <span>,</span> <span>FILEGROWTH</span> <span>=</span> <span>5120000</span><span>KB</span>
+<span>),</span>
+<span>(</span>
+   <span>NAME</span> <span>=</span> <span>N</span><span>'TrafficLogs_Archive3'</span><span>,</span>
+   <span>FILENAME</span> <span>=</span> <span>N</span><span>'E:\Data\TrafficLogs_Archive3.ndf'</span><span>,</span>
+   <span>SIZE</span> <span>=</span> <span>102400000</span><span>KB</span><span>,</span>
+   <span>FILEGROWTH</span> <span>=</span> <span>5120000</span><span>KB</span>
+<span>)</span>
+<span>LOG</span> <span>ON</span>
+<span>(</span>
+   <span>NAME</span> <span>=</span> <span>N</span><span>'TrafficLogs_log'</span><span>,</span>
+   <span>FILENAME</span> <span>=</span> <span>N</span><span>'F:\Data\TrafficLogs_log.ldf'</span><span>,</span>
+   <span>SIZE</span> <span>=</span> <span>5120000</span><span>KB</span><span>,</span>
+   <span>MAXSIZE</span> <span>=</span> <span>2048</span><span>GB</span><span>,</span>
+   <span>FILEGROWTH</span> <span>=</span> <span>102400000</span><span>KB</span>
+<span>);</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>The database was going to have all of the old historical tables (i.e. the 40TBs) stored on the <code>TrafficLogs_Archive</code> filegroup, and we’d use the <code>PRIMARY</code> and <code>TrafficLogs_Current</code> for newer data being added.</p>
+
+<p>You’ll notice that the <code>TrafficLogs_Archive</code> filegroup went on our already very full E: drive, instead of the new F: drive - more on that mistake later.</p>
+
+<h2 id="moving-all-the-data">Moving All The Data<a href="#moving-all-the-data"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>We had a database, so it was time to start the migration. To be clear, I was actually taking over a process that was started, stopped, and then punted from several years earlier. The project was on the backlog of things to be done long before I became the DBA at Stack Overflow. Back then, everyone realized what a time consuming project this would be, and since we didn’t have the resources to devote to it, the can continuously got kicked down the road. As a result, more and more tables were added making the overall task a lot larger.</p>
+
+<p>Since this had been a previously abandoned project, there were already some scripts written, which meant I wasn’t totally starting from scratch. I was handed a couple of scripts to:</p>
+
+<ol>
+<li><p>Create all of the new monthly tables</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span><span>12
+</span><span>13
+</span><span>14
+</span><span>15
+</span><span>16
+</span><span>17
+</span><span>18
+</span><span>19
+</span><span>20
+</span><span>21
+</span><span>22
+</span><span>23
+</span><span>24
+</span><span>25
+</span><span>26
+</span><span>27
+</span><span>28
+</span><span>29
+</span><span>30
+</span><span>31
+</span><span>32
+</span><span>33
+</span><span>34
+</span><span>35
+</span><span>36
+</span><span>37
+</span><span>38
+</span><span>39
+</span><span>40
+</span><span>41
+</span><span>42
+</span><span>43
+</span><span>44
+</span><span>45
+</span><span>46
+</span><span>47
+</span><span>48
+</span><span>49
+</span><span>50
+</span><span>51
+</span><span>52
+</span><span>53
+</span><span>54
+</span><span>55
+</span><span>56
+</span><span>57
+</span><span>58
+</span><span>59
+</span><span>60
+</span><span>61
+</span><span>62
+</span><span>63
+</span><span>64
+</span><span>65
+</span><span>66
+</span><span>67
+</span><span>68
+</span><span>69
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>-- written by Nick Craver
+</span><span></span><span>Declare</span> <span>@</span><span>month</span> <span>datetime</span> <span>=</span> <span>'2015-08-01'</span><span>;</span>
+<span>Declare</span> <span>@</span><span>endmonth</span> <span>datetime</span> <span>=</span> <span>'2021-01-01'</span>
+
+<span>WHILE</span> <span>@</span><span>month</span> <span>&lt;</span> <span>@</span><span>endmonth</span>
+<span>BEGIN</span>
+
+<span>Set</span> <span>NoCount</span> <span>On</span><span>;</span>
+<span>Declare</span> <span>@</span><span>prevMonth</span> <span>datetime</span> <span>=</span> <span>DateAdd</span><span>(</span><span>Month</span><span>,</span> <span>-</span><span>1</span><span>,</span> <span>@</span><span>month</span><span>);</span>
+<span>Declare</span> <span>@</span><span>nextMonth</span> <span>datetime</span> <span>=</span> <span>DateAdd</span><span>(</span><span>Month</span><span>,</span> <span>1</span><span>,</span> <span>@</span><span>month</span><span>);</span>
+<span>Declare</span> <span>@</span><span>monthTable</span> <span>sysname</span> 
+    <span>=</span> <span>'Logs_'</span> <span>+</span> <span>Cast</span><span>(</span><span>DatePart</span><span>(</span><span>Year</span><span>,</span> <span>@</span><span>month</span><span>)</span> <span>as</span> <span>varchar</span><span>)</span> 
+	  <span>+</span> <span>'_'</span> <span>+</span> <span>Right</span><span>(</span><span>'0'</span> <span>+</span> <span>Cast</span><span>(</span><span>DatePart</span><span>(</span><span>Month</span><span>,</span> <span>@</span><span>month</span><span>)</span> <span>as</span> <span>varchar</span><span>),</span> <span>2</span><span>);</span>
+
+<span>Begin</span> <span>Try</span>
+  <span>If</span> <span>Object_Id</span><span>(</span><span>@</span><span>monthTable</span><span>,</span> <span>'U'</span><span>)</span> <span>Is</span> <span>Not</span> <span>Null</span>
+  <span>Begin</span>
+    <span>Declare</span> <span>@</span><span>error</span> <span>nvarchar</span><span>(</span><span>400</span><span>)</span> 
+	  <span>=</span> <span>'Month '</span> <span>+</span> <span>Convert</span><span>(</span><span>varchar</span><span>(</span><span>10</span><span>),</span> <span>@</span><span>month</span><span>,</span> <span>120</span><span>)</span> 
+	    <span>+</span> <span>' has already been moved to '</span> <span>+</span> <span>@</span><span>monthTable</span> <span>+</span> <span>', aborting.'</span><span>;</span>
+	<span>Throw</span> <span>501337</span><span>,</span> <span>@</span><span>error</span><span>,</span> <span>1</span><span>;</span>
+	<span>Return</span><span>;</span>
+  <span>End</span>
+
+  <span>-- Table Creation
+</span><span></span>  <span>Declare</span> <span>@</span><span>tableTemplate</span> <span>nvarchar</span><span>(</span><span>4000</span><span>)</span> <span>=</span> <span>'
+</span><span>    Create Table {Name} (
+</span><span>	  [CreationDate] datetime Not Null,
+</span><span>	  &lt;insert all the columns&gt;,
+</span><span>	  Constraint CK_{Name}_Low Check (CreationDate &gt;= ''{LowerDate}''),
+</span><span>	  Constraint CK_{Name}_High Check (CreationDate &lt; ''{UpperDate}'')
+</span><span>  ) On {Filegroup};
+</span><span>		
+</span><span>    Create Clustered Columnstore Index CCI_{Name} 
+</span><span>	  On {Name} With (Data_Compression = {Compression}) On {Filegroup};'</span><span>;</span>
+
+  <span>-- Constraints exist for metadata swap
+</span><span></span>  <span>Declare</span> <span>@</span><span>table</span> <span>nvarchar</span><span>(</span><span>4000</span><span>)</span> <span>=</span> <span>@</span><span>tableTemplate</span><span>;</span>
+  <span>Set</span> <span>@</span><span>table</span> <span>=</span> <span>Replace</span><span>(</span><span>@</span><span>table</span><span>,</span> <span>'{Name}'</span><span>,</span> <span>@</span><span>monthTable</span><span>);</span>
+  <span>Set</span> <span>@</span><span>table</span> <span>=</span> <span>Replace</span><span>(</span><span>@</span><span>table</span><span>,</span> <span>'{Filegroup}'</span><span>,</span> <span>'Logs_Archive'</span><span>);</span>
+  <span>Set</span> <span>@</span><span>table</span> <span>=</span> <span>Replace</span><span>(</span><span>@</span><span>table</span><span>,</span> <span>'{LowerDate}'</span><span>,</span> <span>Convert</span><span>(</span><span>varchar</span><span>(</span><span>20</span><span>),</span> <span>@</span><span>month</span><span>,</span> <span>120</span><span>));</span>
+  <span>Set</span> <span>@</span><span>table</span> <span>=</span> <span>Replace</span><span>(</span><span>@</span><span>table</span><span>,</span> <span>'{UpperDate}'</span><span>,</span> <span>Convert</span><span>(</span><span>varchar</span><span>(</span><span>20</span><span>),</span> <span>@</span><span>nextMonth</span><span>,</span> <span>120</span><span>));</span>
+  <span>Set</span> <span>@</span><span>table</span> <span>=</span> <span>Replace</span><span>(</span><span>@</span><span>table</span><span>,</span> <span>'{Compression}'</span><span>,</span> <span>'ColumnStore_Archive'</span><span>);</span>
+  <span>Print</span> <span>@</span><span>table</span><span>;</span>
+  <span>Exec</span> <span>sp_executesql</span> <span>@</span><span>table</span><span>;</span>
+		
+  <span>Declare</span> <span>@</span><span>moveSql</span> <span>nvarchar</span><span>(</span><span>4000</span><span>)</span> 
+    <span>=</span> <span>'Create Clustered Columnstore Index CCI_{Name} 
+</span><span>	  On {Name} With (Drop_Existing = On, Data_Compression = Columnstore_Archive) On Logs_Archive;'</span><span>;</span>
+  <span>Set</span> <span>@</span><span>moveSql</span> <span>=</span> <span>Replace</span><span>(</span><span>@</span><span>moveSql</span><span>,</span> <span>'{Name}'</span><span>,</span> <span>@</span><span>monthTable</span><span>);</span>
+  <span>Print</span> <span>@</span><span>moveSql</span><span>;</span>
+  <span>Exec</span> <span>sp_executesql</span> <span>@</span><span>moveSql</span><span>;</span>
+
+<span>End</span> <span>Try</span>
+<span>Begin</span> <span>Catch</span>
+	<span>Select</span> <span>Error_Number</span><span>()</span> <span>ErrorNumber</span><span>,</span>
+	    <span>Error_Severity</span><span>()</span> <span>ErrorSeverity</span><span>,</span>
+	    <span>Error_State</span><span>()</span> <span>ErrorState</span><span>,</span>
+	    <span>Error_Procedure</span><span>()</span> <span>ErrorProcedure</span><span>,</span>
+	    <span>Error_Line</span><span>()</span> <span>ErrorLine</span><span>,</span>
+	    <span>Error_Message</span><span>()</span> <span>ErrorMessage</span><span>;</span>
+	<span>Throw</span><span>;</span>
+<span>End</span> <span>Catch</span>
+
+<span>set</span> <span>@</span><span>month</span> <span>=</span> <span>dateadd</span><span>(</span><span>month</span><span>,</span> <span>1</span><span>,</span> <span>@</span><span>month</span><span>)</span>
+
+<span>END</span>
+<span>GO</span>
+	</code></pre></td></tr></tbody></table>
+</div>
+</div></li>
+
+<li><p>A LINQPad script to loop through each day, starting with the earliest, and insert the data into the new table</p>
+
+<div><div>
+<table data-lang="C#"><tbody><tr><td>
+<pre><code data-lang="cs"><span>  1
+</span><span>  2
+</span><span>  3
+</span><span>  4
+</span><span>  5
+</span><span>  6
+</span><span>  7
+</span><span>  8
+</span><span>  9
+</span><span> 10
+</span><span> 11
+</span><span> 12
+</span><span> 13
+</span><span> 14
+</span><span> 15
+</span><span> 16
+</span><span> 17
+</span><span> 18
+</span><span> 19
+</span><span> 20
+</span><span> 21
+</span><span> 22
+</span><span> 23
+</span><span> 24
+</span><span> 25
+</span><span> 26
+</span><span> 27
+</span><span> 28
+</span><span> 29
+</span><span> 30
+</span><span> 31
+</span><span> 32
+</span><span> 33
+</span><span> 34
+</span><span> 35
+</span><span> 36
+</span><span> 37
+</span><span> 38
+</span><span> 39
+</span><span> 40
+</span><span> 41
+</span><span> 42
+</span><span> 43
+</span><span> 44
+</span><span> 45
+</span><span> 46
+</span><span> 47
+</span><span> 48
+</span><span> 49
+</span><span> 50
+</span><span> 51
+</span><span> 52
+</span><span> 53
+</span><span> 54
+</span><span> 55
+</span><span> 56
+</span><span> 57
+</span><span> 58
+</span><span> 59
+</span><span> 60
+</span><span> 61
+</span><span> 62
+</span><span> 63
+</span><span> 64
+</span><span> 65
+</span><span> 66
+</span><span> 67
+</span><span> 68
+</span><span> 69
+</span><span> 70
+</span><span> 71
+</span><span> 72
+</span><span> 73
+</span><span> 74
+</span><span> 75
+</span><span> 76
+</span><span> 77
+</span><span> 78
+</span><span> 79
+</span><span> 80
+</span><span> 81
+</span><span> 82
+</span><span> 83
+</span><span> 84
+</span><span> 85
+</span><span> 86
+</span><span> 87
+</span><span> 88
+</span><span> 89
+</span><span> 90
+</span><span> 91
+</span><span> 92
+</span><span> 93
+</span><span> 94
+</span><span> 95
+</span><span> 96
+</span><span> 97
+</span><span> 98
+</span><span> 99
+</span><span>100
+</span><span>101
+</span><span>102
+</span><span>103
+</span><span>104
+</span><span>105
+</span><span>106
+</span><span>107
+</span><span>108
+</span><span>109
+</span><span>110
+</span><span>111
+</span><span>112
+</span><span>113
+</span><span>114
+</span><span>115
+</span></code></pre></td>
+<td>
+<pre><code data-lang="cs"><span>--</span> <span>written</span> <span>by</span> <span>Nick</span> <span>Craver</span>
+<span>&lt;</span><span>Query</span> <span>Kind</span><span>=</span><span>"Program"</span><span>&gt;</span>
+<span>&lt;</span><span>NuGetReference</span><span>&gt;</span><span>Dapper</span><span>&lt;/</span><span>NuGetReference</span><span>&gt;</span>
+<span>&lt;</span><span>Namespace</span><span>&gt;</span><span>Dapper</span><span>&lt;/</span><span>Namespace</span><span>&gt;</span>
+<span>&lt;/</span><span>Query</span><span>&gt;</span>
+
+<span>void</span> <span>Main</span><span>()</span>
+<span>{</span>
+  <span>MoveDate</span><span>(</span><span>new</span> <span>DateTime</span><span>(</span><span>2015</span><span>,</span> <span>08</span><span>,</span> <span>1</span><span>));</span>
+
+  <span>DateTime</span> <span>date</span> <span>=</span> <span>new</span> <span>DateTime</span><span>(</span><span>2015</span><span>,</span> <span>08</span><span>,</span> <span>1</span><span>);</span>
+  <span>while</span> <span>(</span><span>date</span> <span>&lt;</span> <span>DateTime</span><span>.</span><span>UtcNow</span><span>)</span>
+  <span>{</span>
+    <span>MoveDate</span><span>(</span><span>date</span><span>);</span>
+    <span>date</span> <span>=</span> <span>date</span><span>.</span><span>AddDays</span><span>(</span><span>1</span><span>);</span>
+  <span>}</span>
+<span>}</span>
+
+<span>static</span> <span>readonly</span> <span>List</span><span>&lt;</span><span>string</span><span>&gt;</span> <span>cols</span> <span>=</span> <span>new</span> <span>List</span><span>&lt;</span><span>string</span><span>&gt;</span> <span>{</span> <span>"&lt;col list&gt;"</span> <span>};</span>
+
+<span>public</span> <span>void</span> <span>MoveDate</span><span>(</span><span>DateTime</span> <span>date</span><span>)</span>
+<span>{</span>
+  <span>var</span> <span>tableName</span> <span>=</span> <span>GetTableName</span><span>(</span><span>date</span><span>);</span>
+  <span>var</span> <span>destTable</span> <span>=</span> <span>GetDestTableName</span><span>(</span><span>date</span><span>);</span>
+  <span>$"Attempting to migrate {date:yyyy-MM-dd} f
+</span><span>    from {tableName} to {destTable}"</span><span>.</span><span>Dump</span><span>(</span><span>$"{date:yyyy-MM-dd}"</span><span>);</span>
+
+  <span>using</span> <span>(</span><span>var</span> <span>conn</span> <span>=</span> <span>GetConn</span><span>())</span>
+  <span>{</span>
+    <span>int</span> <span>rowCount</span><span>;</span>
+	<span>try</span>
+	<span>{</span>
+	  <span>rowCount</span> <span>=</span> <span>conn</span><span>.</span><span>QuerySingle</span><span>&lt;</span><span>int</span><span>&gt;(</span><span>$"Select Count(*) 
+</span><span>						From HAProxyLogs.dbo.{tableName};"</span><span>);</span>
+	<span>}</span>
+	<span>catch</span> <span>(</span><span>SqlException</span> <span>e</span><span>)</span>
+	<span>{</span>
+	  <span>(</span><span>"  Error migrating: "</span> <span>+</span> <span>e</span><span>.</span><span>Message</span><span>).</span><span>Dump</span><span>();</span>
+	  <span>return</span><span>;</span>
+	<span>}</span>
+	<span>$"  Summary for {date:yyyy-MM-dd}"</span><span>.</span><span>Dump</span><span>();</span>
+	<span>$"    {rowCount:n0} row(s) in {tableName}"</span><span>.</span><span>Dump</span><span>();</span>
+	<span>var</span> <span>pb</span> <span>=</span> <span>new</span> <span>Util</span><span>.</span><span>ProgressBar</span><span>(</span><span>$"{tableName} (0/{rowCount})"</span><span>);</span>
+	<span>pb</span><span>.</span><span>Dump</span><span>(</span><span>tableName</span> <span>+</span> <span>" copy"</span><span>);</span>
+
+	<span>Func</span><span>&lt;</span><span>int</span><span>&gt;</span> <span>GetDestRowCount</span> <span>=</span> <span>()</span> 
+	  <span>=&gt;</span> <span>conn</span><span>.</span><span>QuerySingle</span><span>&lt;</span><span>int</span><span>&gt;(</span><span>$"Select Count(*) 
+</span><span>					From {destTable} 
+</span><span>					Where CreationDate &gt;= @date 
+</span><span>					  And CreationDate &lt; @date + 1;"</span><span>,</span> <span>new</span> <span>{</span> <span>date</span> <span>});</span>
+	  <span>Action</span><span>&lt;</span><span>long</span><span>,</span> <span>int</span><span>&gt;</span> <span>UpdatePB</span> <span>=</span> <span>(</span><span>copied</span><span>,</span> <span>total</span><span>)</span> <span>=&gt;</span>
+	  <span>{</span>
+		<span>pb</span><span>.</span><span>Fraction</span> <span>=</span> <span>(</span><span>double</span><span>)</span><span>copied</span> <span>/</span> <span>total</span><span>;</span>
+		<span>pb</span><span>.</span><span>Caption</span> <span>=</span> <span>$"{tableName} ({copied}/{total})"</span><span>;</span>
+	  <span>};</span>
+
+	  <span>var</span> <span>destRowCount</span> <span>=</span> <span>GetDestRowCount</span><span>();</span>
+	  <span>$"  {destRowCount:n0} row(s) in {destTable}"</span><span>.</span><span>Dump</span><span>();</span>
+
+	  <span>if</span> <span>(</span><span>destRowCount</span> <span>&gt;</span> <span>0</span><span>)</span>
+	  <span>{</span>
+		<span>$"Rows found in destiation table - aborting!"</span><span>.</span><span>Dump</span><span>();</span>
+		<span>return</span><span>;</span>
+	  <span>}</span>
+
+	<span>var</span> <span>reader</span> <span>=</span> <span>conn</span><span>.</span><span>ExecuteReader</span><span>(</span><span>$"Select {string.Join("</span><span>,</span><span>", cols)} 
+</span><span></span>					<span>From</span> <span>HAProxyLogs</span><span>.</span><span>dbo</span><span>.{</span><span>tableName</span><span>};</span><span>");
+</span><span></span>
+	<span>using</span> <span>(</span><span>SqlConnection</span> <span>dest</span> <span>=</span> <span>GetConn</span><span>())</span>
+	<span>{</span>
+	  <span>dest</span><span>.</span><span>Open</span><span>();</span>
+			
+	  <span>using</span> <span>(</span><span>SqlBulkCopy</span> <span>bc</span> <span>=</span> <span>new</span> <span>SqlBulkCopy</span><span>(</span><span>dest</span><span>))</span>
+	  <span>{</span>
+	    <span>bc</span><span>.</span><span>BulkCopyTimeout</span> <span>=</span> <span>5</span><span>*</span><span>60</span><span>;</span>
+		<span>bc</span><span>.</span><span>BatchSize</span> <span>=</span> <span>1048576</span><span>;</span>
+		<span>bc</span><span>.</span><span>NotifyAfter</span> <span>=</span> <span>100000</span><span>;</span>
+		<span>bc</span><span>.</span><span>DestinationTableName</span> <span>=</span> <span>GetDestTableName</span><span>(</span><span>date</span><span>);</span>
+		<span>bc</span><span>.</span><span>SqlRowsCopied</span> <span>+=</span> <span>(</span><span>e</span><span>,</span> <span>s</span><span>)</span> <span>=&gt;</span> <span>UpdatePB</span><span>(</span><span>s</span><span>.</span><span>RowsCopied</span><span>,</span> <span>rowCount</span><span>);</span>
+
+		<span>foreach</span> <span>(</span><span>var</span> <span>c</span> <span>in</span> <span>cols</span><span>)</span>
+		<span>{</span>
+		  <span>bc</span><span>.</span><span>ColumnMappings</span><span>.</span><span>Add</span><span>(</span><span>c</span><span>,</span> <span>c</span><span>);</span>
+		<span>}</span>
+
+		<span>try</span>
+		<span>{</span>
+ 		  <span>bc</span><span>.</span><span>WriteToServer</span><span>(</span><span>reader</span><span>);</span>
+		<span>}</span>
+		<span>catch</span> <span>(</span><span>Exception</span> <span>ex</span><span>)</span>
+		<span>{</span>
+		  <span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>ex</span><span>.</span><span>Message</span><span>);</span>
+		<span>}</span>
+		<span>finally</span>
+		<span>{</span>
+		  <span>reader</span><span>.</span><span>Close</span><span>();</span>
+		<span>}</span>
+	  <span>}</span>
+
+	  <span>var</span> <span>destFinalCount</span> <span>=</span> <span>GetDestRowCount</span><span>();</span>
+	<span>}</span>
+  <span>}</span>
+<span>}</span>
+
+<span>public</span> <span>SqlConnection</span> <span>GetConn</span><span>()</span> <span>=&gt;</span>
+  <span>new</span> <span>SqlConnection</span><span>(</span><span>new</span> <span>SqlConnectionStringBuilder</span>
+  <span>{</span>
+	<span>DataSource</span> <span>=</span> <span>"servername"</span><span>,</span>
+	<span>InitialCatalog</span> <span>=</span> <span>"TrafficLogs"</span><span>,</span>
+	<span>IntegratedSecurity</span> <span>=</span> <span>true</span>
+<span>}.</span><span>ToString</span><span>());</span>
+
+<span>public</span> <span>string</span> <span>GetTableName</span><span>(</span><span>DateTime</span> <span>dt</span><span>)</span> <span>=&gt;</span> <span>$"Log_{dt:yyyy_MM_dd}"</span><span>;</span>
+<span>public</span> <span>string</span> <span>GetDestTableName</span><span>(</span><span>DateTime</span> <span>dt</span><span>)</span> <span>=&gt;</span> <span>$"HAProxyLogs_{dt:yyyy_MM}"</span><span>;</span>
+	</code></pre></td></tr></tbody></table>
+</div>
+</div></li>
+</ol>
+
+<p>Ideally, this was going to be as simple as kicking off the LINQPad script, and letting it run in the background looping through all the tables. I thought I wouldn’t have to worry about it, but things are never really that easy.</p>
+
+<p>I started the migration in Colorado, on January 14, 2019 (yes, I know the exact date). Pulling millions of rows of data from spinny drives, and then inserting it back into new tables on those same spinny drives was slow. By day 2,
+ <a href="https://twitter.com/tarynpivots/status/1085225095168065536" target="_blank">knew this was going to be painful</a>. My original plan was to run the migration in Colorado first, then in New York. However, once I saw how slow each table was taking, I decided to run them simultaneously. About a week later, I kicked off the New York data migration.</p>
+
+<h2 id="data-migration-issues">Data Migration Issues<a href="#data-migration-issues"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>Early on, I hit various issues that I needed to work through. Some of these were easy fixes, others not so much.</p>
+
+<h3 id="script-timeouts">Script Timeouts<a href="#script-timeouts"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>The first issue was with the C# script. The script periodically timed-out when querying the database. After adjusting the settings, I crossed my fingers and hoped it would continue to work, which it did, for the most part.</p>
+
+<h3 id="random-script-errors">Random Script Errors<a href="#random-script-errors"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>Next, I ran into an issue, where the script would continue to the next table, aka day, if there was an error. That was terrible because we wanted the data to be <a href="https://docs.microsoft.com/en-us/sql/relational-databases/indexes/columnstore-indexes-query-performance?view=sql-server-ver15" target="_blank">inserted in date order</a>, for the clustered columnstore index. If the script errored and moved on to the next day, cleanup would need to be done for the day that didn’t finish. At that point, I’d have to start the process over for that particular day.</p>
+
+<p>You might be wondering what I mean by “cleanup”.</p>
+
+<p>Let me take a quick step back and explain the old process. The original table structure aka the daily tables were rowstore with a generic identity (ID) column to make each row unique. After 14 days, we would drop the primary key from the table, and add a clustered columnstore index. Even though the conversion to a clustered columnstore occurred, the ID column would remain.</p>
+
+<p>In the new table, we dropped the ID column. Dropping this column meant, trying to figure out the uniqueness of the rows inserted before a failure would be incredibly difficult. It was far easier, in the event of a failure, to just delete everything from the table for that day, and everything after that day (if it moved to another table), and restart the process.</p>
+
+<h3 id="data-validation">Data Validation<a href="#data-validation"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>I realized I needed to validate that the total number of rows inserted into the new table matched the total number of rows from the old daily table. Sounds easy, right? Well, not necessarily.</p>
+
+<p>Sure, the original tables were per day, but there were cases where instead of containing data from <code>date 00:00-23:59</code> it would potentially include some rows from <code>date+1</code>. This was a known issue (due to latency of logs arriving from HAProxy), and I was told the totals didn’t have to match perfectly - if we lost some rows, it was fine. The thing is, when you’re responsible for moving data from one system to another, you really want things to match…perfectly.</p>
+
+<p>Because of the stragglers from a different day, I couldn’t just query the total rows from the old table and verify that the new table contained the same count. I had to come up with a way to query the count by day. I did this by adding a column to the new table called <code>OriginalLogTable</code> and then populating it with the name of the old table, for example <code>Log_2019_07_01</code>. Having this column allowed me to compare the count of rows in the old table, with the count in the new table by grouping by the <code>OriginalLogTable</code>. This solved my problem because when I finished a month, I could easily verify that each day matched between the old and new tables, using the script below:</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span>  1
+</span><span>  2
+</span><span>  3
+</span><span>  4
+</span><span>  5
+</span><span>  6
+</span><span>  7
+</span><span>  8
+</span><span>  9
+</span><span> 10
+</span><span> 11
+</span><span> 12
+</span><span> 13
+</span><span> 14
+</span><span> 15
+</span><span> 16
+</span><span> 17
+</span><span> 18
+</span><span> 19
+</span><span> 20
+</span><span> 21
+</span><span> 22
+</span><span> 23
+</span><span> 24
+</span><span> 25
+</span><span> 26
+</span><span> 27
+</span><span> 28
+</span><span> 29
+</span><span> 30
+</span><span> 31
+</span><span> 32
+</span><span> 33
+</span><span> 34
+</span><span> 35
+</span><span> 36
+</span><span> 37
+</span><span> 38
+</span><span> 39
+</span><span> 40
+</span><span> 41
+</span><span> 42
+</span><span> 43
+</span><span> 44
+</span><span> 45
+</span><span> 46
+</span><span> 47
+</span><span> 48
+</span><span> 49
+</span><span> 50
+</span><span> 51
+</span><span> 52
+</span><span> 53
+</span><span> 54
+</span><span> 55
+</span><span> 56
+</span><span> 57
+</span><span> 58
+</span><span> 59
+</span><span> 60
+</span><span> 61
+</span><span> 62
+</span><span> 63
+</span><span> 64
+</span><span> 65
+</span><span> 66
+</span><span> 67
+</span><span> 68
+</span><span> 69
+</span><span> 70
+</span><span> 71
+</span><span> 72
+</span><span> 73
+</span><span> 74
+</span><span> 75
+</span><span> 76
+</span><span> 77
+</span><span> 78
+</span><span> 79
+</span><span> 80
+</span><span> 81
+</span><span> 82
+</span><span> 83
+</span><span> 84
+</span><span> 85
+</span><span> 86
+</span><span> 87
+</span><span> 88
+</span><span> 89
+</span><span> 90
+</span><span> 91
+</span><span> 92
+</span><span> 93
+</span><span> 94
+</span><span> 95
+</span><span> 96
+</span><span> 97
+</span><span> 98
+</span><span> 99
+</span><span>100
+</span><span>101
+</span><span>102
+</span><span>103
+</span><span>104
+</span><span>105
+</span><span>106
+</span><span>107
+</span><span>108
+</span><span>109
+</span><span>110
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>if</span> <span>object_id</span><span>(</span><span>'tempdb..#NewTableDetails'</span><span>)</span> <span>is</span> <span>not</span> <span>null</span>
+    <span>drop</span> <span>table</span> <span>#</span><span>NewTableDetails</span>
+ 
+<span>create</span> <span>table</span> <span>#</span><span>NewTableDetails</span> 
+<span>(</span>
+	<span>TrafficLogOrigTable</span> <span>varchar</span><span>(</span><span>50</span><span>),</span> 
+	<span>TrafficLogTotalRows</span> <span>bigint</span><span>,</span> 
+	<span>OriginalLogDate</span> <span>date</span>
+<span>)</span>
+ 
+<span>if</span> <span>object_id</span><span>(</span><span>'tempdb..#LogDetails'</span><span>)</span> <span>is</span> <span>not</span> <span>null</span>
+    <span>drop</span> <span>table</span> <span>#</span><span>LogDetails</span>
+ 
+<span>create</span> <span>table</span> <span>#</span><span>LogDetails</span> <span>(</span><span>LogDate</span> <span>date</span><span>,</span> <span>OriginalTotalRows</span> <span>bigint</span><span>)</span>
+ 
+<span>declare</span> <span>@</span><span>sql</span> <span>nvarchar</span><span>(</span><span>max</span><span>)</span> <span>=</span> <span>''</span>
+<span>declare</span> <span>@</span><span>startdate</span> <span>datetime</span> <span>=</span> <span>'2019-10-01'</span>  
+<span>declare</span> <span>@</span><span>enddate</span> <span>datetime</span> <span>=</span> <span>'2019-11-01'</span>
+ 
+<span>if</span> <span>object_id</span><span>(</span><span>'tempdb..#dates'</span><span>)</span> <span>is</span> <span>not</span> <span>null</span>
+    <span>drop</span> <span>table</span> <span>#</span><span>dates</span><span>;</span>
+ 
+<span>CREATE</span> <span>TABLE</span> <span>#</span><span>dates</span>
+<span>(</span>
+  <span>[</span><span>Date</span><span>]</span> <span>DATE</span> <span>PRIMARY</span> <span>KEY</span><span>,</span>
+  <span>FirstOfMonth</span> <span>AS</span> <span>CONVERT</span><span>(</span><span>DATE</span><span>,</span> <span>DATEADD</span><span>(</span><span>MONTH</span><span>,</span> <span>DATEDIFF</span><span>(</span><span>MONTH</span><span>,</span> <span>0</span><span>,</span> <span>[</span><span>Date</span><span>]),</span> <span>0</span><span>)),</span>
+  <span>OldTableName</span> <span>as</span> <span>concat</span><span>(</span><span>'Log_'</span><span>,</span> <span>year</span><span>([</span><span>date</span><span>]),</span> <span>'_'</span><span>,</span> <span>right</span><span>(</span><span>'0'</span> <span>+</span> <span>rtrim</span><span>(</span><span>month</span><span>([</span><span>date</span><span>])),</span> <span>2</span><span>),</span> <span>'_'</span><span>,</span> <span>right</span><span>(</span><span>'0'</span> <span>+</span> <span>rtrim</span><span>(</span><span>day</span><span>([</span><span>date</span><span>])),</span> <span>2</span><span>)),</span>
+  <span>NewTableName</span> <span>as</span> <span>concat</span><span>(</span><span>'HAProxyLogs_'</span><span>,</span> <span>year</span><span>([</span><span>date</span><span>]),</span> <span>'_'</span><span>,</span> <span>right</span><span>(</span><span>'0'</span> <span>+</span> <span>rtrim</span><span>(</span><span>month</span><span>([</span><span>date</span><span>])),</span> <span>2</span><span>))</span>
+<span>);</span>
+ 
+<span>INSERT</span> <span>#</span><span>dates</span><span>([</span><span>Date</span><span>])</span> 
+<span>SELECT</span> <span>d</span>
+<span>FROM</span>
+<span>(</span>
+  <span>SELECT</span> <span>d</span> <span>=</span> <span>DATEADD</span><span>(</span><span>DAY</span><span>,</span> <span>rn</span> <span>-</span> <span>1</span><span>,</span> <span>@</span><span>StartDate</span><span>)</span>
+  <span>FROM</span> 
+  <span>(</span>
+    <span>SELECT</span> <span>TOP</span> <span>(</span><span>DATEDIFF</span><span>(</span><span>DAY</span><span>,</span> <span>@</span><span>StartDate</span><span>,</span> <span>@</span><span>enddate</span><span>))</span> 
+      <span>rn</span> <span>=</span> <span>ROW_NUMBER</span><span>()</span> <span>OVER</span> <span>(</span><span>ORDER</span> <span>BY</span> <span>s1</span><span>.[</span><span>object_id</span><span>])</span>
+    <span>FROM</span> <span>sys</span><span>.</span><span>all_objects</span> <span>AS</span> <span>s1</span>
+    <span>CROSS</span> <span>JOIN</span> <span>sys</span><span>.</span><span>all_objects</span> <span>AS</span> <span>s2</span>
+    <span>ORDER</span> <span>BY</span> <span>s1</span><span>.[</span><span>object_id</span><span>]</span>
+  <span>)</span> <span>AS</span> <span>x</span>
+<span>)</span> <span>AS</span> <span>y</span><span>;</span>
+ 
+<span>-- for each new table name get the count of rows, get list of OldTables 
+</span><span>-- Imported and then get the counts for each one
+</span><span></span><span>declare</span> <span>@</span><span>newtablename</span> <span>nvarchar</span><span>(</span><span>100</span><span>)</span>
+<span>declare</span> <span>@</span><span>date</span> <span>datetime</span>
+<span>declare</span> <span>newtable_cursor</span> <span>cursor</span> <span>for</span>
+    <span>select</span> <span>distinct</span> <span>NewTableName</span>
+    <span>from</span> <span>#</span><span>dates</span>
+    <span>where</span> <span>[</span><span>date</span><span>]</span> <span>&lt;</span> <span>@</span><span>enddate</span>
+<span>open</span> <span>newtable_cursor</span> 
+<span>fetch</span> <span>next</span> <span>from</span> <span>newtable_cursor</span> <span>into</span> <span>@</span><span>newtablename</span>
+ 
+<span>while</span> <span>@@</span><span>FETCH_STATUS</span> <span>=</span> <span>0</span>
+<span>begin</span>
+    <span>set</span> <span>@</span><span>sql</span> <span>=</span> <span>'insert into #NewTableDetails (TrafficLogOrigTable, TrafficLogTotalRows) 
+</span><span>                select 
+</span><span>                    TrafficLogOrigTable = OriginalLogTable, 
+</span><span>                    TrafficLogTotalRows = count(*)
+</span><span>                from TrafficLogs.dbo.['</span> <span>+</span> <span>@</span><span>newtablename</span> <span>+</span><span>'] 
+</span><span>                group by OriginalLogTable '</span><span>;</span>
+ 
+    <span>exec</span> <span>sp_executesql</span> <span>@</span><span>sql</span>
+ 
+    <span>FETCH</span> <span>NEXT</span> <span>FROM</span> <span>newtable_cursor</span> <span>INTO</span> <span>@</span><span>newtablename</span>
+<span>end</span>
+<span>CLOSE</span> <span>newtable_cursor</span>  
+<span>DEALLOCATE</span> <span>newtable_cursor</span>  
+ 
+<span>update</span> <span>#</span><span>NewTableDetails</span>
+<span>set</span> <span>OriginalLogDate</span> 
+    <span>=</span> <span>Cast</span><span>(</span><span>Replace</span><span>(</span><span>Replace</span><span>(</span><span>TrafficLogOrigTable</span><span>,</span> <span>'Log_'</span><span>,</span> <span>''</span><span>),</span> <span>'_'</span><span>,</span> <span>'-'</span><span>)</span> <span>as</span> <span>date</span><span>)</span>
+ 
+<span>declare</span> <span>@</span><span>oldTableName</span> <span>nvarchar</span><span>(</span><span>100</span><span>)</span>
+<span>declare</span> <span>@</span><span>oldtabledate</span> <span>date</span>
+<span>declare</span> <span>table_cursor</span> <span>cursor</span> <span>for</span>
+    <span>select</span> <span>OriginalLogDate</span><span>,</span> <span>TrafficLogOrigTable</span>
+    <span>from</span> <span>#</span><span>NewTableDetails</span>
+<span>open</span> <span>table_cursor</span> 
+<span>fetch</span> <span>next</span> <span>from</span> <span>table_cursor</span> <span>into</span> <span>@</span><span>oldtabledate</span><span>,</span> <span>@</span><span>oldTableName</span>
+ 
+<span>while</span> <span>@@</span><span>FETCH_STATUS</span> <span>=</span> <span>0</span>
+<span>begin</span>
+    <span>set</span> <span>@</span><span>sql</span> <span>=</span> <span>'insert into #LogDetails (LogDate, OriginalTotalRows) 
+</span><span>                select 
+</span><span>                    LogDate = '''</span><span>+</span> <span>convert</span><span>(</span><span>varchar</span><span>(</span><span>10</span><span>),</span> <span>@</span><span>oldtabledate</span><span>,</span> <span>23</span><span>)</span> <span>+</span><span>''', 
+</span><span>                    OriginalTotalRows = count(*) 
+</span><span>                from HAProxyLogs.dbo.['</span> <span>+</span> <span>@</span><span>oldTableName</span> <span>+</span><span>']'</span><span>;</span>
+    <span>exec</span> <span>sp_executesql</span> <span>@</span><span>sql</span>
+ 
+ 
+    <span>FETCH</span> <span>NEXT</span> <span>FROM</span> <span>table_cursor</span> <span>INTO</span> <span>@</span><span>oldtabledate</span><span>,</span> <span>@</span><span>oldTableName</span>
+<span>end</span>
+<span>CLOSE</span> <span>table_cursor</span>  
+<span>DEALLOCATE</span> <span>table_cursor</span>  
+ 
+<span>select</span> 
+    <span>nt</span><span>.</span><span>OriginalLogDate</span><span>,</span> 
+    <span>nt</span><span>.</span><span>TrafficLogOrigTable</span><span>,</span> 
+    <span>nt</span><span>.</span><span>TrafficLogTotalRows</span><span>,</span> 
+    <span>ot</span><span>.</span><span>OriginalTotalRows</span><span>,</span> 
+    <span>ot</span><span>.</span><span>LogDate</span><span>,</span> 
+    <span>IsMatch</span> <span>=</span> <span>case</span> <span>when</span> <span>nt</span><span>.</span><span>TrafficLogTotalRows</span> <span>=</span> <span>ot</span><span>.</span><span>OriginalTotalRows</span> <span>then</span> <span>'Y'</span> <span>else</span> <span>'N'</span> <span>end</span>
+<span>from</span> <span>#</span><span>NewTableDetails</span> <span>nt</span>
+<span>full</span> <span>join</span> <span>#</span><span>LogDetails</span> <span>ot</span>
+    <span>on</span> <span>nt</span><span>.</span><span>OriginalLogDate</span> <span>=</span> <span>ot</span><span>.</span><span>LogDate</span>
+<span>order</span> <span>by</span> <span>nt</span><span>.</span><span>OriginalLogDate</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<h3 id="column-changes">Column Changes<a href="#column-changes"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>I also discovered that we added new columns after the original daily tables were designed. This meant that over the course of the data migration the table structure would change. I adjusted the LinqPad script so it would add the new columns when needed based on date, this would make sure it continued to work and we wouldn’t skip new columns.</p>
+
+<p>There were many more issues which involved debugging the script, but eventually I had a C# script that fixed all of the above problems. The new script looked a little like this:</p>
+
+<div><div>
+<table data-lang="C#"><tbody><tr><td>
+<pre><code data-lang="cs"><span>  1
+</span><span>  2
+</span><span>  3
+</span><span>  4
+</span><span>  5
+</span><span>  6
+</span><span>  7
+</span><span>  8
+</span><span>  9
+</span><span> 10
+</span><span> 11
+</span><span> 12
+</span><span> 13
+</span><span> 14
+</span><span> 15
+</span><span> 16
+</span><span> 17
+</span><span> 18
+</span><span> 19
+</span><span> 20
+</span><span> 21
+</span><span> 22
+</span><span> 23
+</span><span> 24
+</span><span> 25
+</span><span> 26
+</span><span> 27
+</span><span> 28
+</span><span> 29
+</span><span> 30
+</span><span> 31
+</span><span> 32
+</span><span> 33
+</span><span> 34
+</span><span> 35
+</span><span> 36
+</span><span> 37
+</span><span> 38
+</span><span> 39
+</span><span> 40
+</span><span> 41
+</span><span> 42
+</span><span> 43
+</span><span> 44
+</span><span> 45
+</span><span> 46
+</span><span> 47
+</span><span> 48
+</span><span> 49
+</span><span> 50
+</span><span> 51
+</span><span> 52
+</span><span> 53
+</span><span> 54
+</span><span> 55
+</span><span> 56
+</span><span> 57
+</span><span> 58
+</span><span> 59
+</span><span> 60
+</span><span> 61
+</span><span> 62
+</span><span> 63
+</span><span> 64
+</span><span> 65
+</span><span> 66
+</span><span> 67
+</span><span> 68
+</span><span> 69
+</span><span> 70
+</span><span> 71
+</span><span> 72
+</span><span> 73
+</span><span> 74
+</span><span> 75
+</span><span> 76
+</span><span> 77
+</span><span> 78
+</span><span> 79
+</span><span> 80
+</span><span> 81
+</span><span> 82
+</span><span> 83
+</span><span> 84
+</span><span> 85
+</span><span> 86
+</span><span> 87
+</span><span> 88
+</span><span> 89
+</span><span> 90
+</span><span> 91
+</span><span> 92
+</span><span> 93
+</span><span> 94
+</span><span> 95
+</span><span> 96
+</span><span> 97
+</span><span> 98
+</span><span> 99
+</span><span>100
+</span><span>101
+</span><span>102
+</span><span>103
+</span><span>104
+</span><span>105
+</span><span>106
+</span><span>107
+</span><span>108
+</span><span>109
+</span><span>110
+</span><span>111
+</span><span>112
+</span><span>113
+</span><span>114
+</span><span>115
+</span><span>116
+</span><span>117
+</span><span>118
+</span><span>119
+</span><span>120
+</span><span>121
+</span><span>122
+</span><span>123
+</span><span>124
+</span></code></pre></td>
+<td>
+<pre><code data-lang="cs"><span>&lt;</span><span>Query</span> <span>Kind</span><span>=</span><span>"Program"</span><span>&gt;</span>
+ <span>&lt;</span><span>NuGetReference</span><span>&gt;</span><span>Dapper</span><span>&lt;/</span><span>NuGetReference</span><span>&gt;</span>
+ <span>&lt;</span><span>Namespace</span><span>&gt;</span><span>Dapper</span><span>&lt;/</span><span>Namespace</span><span>&gt;</span>
+<span>&lt;/</span><span>Query</span><span>&gt;</span>
+ 
+<span>void</span> <span>Main</span><span>()</span>
+<span>{</span>
+   <span>DateTime</span> <span>date</span> <span>=</span> <span>new</span> <span>DateTime</span><span>(</span><span>2016</span><span>,</span> <span>07</span><span>,</span> <span>26</span><span>);</span>
+   <span>while</span> <span>(</span><span>date</span> <span>&lt;</span> <span>DateTime</span><span>.</span><span>UtcNow</span><span>)</span>
+   <span>{</span>
+       <span>MoveDate</span><span>(</span><span>date</span><span>);</span>
+       <span>date</span> <span>=</span> <span>date</span><span>.</span><span>AddDays</span><span>(</span><span>1</span><span>);</span>
+   <span>}</span>
+<span>}</span>
+ 
+<span>static</span> <span>readonly</span> <span>List</span><span>&lt;</span><span>string</span><span>&gt;</span> <span>cols</span> <span>=</span> <span>new</span> <span>List</span><span>&lt;</span><span>string</span><span>&gt;</span> <span>{</span> <span>"&lt;col list&gt;"</span> <span>};</span>
+ 
+<span>public</span> <span>void</span> <span>MoveDate</span><span>(</span><span>DateTime</span> <span>date</span><span>)</span>
+<span>{</span>
+   <span>var</span> <span>tableName</span> <span>=</span> <span>GetTableName</span><span>(</span><span>date</span><span>);</span>
+   <span>var</span> <span>destTable</span> <span>=</span> <span>GetDestTableName</span><span>(</span><span>date</span><span>);</span>
+   <span>$"Attempting to migrate {date:yyyy-MM-dd} from {tableName} 
+</span><span>   		to {destTable}"</span><span>.</span><span>Dump</span><span>(</span><span>$"{date:yyyy-MM-dd}"</span><span>);</span>
+ 
+   <span>if</span> <span>(</span><span>date</span> <span>&gt;=</span> <span>new</span> <span>DateTime</span><span>(</span><span>2017</span><span>,</span> <span>01</span><span>,</span> <span>12</span><span>))</span>
+   <span>{</span>
+       <span>cols</span><span>.</span><span>Add</span><span>(</span><span>"new col1"</span><span>);</span>
+       <span>cols</span><span>.</span><span>Add</span><span>(</span><span>"new col2"</span><span>);</span>
+   <span>}</span>
+ 
+   <span>using</span> <span>(</span><span>var</span> <span>conn</span> <span>=</span> <span>GetConn</span><span>())</span>
+   <span>{</span>
+       <span>int</span> <span>rowCount</span><span>;</span>
+       <span>try</span>
+       <span>{</span>
+           <span>rowCount</span> <span>=</span> <span>conn</span><span>.</span><span>QuerySingle</span><span>&lt;</span><span>int</span><span>&gt;(</span><span>$"Select Count(*) 
+</span><span>		   				From HAProxyLogs.dbo.{tableName};"</span><span>);</span>
+       <span>}</span>
+       <span>catch</span> <span>(</span><span>SqlException</span> <span>e</span><span>)</span>
+       <span>{</span>
+           <span>(</span><span>"  Error migrating: "</span> <span>+</span> <span>e</span><span>.</span><span>Message</span><span>).</span><span>Dump</span><span>();</span>
+           <span>return</span><span>;</span>
+       <span>}</span>
+       <span>$"  Summary for {date:yyyy-MM-dd}"</span><span>.</span><span>Dump</span><span>();</span>
+       <span>$"    {rowCount:n0} row(s) in {tableName}"</span><span>.</span><span>Dump</span><span>();</span>
+       <span>var</span> <span>pb</span> <span>=</span> <span>new</span> <span>Util</span><span>.</span><span>ProgressBar</span><span>(</span><span>$"{tableName} (0/{rowCount})"</span><span>);</span>
+       <span>pb</span><span>.</span><span>Dump</span><span>(</span><span>tableName</span> <span>+</span> <span>" copy"</span><span>);</span>
+ 
+       <span>Func</span><span>&lt;</span><span>int</span><span>&gt;</span> <span>GetDestRowCount</span> <span>=</span> <span>()</span> 
+	    <span>=&gt;</span> <span>conn</span><span>.</span><span>QuerySingle</span><span>&lt;</span><span>int</span><span>&gt;(</span><span>$"Select Count(*) 
+</span><span>			   		From {destTable} 
+</span><span>					Where CreationDate &gt;= @date 
+</span><span>					  And OriginalLogTable = '{tableName}';"</span><span>,</span> <span>new</span> <span>{</span> <span>date</span> <span>});</span>
+       <span>Action</span><span>&lt;</span><span>long</span><span>,</span> <span>int</span><span>&gt;</span> <span>UpdatePB</span> <span>=</span> <span>(</span><span>copied</span><span>,</span> <span>total</span><span>)</span> <span>=&gt;</span>
+       <span>{</span>
+           <span>pb</span><span>.</span><span>Fraction</span> <span>=</span> <span>(</span><span>double</span><span>)</span><span>copied</span> <span>/</span> <span>total</span><span>;</span>
+           <span>pb</span><span>.</span><span>Caption</span> <span>=</span> <span>$"{tableName} ({copied}/{total})"</span><span>;</span>
+       <span>};</span>
+ 
+       <span>var</span> <span>destRowCount</span> <span>=</span> <span>GetDestRowCount</span><span>();</span>
+       <span>$"There are  {destRowCount:n0} row(s) for table: {destTable}"</span><span>.</span><span>Dump</span><span>();</span>
+ 
+       <span>if</span> <span>(</span><span>destRowCount</span> <span>&gt;</span> <span>0</span><span>)</span>
+       <span>{</span>
+           <span>$"Rows found in destination table - aborting!"</span><span>.</span><span>Dump</span><span>();</span>
+           <span>return</span><span>;</span>
+       <span>}</span>
+ 
+       <span>var</span> <span>sqlString</span> <span>=</span> <span>$"Select {string.Join("</span><span>,</span><span>", cols)}, OriginalLogTable = '{tableName}' 
+</span><span></span>	   			<span>From</span> <span>HAProxyLogs</span><span>.</span><span>dbo</span><span>.{</span><span>tableName</span><span>};</span><span>";
+</span><span></span>       <span>var</span> <span>reader</span> <span>=</span> <span>conn</span><span>.</span><span>ExecuteReader</span><span>(</span><span>sqlString</span><span>);</span>
+ 
+       <span>using</span> <span>(</span><span>SqlConnection</span> <span>dest</span> <span>=</span> <span>GetConn</span><span>())</span>
+       <span>{</span>
+           <span>dest</span><span>.</span><span>Open</span><span>();</span>
+      
+           <span>using</span> <span>(</span><span>SqlBulkCopy</span> <span>bc</span> <span>=</span> <span>new</span> <span>SqlBulkCopy</span><span>(</span><span>dest</span><span>))</span>
+           <span>{</span>
+              
+               <span>bc</span><span>.</span><span>BulkCopyTimeout</span> <span>=</span> <span>15</span><span>*</span><span>60</span><span>;</span>
+               <span>bc</span><span>.</span><span>BatchSize</span> <span>=</span> <span>1048576</span><span>;</span>
+               <span>bc</span><span>.</span><span>NotifyAfter</span> <span>=</span> <span>100000</span><span>;</span>
+               <span>bc</span><span>.</span><span>DestinationTableName</span> <span>=</span> <span>GetDestTableName</span><span>(</span><span>date</span><span>);</span>
+               <span>bc</span><span>.</span><span>SqlRowsCopied</span> <span>+=</span> <span>(</span><span>e</span><span>,</span> <span>s</span><span>)</span> <span>=&gt;</span> <span>UpdatePB</span><span>(</span><span>s</span><span>.</span><span>RowsCopied</span><span>,</span> <span>rowCount</span><span>);</span>
+ 
+               <span>foreach</span> <span>(</span><span>var</span> <span>c</span> <span>in</span> <span>cols</span><span>)</span>
+               <span>{</span>
+                   <span>bc</span><span>.</span><span>ColumnMappings</span><span>.</span><span>Add</span><span>(</span><span>c</span><span>,</span> <span>c</span><span>);</span>
+               <span>}</span>
+ 
+               <span>try</span>
+               <span>{</span>
+                   <span>bc</span><span>.</span><span>ColumnMappings</span><span>.</span><span>Add</span><span>(</span><span>"OriginalLogTable"</span><span>,</span> <span>"OriginalLogTable"</span><span>);</span>
+                   <span>bc</span><span>.</span><span>WriteToServer</span><span>(</span><span>reader</span><span>);</span>
+               <span>}</span>
+               <span>catch</span> <span>(</span><span>Exception</span> <span>ex</span><span>)</span>
+               <span>{</span>
+                   <span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>ex</span><span>.</span><span>Message</span><span>);</span>
+               <span>}</span>
+               <span>finally</span>
+               <span>{</span>
+                   <span>reader</span><span>.</span><span>Close</span><span>();</span>
+               <span>}</span>
+           <span>}</span>
+ 
+           <span>// try updating stats after full dump to see if that stops time-outs
+</span><span></span>           <span>var</span> <span>statsString</span> 
+		<span>=</span> <span>$"waitfor delay '00:00:05'; 
+</span><span>		    update statistics dbo.[{destTable}] [{destTable}_OriginalLogTable];"</span><span>;</span>
+           <span>conn</span><span>.</span><span>Query</span><span>(</span><span>statsString</span><span>);</span>
+ 
+           <span>var</span> <span>destFinalCount</span> <span>=</span> <span>GetDestRowCount</span><span>();</span>
+           <span>$"After migration there are {destFinalCount:n0} row(s) in {destTable}"</span><span>.</span><span>Dump</span><span>();</span>
+       <span>}</span>
+   <span>}</span>
+<span>}</span>
+ 
+ 
+<span>public</span> <span>SqlConnection</span> <span>GetConn</span><span>()</span> <span>=&gt;</span>
+   <span>new</span> <span>SqlConnection</span><span>(</span><span>"Data Source=servername;Initial Catalog=TrafficLogs;Trusted_Connection=True;Connection Timeout = 1500;"</span><span>);</span>
+ 
+<span>public</span> <span>string</span> <span>GetTableName</span><span>(</span><span>DateTime</span> <span>dt</span><span>)</span> <span>=&gt;</span> <span>$"Log_{dt:yyyy_MM_dd}"</span><span>;</span>
+<span>public</span> <span>string</span> <span>GetDestTableName</span><span>(</span><span>DateTime</span> <span>dt</span><span>)</span> <span>=&gt;</span> <span>$"HAProxyLogs_{dt:yyyy_MM}"</span><span>;</span>
+ </code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<h2 id="it-s-so-slow">It’s So Slow<a href="#it-s-so-slow"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>We all knew this was going to be a slow process, but I don’t think anyone realized how slow. I did everything I could think of to try and speed up the script.</p>
+
+<p>It took about 2-2.5 hours to insert each old table into the new table. By the middle of February, I had:</p>
+
+<ul>
+<li>1332 tables left to migrate in New York</li>
+<li>and 782 tables left in Colorado</li>
+</ul>
+
+<p>At the rate it was going, I knew <a href="https://twitter.com/tarynpivots/status/1098695568140906496" target="_blank">it was going to take months to complete</a>.</p>
+
+<p>I went back to the drawing board to figure out some way to move the data faster. Obviously, I wanted to follow the same steps - insert old data, verify the row count matches, move to the next day, repeat - I used the C# script as my model - I mean it worked, it was just a little slow. I tried a bunch of different things, none were blazingly fast:</p>
+
+<ul>
+<li>an SSIS package - sorry SSIS fans, this was even slower and I won’t embarrass myself by sharing it</li>
+<li>a SQL script using dynamic SQL - this was also pretty slow</li>
+</ul>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span>  1
+</span><span>  2
+</span><span>  3
+</span><span>  4
+</span><span>  5
+</span><span>  6
+</span><span>  7
+</span><span>  8
+</span><span>  9
+</span><span> 10
+</span><span> 11
+</span><span> 12
+</span><span> 13
+</span><span> 14
+</span><span> 15
+</span><span> 16
+</span><span> 17
+</span><span> 18
+</span><span> 19
+</span><span> 20
+</span><span> 21
+</span><span> 22
+</span><span> 23
+</span><span> 24
+</span><span> 25
+</span><span> 26
+</span><span> 27
+</span><span> 28
+</span><span> 29
+</span><span> 30
+</span><span> 31
+</span><span> 32
+</span><span> 33
+</span><span> 34
+</span><span> 35
+</span><span> 36
+</span><span> 37
+</span><span> 38
+</span><span> 39
+</span><span> 40
+</span><span> 41
+</span><span> 42
+</span><span> 43
+</span><span> 44
+</span><span> 45
+</span><span> 46
+</span><span> 47
+</span><span> 48
+</span><span> 49
+</span><span> 50
+</span><span> 51
+</span><span> 52
+</span><span> 53
+</span><span> 54
+</span><span> 55
+</span><span> 56
+</span><span> 57
+</span><span> 58
+</span><span> 59
+</span><span> 60
+</span><span> 61
+</span><span> 62
+</span><span> 63
+</span><span> 64
+</span><span> 65
+</span><span> 66
+</span><span> 67
+</span><span> 68
+</span><span> 69
+</span><span> 70
+</span><span> 71
+</span><span> 72
+</span><span> 73
+</span><span> 74
+</span><span> 75
+</span><span> 76
+</span><span> 77
+</span><span> 78
+</span><span> 79
+</span><span> 80
+</span><span> 81
+</span><span> 82
+</span><span> 83
+</span><span> 84
+</span><span> 85
+</span><span> 86
+</span><span> 87
+</span><span> 88
+</span><span> 89
+</span><span> 90
+</span><span> 91
+</span><span> 92
+</span><span> 93
+</span><span> 94
+</span><span> 95
+</span><span> 96
+</span><span> 97
+</span><span> 98
+</span><span> 99
+</span><span>100
+</span><span>101
+</span><span>102
+</span><span>103
+</span><span>104
+</span><span>105
+</span><span>106
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>declare</span> <span>@</span><span>startDate</span> <span>datetime</span> <span>=</span> <span>'2015-11-01'</span>
+<span>declare</span> <span>@</span><span>endDate</span> <span>datetime</span> <span>=</span> <span>'2015-12-01'</span>
+
+<span>declare</span> <span>@</span><span>OldTableName</span> <span>varchar</span><span>(</span><span>100</span><span>)</span>
+<span>declare</span> <span>@</span><span>NewTableName</span> <span>varchar</span><span>(</span><span>100</span><span>)</span>
+
+<span>declare</span> <span>@</span><span>cols</span> <span>varchar</span><span>(</span><span>max</span><span>)</span> <span>=</span> <span>'comma, separated, col, list'</span>
+<span>declare</span> <span>@</span><span>originalrowcount</span> <span>int</span>
+<span>declare</span> <span>@</span><span>newrowcount</span> <span>int</span>
+<span>declare</span> <span>@</span><span>finalrowcount</span> <span>int</span>
+<span>declare</span> <span>@</span><span>rowcountsql</span> <span>nvarchar</span><span>(</span><span>max</span><span>)</span>
+
+<span>declare</span> <span>@</span><span>insertsql</span> <span>nvarchar</span><span>(</span><span>max</span><span>)</span>
+
+<span>declare</span> <span>@</span><span>statssql</span> <span>nvarchar</span><span>(</span><span>max</span><span>)</span>
+
+<span>while</span> <span>@</span><span>startDate</span> <span>&lt;</span> <span>@</span><span>endDate</span>
+<span>begin</span>
+
+<span>set</span> <span>@</span><span>OldTableName</span> 
+  <span>=</span> <span>concat</span><span>(</span><span>'Log_'</span><span>,</span> <span>year</span><span>(</span><span>@</span><span>startDate</span><span>),</span> <span>'_'</span>
+	  <span>,</span> <span>right</span><span>(</span><span>'0'</span> <span>+</span> <span>rtrim</span><span>(</span><span>month</span><span>(</span><span>@</span><span>startDate</span><span>)),</span> <span>2</span><span>),</span> <span>'_'</span>
+	  <span>,</span> <span>right</span><span>(</span><span>'0'</span> <span>+</span> <span>rtrim</span><span>(</span><span>day</span><span>(</span><span>@</span><span>startDate</span><span>)),</span> <span>2</span><span>))</span>
+<span>set</span> <span>@</span><span>NewTableName</span> 
+  <span>=</span> <span>concat</span><span>(</span><span>'HAProxyLogs_'</span><span>,</span> <span>year</span><span>(</span><span>@</span><span>startDate</span><span>),</span> <span>'_'</span>
+	  <span>,</span> <span>right</span><span>(</span><span>'0'</span> <span>+</span> <span>rtrim</span><span>(</span><span>month</span><span>(</span><span>@</span><span>startDate</span><span>)),</span> <span>2</span><span>))</span>
+
+<span>print</span> <span>concat</span><span>(</span><span>'Attempting to migrate '</span><span>,</span> <span>convert</span><span>(</span><span>varchar</span><span>(</span><span>10</span><span>),</span> <span>@</span><span>startDate</span><span>,</span> <span>120</span><span>)</span>
+	  <span>,</span> <span>' from '</span><span>,</span> <span>@</span><span>OldTableName</span><span>,</span> <span>' to '</span><span>,</span> <span>@</span><span>NewTableName</span><span>)</span>
+<span>print</span> <span>' '</span>
+
+<span>if</span> <span>@</span><span>startDate</span> <span>&gt;=</span> <span>'2017-01-12'</span>
+  <span>begin</span>
+    <span>if</span> <span>(</span><span>charindex</span><span>(</span><span>'new col1'</span><span>,</span> <span>@</span><span>cols</span><span>)</span> <span>=</span> <span>0</span><span>)</span>
+  	  <span>begin</span>
+	    <span>set</span> <span>@</span><span>cols</span> <span>=</span> <span>concat</span><span>(</span><span>@</span><span>cols</span><span>,</span> <span>', new col1'</span><span>)</span>
+	  <span>end</span>
+
+	<span>if</span> <span>(</span><span>charindex</span><span>(</span><span>'new col2'</span><span>,</span> <span>@</span><span>cols</span><span>)</span> <span>=</span> <span>0</span><span>)</span>
+	  <span>begin</span>
+	    <span>set</span> <span>@</span><span>cols</span> <span>=</span> <span>concat</span><span>(</span><span>@</span><span>cols</span><span>,</span> <span>', new col2'</span><span>)</span>
+	  <span>end</span>
+  <span>end</span>
+
+<span>set</span> <span>@</span><span>rowcountsql</span> <span>=</span> <span>concat</span><span>(</span><span>'select @cnt = count(*) from HAProxyLogs.dbo.['</span><span>,</span> <span>@</span><span>OldTableName</span><span>,</span> <span>']'</span><span>);</span>
+<span>exec</span> <span>sp_executesql</span> <span>@</span><span>rowcountsql</span><span>,</span> <span>N</span><span>'@cnt int output'</span><span>,</span> <span>@</span><span>cnt</span> <span>=</span> <span>@</span><span>originalrowcount</span> <span>output</span><span>;</span>
+
+<span>/*
+</span><span>print concat('Summary for ', convert(varchar(10), @startDate, 120)
+</span><span>	  , ' ', @originalrowcount, ' rows in ', @OldTableName);
+</span><span>print ' '
+</span><span>print concat('Starting copy of ', @OldTableName);
+</span><span>print ' '
+</span><span>*/</span>
+
+<span>-- check if the new table has any rows in it
+</span><span></span><span>set</span> <span>@</span><span>rowcountsql</span> 
+  <span>=</span> <span>concat</span><span>(</span><span>'select @cnt = count(*) from '</span><span>,</span> <span>@</span><span>NewTableName</span>
+  	  <span>,</span> <span>' where CreationDate &gt;= '''</span><span>,</span> <span>convert</span><span>(</span><span>varchar</span><span>(</span><span>10</span><span>),</span> <span>@</span><span>startDate</span><span>,</span> <span>120</span><span>)</span>
+	  <span>,</span> <span>''' and OriginalLogTable = '''</span><span>,</span> <span>@</span><span>OldTableName</span><span>,</span> <span>''';'</span><span>)</span>
+<span>--print @rowcountsql
+</span><span></span><span>exec</span> <span>sp_executesql</span> <span>@</span><span>rowcountsql</span><span>,</span> <span>N</span><span>'@cnt int output'</span><span>,</span> <span>@</span><span>cnt</span> <span>=</span> <span>@</span><span>newrowcount</span> <span>output</span><span>;</span>
+
+<span>print</span> <span>concat</span><span>(</span><span>'There are '</span><span>,</span> <span>@</span><span>newrowcount</span><span>,</span> <span>' row(s) for table: '</span><span>,</span> <span>@</span><span>NewTableName</span><span>);</span>
+<span>print</span> <span>' '</span>
+
+<span>If</span> <span>@</span><span>newrowcount</span> <span>&gt;</span> <span>0</span>
+	<span>begin</span>
+		<span>print</span> <span>'Rows found in the destination table - aborting'</span>
+		<span>print</span> <span>' '</span>
+		<span>break</span><span>;</span>
+	<span>end</span>
+
+<span>set</span> <span>@</span><span>insertsql</span> 
+  <span>=</span> <span>concat</span><span>(</span><span>'insert into TrafficLogs.dbo.'</span><span>,</span> <span>@</span><span>NewTableName</span><span>,</span> <span>'('</span><span>,</span> <span>@</span><span>cols</span><span>,</span> <span>', OriginalLogTable) 
+</span><span>	  select '</span><span>,</span> <span>@</span><span>cols</span><span>,</span> <span>', OriginalLogTable = '''</span><span>,</span> <span>@</span><span>OldTableName</span><span>,</span> <span>'''  
+</span><span>	  from HAProxyLogs.dbo.'</span><span>,</span> <span>@</span><span>OldTableName</span><span>);</span>
+<span>print</span> <span>@</span><span>insertsql</span>
+<span>print</span> <span>' '</span>
+<span>exec</span> <span>sp_executesql</span> <span>@</span><span>insertsql</span><span>;</span>
+
+<span>set</span> <span>@</span><span>statssql</span> 
+  <span>=</span> <span>concat</span><span>(</span><span>'update statistics TrafficLogs.dbo.'</span><span>,</span> <span>@</span><span>NewTableName</span>
+  	  <span>,</span> <span>' '</span><span>,</span> <span>@</span><span>NewTableName</span><span>,</span> <span>'_OriginalLogTable'</span><span>);</span>
+<span>print</span> <span>@</span><span>statssql</span>
+<span>print</span> <span>' '</span>
+<span>exec</span> <span>sp_executesql</span> <span>@</span><span>statssql</span>
+
+<span>set</span> <span>@</span><span>rowcountsql</span> 
+  <span>=</span> <span>concat</span><span>(</span><span>'select @cnt = count(*) from '</span><span>,</span> <span>@</span><span>NewTableName</span>
+    	<span>,</span> <span>' where CreationDate &gt;= '''</span><span>,</span> <span>convert</span><span>(</span><span>varchar</span><span>(</span><span>10</span><span>),</span> <span>@</span><span>startDate</span><span>,</span> <span>120</span><span>)</span>
+		<span>,</span> <span>''' and OriginalLogTable = '''</span><span>,</span> <span>@</span><span>OldTableName</span><span>,</span> <span>''';'</span><span>)</span>
+<span>exec</span> <span>sp_executesql</span> <span>@</span><span>rowcountsql</span><span>,</span> <span>N</span><span>'@cnt int output'</span><span>,</span> <span>@</span><span>cnt</span> <span>=</span> <span>@</span><span>finalrowcount</span> <span>output</span><span>;</span>
+
+<span>print</span> <span>concat</span><span>(</span><span>'After migration there are '</span><span>,</span> <span>@</span><span>finalrowcount</span><span>,</span> <span>' row(s) in the '</span><span>,</span> <span>@</span><span>NewTableName</span><span>);</span>
+
+<span>If</span> <span>@</span><span>originalrowcount</span> <span>&lt;&gt;</span> <span>@</span><span>finalrowcount</span>
+  <span>begin</span>
+    <span>print</span> <span>'final row does not match original stopping operation'</span><span>;</span>
+	<span>print</span> <span>' '</span>
+	<span>break</span><span>;</span>
+  <span>end</span>
+
+<span>set</span> <span>@</span><span>startDate</span> <span>=</span> <span>dateadd</span><span>(</span><span>day</span><span>,</span> <span>1</span><span>,</span> <span>@</span><span>startDate</span><span>)</span>
+
+<span>END</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<ul>
+<li>a PowerShell version - slow but seemed to be more stable than the original C# script</li>
+</ul>
+
+<div><div>
+<table data-lang="powershell"><tbody><tr><td>
+<pre><code data-lang="powershell"><span>  1
+</span><span>  2
+</span><span>  3
+</span><span>  4
+</span><span>  5
+</span><span>  6
+</span><span>  7
+</span><span>  8
+</span><span>  9
+</span><span> 10
+</span><span> 11
+</span><span> 12
+</span><span> 13
+</span><span> 14
+</span><span> 15
+</span><span> 16
+</span><span> 17
+</span><span> 18
+</span><span> 19
+</span><span> 20
+</span><span> 21
+</span><span> 22
+</span><span> 23
+</span><span> 24
+</span><span> 25
+</span><span> 26
+</span><span> 27
+</span><span> 28
+</span><span> 29
+</span><span> 30
+</span><span> 31
+</span><span> 32
+</span><span> 33
+</span><span> 34
+</span><span> 35
+</span><span> 36
+</span><span> 37
+</span><span> 38
+</span><span> 39
+</span><span> 40
+</span><span> 41
+</span><span> 42
+</span><span> 43
+</span><span> 44
+</span><span> 45
+</span><span> 46
+</span><span> 47
+</span><span> 48
+</span><span> 49
+</span><span> 50
+</span><span> 51
+</span><span> 52
+</span><span> 53
+</span><span> 54
+</span><span> 55
+</span><span> 56
+</span><span> 57
+</span><span> 58
+</span><span> 59
+</span><span> 60
+</span><span> 61
+</span><span> 62
+</span><span> 63
+</span><span> 64
+</span><span> 65
+</span><span> 66
+</span><span> 67
+</span><span> 68
+</span><span> 69
+</span><span> 70
+</span><span> 71
+</span><span> 72
+</span><span> 73
+</span><span> 74
+</span><span> 75
+</span><span> 76
+</span><span> 77
+</span><span> 78
+</span><span> 79
+</span><span> 80
+</span><span> 81
+</span><span> 82
+</span><span> 83
+</span><span> 84
+</span><span> 85
+</span><span> 86
+</span><span> 87
+</span><span> 88
+</span><span> 89
+</span><span> 90
+</span><span> 91
+</span><span> 92
+</span><span> 93
+</span><span> 94
+</span><span> 95
+</span><span> 96
+</span><span> 97
+</span><span> 98
+</span><span> 99
+</span><span>100
+</span><span>101
+</span><span>102
+</span><span>103
+</span><span>104
+</span><span>105
+</span><span>106
+</span><span>107
+</span><span>108
+</span><span>109
+</span><span>110
+</span><span>111
+</span><span>112
+</span><span>113
+</span><span>114
+</span><span>115
+</span><span>116
+</span><span>117
+</span><span>118
+</span><span>119
+</span><span>120
+</span><span>121
+</span><span>122
+</span><span>123
+</span><span>124
+</span><span>125
+</span><span>126
+</span><span>127
+</span><span>128
+</span><span>129
+</span><span>130
+</span><span>131
+</span><span>132
+</span><span>133
+</span><span>134
+</span><span>135
+</span><span>136
+</span><span>137
+</span><span>138
+</span><span>139
+</span><span>140
+</span><span>141
+</span><span>142
+</span><span>143
+</span><span>144
+</span><span>145
+</span><span>146
+</span><span>147
+</span><span>148
+</span><span>149
+</span><span>150
+</span><span>151
+</span><span>152
+</span><span>153
+</span><span>154
+</span><span>155
+</span><span>156
+</span><span>157
+</span><span>158
+</span><span>159
+</span><span>160
+</span><span>161
+</span><span>162
+</span></code></pre></td>
+<td>
+<pre><code data-lang="powershell"><span>&lt;#
+</span><span>  </span><span>.SYNOPSIS</span><span>
+</span><span>  Traffic Log Data Migration
+</span><span>
+</span><span>  </span><span>.EXAMPLE</span><span>
+</span><span>  .\DataMigration.ps1 -ServerName name -StartDate 2019-01-01 -EndDate 2019-02-01
+</span><span>#&gt;</span>
+
+<span>[</span><span>CmdletBinding</span><span>()]</span> <span>#See <a href="http://technet.microsoft.com/en-us/library/hh847884(v=wps.620).aspx" rel="nofollow"><span>http</span><span>://</span><span>technet</span><span>.</span><span>microsoft</span><span>.</span><span>com</span><span>/</span><span>en</span><span>-</span><span>us</span><span>/</span><span>library</span><span>/</span><span>hh847884</span><span>(</span><span>v</span><span>=</span><span>wps</span><span>.</span><span>620</span><span>).</span><span>aspx</span></a> for CmdletBinding common parameters</span>
+<span>param</span><span>(</span>
+  <span>[</span><span>parameter</span><span>(</span><span>Mandatory</span> <span>=</span> <span>$true</span><span>)]</span>
+  <span>[string]</span><span>$ServerName</span><span>,</span>
+  <span>[</span><span>parameter</span><span>(</span><span>Mandatory</span> <span>=</span> <span>$true</span><span>)]</span>
+  <span>[DateTime]</span><span>$StartDate</span><span>,</span>
+  <span>[</span><span>parameter</span><span>(</span><span>Mandatory</span> <span>=</span> <span>$true</span><span>)]</span>
+  <span>[DateTime]</span><span>$EndDate</span>
+<span>)</span>
+
+<span># taken from <a href="https://blog.netnerds.net/2015/05/getting-total-number-of-rows-copied-in-sqlbulkcopy-using-powershell/" rel="nofollow"><span>https</span><span>://</span><span>blog</span><span>.</span><span>netnerds</span><span>.</span><span>net</span><span>/</span><span>2015</span><span>/</span><span>05</span><span>/</span><span>getting</span><span>-</span><span>total</span><span>-</span><span>number</span><span>-</span><span>of</span><span>-</span><span>rows</span><span>-</span><span>copied</span><span>-</span><span>in</span><span>-</span><span>sqlbulkcopy</span><span>-</span><span>using</span><span>-</span><span>powershell</span><span>/</span></a></span>
+<span>$source</span> <span>=</span> <span>'namespace System.Data.SqlClient
+</span><span>{   
+</span><span>  using Reflection;
+</span><span>  public static class SqlBulkCopyExtension
+</span><span>  {
+</span><span>    const String _rowsCopiedFieldName = "_rowsCopied";
+</span><span>    static FieldInfo _rowsCopiedField = null;
+</span><span>    public static int RowsCopiedCount(this SqlBulkCopy bulkCopy)
+</span><span>    {
+</span><span>        if (_rowsCopiedField == null) _rowsCopiedField 
+</span><span>			= typeof(SqlBulkCopy).GetField(_rowsCopiedFieldName, BindingFlags.NonPublic 
+</span><span>			    | BindingFlags.GetField | BindingFlags.Instance);           
+</span><span>        return (int)_rowsCopiedField.GetValue(bulkCopy);
+</span><span>    }
+</span><span>  }
+</span><span>}
+</span><span>'</span>
+<span>Add-Type</span> <span>-ReferencedAssemblies</span> <span>'System.Data.dll'</span> <span>-TypeDefinition</span> <span>$source</span>
+<span>$null</span> <span>=</span> <span>[Reflection.Assembly]</span><span>::</span><span>LoadWithPartialName</span><span>(</span><span>"System.Data"</span><span>)</span>
+
+<span>Function</span> <span>ConnectionString</span><span>(</span><span>[string]</span> <span>$ServerName</span><span>,</span> <span>[string]</span> <span>$DbName</span><span>)</span>
+<span>{</span>
+  <span>"Data Source=$ServerName;Initial Catalog=TrafficLogs;Trusted_Connection=True;Connection Timeout = 2000;"</span>
+<span>}</span>
+
+<span>Function</span> <span>GetOriginalTableRowCount</span><span>(</span><span>$sqlConnection</span><span>,</span> <span>$table</span><span>){</span>
+  <span>$sqlConnection</span><span>.</span><span>open</span><span>();</span>
+  <span>$OriginalRowCountCmd</span> <span>=</span> <span>"select OriginalCount = count(*) from "</span> <span>+</span> <span>$table</span><span>;</span>
+  <span>$SqlCmd</span> <span>=</span> <span>New-Object</span>  <span>System</span><span>.</span><span>Data</span><span>.</span><span>SqlClient</span><span>.</span><span>SqlCommand</span><span>(</span><span>$OriginalRowCountCmd</span><span>,</span> <span>$sqlConnection</span><span>)</span>
+  <span>$SqlCmd</span><span>.</span><span>CommandTimeout</span> <span>=</span> <span>0</span><span>;</span>
+  <span>$row_count</span> <span>=</span> <span>[Int64]</span> <span>$SqlCmd</span><span>.</span><span>ExecuteScalar</span><span>()</span>
+  <span>$sqlConnection</span><span>.</span><span>Close</span><span>();</span>
+  <span>return</span> <span>$row_count</span>
+<span>}</span>
+
+<span>Function</span> <span>GetNewTableRowCount</span><span>(</span><span>$sqlConnection</span><span>,</span> <span>$table</span><span>){</span>
+  <span>$sqlConnection</span><span>.</span><span>open</span><span>();</span>
+  <span>$RowCountCmd</span> <span>=</span> <span>"select NewCount = count(*) from "</span> <span>+</span> <span>$table</span> 
+  		<span>+</span> <span>" where CreationDate &gt;= '"</span><span>+(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy-MM-dd"</span><span>))</span>
+		  <span>+</span><span>"' and OriginalLogTable = 'Log_"</span><span>+(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy_MM_dd"</span><span>))+</span><span>"'"</span><span>;</span>
+  <span>$SqlCmd</span> <span>=</span> <span>New-Object</span>  <span>System</span><span>.</span><span>Data</span><span>.</span><span>SqlClient</span><span>.</span><span>SqlCommand</span><span>(</span><span>$RowCountCmd</span><span>,</span> <span>$sqlConnection</span><span>)</span>
+  <span>$SqlCmd</span><span>.</span><span>CommandTimeout</span> <span>=</span> <span>0</span><span>;</span>
+  <span>$row_count</span> <span>=</span> <span>[Int64]</span> <span>$SqlCmd</span><span>.</span><span>ExecuteScalar</span><span>()</span>
+  <span>$sqlConnection</span><span>.</span><span>Close</span><span>();</span>
+  <span>return</span> <span>$row_count</span>
+<span>}</span>
+
+<span>$cols</span> <span>=</span> <span>"col1"</span><span>,</span> <span>"col2"</span><span>,</span> <span>"col3"</span><span>,</span> <span>"..."</span><span>;</span>
+
+<span>for</span> <span>(</span><span>$i</span> <span>=</span> <span>$StartDate</span><span>;</span> <span>$i</span> <span>-lt</span> <span>$EndDate</span><span>;</span> <span>$i</span> <span>=</span> <span>$i</span><span>.</span><span>AddDays</span><span>(</span><span>1</span><span>))</span>
+<span>{</span>
+  <span>$MigrationStart</span> <span>=</span> <span>Get-Date</span>
+  <span>Write-Host</span> <span>"Migration started at: $MigrationStart"</span>
+  <span>$OldTableName</span> <span>=</span> <span>"HAProxyLogs.dbo.Log_"</span><span>+(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy_MM_dd"</span><span>))</span>
+  <span>$NewTableName</span> <span>=</span> <span>"TrafficLogs.dbo.HAProxyLogs_"</span><span>+(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy_MM"</span><span>))</span>
+  <span>Write-Host</span> <span>"Attempting to migrate "</span><span>(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy_MM_dd"</span><span>))</span><span>" from "</span> <span>$OldTableName</span>  <span>" to "</span> <span>$NewTableName</span><span>;</span>
+
+  <span># build the connection string and open it</span>
+  <span>$SrcConnStr</span> <span>=</span> <span>ConnectionString</span> <span>$ServerName</span>
+  <span>$SrcConn</span>  <span>=</span> <span>New-Object</span> <span>System</span><span>.</span><span>Data</span><span>.</span><span>SqlClient</span><span>.</span><span>SQLConnection</span><span>(</span><span>$SrcConnStr</span><span>)</span>
+
+  <span># whats the row count on the original table in HAProxyLogs</span>
+  <span>$originalRowCount</span> <span>=</span> <span>GetOriginalTableRowCount</span> <span>$SrcConn</span> <span>$OldTableName</span>
+  <span>Write-Host</span> <span>"Summary for "</span> <span>(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy-MM-dd"</span><span>))</span><span>": 
+</span><span>  	  	There are "</span><span>$originalRowCount</span><span>" rows in table "</span><span>$OldTableName</span>
+
+  <span># make sure there is no data in the table currently for the day</span>
+  <span>$newRowCount</span> <span>=</span> <span>GetNewTableRowCount</span> <span>$SrcConn</span> <span>$NewTableName</span>
+
+  <span>if</span><span>(</span><span>$newRowCount</span> <span>-gt</span> <span>0</span><span>){</span>
+    <span>Write-Host</span> <span>"Rows found in the destination table - aborting migration"</span>
+    <span>break</span><span>;</span>
+  <span>}</span>
+  <span>else</span> <span>{</span>
+    <span>Write-Host</span> <span>"No data for the date in the destination table - continuing migration"</span>
+  <span>}</span>
+
+  <span># select the data we need from the original table</span>
+  <span>$selectCmdText</span> <span>=</span> <span>"select "</span><span>+</span> <span>(</span><span>$cols</span> <span>-join</span> <span>', '</span><span>)</span> 
+  		  <span>+</span><span>", OriginalLogTable = 'Log_"</span><span>+(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy_MM_dd"</span><span>))</span>
+		  <span>+</span><span>"' from "</span><span>+</span><span>$OldTableName</span><span>;</span>
+  <span>$SqlCommand</span> <span>=</span> <span>New-Object</span> <span>system</span><span>.</span><span>Data</span><span>.</span><span>SqlClient</span><span>.</span><span>SqlCommand</span><span>(</span><span>$selectCmdText</span><span>,</span> <span>$SrcConn</span><span>)</span>
+  <span>$SqlCommand</span><span>.</span><span>CommandTimeout</span> <span>=</span> <span>0</span><span>;</span>
+  <span>$SrcConn</span><span>.</span><span>Open</span><span>()</span>
+  <span>[System.Data.SqlClient.SqlDataReader]</span> <span>$SqlReader</span> <span>=</span> <span>$SqlCommand</span><span>.</span><span>ExecuteReader</span><span>()</span>
+
+  <span>$destConnection</span> <span>=</span> <span>ConnectionString</span> <span>$ServerName</span>
+  <span>$bulkCopy</span> <span>=</span> <span>New-Object</span> <span>Data</span><span>.</span><span>SqlClient</span><span>.</span><span>SqlBulkCopy</span><span>(</span><span>$destConnection</span><span>)</span>
+  <span>$bulkCopy</span><span>.</span><span>BatchSize</span> <span>=</span> <span>1048576</span>
+  <span>$bulkCopy</span><span>.</span><span>BulkCopyTimeout</span> <span>=</span> <span>0</span> <span># 20*60</span>
+  <span>$bulkCopy</span><span>.</span><span>DestinationTableName</span> <span>=</span> <span>$NewTableName</span>
+  <span>$bulkCopy</span><span>.</span><span>NotifyAfter</span> <span>=</span> <span>500000</span>
+
+  <span># taken from <a href="https://blog.netnerds.net/2015/05/getting-total-number-of-rows-copied-in-sqlbulkcopy-using-powershell/" rel="nofollow"><span>https</span><span>://</span><span>blog</span><span>.</span><span>netnerds</span><span>.</span><span>net</span><span>/</span><span>2015</span><span>/</span><span>05</span><span>/</span><span>getting</span><span>-</span><span>total</span><span>-</span><span>number</span><span>-</span><span>of</span><span>-</span><span>rows</span><span>-</span><span>copied</span><span>-</span><span>in</span><span>-</span><span>sqlbulkcopy</span><span>-</span><span>using</span><span>-</span><span>powershell</span><span>/</span></a></span>
+  <span>$bulkCopy</span><span>.</span><span>Add_SqlRowscopied</span><span>(</span>
+    <span>{</span><span>Write-Host</span> <span>"</span><span>$(</span><span>$args</span><span>[</span><span>1</span><span>].</span><span>RowsCopied</span><span>)</span><span>/$originalRowCount rows copied 
+</span><span>	    from $OldTableName to $NewTableName"</span> <span>})</span>
+
+  <span>foreach</span> <span>(</span><span>$col</span> <span>in</span> <span>$cols</span><span>){</span>
+    <span>$bulkCopy</span><span>.</span><span>ColumnMappings</span><span>.</span><span>Add</span><span>(</span><span>$col</span><span>,</span><span>$col</span><span>)</span>
+  <span>}</span>
+
+  <span>try</span> <span>{</span>
+    <span>Write-Host</span> <span>"Starting Migration"</span>
+    <span>$bulkCopy</span><span>.</span><span>ColumnMappings</span><span>.</span><span>Add</span><span>(</span><span>"OriginalLogTable"</span><span>,</span> <span>"OriginalLogTable"</span><span>);</span>
+    <span>$bulkCopy</span><span>.</span><span>WriteToServer</span><span>(</span><span>$SqlReader</span><span>)</span>
+
+    <span>$total</span> <span>=</span> <span>[System.Data.SqlClient.SqlBulkCopyExtension]</span><span>::</span><span>RowsCopiedCount</span><span>(</span><span>$bulkcopy</span><span>)</span>
+    <span>Write-Host</span> <span>"$total total rows written"</span>
+
+  <span>}</span>
+  <span>catch</span> <span>{</span>
+    <span>$ex</span> <span>=</span> <span>$_</span><span>.</span><span>Exception</span>
+    <span>Write-Error</span> <span>$ex</span><span>.</span><span>Message</span>
+    <span>While</span><span>(</span><span>$ex</span><span>.</span><span>InnerException</span><span>)</span>
+    <span>{</span>
+      <span>$ex</span> <span>=</span> <span>$ex</span><span>.</span><span>InnerException</span>
+      <span>Write-Error</span> <span>$ex</span><span>.</span><span>Message</span>
+    <span>}</span>
+  <span>}</span>
+  <span>Finally</span>
+  <span>{</span>
+    <span>$SqlReader</span><span>.</span><span>Close</span><span>()</span>
+    <span>$bulkCopy</span><span>.</span><span>Close</span><span>()</span>
+    <span>$SrcConn</span><span>.</span><span>Close</span><span>()</span>
+  <span>}</span>
+
+  <span># once done update statistics on the new table</span>
+  <span>$statsCmdText</span> <span>=</span> <span>"update statistics "</span><span>+</span><span>$NewTableName</span>
+  	  	<span>+</span><span>" HAProxyLogs_"</span><span>+(</span><span>$i</span><span>.</span><span>ToString</span><span>(</span><span>"yyyy_MM"</span><span>))+</span><span>"_OriginalLogTable"</span><span>;</span>
+  <span>Invoke-DbaQuery</span> <span>-SqlInstance</span> <span>$ServerName</span> <span>-Query</span> <span>$statsCmdText</span><span>;</span>
+
+  <span>Write-Host</span> <span>"After migration there are $total rows 
+</span><span>  		were written to $NewTableName table from $OldTableName"</span><span>;</span>
+
+  <span>if</span><span>(</span><span>$originalRowCount</span> <span>-ne</span> <span>$total</span><span>){</span>
+    <span>Write-Host</span> <span>"total rows migrated does not match. Stopping operation"</span>
+    <span>break</span><span>;</span>
+  <span>}</span>
+
+  <span>$total</span> <span>=</span> <span>0</span><span>;</span>
+
+<span>}</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>All of my options were slow.</p>
+
+<p>I ended up using the PowerShell option because I could easily run multiple months at once. I had 3 PowerShell sessions going, which let me chew through 3 months at a time. It was far easier to run several months in PowerShell than with the C# script. Utilizing PowerShell allowed me to get through a lot more data in a shorter amount of time. Don’t get me wrong it was still slow - each session was moving about a month of tables in about a week of work - but at least I was moving more data and chasing the target slightly faster.</p>
+
+<p>While the PowerShell script wasn’t perfect, and I still hit issues with timeouts and errors, it overall worked better. Now that I had a somewhat working process that didn’t need daily hand-holding, it was time to focus on some of the other problems with the migration.</p>
+
+<h2 id="continuous-issues-of-no-free-disk-space">Continuous Issues of No Free Disk Space<a href="#continuous-issues-of-no-free-disk-space"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>When your servers are already limited in free space and you have to move 40TB of data around on the same server, it becomes a little like <a href="https://en.wikipedia.org/wiki/Whac-A-Mole" target="_blank">whack-a-mole</a> to get things moved. I had to get creative to free up space while continuing to move all the data to the new format.</p>
+
+<h3 id="deleting-and-shrinking">Deleting and Shrinking<a href="#deleting-and-shrinking"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>Yes, you read that right. Shrinking. Before I get to that, let me explain why I needed to do this.</p>
+
+<p>We didn’t have new hardware yet and these were production SQL Servers - meaning the old database was still receiving new data and we were adding a new table everyday. As I was moving tables to the new database, we were adding tables with hundreds of millions of rows of data to the old database. This was all happening on the exact same server and drive with minimal free space.</p>
+
+<p>Hence the need to juggle.</p>
+
+<p>After moving each month, I would do a final validation, then it was time for some cleanup. This included deleting all of the daily tables for the month that were just migrated, as well as dropping the <code>OriginalLogTable</code> column from the monthly table in the new database. The daily tables were no longer needed because we had the data in the new table, so getting rid of duplicate data would allow me to gain back disk space…sort of.</p>
+
+<p>I say sort of, because I was just moving data on the same drives. We changed formats from daily tables to monthly tables, and while we got better compression in the new tables, there weren’t huge gains in free space. We had the same number of rows of data stored in fewer tables, which meant less bits in the long run, but in order to gain back the space allocated to the old data files, I had to shrink them.</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/scales.png" width="300" height="300" alt="Balancing Scales"></p>
+
+<p>As I moved the data from the old files, I was increasing the size of the new data files. This was all being done on the E: drive that was 85-90% full, which I mentioned above. I was constantly trying to keep the used disk space in check.</p>
+
+<p>It was quite a balancing act.</p>
+
+<p>Each month of data was anywhere from 300GB to 1TB in size, and the 3 old data files were approximately 12TB each. At the end of each migration, I tried to shrink the old database files by the amount we just deleted. This took several attempts to get something that worked well.</p>
+
+<p>Initially, I naively tried to run <code>DBCC SHRINKFILE(FileName, TRUNCATEONLY)</code> to free up space. As I expected, that did not work.</p>
+
+<p>Next, I tried to run <code>DBCC SHRINKFILE(FileName, CurrentFileSize - SizeOfDataJustDeleted)</code> on each file. That didn’t work either. Well to be clear, it would have if we had more drive space on the D: drive where the log file was stored. The D: drive was already about 85% full with tempdb, the HAProxyLogs log file, and another datafile. When you run <code>DBCC SHRINKFILE</code> and let’s say you want to shrink a file by 300GB, then you <a href="https://karaszi.com/why-you-want-to-be-restrictive-with-shrink-of-database-files" target="_blank">need to have the ability to increase your database transaction log file by the amount you’re trying to shrink</a>. Since we were already constrained on drive space where the t-log was stored, I wasn’t able to shrink the files by the amount I deleted because I kept running out of space on the D: drive.</p>
+
+<p>I had a couple of options to free up space on the D: drive - move <code>tempdb</code> or move the other log/database files to our newly configured F: drive with 14TB of free space. I decided to move <code>tempdb</code> because it was as easy as executing the following command and restarting the SQL service.</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>alter</span> <span>database</span> <span>tempdb</span> 
+	<span>modify</span> <span>file</span> <span>(</span><span>NAME</span> <span>=</span> <span>tempdev</span><span>,</span> <span>FILENAME</span> <span>=</span> <span>'F:\Data\tempdev.mdf'</span><span>,</span> <span>SIZE</span> <span>=</span> <span>20000</span><span>MB</span><span>);</span>
+<span>alter</span> <span>database</span> <span>tempdb</span> 
+	<span>modify</span> <span>file</span> <span>(</span><span>NAME</span> <span>=</span> <span>templog</span><span>,</span> <span>FILENAME</span> <span>=</span> <span>'F:\Data\templog.ldf'</span><span>,</span> <span>SIZE</span> <span>=</span> <span>1000</span><span>MB</span><span>);</span>
+<span>alter</span> <span>database</span> <span>tempdb</span> 
+	<span>modify</span> <span>file</span> <span>(</span><span>NAME</span> <span>=</span> <span>tempdev2</span><span>,</span> <span>FILENAME</span> <span>=</span> <span>'F:\Data\tempdev2.mdf'</span><span>,</span> <span>SIZE</span> <span>=</span> <span>20000</span><span>MB</span><span>);</span>
+<span>alter</span> <span>database</span> <span>tempdb</span> 
+	<span>modify</span> <span>file</span> <span>(</span><span>NAME</span> <span>=</span> <span>tempdev3</span><span>,</span> <span>FILENAME</span> <span>=</span> <span>'F:\Data\tempdev3.mdf'</span><span>,</span> <span>SIZE</span> <span>=</span> <span>20000</span><span>MB</span><span>);</span>
+<span>alter</span> <span>database</span> <span>tempdb</span> 
+	<span>modify</span> <span>file</span> <span>(</span><span>NAME</span> <span>=</span> <span>tempdev4</span><span>,</span> <span>FILENAME</span> <span>=</span> <span>'F:\Data\tempdev4.mdf'</span><span>,</span> <span>SIZE</span> <span>=</span> <span>1000</span><span>MB</span><span>);</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>By moving <code>tempdb</code> we had minimal downtime and I gained approximately 122GB in free space. While that gave me a little more room to shrink the old data files, it still wasn’t quite working as I wanted, so it was back to the drawing board.</p>
+
+<p>Trying to shrink the files in huge chunks of 300GB or more was too much, it was slow and resulted in blocking of the inserts into the old database. I found a <a href="https://medium.com/@anna.f/shrink-oversized-data-files-in-microsoft-sql-server-53fb640f893e" target="_blank">solution that seemed promising</a> and would involve shrinking the files in much smaller bits in a loop, so I figured I’d try it. It took a little bit of poking to get the <a href="https://twitter.com/tarynpivots/status/1095430853507788802" target="_blank">right number to shrink in every execution</a>, but I eventually ended up using something similar to this:</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span><span>12
+</span><span>13
+</span><span>14
+</span><span>15
+</span><span>16
+</span><span>17
+</span><span>18
+</span><span>19
+</span><span>20
+</span><span>21
+</span><span>22
+</span><span>23
+</span><span>24
+</span><span>25
+</span><span>26
+</span><span>27
+</span><span>28
+</span><span>29
+</span><span>30
+</span><span>31
+</span><span>32
+</span><span>33
+</span><span>34
+</span><span>35
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>declare</span> <span>@</span><span>from</span> <span>int</span>                             
+<span>declare</span> <span>@</span><span>leap</span> <span>int</span>                             
+<span>declare</span> <span>@</span><span>to</span> <span>int</span>                             
+<span>declare</span> <span>@</span><span>datafile</span> <span>varchar</span><span>(</span><span>128</span><span>)</span>
+<span>declare</span> <span>@</span><span>cmd</span> <span>varchar</span> <span>(</span><span>512</span><span>)</span>
+<span>declare</span> <span>@</span><span>starttime</span> <span>datetime</span>
+<span>declare</span> <span>@</span><span>endtime</span> <span>datetime</span>
+ 
+<span>/*settings*/</span>      
+<span>set</span> <span>@</span><span>from</span> <span>=</span> <span>13533200</span>            <span>/*Current size in MB*/</span>
+<span>set</span> <span>@</span><span>to</span> <span>=</span> <span>11600000</span>              <span>/*Goal size in MB*/</span> 
+<span>set</span> <span>@</span><span>datafile</span> <span>=</span> <span>'HAProxyLogs1'</span>  <span>/*Datafile name*/</span>
+<span>set</span> <span>@</span><span>leap</span> <span>=</span>  <span>10000</span>            	<span>/*Size of leaps in MB*/</span>
+ 
+<span>while</span> <span>((</span><span>@</span><span>from</span> <span>-</span> <span>@</span><span>leap</span><span>)</span> <span>&gt;</span> <span>@</span><span>to</span><span>)</span>                             
+    <span>begin</span>
+ 
+        <span>set</span> <span>@</span><span>starttime</span> <span>=</span> <span>getdate</span><span>()</span>
+ 
+        <span>print</span> <span>concat</span><span>(</span><span>'started: '</span><span>,</span> <span>@</span><span>starttime</span><span>)</span>
+        
+        <span>set</span> <span>@</span><span>from</span> <span>=</span> <span>@</span><span>from</span> <span>-</span> <span>@</span><span>leap</span>
+        <span>set</span> <span>@</span><span>cmd</span> <span>=</span> <span>'DBCC SHRINKFILE ('</span> <span>+</span> <span>@</span><span>datafile</span> <span>+</span><span>', '</span> <span>+</span> <span>cast</span><span>(</span><span>@</span><span>from</span> <span>as</span> <span>varchar</span><span>(</span><span>20</span><span>))</span> <span>+</span> <span>')'</span>
+        <span>print</span> <span>@</span><span>cmd</span>
+        <span>exec</span><span>(</span><span>@</span><span>cmd</span><span>)</span>
+        <span>print</span> <span>'==&gt;    SHRINK SCRIPT - '</span><span>+</span> <span>cast</span> <span>((</span><span>@</span><span>from</span><span>-@</span><span>to</span><span>)</span> <span>as</span>  <span>varchar</span> <span>(</span><span>20</span><span>))</span> <span>+</span> <span>'MB LEFT'</span>        
+        
+        <span>set</span> <span>@</span><span>endtime</span> <span>=</span> <span>getdate</span><span>()</span>
+ 
+        <span>print</span> <span>concat</span><span>(</span><span>'ended: '</span><span>,</span> <span>getdate</span><span>(),</span> <span>' took :'</span> <span>,</span> <span>datediff</span><span>(</span><span>minute</span><span>,</span> <span>@</span><span>starttime</span><span>,</span> <span>@</span><span>endtime</span><span>))</span>
+    <span>end</span>
+ 
+<span>set</span> <span>@</span><span>cmd</span> <span>=</span>  <span>'DBCC SHRINKFILE ('</span> <span>+</span> <span>@</span><span>datafile</span> <span>+</span><span>', '</span> <span>+</span> <span>cast</span><span>(</span><span>@</span><span>to</span> <span>as</span> <span>varchar</span><span>(</span><span>20</span><span>))</span> <span>+</span> <span>')'</span>
+<span>print</span> <span>@</span><span>cmd</span>
+<span>exec</span><span>(</span><span>@</span><span>cmd</span><span>)</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>I’d run the script against each file separately to fully recover the disk space from the month that was deleted. Again it was slow, but it worked.</p>
+
+<p>I’m aware of all the issues with shrinking database files, and no, I wouldn’t normally do it. However, shrinking the files was necessary to move the project forward, as I had to get around the lack of disk space.</p>
+
+<h3 id="just-use-the-new-drive">Just Use the New Drive<a href="#just-use-the-new-drive"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>Now that I had a script to migrate the data relatively quickly (the PowerShell one), and had a script to shrink the old data files, you’d think I’d be all set to just run with this project, right?</p>
+
+<p>Not so fast.</p>
+
+<p>When I set up the new TrafficLogs database I put the data files for the archive (the old stuff being migrated) on the drive with the spinny disks. We didn’t think about using the new F: drive with 14TB of free SSD space to use, mainly because  it wasn’t going to be enough for the entire migration. But after a few weeks, I decided to use that drive for a few reasons:</p>
+
+<ul>
+<li>They were NVMe SSDs. Which meant writing to them was much faster than writing to the the spinny drives</li>
+<li>It was about 14TB of free space, which let me move a huge amount of data without worrying about shrinking immediately. I could punt some of the whack-a-mole with the disk space.</li>
+</ul>
+
+<p>Unfortunately, the only issue with doing this was once I filled the 14TB of disk space, I had to migrate the datafiles all back to the spinny drives. Which I did at the end of March 2019 after I ran out of drive space.</p>
+
+<p>Was this ideal? No. Was it a pain? Yes. But again, it moved the entire project forward and I was still slowly getting all the data migrated over.</p>
+
+<h3 id="drives-please-don-t-die">Drives, Please Don’t Die<a href="#drives-please-don-t-die"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>In early May 2019, I was still plugging away at migrating data. At this point, I was back to where I started - copying data from the old database on the spinny drives, inserting it into the new database, deleting the old data, and then shrinking the files all on the same drives.</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/edrive_slowness.png" width="500" height="500" alt="Read/Write Stats of Spinny Drives"></p>
+
+<p>After months of doing this, I was seeing a noticeable slowdown in the process. The read/write delays on the drives had increased since January. The <a href="https://twitter.com/tarynpivots/status/1126581287471407104" target="_blank">average delays</a> of reads were over 100 milliseconds and about 80 milliseconds for writes.</p>
+
+<p>The <a href="https://twitter.com/tarynpivots/status/1131620681794240513" target="_blank">overall response time</a> was terrible.</p>
+
+<p>I was struggling with <a href="https://twitter.com/tarynpivots/status/1130566711088799744" target="_blank"><code>PAGEIOLATCH_SH</code> waits</a> as I was trying to insert data into the new tables.</p>
+
+<p>We had been using the spinny drives for years, and I had been hitting them non-stop for about 4 months. I was <a href="https://twitter.com/tarynpivots/status/1127320396619890688" target="_blank">very worried the drives were going to fail</a> before I was done migrating all of the data.</p>
+
+<p>Thankfully, they didn’t. I eventually was able to move all of the old data over to the new database. It only <a href="https://twitter.com/tarynpivots/status/1144251803820810241" target="_blank">took 6 months to complete</a>.</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/traffliclog_tables.jpg" alt="Traffic Logs Done"></p>
+
+<p>I was done, but not really. We still didn’t have the new servers which meant every table created would still need to be migrated until we had them, and had cutover to the new servers and database.</p>
+
+<p>The moving target was still moving.</p>
+
+<h2 id="finally-new-hardware">Finally, New Hardware<a href="#finally-new-hardware"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>The plan was to get the new servers in June/July, but the purchase was delayed several months. After respeccing them to have all NVMe SSD storage, they finally arrived in late September. To make the final migration of the new hardware as easy as possible, from June through the end of September, I moved one table a day, keeping things up to date.</p>
+
+<p>In early October, the new servers were ready for me to start installing SQL Server on them. The end was near.</p>
+
+<p>After lots of fussing with the Windows Server install, I eventually got installed SQL Server 2017 on both of them. It was time for the next obstacle moving the gigantic databases over.</p>
+
+<h3 id="backup-and-restore-failure">Backup and Restore Failure<a href="#backup-and-restore-failure"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>The most obvious way to move a database from the old server to the new server is, of course, to take a backup and then restore it. So, that’s what <a href="https://twitter.com/tarynpivots/status/1182779767621181440" target="_blank">I did</a>, or I should say, tried to do. I say tried because when I took the backup, I set the script to write it out on the new server, but unfortunately, <a href="https://twitter.com/tarynpivots/status/1184804705844613125" target="_blank">the backup took most of the space</a> which meant I couldn’t restore it. It was a bit of a <a href="https://en.wikipedia.org/wiki/Facepalm#:~:text=A%20facepalm%20is%20the%20physical,in%20contact%20with%20the%20face." target="_blank">facepalm moment</a>.</p>
+
+<p>We’re a very lean shop when it comes to hardware, and this is by far our largest chunk of data we have to store, so there wasn’t a place anywhere on the network to store a 33-38TB full backup temporarily, while it was being restored to a server.</p>
+
+<p>Time for more <a href="https://twitter.com/tarynpivots/status/1184893381308084226" target="_blank">juggling</a>.</p>
+
+<h3 id="copying-tables-again">Copying Tables…Again<a href="#copying-tables-again"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>Since I wasn’t able to take a backup and restore it, I was back to square one, trying to figure out how to quickly move this data. After spending almost the entire year moving tables one by one, the idea of having to do it all over again pretty much drove me to tears, but that’s what I tried next.</p>
+
+<p>I would be moving from server to server within the same datacenter and rack, so I wanted to see how fast it would be to use various methods to bulk insert the data from the old database to the new one. I tried:</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/slow_migrations.jpg" width="300" height="300" alt="Slow Migration Time"></p>
+
+<ul>
+<li><a href="https://twitter.com/tarynpivots/status/1185194987488567297" target="_blank">PowerShell method</a> - took <a href="https://twitter.com/tarynpivots/status/1185304145361637377" target="_blank">36 hours</a> to move one table with 4 billion rows</li>
+<li>SSIS version - took 2.5 days to move the same table</li>
+<li><a href="https://docs.microsoft.com/en-us/sql/t-sql/functions/openrowset-transact-sql?view=sql-server-ver15" target="_blank"><code>OPENROWSET</code></a> - took 16 hours to move 650 million rows</li>
+</ul>
+
+<p>PowerShell was the winner when it came to speed, but Nick Craver wasn’t convinced. He decided to try it. He wrote a little LINQPad script and after running it <a href="https://twitter.com/Nick_Craver/status/1186456942400737281" target="_blank">he finally believed me that moving this much data sucked</a>.</p>
+
+<p>At this point, <a href="https://twitter.com/tarynpivots/status/1186465114754445313" target="_blank">I was devastated</a> because it looked like I was going to have to migrate everything for a second time.</p>
+
+<h3 id="time-to-try-an-availability-group">Time to Try an Availability Group<a href="#time-to-try-an-availability-group"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p>I really, really, really did not want to move hundreds of tables again, so I threw out the idea of using an <a href="https://docs.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server?view=sql-server-ver15" target="_blank">availability group</a> to <a href="https://docs.microsoft.com/en-us/sql/database-engine/availability-groups/windows/automatically-initialize-always-on-availability-group?view=sql-server-ver15" target="_blank">automatically seed the databases</a> to the new servers. We already have AGs throughout our infrastructure, so I was familiar with using them, but I was unsure if it would successfully work for a database of this size.</p>
+
+<p>Before starting, I pinged <a href="https://www.seangallardy.com/" target="_blank">Sean Gallardy</a> and asked if he thought it was possible to automatically seed a database of between 30-40TB - he guessed it’d be slow but possible, maybe taking 1-3 days. I was 100% ok with waiting 1-3 days, if it saved me months of moving tables again.</p>
+
+<p>I decided to spin up the availability group on the Colorado server first, and if it was successful, I’d move to New York. In order to set this up, I would need to go through all these steps:</p>
+
+<ul>
+<li>Set up new Windows Failover Cluster with the two servers</li>
+<li>Take another backup, as I couldn’t use the first one because the database was in <a href="https://docs.microsoft.com/en-us/sql/relational-databases/backup-restore/recovery-models-sql-server?view=sql-server-ver15" target="_blank">simple recovery instead of full</a>. This meant waiting another <a href="https://twitter.com/tarynpivots/status/1186819184249856000" target="_blank">11.5 hours</a> for the backup of the 33TB database in Colorado to finish</li>
+<li>Set up the AG and fingers crossed let it seed</li>
+<li>Initiate failover to the new server</li>
+<li>Destroy AG and shutdown old server</li>
+</ul>
+
+<p>After backup in Colorado finished, I realized that we might have a small problem when trying to autoseed. The <a href="https://docs.microsoft.com/en-us/sql/database-engine/availability-groups/windows/automatically-initialize-always-on-availability-group?view=sql-server-ver15" target="_blank">docs explain</a>:</p>
+
+<blockquote>
+<p>Automatic seeding requires that the data and log file paths are the same on every SQL Server instance participating in the availability group</p>
+</blockquote>
+
+<p>The old servers had the data on E: and F:, and the new servers were using D:. To be certain there were no issues, I quickly renamed the drive on the new server to E: and moved the files over using:</p>
+
+<div><div>
+<table data-lang="SQL"><tbody><tr><td>
+<pre><code data-lang="sql"><span>1
+</span><span>2
+</span><span>3
+</span><span>4
+</span><span>5
+</span><span>6
+</span><span>7
+</span></code></pre></td>
+<td>
+<pre><code data-lang="sql"><span>use</span> <span>[</span><span>master</span><span>]</span>
+<span>​</span>
+<span>alter</span> <span>database</span> <span>[</span><span>TrafficLogs</span><span>]</span> 
+<span>modify</span> <span>file</span><span>(</span><span>name</span><span>=</span> <span>TrafficLogs_Current</span><span>,</span> <span>filename</span> <span>=</span> <span>'E:\Data\TrafficLogs_Current.mdf'</span><span>);</span>
+<span>​</span>
+<span>alter</span> <span>database</span> <span>[</span><span>TrafficLogs</span><span>]</span> 
+<span>modify</span> <span>file</span><span>(</span><span>name</span><span>=</span> <span>TrafficLogs_log</span><span>,</span> <span>filename</span> <span>=</span> <span>'E:\Data\TrafficLogs_log.ldf'</span><span>);</span></code></pre></td></tr></tbody></table>
+</div>
+</div>
+
+<p>By changing the assigned letter to the drive, I also had to move <code>tempdb</code> to the new drive, but once all that was done it was time to try setting up the availability group.</p>
+
+<p>I spun up the temporary AG in Colorado, waited and watched SQL Server. I was constantly checking both DMVs <code>sys.dm_hadr_automatic_seeding</code> and <code>sys.dm_hadr_physical_seeding_stats</code> to see the <a href="https://docs.microsoft.com/en-us/sql/database-engine/availability-groups/windows/automatically-initialize-always-on-availability-group?view=sql-server-ver15#monitor-automatic-seeding-availability-group" target="_blank">status of the seeding process</a>. I was concerned it would fail and we’d be back to the drawing board. After about 6 hours, it looked like we had seeded about 17TB of the database.</p>
+
+<p>We also could see from our SignalFX monitoring of network traffic that something was happening. The SignalFX chart below shows we were averaging about 150 - 180 Mb/sec of traffic to a box that wasn’t being used by anything except for the database seeding.</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/co_log_transfer_inprogress.png" width="720" height="360" alt="Network Traffic Flowing"></p>
+
+<p>By the next morning, the seeding had finished and we had a database with all the tables on the new Colorado server. Progress!!</p>
+
+<p><img src="https://www.tarynpivots.com/image/2020/opserver_seeding_co.png" width="720" height="360" alt="We have tables"></p>
+
+<p>Before initiating the failover, I ran a <a href="https://twitter.com/tarynpivots/status/1187516892170223616" target="_blank"><code>DBCC CHECKDB</code></a> on the new server aka the secondary in the availability group to be sure the database was in a good state, and after <a href="https://twitter.com/tarynpivots/status/1187690141940244480" target="_blank">22 hours</a> it completed with no issues reported.</p>
+
+<p>It was time for the failover. I was a little nervous about doing it, but we were ecstatic, shocked, and impressed (all-in-one) that it worked.</p>
+
+<p>While all of this work was happening in Colorado, I kicked off <a href="https://twitter.com/tarynpivots/status/1187179353425113089" target="_blank">the process on the New York server</a> since the database was  larger, and I knew it was going to take a long time. After taking <a href="https://twitter.com/tarynpivots/status/1187736811675668480" target="_blank">41 hours to backup the 40TB database</a>, I was ready to follow all the same steps on the New York server. I set up the cluster, availability group, seeded the database, ran a very long <code>DBCC CHECKDB</code>, and finished with a successful failover.</p>
+
+<p>The hardest parts were done, but it wasn’t quite time to celebrate. I still had some final work to do.</p>
+
+<h3 id="final-cleanup">Final Cleanup<a href="#final-cleanup"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h3>
+
+<p><img src="https://www.tarynpivots.com/image/2020/fireworks.jpg" width="360" height="120" alt="Celebration Fireworks"></p>
+
+<p>We finally had the new servers in place with the databases, but we didn’t have the new traffic log data flowing to the new servers quite yet. The service that sends the traffic logs (Traffic Processing Service aka TPS) was still pointing to the old database. This was done purposely, to not interrupt any of the teams using the data. The idea was, once the servers were in place, we could side-by-side release the new version to push data in both places for a period of time (by sending syslog traffic from HAProxy to both servers). This would allow teams to port their processes to the new database and table structures in a gradual way.</p>
+
+<p>The week after the failover, we released the new traffic processing service and I did a few more days of data migration from the old server. I also destroyed the availability group and the windows failover clusters. Once all that was done, it was finally time to celebrate.</p>
+
+<h2 id="final-thoughts">Final Thoughts<a href="#final-thoughts"><svg viewBox="0 0 16 10" version="1.1" width="24" height="24"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a></h2>
+
+<p>During my time as the DBA at Stack Overflow, I’ve had the opportunity to work on various large projects  (some documented <a href="https://www.tarynpivots.com/post/how-we-upgraded-stackoverflow-to-sql-server-2017/" target="_blank">here</a> and <a href="https://www.tarynpivots.com/post/how-stack-overflow-upgraded-from-windows-2012/" target="_blank">here</a>), but none have taken as long as this one. This took <a href="https://twitter.com/tarynpivots/status/1191458709630672896" target="_blank">about 11 months</a> with all of the moving, validating, deleting, and juggling space.</p>
+
+<p>I honestly love taking on these big projects. Planning the entire thing, and taking it from start to finish is extremely gratifying. Even though I automated the majority of the work, this project was incredibly frustrating and I definitely don’t want to do it again anytime soon (unless I have plenty of drive space and don’t  have to juggle things for 11 months). This project was challenging in many ways, and considering I had to do the same work on two servers it was doubly challenging. In the end, I was very relieved to successfully use an availability group to seed the databases to the new servers, and finally be done with moving all the things.</p>
+
+<p>Have you ever had to move multiple databases of this size? Were you lucky enough to have extra disk space to get it done? I’d be curious how others would have solved the problem of moving about 40TB of data (twice) with minimal free disk space? If you have thoughts, let me know.</p>
+
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
