@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Detecting duplicate routes in ASP.NET Core: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 5 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Detecting duplicate routes in ASP.NET Core: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 5 - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I show how you can use a unit test to identify duplicate routes that would fail at runtime"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/detecting-duplicate-routes-in-aspnetcore/amp/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Detecting duplicate routes in ASP.NET Core: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 5</title>
+<div class="readable">
+        <h1>Detecting duplicate routes in ASP.NET Core: Visualizing ASP.NET Core 3.0 endpoints using GraphvizOnline - Part 5</h1>
+            <div>Reading time: 10-13 minutes</div>
+        <div>Posted here: 29 Jul 2020</div>
+        <p><a href="https://andrewlock.net/detecting-duplicate-routes-in-aspnetcore/amp/">https://andrewlock.net/detecting-duplicate-routes-in-aspnetcore/amp/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div role="main">
+
+<article>
+
+<section>
+<p>In <a href="https://andrewlock.net/series/visualizing-asp-net-core-3-endpoints-using-graphvizonline/">this series</a>, I have shown how to view all the routes in your application using an endpoint graph. In this post I show how to do something more useful—detecting duplicate routes that would throw an exception at runtime. I show how to use the same <code>DfaGraphWriter</code> primitives as in previous posts to create a unit test that fails if you have any duplicate routes in your application that would cause a failure at runtime.</p>
+<h2 id="duplicate-routes-and-runtime-exceptions">Duplicate routes and runtime exceptions</h2>
+<p>ASP.NET Core 3.x uses endpoint routing for all your MVC/API controllers and Razor Pages, as well as dedicated endpoints like a health check endpoint. As you've already seen in this series, those endpoints are built into a directed graph, which is used to route incoming requests to a handler:</p>
+<p><amp-img src="/content/images/2020/graph_07.png" alt="A ValuesController endpoint routing application with different styling" width="2790" height="1117" layout="responsive" i-amphtml-layout="responsive" i-amphtml-auto-lightbox-visited="" lightbox="i-amphtml-auto-lightbox-0" on="tap:amp-lightbox-gallery.activate"><i-amphtml-sizer slot="i-amphtml-svc"></i-amphtml-sizer><img decoding="async" alt="A ValuesController endpoint routing application with different styling" src="https://andrewlock.net/content/images/2020/graph_07.png"></amp-img></p>
+<p>Unfortunately, it's perfectly possible to structure your controllers/Razor Pages in such as way as to have multiple endpoints be a match for a given route. For example, imagine you have a "values" controller in your project:</p>
+<pre><code><span>[</span><span>Route</span><span>(</span><span>"api/[controller]"</span><span>)</span><span>]</span>
+<span>[</span><span>ApiController</span><span>]</span>
+<span>public</span> <span>class</span> <span>ValuesController</span> <span>:</span> <span>ControllerBase</span>
+<span>{</span>
+    <span>[</span><span>HttpGet</span><span>]</span>
+    <span>public</span> ActionResult<span>&lt;</span>IEnumerable<span>&lt;</span><span>string</span><span>&gt;</span><span>&gt;</span> <span>Get</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>return</span> <span>new</span> <span>string</span><span>[</span><span>]</span> <span>{</span> <span>"value1"</span><span>,</span> <span>"value2"</span> <span>}</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Meanwhile, some joker has also created the following controller too:</p>
+<pre><code><span>[</span><span>ApiController</span><span>]</span>
+<span>public</span> <span>class</span> <span>DuplicateController</span>
+<span>{</span>
+    <span>[</span><span>HttpGet</span><span>(</span><span>"api/values"</span><span>)</span><span>]</span>
+    <span>public</span> <span>string</span> <span>Get</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>return</span> <span>"oops"</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>As routing is only handled at runtime, everything will appear to be fine when you build and deploy your application. Health checks will pass, and all other routes will behave normally. But when someone hits the URL <code>/api/values</code>, you'll get this beauty:</p>
+<p><amp-img src="/content/images/2020/duplicate_detector2.png" alt="AmbiguousMatchException: The request matched multiple endpoints" width="3000" height="2000" layout="responsive" i-amphtml-layout="responsive" i-amphtml-auto-lightbox-visited="" lightbox="i-amphtml-auto-lightbox-1" on="tap:amp-lightbox-gallery.activate"><i-amphtml-sizer slot="i-amphtml-svc"></i-amphtml-sizer><img decoding="async" alt="AmbiguousMatchException: The request matched multiple endpoints" src="https://andrewlock.net/content/images/2020/duplicate_detector2.png"></amp-img></p>
+<p>The good thing here at least is that the error message tells you where the problem is. But wouldn't it be nice to know that <em>before</em> you've deployed to production?</p>
+<p>Trying to detect this error ahead of time was what started me down the graph-drawing rabbit-hole of this series. My goal was to create a simple unit test that can run as part of the build, to identify errors like these.</p>
+<h2 id="creating-a-duplicate-endpoint-detector">Creating a duplicate endpoint detector</h2>
+<p>If you've read the rest of <a href="https://andrewlock.net/series/visualizing-asp-net-core-3-endpoints-using-graphvizonline/">this series</a>, then you may have already figured out how this is going to work. The <code>DfaGraphWriter</code> that is built-in to the framework, which can be used to visualize the endpoint graph, knows how to visit each node (route) in the graph. We'll adapt this somewhat: instead of outputting a graph, we'll return a list of routes which match multiple endpoints.</p>
+<p>The detector class we'll create, <code>DuplicateEndpointDetector</code> uses <a href="https://andrewlock.net/creating-a-custom-dfagraphwriter-using-impromptuinterface-and-reflection/">the same ImpromptuInterface technique as previous posts</a>, reusing the <code>IDfaNode</code> and <code>IDfaMatcherBuilder</code> interfaces, shown below for completeness:</p>
+<pre><code><span>public</span> <span>interface</span> <span>IDfaNode</span>
+<span>{</span>
+    <span>public</span> <span>string</span> Label <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> List<span>&lt;</span>Endpoint<span>&gt;</span> Matches <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>IDictionary</span> Literals <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>object</span> Parameters <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>object</span> CatchAll <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>IDictionary</span> PolicyEdges <span>{</span> <span>get</span><span>;</span> <span>}</span>
+<span>}</span>
+
+<span>public</span> <span>interface</span> <span>IDfaMatcherBuilder</span>
+<span>{</span>
+    <span>void</span> <span>AddEndpoint</span><span>(</span><span>RouteEndpoint</span> endpoint<span>)</span><span>;</span>
+    <span>object</span> <span>BuildDfaTree</span><span>(</span><span>bool</span> includeLabel <span>=</span> <span>false</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>These interfaces give us a slightly nicer way to work with <a href="https://github.com/dotnet/aspnetcore/blob/083f81d7604352822820f6313c3d4eb219c044a8/src/Http/Routing/src/Internal/DfaGraphWriter.cs">the internal classes used by the default <code>DfaGraphWriter</code></a>. </p>
+<p>The bulk of the <code>DuplicateEndpointDetector</code> is identical to the <code>CustomDfaGraphWriter</code> <a href="https://andrewlock.net/creating-a-custom-endpoint-visualization-graph/">from my previous post</a>. The only difference is that we a <code>GetDuplicateEndpoints()</code> method instead of a <code>Write()</code> method. We also don't use a <code>TextWriter</code> (as we're not trying to build a graph for display) and we return a dictionary of duplicated endpoints (keyed on the route). </p>
+<p>I've shown almost the complete code below, with the exception of the <code>LogDuplicates</code> method which we'll get to shortly.</p>
+<pre><code><span>public</span> <span>class</span> <span>DuplicateEndpointDetector</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>IServiceProvider</span> _services<span>;</span>
+    <span>public</span> <span>DuplicateEndpointDetector</span><span>(</span><span>IServiceProvider</span> services<span>)</span>
+    <span>{</span>
+        _services <span>=</span> services<span>;</span>
+    <span>}</span>
+
+    <span>public</span> Dictionary<span>&lt;</span><span>string</span><span>,</span> List<span>&lt;</span><span>string</span><span>&gt;</span><span>&gt;</span> <span>GetDuplicateEndpoints</span><span>(</span><span>EndpointDataSource</span> dataSource<span>)</span>
+    <span>{</span>
+        
+        <span>Type</span> matcherBuilder <span>=</span> <span>typeof</span><span>(</span>IEndpointSelectorPolicy<span>)</span><span>.</span>Assembly
+            <span>.</span><span>GetType</span><span>(</span><span>"Microsoft.AspNetCore.Routing.Matching.DfaMatcherBuilder"</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> rawBuilder <span>=</span> _services<span>.</span><span>GetRequiredService</span><span>(</span>matcherBuilder<span>)</span><span>;</span>
+        <span>IDfaMatcherBuilder</span> builder <span>=</span> rawBuilder<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaMatcherBuilder</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> endpoints <span>=</span> dataSource<span>.</span>Endpoints<span>;</span>
+        <span>for</span> <span>(</span><span>var</span> i <span>=</span> <span>0</span><span>;</span> i <span>&lt;</span> endpoints<span>.</span>Count<span>;</span> i<span>++</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>endpoints<span>[</span>i<span>]</span> <span>is</span> <span>RouteEndpoint</span> endpoint <span>&amp;&amp;</span> <span>(</span>endpoint<span>.</span>Metadata<span>.</span><span><span>GetMetadata</span><span>&lt;</span><span>ISuppressMatchingMetadata</span><span>&gt;</span></span><span>(</span><span>)</span><span>?</span><span>.</span>SuppressMatching <span>?</span><span>?</span> <span>false</span><span>)</span> <span>==</span> <span>false</span><span>)</span>
+            <span>{</span>
+                builder<span>.</span><span>AddEndpoint</span><span>(</span>endpoint<span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span>
+
+        
+        <span>var</span> rawTree <span>=</span> builder<span>.</span><span>BuildDfaTree</span><span>(</span>includeLabel<span>:</span> <span>true</span><span>)</span><span>;</span>
+        <span>IDfaNode</span> tree <span>=</span> rawTree<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> visited <span>=</span> <span>new</span> <span><span>Dictionary</span><span>&lt;</span><span>IDfaNode</span><span>,</span> <span>int</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> duplicates <span>=</span> <span>new</span> <span>Dictionary</span><span>&lt;</span><span>string</span><span>,</span> List<span>&lt;</span><span>string</span><span>&gt;</span><span>&gt;</span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>Visit</span><span>(</span>tree<span>,</span> LogDuplicates<span>)</span><span>;</span>
+
+        
+        <span>return</span> duplicates<span>;</span>
+
+        <span>void</span> <span>LogDuplicates</span><span>(</span><span>IDfaNode</span> node<span>)</span>
+        <span>{</span>
+            
+        <span>}</span>
+    <span>}</span>
+
+    
+    <span>static</span> <span>void</span> <span>Visit</span><span>(</span><span>IDfaNode</span> node<span>,</span> Action<span>&lt;</span>IDfaNode<span>&gt;</span> visitor<span>)</span>
+    <span>{</span>
+        <span>if</span> <span>(</span>node<span>.</span>Literals<span>?</span><span>.</span>Values <span>!=</span> <span>null</span><span>)</span>
+        <span>{</span>
+            <span>foreach</span> <span>(</span><span>var</span> dictValue <span>in</span> node<span>.</span>Literals<span>.</span>Values<span>)</span>
+            <span>{</span>
+                <span>IDfaNode</span> <span>value</span> <span>=</span> dictValue<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+                <span>Visit</span><span>(</span><span>value</span><span>,</span> visitor<span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span>
+
+        
+        <span>if</span> <span>(</span>node<span>.</span>Parameters <span>!=</span> <span>null</span> <span>&amp;&amp;</span> <span>!</span><span>ReferenceEquals</span><span>(</span>node<span>,</span> node<span>.</span>Parameters<span>)</span><span>)</span>
+        <span>{</span>
+            <span>IDfaNode</span> parameters <span>=</span> node<span>.</span>Parameters<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>Visit</span><span>(</span>parameters<span>,</span> visitor<span>)</span><span>;</span>
+        <span>}</span>
+
+        
+        <span>if</span> <span>(</span>node<span>.</span>CatchAll <span>!=</span> <span>null</span> <span>&amp;&amp;</span> <span>!</span><span>ReferenceEquals</span><span>(</span>node<span>,</span> node<span>.</span>CatchAll<span>)</span><span>)</span>
+        <span>{</span>
+            <span>IDfaNode</span> catchAll <span>=</span> node<span>.</span>CatchAll<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>Visit</span><span>(</span>catchAll<span>,</span> visitor<span>)</span><span>;</span>
+        <span>}</span>
+
+        <span>if</span> <span>(</span>node<span>.</span>PolicyEdges<span>?</span><span>.</span>Values <span>!=</span> <span>null</span><span>)</span>
+        <span>{</span>
+            <span>foreach</span> <span>(</span><span>var</span> dictValue <span>in</span> node<span>.</span>PolicyEdges<span>.</span>Values<span>)</span>
+            <span>{</span>
+                <span>IDfaNode</span> <span>value</span> <span>=</span> dictValue<span>.</span><span><span>ActLike</span><span>&lt;</span><span>IDfaNode</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+                <span>Visit</span><span>(</span><span>value</span><span>,</span> visitor<span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span>
+
+        <span>visitor</span><span>(</span>node<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>This class follows the same approach as the graph writer. It uses <em>ImpromptuInterface</em> to create an <code>IDfaMatcherBuilder</code> proxy, which it uses to build a graph of all the endpoints in the system. It then visits each of the <code>IDfaNode</code>s in the graph and calls the <code>LogDuplicates()</code> method, passing in each node in turn. </p>
+<p><code>LogDuplicates()</code> is a lot simpler than the <code>WriteNode()</code> implementation <a href="https://andrewlock.net/creating-a-custom-endpoint-visualization-graph/">from the previous post</a>. All we're concerned about here is whether a node has multiple entries in its <code>Matches</code> property. If it does, we have an ambiguous route, so we add it to the dictionary. I'm using the <code>DisplayName</code> to identify the ambiguous endpoints, just as the exception message shown earlier does.</p>
+<pre><code>
+<span>var</span> visited  <span>=</span> <span>new</span> <span><span>Dictionary</span><span>&lt;</span><span>IDfaNode</span><span>,</span> <span>int</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>var</span> duplicates <span>=</span> <span>new</span> <span>Dictionary</span><span>&lt;</span><span>string</span><span>,</span> List<span>&lt;</span><span>string</span><span>&gt;</span><span>&gt;</span><span>(</span><span>)</span><span>;</span>
+
+<span>void</span> <span>LogDuplicates</span><span>(</span><span>IDfaNode</span> node<span>)</span>
+<span>{</span>
+    
+    
+    <span>if</span> <span>(</span><span>!</span>visited<span>.</span><span>TryGetValue</span><span>(</span>node<span>,</span> <span>out</span> <span>var</span> label<span>)</span><span>)</span>
+    <span>{</span>
+        label <span>=</span> visited<span>.</span>Count<span>;</span>
+        visited<span>.</span><span>Add</span><span>(</span>node<span>,</span> label<span>)</span><span>;</span>
+    <span>}</span>
+
+    
+    
+
+    
+    <span>var</span> matchCount <span>=</span> node<span>?</span><span>.</span>Matches<span>?</span><span>.</span>Count <span>?</span><span>?</span> <span>0</span><span>;</span>
+    <span>if</span><span>(</span>matchCount <span>&gt;</span> <span>1</span><span>)</span>
+    <span>{</span>
+        
+        duplicates<span>[</span>node<span>.</span>Label<span>]</span> <span>=</span> node<span>.</span>Matches<span>.</span><span>Select</span><span>(</span>x <span>=</span><span>&gt;</span> x<span>.</span>DisplayName<span>)</span><span>.</span><span>ToList</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>After executing <code>GetDuplicateEndpoints()</code> you'll have a dictionary containing all the duplicate routes in your application. The final thing to do is create a unit test, so that we can fail the build if we detect a problem.</p>
+<h2 id="creating-a-unit-test-to-detect-duplicate-endpoints">Creating a unit test to detect duplicate endpoints</h2>
+<p>I like to put this check in a unit test, because performance is much less of an issue. You <em>could</em> check for duplicate routes on app startup or using a health check But given that we use reflection heavily this will add to startup time, and also given that the routes are fixed once you deploy your application, a unit test seems like the best place for it.</p>
+<p>Just as <a href="https://andrewlock.net/adding-an-endpoint-graph-to-your-aspnetcore-application/">in a previous post where I <em>draw</em> the graph in a unit test</a>, in this post I'll use an "integration test" to check for duplicate endpoints in my main app. </p>
+<ul>
+<li>Create a new xUnit project using VS or by running <code>dotnet new xunit</code>.</li>
+<li>Install <em>Microsoft.AspNetCore.Mvc.Testing</em> by running <code>dotnet add package Microsoft.AspNetCore.Mvc.Testing</code></li>
+<li>Update the <code>&lt;Project&gt;</code> element of your test project to <code>&lt;Project Sdk="Microsoft.NET.Sdk.Web"&gt;</code></li>
+<li>Reference your ASP.NET Core project from the test project</li>
+</ul>
+<p>You can now create a simple integration test using <a href="https://docs.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-3.1#basic-tests-with-the-default-webapplicationfactory">the <code>WebApplicationFactory&lt;&gt;</code> as a class fixture</a>. I also inject <code>ITestOutputHelper</code> so that we can list out the duplicate endpoints for the test:</p>
+<pre><code><span>public</span> <span>class</span> <span>DuplicateDetectorTest</span>
+    <span>:</span> <span>IClassFixture</span><span>&lt;</span>WebApplicationFactory<span>&lt;</span>ApiRoutes<span>.</span>Startup<span>&gt;</span><span>&gt;</span>
+<span>{</span>
+    
+    <span>private</span> <span>readonly</span> WebApplicationFactory<span>&lt;</span>ApiRoutes<span>.</span>Startup<span>&gt;</span> _factory<span>;</span>
+    <span>private</span> <span>readonly</span> <span>ITestOutputHelper</span> _output<span>;</span>
+    <span>public</span> <span>DuplicateDetectorTest</span><span>(</span>WebApplicationFactory<span>&lt;</span>Startup<span>&gt;</span> factory<span>,</span> <span>ITestOutputHelper</span> output<span>)</span>
+    <span>{</span>
+        _factory <span>=</span> factory<span>;</span>
+        _output <span>=</span> output<span>;</span>
+    <span>}</span>
+
+    <span>[</span><span>Fact</span><span>]</span>
+    <span>public</span> <span>void</span> <span>ShouldNotHaveDuplicateEndpoints</span><span>(</span><span>)</span>
+    <span>{</span>
+        
+        
+        <span>var</span> detector <span>=</span> <span>new</span> <span>DuplicateEndpointDetector</span><span>(</span>_factory<span>.</span>Services<span>)</span><span>;</span>
+        <span>var</span> endpointData <span>=</span> _factory<span>.</span>Services<span>.</span><span><span>GetRequiredService</span><span>&lt;</span><span>EndpointDataSource</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> duplicates <span>=</span> detector<span>.</span><span>GetDuplicateEndpoints</span><span>(</span>endpointData<span>)</span><span>;</span>
+
+        
+        <span>foreach</span> <span>(</span><span>var</span> keyValuePair <span>in</span> duplicates<span>)</span>
+        <span>{</span>
+            <span>var</span> allMatches <span>=</span> <span>string</span><span>.</span><span>Join</span><span>(</span><span>", "</span><span>,</span> keyValuePair<span>.</span>Value<span>)</span><span>;</span>
+            _output<span>.</span><span>WriteLine</span><span>(</span>$<span>"Duplicate route: '{keyValuePair.Key}'. Matches: {allMatches}"</span><span>)</span><span>;</span>
+        <span>}</span>
+
+        
+        Assert<span>.</span><span>Empty</span><span>(</span>duplicates<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>When you run the test, the assertion will fail, and if you view the output, you'll see a list of the routes with issues, as well as the endpoints that caused the problem:</p>
+
+<p>If you're running your unit tests as part of your CI build, then you'll catch the issue <em>before</em> it gets to production. Pretty handy!</p>
+<h2 id="summary">Summary</h2>
+<p>In this post I show how you can build a duplicate endpoint detector using the endpoint graph building facilities included in ASP.NET Core. The end result requires quite a few tricks, as I've shown in the previous posts of this series, such as using <em>ImpromptuInterface</em> to create proxies for interacting with <code>internal</code> types.</p>
+<p>The end result is that you can detect when multiple endpoints (e.g. API controllers) are using the same route in your application. Given that those throw routes would throw an <code>AmbiguousMatchException</code> at runtime, being able to detect issues using a unit test is pretty handy!</p>
+</section>
+
+
+</article>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
