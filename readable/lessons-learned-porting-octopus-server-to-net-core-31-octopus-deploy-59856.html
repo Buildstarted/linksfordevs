@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Lessons learned porting Octopus Server to .NET Core 3.1 - Octopus Deploy - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Lessons learned porting Octopus Server to .NET Core 3.1 - Octopus Deploy - linksfor.dev(s)"/>
+    <meta property="article:author" content="Octopus Deploy"/>
+    <meta property="og:description" content="We ported Octopus Server to .NET Core 3.1 to unlock the ability to run on Linux, Docker Containers, and Kubernetes. This post shares lessons learned along the way."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://octopus.com/blog/octopus-server-dotnet-core-lessons-learned"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Lessons learned porting Octopus Server to .NET Core 3.1 - Octopus Deploy</title>
+<div class="readable">
+        <h1>Lessons learned porting Octopus Server to .NET Core 3.1 - Octopus Deploy</h1>
+            <div>by Octopus Deploy</div>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 20 Mar 2020</div>
+        <p><a href="https://octopus.com/blog/octopus-server-dotnet-core-lessons-learned">https://octopus.com/blog/octopus-server-dotnet-core-lessons-learned</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p><a href="#" data-featherlight="https://i.octopus.com/blog/2020-03/octopus-server-dotnet-core-lessons-learned/eskimo-octopus-linux-land.png" data-title=""><img src="https://i.octopus.com/blog/2020-03/octopus-server-dotnet-core-lessons-learned/eskimo-octopus-linux-land.png" alt="Lessons learned porting Octopus Server to .NET Core 3.1"></a></p>
+<p>With the release of Octopus 2020.1, Octopus Server now runs on .NET Core 3.1, which means it can be installed on Linux, Docker Containers, and Kubernetes. This was a significant effort, we already shared our <a href="https://octopus.com/blog/octopus-cloud-1.0-reflections">reflections on the launch of Octopus Cloud 1.0</a> and <a href="https://octopus.com/blog/octopus-cloud-v2-why-kubernetes">why we chose Kubernetes, Linux, and .NET Core for Octopus Cloud 2.0</a>, in this post, we share the benefits of the change and our top three lessons learned.</p>
+<h2 id="benefits"><a href="#benefits" aria-label="Anchor link for: benefits" data-anchorjs-icon=""></a>Benefits</h2>
+<p>Before we share the lessons learned, here are the benefits of porting Octopus Server to .NET Core:</p>
+<ul>
+<li>Modern development environment, framework, and tooling.</li>
+<li>Cross-platform support for Windows and Linux.</li>
+<li>Access to the mature ecosystem for running Linux containers in Kubernetes.</li>
+<li>Choice and flexibility: Our customers can choose to run Octopus on Windows or Linux, or they can use Octopus Cloud.</li>
+<li>Octopus Cloud has gained improved performance and reduced operating costs. See the links above for concrete numbers.</li>
+</ul>
+<p>This also makes our development environment more productive as our engineering teams now have the choice to develop on Windows or Linux.</p>
+<h2 id="top-three-lessons-learned"><a href="#top-three-lessons-learned" aria-label="Anchor link for: top three lessons learned" data-anchorjs-icon=""></a>Top three lessons learned</h2>
+<p>We learned a lot going through this process; however, there are three major lessons we learned.</p>
+<h3 id="know-and-plan-for-differences-between-windows-and-linux"><a href="#know-and-plan-for-differences-between-windows-and-linux" aria-label="Anchor link for: know and plan for differences between windows and linux" data-anchorjs-icon=""></a>1. Know and plan for differences between Windows and Linux</h3>
+<p>There are platform-specific differences in the implementations of .NET Core on Windows and Linux. Most of the issues were small and had easy workarounds, but we did find a few significant problems that are worth sharing.</p>
+<p><strong>Configuration settings and the Windows registry</strong></p>
+<p>To support both Windows and Linux platforms, we had to remove any Windows-specific code. Octopus Server started as a Windows product, and it followed the platform conventions and stored some configuration settings in the Windows registry, which is a problem for Linux.</p>
+<p><strong>Solution</strong>:</p>
+<p>We shifted everything stored in the registry to the file system or the Octopus database. This was a simple task, but it took time and testing to get it right.</p>
+<p><strong>Database performance problems</strong></p>
+<p>The most significant problem we encountered was abysmal database performance due to the different way of handling database queries on Windows and Linux. Octopus uses Microsoft SQL Server as its data store, and we discovered a <a href="https://github.com/dotnet/SqlClient/issues/422" rel="nofollow">significant problem</a> in the .NET Core SQL client library on Linux. If we have the <code>MultipleActiveResultSets</code> setting set to <code>True</code> we get exceptions and database timeouts. The GitHub issue linked above shares the full details and a simple code sample to reproduce the problem.</p>
+<p><strong>Solution</strong>:</p>
+<p>Our short-term solution was to disable the <code>MultipleActiveResultSets</code> setting and use it very sparingly. In general, we open two connections to our database, one with this setting enabled and one with it disabled. We primarily use the disabled connection and only use the enabled one when it is required.</p>
+<p>We have been working with Microsoft to help provide information to resolve the issue, and we hope to see a proper fix in the future.</p>
+<p><strong>Authentication providers</strong></p>
+<p>We also encountered the need to host the Octopus Server web host differently on each platform. We use <code>HttpSys</code> on Windows and <em>Kestrel</em> on Linux, and this made our authentication challenging. Octopus needs to support multiple authentication schemes, including cookies-based authentication, and the ability for users to log in and out and have multiple authentication providers enabled at once.</p>
+<p>The core issue we hit was that <code>HttpSys</code> supports integrated authentication (i.e., Windows authentication), but its a binary on/off setting for every endpoint in the host. This is inflexible, and it's a change from our non-.NET Core code-base. Users could log in automatically, but they could never log out.</p>
+<p>Note: We don't use Kestrel on Windows because it doesn't support virtual directories and we have customers that share the same port with other services. So to ensure we maintain backwards compatibility, we decided to use <code>HttpSys</code> for Windows only.</p>
+<p><strong>Solution</strong>:</p>
+<p>We considered several options, but after going through this <a href="https://github.com/dotnet/aspnetcore/issues/5888" rel="nofollow">ASP.NET Core issue</a>, we decided to follow the advice there and use two hosts. One standard web host and a second one to look/behave like a virtual directory off the main API site's root, i.e., <code>/integrate-challenge</code>, and is therefore consistent with the location in earlier versions of Octopus Server. The host only has that one route, and it initiates the login challenge using a 401 response when the user isn't already authenticated.</p>
+<h3 id="sharpen-your-debugging-skills-for-linux-and-docker"><a href="#sharpen-your-debugging-skills-for-linux-and-docker" aria-label="Anchor link for: sharpen your debugging skills for linux and docker" data-anchorjs-icon=""></a>2. Sharpen your debugging skills for Linux and Docker</h3>
+<p>As we progressed through the .NET Core port, we also learned how to code, test, and debug problems with Windows, Windows Subsystem for Linux (WSL), Linux, and Docker. Historically, our team all developed on Windows, but this has evolved into individuals coding on Windows, Linux, and macOS, and as a result, we've learned several lessons:</p>
+<p><strong>Running as non-root or non-admin</strong></p>
+<p>We found it much easier to run all builds and test Octopus Server on Linux as non-root or non-sudo to limit permission-based errors and problems. That said, we sometimes need to run commands as root using <code>sudo</code> and then afterwards fix up the ownership of files that were created during those commands with <code>chown</code>, like <code>sudo chown -R $user:$user ~/Octopus/MyInstance</code>. This is a bit quick and dirty, but it does the job.</p>
+<p>We are planning to change this in future, such that octopus runs as a user that is a member of a group, and during installation we configure the group owner of <code>/etc/octopus</code> to be that group.</p>
+<p><strong>Certificate management</strong></p>
+<p>Our end-to-end (E2E) test suite runs a range of tests that run against the Octopus Server listening over HTTPS (i.e., port 443). This requires us to convert and import some self-signed certificates into the local certificate store in <code>/etc/</code> on a Linux box. To solve this problem, we wrote the following script:</p>
+<pre><code><span>#!/bin/bash</span>
+<span>echo</span> <span>"Setup certificates"</span>
+CERTS_PATH_DEST=<span>"/usr/local/share/ca-certificates"</span>
+<span>if</span> [ ! <span>-d</span> <span>"<span>$CERTS_PATH_DEST</span>"</span> ]
+<span>then</span>
+    <span>echo</span> <span>"Creating <span>$CERTS_PATH_DEST</span>"</span>
+    mkdir <span>${CERTS_PATH_DEST}</span>
+<span>fi</span>
+MY_PATH=<span>"`dirname "<span>$0</span>"`"</span>
+CERT_PFX_FILES=(<span>${PWD}</span>/<span>${MY_PATH}</span>/../Octopus.E2ETests/Universe/*.pfx)
+<span>for</span> CERT_PFX <span>in</span> <span>"<span>${CERT_PFX_FILES[@]}</span>"</span>
+<span>do</span>
+    FILE_NAME=$(basename <span>"<span>$CERT_PFX</span>"</span>)
+    CERT_CRT=<span>"<span>${CERTS_PATH_DEST}</span>/<span>${FILE_NAME%.*}</span>.crt"</span>
+    <span>if</span> [ ! <span>-e</span> <span>"<span>${CERT_CRT}</span>"</span> ]
+    <span>then</span>
+        <span>echo</span> <span>"Converting '<span>${CERT_PFX}</span>' to '<span>${CERT_CRT}</span>'"</span>
+        openssl pkcs12 -in <span>"<span>${CERT_PFX}</span>"</span> -clcerts -nokeys -out <span>"<span>${CERT_CRT}</span>"</span> -passin pass:password
+    <span>fi</span>
+<span>done</span>
+update-ca-certificates
+</code></pre>
+<p><strong>Connecting to the SQL Server database</strong></p>
+<p>Octopus uses Microsoft SQL Server as its database, and teams generally connect to it via integrated Windows authentication on Windows Servers. This no longer works. Our solution here was to switch to user name and password-based authentication.</p>
+<p>Further, we found our suite of end-to-end (E2E) tests runs much faster and more reliable with database connection pooling turned off. We haven't gotten to the bottom of this yet, but it's likely a platform-specific problem related to the database performance issue mentioned above.</p>
+<p><strong>Debug Octopus Server on Linux with Visual Studio Code</strong></p>
+<p>Our team writes code with a variety of tools, including the following:</p>
+<ul>
+<li><a href="https://visualstudio.microsoft.com/vs/" rel="nofollow">Visual Studio</a></li>
+<li><a href="https://www.jetbrains.com/rider/" rel="nofollow">JetBrains Rider</a></li>
+<li><a href="https://code.visualstudio.com/" rel="nofollow">Visual Studio Code</a></li>
+</ul>
+<p>Currently, the most popular is <a href="https://code.visualstudio.com/" rel="nofollow">Visual Studio Code</a> with the <a href="https://aka.ms/vscode-remote/download/extension" rel="nofollow">Remote Development extension</a>. This extension is still in preview, but we find it works very well.</p>
+<p>With Visual Studio Code and the Remote Development extension, we can run applications, test, and debug them as well as edit code in Linux (or a Docker container). Simply point VS Code at the folder that contains the Octopus Server code, and then it's pretty much just F5 from there. It's that simple!</p>
+<h3 id="simplify-with-self-contained-packages"><a href="#simplify-with-self-contained-packages" aria-label="Anchor link for: simplify with self contained packages" data-anchorjs-icon=""></a>3. Simplify with self-contained packages</h3>
+<p>Porting Octopus to .NET Core has allowed us to ship <a href="https://www.hanselman.com/blog/MakingATinyNETCore30EntirelySelfcontainedSingleExecutable.aspx" rel="nofollow">self-contained packages</a> which brings multiple benefits.</p>
+<ul>
+<li><strong>Fewer dependencies</strong>: Shipping a single self-contained executable means we no longer require .NET Core to be installed on the Octopus server. The result is reduced installation requirements that make Octopus easier to install. This is a big win.</li>
+<li><strong>Improved supportability</strong>: In a nutshell, fewer dependencies make Octopus easier to install and support. There are fewer components and fewer things that can be accidentally changed. Shipping Docker container images for <a href="https://hub.docker.com/r/octopusdeploy/octopusdeploy" rel="nofollow">Windows</a> and Linux (coming soon) eliminates further dependencies as even more of the dependencies are built into the containers.</li>
+<li><strong>Modern software and tooling</strong>: Using modern tools and frameworks enables our team to continue to innovate and ship software quickly with useful features for our customers.</li>
+</ul>
+<p>Unfortunately, this also has some tradeoffs as moving to .NET Core 3.1 required us to <a href="https://octopus.com/blog/raising-minimum-requirements-for-octopus-server">drop support</a> for older operating systems, including Windows Server 2008-2012 and some Linux distros. Supporting older servers and browsers drains our time and attention, making it harder for us to innovate and move the Octopus ecosystem forward.</p>
+<h2 id="conclusion"><a href="#conclusion" aria-label="Anchor link for: conclusion" data-anchorjs-icon=""></a>Conclusion</h2>
+<p>We ported Octopus Server to .NET Core 3.1 so that the server can run on Linux, Docker Containers, and Kubernetes. We made this change to reduce costs and increase the performance of our Octopus Cloud SaaS product, and it has been a great success.</p>
+<p>It wasn't a simple journey, but we learned a lot on the way.</p>
+<ol>
+<li>Know and plan for differences between Windows and Linux</li>
+<li>Sharpen your debugging skills for Linux and Docker</li>
+<li>Simplify with self-contained packages</li>
+</ol>
+
+<ul>
+<li><a href="https://octopus.com/blog/octopus-release-2020-1">Octopus 2020.1: Dark mode and better Linux support</a></li>
+<li><a href="https://octopus.com/blog/octopus-dark-mode">Introducing dark mode</a></li>
+</ul>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

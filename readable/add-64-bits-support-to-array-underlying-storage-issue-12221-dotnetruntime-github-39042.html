@@ -1,0 +1,1690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Add 64 bits support to Array underlying storage &#xB7; Issue #12221 &#xB7; dotnet/runtime - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Add 64 bits support to Array underlying storage &#xB7; Issue #12221 &#xB7; dotnet/runtime - linksfor.dev(s)"/>
+    <meta property="article:author" content="GPSnoopy"/>
+    <meta property="og:description" content="While System.Array API supports LongLength and operator this[long i], the CLR does not allow arrays to be allocated with more than 2^31-1 elements (int.MaxValue). This limitation has become a daily..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/dotnet/coreclr/issues/23132"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Add 64 bits support to Array underlying storage &#xB7; Issue #12221 &#xB7; dotnet/runtime</title>
+<div class="readable">
+        <h1>Add 64 bits support to Array underlying storage &#xB7; Issue #12221 &#xB7; dotnet/runtime</h1>
+            <div>by GPSnoopy</div>
+            <div>Reading time: 24-30 minutes</div>
+        <div>Posted here: 18 Oct 2019</div>
+        <p><a href="https://github.com/dotnet/coreclr/issues/23132">https://github.com/dotnet/coreclr/issues/23132</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+              <div data-quote-markdown=".js-comment-body" data-issue-and-pr-hovercards-enabled="" data-team-hovercards-enabled="">
+
+            <div data-channel="marked-as-read:issue:557939639">
+
+              
+<div data-gid="MDU6SXNzdWU1NTc5Mzk2Mzk=" data-url="/_render_node/MDU6SXNzdWU1NTc5Mzk2Mzk=/issues/body" data-channel="issue:557939639">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GPSnoopy/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GPSnoopy"><img height="40" width="40" alt="@GPSnoopy" src="https://avatars1.githubusercontent.com/u/10282472?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issue-557939639">
+  <div data-body-version="50f4f77007fa29203bc390b7c3297bd4" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>While System.Array API supports LongLength and operator this[long i], the CLR does not allow arrays to be allocated with more than 2^31-1 elements (int.MaxValue).</p>
+<p>This limitation has become a daily annoyance when working with HPC or big data. We frequently hit this limit.</p>
+<p><strong>Why this matters</strong></p>
+<ul>
+<li>.NET arrays is the de facto storage unit of many APIs &amp; collections.</li>
+<li>Currently one has to allocate native memory instead, which does not work with managed code (Span could have helped, but it's been limited to int32 as well).</li>
+<li>HPC frameworks expects data to be contiguous in memory (i.e. the data cannot be split into separate arrays). E.g. BLAS libraries.</li>
+<li>Requires applications to be coded and designed differently if they handle &lt;2G elements or &gt;2G elements. I.e. It does not scale.</li>
+<li>It's an arbitrary limitation with little value to the user and application:
+<ul>
+<li>With a desktop with 64GB, why can one only allocate 3.1% of its memory in one go?</li>
+<li>With a data centre machine with 1,536GB, why can one only allocate 0.1% of its memory in one go?</li>
+</ul>
+</li>
+</ul>
+<p>In C++ this is solved with std::size_t (whose typedef changes depending on the target platform). Ideally, .NET would have taken the same route when designing System.Array. Why they haven't is a mystery, given that AMD64 and .NET Framework appeared around the same time.</p>
+<p><strong>Proposal</strong><br>
+I suggest that when the CLR/JIT runs the .NET application in x64, it allows the array long constructor to allocate more than int.MaxValue items:</p>
+<ul>
+<li>Indexing the array with operator this[long i] should work as expected and give access to the entire array.</li>
+<li>Indexing the array with operator this[int i] should work as expected but implicitly limit the access to only the first int.MaxValue elements.</li>
+<li>The LongLength property should return the total number of elements in the array.</li>
+<li>The Length property should return the total number of elements in the array, or throw OverflowException of there are more than int.MaxValue elements (this matches the current behaviour on multi-dimensional arrays with more than int.MaxValue elements).</li>
+</ul>
+<p>I naively believe that the above should not break any existing application.</p>
+<p>Bonus points for extending 64-bit support to Span and ReadOnlySpan.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+</div>
+
+
+              
+
+  
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk3OTM2Ng==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk3OTM2Ng==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ3MDk3OTM2Ng==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/tannergooding/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/tannergooding"><img height="40" width="40" alt="@tannergooding" src="https://avatars2.githubusercontent.com/u/10487869?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-470979366">
+    <div>
+      
+
+  
+
+<details data-body-version="8a23019117b1716e7b437eb264499f33">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="8a23019117b1716e7b437eb264499f33" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <blockquote>
+<p>I naively believe that the above should not break any existing application.</p>
+</blockquote>
+<p>One of the simplest breaks becomes any program that is doing the following:</p>
+<div><pre><span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>array</span>.<span>Length</span>; <span>i</span><span>++</span>)
+{
+}</pre></div>
+<p>This works fine for any existing programs, since CoreCLR actually defines a limit that is just under <code>int.MaxValue</code>. Allowing values that are greater than <code>int.MaxValue</code> would cause an overflow to <code>-2147483648</code> and either cause unexpected behavior or cause an <code>IndexOutOfRangeException</code> to be thrown.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk3OTkzNw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk3OTkzNw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ3MDk3OTkzNw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/giuliojiang/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/giuliojiang"><img height="40" width="40" alt="@giuliojiang" src="https://avatars0.githubusercontent.com/u/2095640?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-470979937">
+    <div>
+      
+
+  
+
+<details data-body-version="a560404c583c98f8af89a10f902ca70d">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="a560404c583c98f8af89a10f902ca70d" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>I frequently run into this array when processing large chunks of data from network streams into byte arrays, and always need to implement chunking logic in order to be able to process the data.<br>
+It would be great to be able to use <code>long</code> indexes on arrays</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk4MTkzNQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk4MTkzNQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ3MDk4MTkzNQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GPSnoopy/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GPSnoopy"><img height="40" width="40" alt="@GPSnoopy" src="https://avatars1.githubusercontent.com/u/10282472?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-470981935">
+    <div>
+      
+
+  
+
+<details data-body-version="aacffc688fb7725480035b29d10527b1">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="aacffc688fb7725480035b29d10527b1" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p><a data-hovercard-type="user" data-hovercard-url="/users/tannergooding/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/tannergooding">@tannergooding</a> That's why I proposed above to keep the existing behaviour of throwing OverflowException on Length when there are more than int.MaxValue elements. Nothing changes there.</p>
+<p>I'm suggesting that changing the CLR implementation as proposed above would allow applications and people who want to to use large arrays without breaking existing applications. You are right that simply passing a large array into a library that does not support it will break, but at least this will give us choice. We need to start somewhere, and .NET cannot keep ignoring this problem.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk4MzAwNQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3MDk4MzAwNQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ3MDk4MzAwNQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/philjdf/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/philjdf"><img height="40" width="40" alt="@philjdf" src="https://avatars1.githubusercontent.com/u/39185762?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-470983005">
+    <div>
+      
+
+  
+
+<details data-body-version="6a8667c48e0e5458378a5f939fdf53da">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="6a8667c48e0e5458378a5f939fdf53da" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>Yesterday I happily created an array in Python which contained more than two billion elements. When can I do the same in .NET?</p>
+<p>Currently we get an exception if we try to construct an array with more than 2B elements. What's wrong with deferring that exception until something calls the <code>Length</code> property which can no longer return a valid int? <a data-hovercard-type="user" data-hovercard-url="/users/tannergooding/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/tannergooding">@tannergooding</a>'s example wouldn't cause problems. Are there other examples which break?</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3NTEyODIyNw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3NTEyODIyNw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ3NTEyODIyNw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GrabYourPitchforks/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GrabYourPitchforks"><img height="40" width="40" alt="@GrabYourPitchforks" src="https://avatars2.githubusercontent.com/u/1746272?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-475128227">
+    <div>
+      
+
+  
+
+<details data-body-version="c4b23fc560452753b17855eb628ea67d">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="c4b23fc560452753b17855eb628ea67d" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>This is an interesting idea, but I wonder if it would be better to have a <code>LargeArray&lt;T&gt;</code> or similar class that has these semantics rather than try to shoehorn it into the existing <code>Array</code> class. The reason I suggest this course of action is that the GC currently has a hard dependency on the element count of any variable-length managed object fitting into a 32-bit signed integer. Changing the normal <code>Array</code> class to have a 64-bit length property would at minimum also affect the <code>String</code> type, and it may have other unintended consequences throughout the GC that would hinder its efficiency, even when collecting normal fixed-size objects. Additionally, accessing the existing <code>Array.Length</code> property would no longer be a simple one-instruction dereference; it'd now be an overflow check with associated branching.</p>
+<p>If we had a theoretical <code>LargeArray&lt;T&gt;</code> class, it could be created from the beginning with a "correct" API surface, including even using <code>nuint</code> instead of <code>long</code> for the indexer. If it allowed <em>T</em> to be a reference type, we could also eliminate the weird pseudo-covariance / contravariance behavior that existing <code>Array</code> instances have, which would make writing to a <code>LargeArray&lt;T&gt;</code> potentially cheaper than writing to a normal <code>Array</code>.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDE3OlJlbmFtZWRUaXRsZUV2ZW50MjI1MjQwNjYxMA==">
+  
+        <div data-team-hovercards-enabled="" id="event-2252406610">
+  
+  <div>
+
+    
+
+        <p><a data-hovercard-type="user" data-hovercard-url="/users/GPSnoopy/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GPSnoopy"><img height="20" width="20" alt="@GPSnoopy" src="https://avatars0.githubusercontent.com/u/10282472?s=60&amp;v=4"></a>
+  <a data-hovercard-type="user" data-hovercard-url="/users/GPSnoopy/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GPSnoopy">GPSnoopy</a>
+  
+
+
+      
+changed the title
+<del>Add 64-bit support to Array underlying storage</del>
+
+<ins>Add 64 bits support to Array underlying storage</ins></p><a href="#event-2252406610"><relative-time datetime="2019-04-04T10:02:48Z" title="Apr 4, 2019, 3:02 AM PDT">on Apr 4, 2019</relative-time></a>
+
+  </div>
+</div>
+
+
+
+
+</div>
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3OTgzNzM3MA==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ3OTgzNzM3MA==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ3OTgzNzM3MA==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GPSnoopy/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GPSnoopy"><img height="40" width="40" alt="@GPSnoopy" src="https://avatars1.githubusercontent.com/u/10282472?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-479837370">
+    <div>
+      
+
+  
+
+<details data-body-version="63c54e5001f497eff67d9f38e50cd665">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="63c54e5001f497eff67d9f38e50cd665" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p><a data-hovercard-type="user" data-hovercard-url="/users/GrabYourPitchforks/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GrabYourPitchforks">@GrabYourPitchforks</a> interesting facts about the GC. I wasn't aware of such limitations.</p>
+<p>A <code>LargeArray&lt;T&gt;</code> class could be a temporary solution. My main concern is that it would stay a very niche class with no interoperability with the rest of the .NET ecosystem, and ultimately would be an evolutionary dead end. I do like the idea of <code>nuint</code>/<code>nint</code> though.</p>
+<p>My gut feeling is that <code>Array</code>, <code>String</code> and the GC are ripe for a 64 bits overhaul. We should bite the bullet and do it. So far I've been quite impressed by the .NET Core team willingness to revisit old decisions and areas that Microsoft had kept shut in the past (e.g. SIMD/platform specific instructions, <code>float.ToString()</code> roundtrip fixes, bug fixes that change backward compatibility, etc).</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4MDM0MDg5NA==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4MDM0MDg5NA==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4MDM0MDg5NA==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/juliusfriedman/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/juliusfriedman"><img height="40" width="40" alt="@juliusfriedman" src="https://avatars0.githubusercontent.com/u/7851618?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-480340894">
+    <div>
+      
+
+  
+
+<details data-body-version="61f312ecd15f746e1da3cc04242dd8dd">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="61f312ecd15f746e1da3cc04242dd8dd" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>I guess I could palette a LargeArray but if that's going to be implemented than I hope it doesn't create a new type which is not actually an Array, IMHO it would have been much easier to address this if we would have created another sub type of Array internally instead of inventing Span however Span also solves other problems....</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NTM5NDg1OQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NTM5NDg1OQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4NTM5NDg1OQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GSPP/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GSPP"><img height="40" width="40" alt="@GSPP" src="https://avatars1.githubusercontent.com/u/12032350?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-485394859">
+    <div>
+      
+
+  
+
+<details data-body-version="240da0de8d03aa2bb9011bbe9829a962">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="240da0de8d03aa2bb9011bbe9829a962" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>These days 2GB arrays are barely enough for many applications to run reliably. RAM prices have stagnated for a few years now. Surely, the industry will resolve this problem sooner or later. As RAM amounts resume increasing at Moores law rate this 2GB array issue will become very commonplace sooner or later.</p>
+<p>A <code>LargeArray&lt;T&gt;</code> type might be a good medium term solution. But will 2GB arrays not be very commonplace 10 years from now? Do we then want to litter application code and API surfaces with <code>LargeArray&lt;T&gt;</code>? It would often be a hard choice whether to go for <code>LargeArray&lt;T&gt;</code> or <code>T[]</code>.</p>
+<p>Thinking in the very long term it seems far better to find a way to fix <code>T[]</code>.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NTM5NjM4Mw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NTM5NjM4Mw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4NTM5NjM4Mw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GSPP/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GSPP"><img height="40" width="40" alt="@GSPP" src="https://avatars1.githubusercontent.com/u/12032350?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-485396383">
+    <div>
+      
+
+  
+
+<details data-body-version="1ea33d688a8422153bfd951d63d2e718">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="1ea33d688a8422153bfd951d63d2e718" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>If 64 bit support is implemented there could be a tool that analyzes your code for legacy patterns (e.g. usage of <code>int Length</code> or the typical for loop <code>for (int i = 0; i &lt; array.Length; i++)</code>). The tool should then be able to mass upgrade the source code. This could be a Roslyn analyzer.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NjQ0OTc1Nw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NjQ0OTc1Nw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4NjQ0OTc1Nw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GrabYourPitchforks/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GrabYourPitchforks"><img height="40" width="40" alt="@GrabYourPitchforks" src="https://avatars2.githubusercontent.com/u/1746272?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-486449757">
+    <div>
+      
+
+  
+
+<details data-body-version="002785ecc6a58cd03e9ef12d90a9b6c7">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="002785ecc6a58cd03e9ef12d90a9b6c7" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>Since this would be such a massive ecosystem breaking change, one other thing you'd probably have to do is analyze the entire graph of all dependencies your application consumes. If the change were made to <code>T[]</code> directly (rather than <code>LargeArray&lt;T&gt;</code> or similar), assemblies would need to mark themselves with something indicating "I support this concept!", and the loader would probably want to block / warn when such assemblies are loaded. Otherwise you could end up in a scenario where two different assemblies <em>loaded into the same application</em> have different views of what an array is, which would result a never-ending bug farm.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzIyNTE3Mw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzIyNTE3Mw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4NzIyNTE3Mw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/juliusfriedman/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/juliusfriedman"><img height="40" width="40" alt="@juliusfriedman" src="https://avatars0.githubusercontent.com/u/7851618?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-487225173">
+    <div>
+      
+
+  
+
+<details data-body-version="8361fa67d372e38a312a69cf61175746">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="8361fa67d372e38a312a69cf61175746" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>Not if large array was an array... i.e. derived from it if only internally perhaps; like I suggested back in the span threads.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzI2NTI2Nw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzI2NTI2Nw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4NzI2NTI2Nw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GrabYourPitchforks/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GrabYourPitchforks"><img height="40" width="40" alt="@GrabYourPitchforks" src="https://avatars2.githubusercontent.com/u/1746272?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-487265267">
+    <div>
+      
+
+  
+
+<details data-body-version="0ea5b9408631ef1cd87a60e3e1b1ea99">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="0ea5b9408631ef1cd87a60e3e1b1ea99" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>If large array is a glorified array, then you could pass a large array into an existing API that accepts a normal array, and you'd end up right back with the problems as originally described in this thread.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzI2NTUwNw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzI2NTUwNw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4NzI2NTUwNw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GrabYourPitchforks/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GrabYourPitchforks"><img height="40" width="40" alt="@GrabYourPitchforks" src="https://avatars2.githubusercontent.com/u/1746272?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-487265507">
+    <div>
+      
+
+  
+
+<details data-body-version="29e23a25c7b4dbeb3b97d0f1058ebccd">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="29e23a25c7b4dbeb3b97d0f1058ebccd" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>Furthermore, I'm not sure I buy the argument that adding large array would bifurcate the ecosystem. The scenario for large array is that you're operating with enormous data sets (potentially over 2bn elements). By definition you wouldn't be passing this data to legacy APIs anyway since those APIs wouldn't know what to do with that amount of data. Since this scenario is so specialized it almost assumes that you've already accepted that you're limited to calling APIs which have been enlightened.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzI3NTE3NQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDQ4NzI3NTE3NQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDQ4NzI3NTE3NQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/juliusfriedman/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/juliusfriedman"><img height="40" width="40" alt="@juliusfriedman" src="https://avatars0.githubusercontent.com/u/7851618?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-487275175">
+    <div>
+      
+
+  
+
+<details data-body-version="3a0d108b1c6536bbe18fb87f7a24aa17">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="3a0d108b1c6536bbe18fb87f7a24aa17" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>You have LongLength on the Array</p>
+<p>The only fundamental diff is that one is on the LOH and one is not.</p>
+<p>By virtue of the same fact span wouldn't be able to hold more than such either so large span must be needed also...</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzUwMDA0Nw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzUwMDA0Nw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzNzUwMDA0Nw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GPSnoopy/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GPSnoopy"><img height="40" width="40" alt="@GPSnoopy" src="https://avatars1.githubusercontent.com/u/10282472?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-537500047">
+    <div>
+      
+
+  
+
+<details data-body-version="29a13d61733041ab32ebd86615233036">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="29a13d61733041ab32ebd86615233036" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>From what I can gather and summarise from the above, there are two pieces of work.</p>
+<ol>
+<li>
+<p>Update the CLR so that Array can works with 64-bit length and indices. This includes changes to the Array implementation itself, but as comments have pointed above, also to System.String and the Garbage Collector. It is likely to be relatively easy to come up with a fork of coreclr that can achieve this, as a proof of concept with no regard for backward compatibility.</p>
+</li>
+<li>
+<p>Find a realistic way to achieve backward compatibility. This is the hard part. I think this is unlikely to succeed without compromising some aspect of the CLR. Whether it is Length throwing on overflow, or awkwardly introducing new specific classes like LargeArray.</p>
+</li>
+</ol>
+<p>But the more I think about it, the more I think this issue is missing the point and ultimately the real problem with .NET as it stands. Even if the initial proposal was to be implemented, it would only fix the immediate 64-bit issue with Array but still leave collections and Span with the same indexing and length limitations.</p>
+<p>I've started reading The Rust Programming Language (kind of felt overdue) and it struck me that Rust also mimics C++ size_t and ssize_t with usize and isize. C# on the other hand somehow decided not to expose this CPU architectural detail and forces everyone to the lowest common denominator for most of it's API: a 32-bit CPU with 32-bit addressing.</p>
+<p>I'd like to emphasis that the 32-bit limitation is purely arbitrary from a user point of view. There is no such thing as a small array and a big array; an image application should not have to be implemented differently whether it works with 2,147,483,647 pixels or 2,147,483,648 pixels. Especially when it's data driven and the application has little control on what the user is up to. Even more frustrating if the hardware has long been capable of it. If you do not believe me or think I'm talking nonsense, I invite you to learn how to program for MS-DOS 16-bit with NEAR and FAR pointers (hint: there is a reason why Doom required a 386 32-bit CPU).</p>
+<p>Instead of tinkering around the edges, what is the general appetite for a more ambitious approach to fix this limitation?</p>
+<p>Here is a controversial suggestion, bit of a kick in the nest:</p>
+<ul>
+<li>Take on <a data-hovercard-type="user" data-hovercard-url="/users/GrabYourPitchforks/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GrabYourPitchforks">@GrabYourPitchforks</a> idea, introduce nint and nuint (I also like size and ssize, but I can imagine a lot of clashes with existing code).</li>
+<li>Allow implicit conversion from int to nint (and uint to nuint) but not the reverse,</li>
+<li>Change all Length properties on Array, String, Span and collections to return nint (leaving aside the debate of signed vs unsigned and keeping the .NET convention of signed lengths).</li>
+<li>Change all indexing operators on Array, String, Span and collection to only take nint.</li>
+<li>Remove LongLength properties and old indexing operators.</li>
+<li>Take a page from Nullable Reference book and allow this to be an optional compilation feature (this is where it hurts).</li>
+<li>Only allow a nint assembly to depend on another assembly if it's also using the new length types.</li>
+<li>But allow a global or per-reference "I know what I'm doing" override, in which case calling the old int32 Length property on an Array is undefined (or just wraps around the 64-bit value).</li>
+<li>Spend a decade refactoring for loops and var i = 0.</li>
+</ul>
+<p>I understand this is far from ideal and can create uncomfortable ecosystem situations (Python2 vs Python3 anyone?). Open to suggestions on how to introduce size types in .NET in a way that doesn't leave .NET and C# more irrelevant on modern hardware each year.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzUzMzIzNQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzUzMzIzNQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzNzUzMzIzNQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/MichalStrehovsky/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/MichalStrehovsky"><img height="40" width="40" alt="@MichalStrehovsky" src="https://avatars1.githubusercontent.com/u/13110571?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-537533235">
+    <div>
+      
+
+  
+
+<details data-body-version="03acafb8815a8924ca03dac823718322">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="03acafb8815a8924ca03dac823718322" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>If we can solve the issue with the GC not being tolerant of variable-length objects bigger than 2 GB,<br>
+a couple things that might make <code>LargeArray&lt;T&gt;</code> with a native-word-sized-Length more palatable:</p>
+<ul>
+<li>Array length is already represented as a pointer-sized integer in the memory layout of arrays in .NET. On 64-bit platforms, the extra bytes serve as padding and are always zero.</li>
+<li>If we were to introduce a <code>LargeArray&lt;T&gt;</code>, we can give it the same memory layout as existing arrays. The only difference is that the bytes that serve as padding for normal arrays would have a meaning for <code>LargeArray&lt;T&gt;</code>.</li>
+<li>If the memory layout is the same, code that operates on <code>LargeArray&lt;T&gt;</code> can also operate on normal arrays (and for a smaller <code>LargeArray&lt;T&gt;</code>, vice-versa)</li>
+<li><strong>We can enable casting between <code>LargeArray&lt;T&gt;</code> and normal arrays</strong></li>
+<li>Casting from an array to <code>LargeArray&lt;T&gt;</code> is easy - we just follow the normal array casting rules (we could get rid of the covariance though, as <a data-hovercard-type="user" data-hovercard-url="/users/GrabYourPitchforks/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GrabYourPitchforks">@GrabYourPitchforks</a> calls out). If we know the element types, it's basically a no-op.</li>
+<li>When casting from <code>LargeArray&lt;T&gt;</code> to normal arrays, we would additionally check the size and throw <code>InvalidCastException</code> if the <code>LargeArray&lt;T&gt;</code> instance is too long.</li>
+<li>Similar rules would apply when casting to collection types (e.g. you can cast <code>LargeArray&lt;T&gt;</code> to <code>ICollection&lt;T&gt;</code> only if the element count is less than MaxInt).</li>
+<li>Existing code operating on arrays doesn't have to worry about <code>Length</code> being longer than MaxInt. Casting rules guarantee this can't happen.</li>
+<li><code>LargeArray&lt;T&gt;</code> would not derive from <code>System.Array</code>, but one could explicitly cast to it (the length-check throwing <code>InvalidCastException</code> would happen in that case). The same for non-generic collection types (e.g. casting to <code>ICollection</code> that has the Int32 <code>Count</code> property would only be allowed for a small <code>LargeArray&lt;T&gt;</code>).</li>
+</ul>
+<p>This scheme would allow <code>LargeArray&lt;T&gt;</code> and normal arrays to co-exist pretty seamlessly.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzU0MDk5NQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzU0MDk5NQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzNzU0MDk5NQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/kasthack/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/kasthack"><img height="40" width="40" alt="@kasthack" src="https://avatars3.githubusercontent.com/u/1292818?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-537540995">
+    <div>
+      
+
+  
+
+<details data-body-version="e3487f47ecb589945899c30116463492">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="e3487f47ecb589945899c30116463492" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p><a data-hovercard-type="user" data-hovercard-url="/users/MichalStrehovsky/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/MichalStrehovsky">@MichalStrehovsky</a></p>
+<blockquote>
+<p>Similar rules would apply when casting to collection types (e.g. you can cast LargeArray to ICollection only if the element count is less than MaxInt).</p>
+</blockquote>
+<p>This would make <code>LargeArray&lt;T&gt;</code> incompatible with a lot of older code in these cases:</p>
+<ul>
+<li>
+<p>Methods that currently accept a more specific type than they actually need(like <code>ICollection&lt;T&gt;</code> instead of <code>IEnumerable&lt;T&gt;</code> while the code just enumerates the values).</p>
+</li>
+<li>
+<p>Probably, some cases where <code>ICollection&lt;T&gt;</code> isn't used directly but inherited from. For instance, methods that accept <code>ISet/IList/IDictionary&lt;...&gt;</code>(I assume, that those interfaces and their implementations would be eventually updated for 64-bit lengths as well) which are inherited from <code>ICollection&lt;T&gt;</code>.</p>
+</li>
+</ul>
+<p>I would go with overflow checks when <code>.Count</code> is called to keep the compatibility and add <code>.LongCount</code> property with a default implementation to the old interfaces.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzU0NzcyMw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzU0NzcyMw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzNzU0NzcyMw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/MichalStrehovsky/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/MichalStrehovsky"><img height="40" width="40" alt="@MichalStrehovsky" src="https://avatars1.githubusercontent.com/u/13110571?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-537547723">
+    <div>
+      
+
+  
+
+<details data-body-version="2a85b8cd3b895e765e00b1c6cc76b011">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="2a85b8cd3b895e765e00b1c6cc76b011" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p><a data-hovercard-type="user" data-hovercard-url="/users/kasthack/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/kasthack">@kasthack</a> I was trying to come up with a compatible solution where one never has to worry about getting <code>OverflowException</code> in the middle of a NuGet package that one doesn't have the source for. Allowing cast to <code>ICollection&lt;T&gt;</code> to succeed no matter the size is really no different from just allowing arrays to be longer than 2 GB (no need for a <code>LargeArray&lt;T&gt;</code> type). Some code will work, some won't.</p>
+<p>With explicit casting, it's clear that we're crossing a boundary into "legacy land" and we need to make sure "legacy land" can do everything it would reasonably be able to do with a normal <code>ICollection&lt;T&gt;</code> before we do the cast.</p>
+<blockquote>
+<p>methods that accept <code>ISet/IList/IDictionary&lt;...&gt;</code></p>
+</blockquote>
+<p>Arrays don't implement ISet/IDictionary so a cast to these would never succeed. For IList, the same rules would apply as for ICollection (ICollection was just an example above).</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzkwNjE5OQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzkwNjE5OQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzNzkwNjE5OQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/philjdf/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/philjdf"><img height="40" width="40" alt="@philjdf" src="https://avatars1.githubusercontent.com/u/39185762?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-537906199">
+    <div>
+      
+
+  
+
+<details data-body-version="87a3fabf82dd559c4895fd50df815ad1">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="87a3fabf82dd559c4895fd50df815ad1" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p><a data-hovercard-type="user" data-hovercard-url="/users/GPSnoopy/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GPSnoopy">@GPSnoopy</a>'s post makes me wonder whether the following variation might make sense:</p>
+<ol>
+<li>Introduce new <code>nint</code> and <code>nuint</code> types, but don't change the signatures of anything to use them. Nothing breaks.</li>
+<li>Introduce new arrays types (with fixed covariance), new span types, etc, which use <code>nint</code> and <code>nuint</code>. Keep the old ones and don't touch them. Make it fast and easy to convert between old and new versions of these types (with an exception if your 64-bit value is too big to fit into the 32-bit counterpart), but conversion should be explicit. Nothing breaks, type safety and all that.</li>
+<li>Add a C# compiler switch <code>/HeyEveryoneIts2019</code> which, when you write <code>double[]</code> you get the new type of array instead of the old one, everything's <code>nint</code> and <code>nuint</code>, and the compiler adds conservative/obvious stuff to convert to/from old-style arrays when you call outside assemblies which want old-style arrays. This way if it gets through the conversion without an exception, you won't break any old referenced code.</li>
+</ol>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzkyMzgxMw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzNzkyMzgxMw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzNzkyMzgxMw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/GSPP/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/GSPP"><img height="40" width="40" alt="@GSPP" src="https://avatars1.githubusercontent.com/u/12032350?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-537923813">
+    <div>
+      
+
+  
+
+<details data-body-version="430cb36e161f3f9c4b571855fb6c6f08">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="430cb36e161f3f9c4b571855fb6c6f08" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>It has been proposed that we could make <code>Array.Length</code> and array indices native-sized (<code>nint</code> or <code>IntPtr</code>).</p>
+<p>This would be a portability issue. Code would need to be tested on both bitnesses which currently is rarely required for most codebases. Code on the internet would be subtly broken all the time because developers would only test their own bitness.</p>
+<p>Likely, there will be language level awkwardness when <code>nint</code> and <code>int</code> come into contact. This awkwardness is a main reason unsigned types are not generally used.</p>
+<p>In C languages the zoo of integer types with their loose size guarantees is a pain point.</p>
+<p>I don't think we want to routinely use variable-length types in normal code. If <code>nint</code> is introduced as a type it should be for special situations. Likely, it is most useful as a performance optimization or when interoperating with native code.</p>
+<hr>
+<p>All arrays should transparently support large sizes and large indexing. There should be no <code>LargeArray&lt;T&gt;</code> and no <code>LargeSpan&lt;T&gt;</code> so that we don't bifurcate the type system. This would entail an enormous duplication of APIs that operate on arrays and spans.</p>
+<p>If the object size increase on 32 bit is considered a problem (it might well be) this could be behind a config switch.</p>
+<hr>
+<p>Code, that cares about large arrays needs to switch to <code>long</code>.</p>
+<p>Likely, it will be fine even in the very long term to keep most code on <code>int</code>. In my experience, over all the code I ever worked on, it is quite rare to have large collections. Most collections are somehow related to a concept that is inherently fairly limited. For example, a list of customers will not have billions of items in it except if you work for one of 10 companies in the entire world. They can use <code>long</code>. Luckily for us, our reality is structured so that most types of objects do not exist in amounts of billions.</p>
+<p>I see no realistic way to upgrade the existing collection system to 64 bit indexes. It would create unacceptable compatibility issues. For example, if <code>ICollection&lt;T&gt;.Count</code> becomes 64 bit, all calling code is broken (all arithmetic but also storing indexes somewhere). This must be opt-in.</p>
+<p>It would be nicer to have a more fundamental and more elegant solution. But I think this is the best tradeoff that we can achieve.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzOTQyOTM2Nw==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzOTQyOTM2Nw==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzOTQyOTM2Nw==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/FraserWaters-GR/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/FraserWaters-GR"><img height="40" width="40" alt="@FraserWaters-GR" src="https://avatars2.githubusercontent.com/u/45234716?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-539429367">
+    <div>
+      
+
+  
+
+<details data-body-version="f158e5338780ac4bd4c89125d23200f2">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="f158e5338780ac4bd4c89125d23200f2" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>Just note there is already a case today where Length can throw. Multi-dimensional arrays can be large enough that the total number of elements is greater than Int.MaxValue. I think this is why LongCount was originally added.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzOTU1Njc5MQ==">
+  
+    
+<div data-gid="MDEyOklzc3VlQ29tbWVudDUzOTU1Njc5MQ==" data-url="/_render_node/MDEyOklzc3VlQ29tbWVudDUzOTU1Njc5MQ==/timeline/issue_comment">
+
+  
+<p><a data-hovercard-type="user" data-hovercard-url="/users/huoyaoyuan/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/huoyaoyuan"><img height="40" width="40" alt="@huoyaoyuan" src="https://avatars2.githubusercontent.com/u/5644458?s=88&amp;v=4"></a>
+
+</p>
+
+
+  
+<div id="issuecomment-539556791">
+    <div>
+      
+
+  
+
+<details data-body-version="e21ed4fd015ae6678951613f5877fb97">
+    <summary>
+      <div>
+        <h3>
+              This comment has been minimized.
+
+        </h3>
+        
+      </div>
+    </summary>
+</details>
+
+
+    </div>
+  <div data-body-version="e21ed4fd015ae6678951613f5877fb97" data-unfurl-hide-url="/content_reference_attachments/hide">
+    
+
+
+    <div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>Note: Currently, when you write <code>foreach</code> over an array, the C# (and also VB) compiler actually generates a <code>for</code> loop, and store index in 32 bits. This means that existing code must break with array that &gt; 2G, or at least a recompile is required.</p>
+<p>I really hopes all size-like parameters among the ecosystem is using <strong><code>nuint</code> (avoid checking for <code>&gt;= 0</code>)</strong>.<br>
+There can be a <code>[SizeAttribute]</code> on all the parameters, and JIT generates the positive guard and bit expansion to allow existing int-size-compiled assembly to run with native-sized-corelib.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div>
+
+  </div>
+</div>
+
+
+</div>
+
+
+</div>
+
+
+  
+  
+
+
+
+
+
+
+
+<!-- Rendered timeline since 2020-01-30 22:24:46 -->
+
+
+
+            </div>
+
+
+            
+          </div>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

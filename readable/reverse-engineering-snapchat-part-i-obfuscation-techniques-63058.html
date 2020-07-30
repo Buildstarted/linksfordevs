@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Reverse Engineering Snapchat (Part I): Obfuscation Techniques - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Reverse Engineering Snapchat (Part I): Obfuscation Techniques - linksfor.dev(s)"/>
+    <meta property="og:description" content="2020-06-18 "/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://hot3eed.github.io/snap_part1_obfuscations.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Reverse Engineering Snapchat (Part I): Obfuscation Techniques</title>
+<div class="readable">
+        <h1>Reverse Engineering Snapchat (Part I): Obfuscation Techniques</h1>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 18 Jun 2020</div>
+        <p><a href="https://hot3eed.github.io/snap_part1_obfuscations.html">https://hot3eed.github.io/snap_part1_obfuscations.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+      
+<p>2020-06-18 </p>
+
+<p>When you have 200+ million daily users, you’ll definitely want to keep your API private from spammers and co., so you’ll have to keep a secret in the binary that authorizes it to make API calls to your server. Snapchat (as of version 10.81.6.81) does this by including a <code>X-Snapchat-Client-Auth-Token</code> header in each request, a typical one would look like:</p>
+<div><div><pre><code>v8:7841EAFE02CD9DE06AE8E41C6478D504:2B8115D1C5873C8BD5A3A9DDA7F976B21A672A643D8AB2AC91CE223C84BA5F9EB112B65B7C85AFD9CEA86A9DC36D5F6405B8D23B369A94A5657894207F09E432CBD21953F8E4F50E44373B59FB39270360DE5113FA983D1F06FF71A0D540488403A848D1C52A2421AF4341E6BBCD702F4921E5DC134ECCF99EDBD599EAA1AAA8556C6122334A63C86711740E58E453A7049FE94634DEC8FFE2E26C28780FFA46994818F7D0915E6DB3061188784D46D381CE2BF4D15E83BEC1ABFFE29207D2A58906CAC598AD314F368CF41E1892CA032859485DC99882F97D5064D4C7C5C2A4A4975C59530F4D0289EF4BC4E7CFC89FC8279038FB6E623C88A8AB38678F1D2757F7C0914C1A162E4F5B173E694109CD67E73762D8C090D8780714861DB883977D3B85D6F503D8D8CD5167B43A2DB18B79804841FE8064AD1A8078EAEF472698AD482AA77BC5D7EB012F0946DAFB923CFD10BA06675730EF338A96D1D0081B174BE5989B77FD07DCEDCDC635DEF1EE986F65798D87A358742F152AA929800FD5BA2CC29E
+</code></pre></div></div>
+
+<h2 id="control-flow-obufscations">Control flow obufscations:</h2>
+<p>Forget about doing static analysis on this binary. Here’s what they do on a high level: the CFG (control flow graph) is destroyed (not flattened), dead code, library calls are mostly dynamic, and all symbols for the token generation function (let’s call it <code>gen_token</code>) and its callees are stripped. They’re implemented in C and not Objective-C for this reason, because you can always use the ObjC runtime against itself<sup><a href="https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/ObjCRuntimeGuide/Articles/ocrtHowMessagingWorks.html#//apple_ref/doc/uid/TP40008048-CH104-SW1">1</a></sup> (Trivia: they only started using Swift recently, but for other tasks.)</p>
+
+<h3 id="indirect-branches-and-opaque-predicates">Indirect branches and opaque predicates</h3>
+<p>Let’s take a look at the very first block in <code>gen_token</code>. The block loads some values from different sections of the binary and then:</p>
+<pre><code>orr       w8,wzr,#0x3
+cmp       x8,#0xb
+orr       w9,wzr,#0x6
+csel      x8,x9,x8,hi
+adrp      x28,0x106941000
+add       x28,x28,#0xe40 ; jump table
+ldr       x8,[x28, x8, LSL #0x3]
+br        x8
+</code></pre>
+<p>See the first two instructions. Why would they compare <code>x8</code> with <code>0xb</code> right after storing <code>0x3</code> in it? Opaque predicates<sup><a href="https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/ObjCRuntimeGuide/Articles/ocrtHowMessagingWorks.html#//apple_ref/doc/uid/TP40008048-CH104-SW1">1</a></sup>. The <code>csel</code> condition will always be false, but that doesn’t matter, because as far as the disassembler is concerned, this is a condition, and conditions need to evaluated at runtime. Replace every single jump (including legit conditions) with a similar block, and you’ve completely destroyed the CFG for any modern disassembler. Now Ghidra/IDA would be happy to display what it thinks is a small function with a tail call, which is in fact a huge function. I’ll give Ghidra that it’s able to calculate the address in <code>br x8</code> but only for the first block (because that’s where it thinks the function ends). Now that’s a plugin idea: use emulation to calculate all the addresses in indirect branches with opaque predicates, which would require an emulation. I actually worked for a bit on implementing this but then that’s not even half the battle for this binary.</p>
+
+<h3 id="bogus-instructions-aka-dead-code">Bogus instructions AKA dead code</h3>
+<p>Every few blocks you’ll find a block that loads a global constant, does some complex-looking operations on it, then just discards it and branches to somewhere else. Those are just there to confuse you and are easily detectible once you see them for a couple of times, so it’s not much of a hindrance.</p>
+
+<h3 id="dynamic-library-calls">Dynamic library calls</h3>
+<p>To make the code as bland as possible, and to prevent you from making educated guesses when you see a call to <code>SecItemCopyMatching</code> for example, most library calls are dynamic.
+So for example instead of a simple <code>bl SecItemCopyMatching</code>, they would do:</p>
+<div><div><pre><code>adrp x23 &lt;address of SecItemCopyMatching&gt;
+</code></pre></div></div>
+<p>Then, in another block they would:</p>
+
+<p>The disassembler doesn’t know the value of <code>x23</code> here because, as stated above, it treats the block as if it doesn’t block to the current function.</p>
+
+<h3 id="loop-unrolling">Loop unrolling</h3>
+<p>When you have a loop that comes with a pre-determined/fixed counter, you can get rid of the counter, and hardcode the loop iterations. This comes at a cost of the binary size, and it’s slightly faster than using a counter. Snap uses this technique in an encryption function. This block moves a huge array of bytes to another, notice how the offsets increment, replacing the counter:</p>
+<div><div><pre><code>ldr        w8,[sp, #0x278]
+str        w8,[sp, #0x226c]
+ldr        w8,[sp, #0x27c]
+str        w8,[sp, #0x2268]
+ldr        w8,[sp, #0x280]
+str        w8,[sp, #0x2264]
+ldr        w8,[sp, #0x284]
+str        w8,[sp, #0x2260]
+ldr        w8,[sp, #0x288]
+str        w8,[sp, #0x225c]
+ldr        w8,[sp, #0x28c]
+str        w8,[sp, #0x2258]
+ldr        w8,[sp, #0x290]
+str        w8,[sp, #0x2254]
+; and so on
+</code></pre></div></div>
+
+<h3 id="joint-functions">Joint functions</h3>
+<p>Suppose you have a function that fills some structure with the right data and another that converts bytes to ASCII:</p>
+<pre><code>void set_struct_fields(some_struct *p);
+void bin2ascii(char *in, char *out, size_t nbytes);
+</code></pre>
+<p>With a little effort you could intercept calls to both and understand what they do just by watching their behavior. Snapchat has quite a clever way of thwarting this. Instead of the two above, there would be:</p>
+<pre><code>void joint_function(uint64_t function_id, void *retval, void *argv[]) {
+    switch (function_id) {
+        case SET_STRUCT_FIELDS_FI:
+            // Get argument from argv
+            set_struct_fields(p);
+            break;
+        case BINS2ASCII_FI:
+            bin2sacii(in, out, nbytes);
+            break;
+        // etc
+    }
+}
+</code></pre>
+<p><code>argv</code> would include all the arguments needed. Now strip all symbols, add the above obfuscations and you’ve got an unintelligble mammoth of a function. You would think that you could still trace all calls to the joint function and treat the <code>path_key</code> as an identifier to the function you’re interested in. But breakpoints won’t act as you’d expect them to. See next.</p>
+
+<h2 id="the-solution-not-breakpoints-aka-anti-debugging-measures">The solution: not breakpoints (AKA anti-debugging measures)</h2>
+<p>Now most control flow obfuscation is against static analysis, using a debugger to get past the above would do it. Not so fast. Most functions call an anti-debugging function, which I named appropriately and whose signature is:</p>
+<pre><code>uint64_t fuckup_debugging(/* some args */, void *func);
+</code></pre>
+<p>There’s at least 9 such functions, all the same behavior. I haven’t taken the time to reverse them but their behavior is clear. 
+Software breakpoints work by patching the instruction at the designated address in memory. The patch is an instruction that triggers an interrupt that’s handled by the parent process, the debugger<sup><a href="https://eli.thegreenplace.net/2011/01/23/how-debuggers-work-part-1#id11">3</a></sup>. That makes them easily detectable; if you have a checksum of what a certain area in memory looks like, a breakpoint in that area will invalidate the checksum. Or, you could look for the interrupt instruction’s <code>brk</code> bytes in the binary.</p>
+
+<p>After doing its check, <code>fuckup_debugging</code> will return a <code>uint64_t</code>, its value which depends on whether there was a breakpoint detected. So actually there’s only two possible values. Isn’t that called a <code>bool</code>? Yes. But a boolean would be trivial to patch. But with an int you can’t guess the “right” value. The <code>fuckup_debugging</code> caller uses the return value (I’ll call it the <code>path_key</code>) to load an address from a jump table, if there was a breakpoint, the fetched address would lead to an infinite loop, leading the app to just keep loading with no feedback, which is the right way to do it.</p>
+
+<h2 id="data-flow-obufscations">Data flow obufscations</h2>
+<p>Data obfuscation is one of the harder things to work with in this binary.
+Here we have <em>lots</em> of MBA (mixed-boolean arithmetic) and scratch arguments passed to functions just to distract you.</p>
+
+<h3 id="mixed-boolean-arithmetic">Mixed-boolean arithmetic</h3>
+<p>One of the less resarched areas in obfuscation techniques is MBA (shoutout to the awesome <a href="https://quarkslab.com/">Quarkslab</a> for their research on this and many other things). Those are typically used in cryptography but can be utilized for obufscation. Basically they’re expressions that mix logical operations with pure arithmetic. For example, <code>x = (a ^ b) + (a &amp; b)</code>.
+The interesting thing about those here is identities, for example <code>x + y</code> can be re-written as <code>(x ^ y) + 2 * (x &amp; y)</code><sup>[7]</sup>. Now imagine how huge the simple <code>x + y</code> expression could get if you substituted each term recursively with its MBA equivalent, crazy stuff.
+An example in assembly. All what that block does is <code>timestamp * 1000</code>:</p>
+<div><div><pre><code>add        x0,sp,#0x1b8             ; struct timeval *tval
+mov        x1,#0x0                  ; struct timezonze *tzone
+adrp       x8,0x109499000
+ldr        x8,[x8, #0x1d0]
+blr        x8                       ; gettimeofday(tval, tone)
+ldr        x8,[sp, #0x1b8]          ; tval-&gt;tv_sec
+mov        w9,#0x3e8
+mul        x8,x8,x9
+ldrsw      x9,[sp, #0x1c0]
+lsr        x9,x9,#0x3
+mov        x10,#0xf7cf
+movk       x10,#0xe353, LSL #16
+movk       x10,#0x9ba5, LSL #32
+movk       x10,#0x20c4, LSL #48
+umulh      x9,x9,x10
+mov        x10,#0xe6b3
+movk       x10,#0x7dba, LSL #16
+movk       x10,#0xecfa, LSL #32
+movk       x10,#0xd0e1, LSL #48
+add        x9,x10,x9, LSR #0x4
+orr        x11,x9,x8
+lsl        x11,x11,#0x1
+eor        x8,x9,x8
+sub        x8,x11,x8
+eor        x9,x8,x10
+mov        x10,#0xe6b3
+movk       x10,#0x7dba, LSL #16
+movk       x10,#0xecfa, LSL #32
+movk       x10,#0x50e1, LSL #48
+bic        x8,x10,x8
+sub        x8,x9,x8, LSL #0x1     ; effectively tv_sec *= 1000
+</code></pre></div></div>
+
+<h3 id="scratch-arguments">Scratch arguments</h3>
+<p>This one isn’t very prevalent in the binary but it’s still interesting to mention. I’ve seen it used in a function that reads the first 8 bytes at a pointer. It has the sginature:</p>
+<div><div><pre><code>uint64_t get_first_qword(uint64_t scratch1, void *src, uint64_t scratch2);
+</code></pre></div></div>
+<p><code>scratch1</code> and <code>2</code> are overwritten without being used at all, again, there to slow you down a bit.</p>
+
+<h2 id="clever-shittime-buyers">Clever shit/time buyers</h2>
+<h3 id="in-house-memmove">In-house <code>memmove</code>?</h3>
+<p>To make your life even more miserable, Snap ocassionally deprives you of recognizing some basic standard lib functions, namely <code>memmove</code>, by implementing their own, or maybe just copying the source. You won’t be very happy after spending a day or two reversing a function to find it’s <code>memmove</code> in the end.</p>
+<h3 id="loading-by-overflowing">Loading by overflowing</h3>
+<p>Another honorary mention. This one has a base address and an index and it loads bytes from an array using a loop. Instead of simply adding the base address to the counter to get the byte, they do a calculation that yields two big 64-bit integers that will overflow but whose sum will be equivalent to the simple calculation. So instead of:</p>
+<div><div><pre><code>add        x10, sp, #0x338             ;base
+ldr        x9, [sp, #0x270]            ;counter
+ldrb       w9, [x10, x9]              
+</code></pre></div></div>
+<p>They do:</p>
+<div><div><pre><code>add        x10, sp, #0x338              ;base
+ldr        x9,[sp, #0x270]              ;counter
+mov        x11,#0x5bdd
+movk       x11,#0x7d38, LSL #16
+movk       x11,#0x1e74, LSL #32
+movk       x11,#0x6d7c, LSL #48
+add        x9,x9,x11
+mov        x12,#0x3f94
+movk       x12,#0x7886, LSL #16
+movk       x12,#0xf6b2, LSL #32
+movk       x12,#0xb119, LSL #48
+add        x9,x9,x12
+sub        x9,x9,x11
+add        x9,x9,#0x10
+mov        x11,#0xd943
+movk       x11,#0xb8b5, LSL #16
+movk       x11,#0x5fd9, LSL #32
+movk       x11,#0x6bd2, LSL #48       ; x11 = 0x6bd25fd9b8b5d943
+sub        x9,x9,x11
+sub        x9,x9,x12
+add        x9,x10,x9                  ; x9 = 0x942da027b272bb75
+ldrb       w9,[x9, x11]               ; overflowing sum but right stack offset
+</code></pre></div></div>
+<h3 id="__mod_init_func">__mod_init_func</h3>
+<p>In Mach-O binaries, functions whose pointers are in the <code>__mod_init_funcs</code> run before <code>main</code>. Using <code>otool</code> to see how many of those are in Snap, we find a staggering <em>816</em> functions:</p>
+<div><div><pre><code>% otool -s __DATA __mod_init_func Snapchat
+Snapchat:
+Contents of (__DATA,__mod_init_func) section
+0000000106819610	0042de58 00000001 0042de58 00000001
+0000000106819620	0042de58 00000001 0042de58 00000001
+0000000106819630	0042de58 00000001 0042de58 00000001
+0000000106819640	0042de58 00000001 0042de58 00000001
+0000000106819650	0042de58 00000001 0042de58 00000001
+0000000106819660	0042de58 00000001 0042de58 00000001
+0000000106819670	0042de58 00000001 0042de58 00000001
+0000000106819680	0042de58 00000001 0042de58 00000001
+0000000106819690	0042de58 00000001 0042de58 00000001
+00000001068196a0	0042de58 00000001 0042de58 00000001
+...and a lot more
+</code></pre></div></div>
+<p>Hmm, seems to much to count manually. Let’s <code>wc</code> it:</p>
+<div><div><pre><code>% otool -s __DATA __mod_init_func Snapchat | wc -l
+     410
+</code></pre></div></div>
+<p>And since it’s two function pointers per line, their actualy number is 816 (after discarding the first two lines). But wait, all of those point to the same function? They’re probably using duplicates as a distraction and to make your job harder, let’s see how many are there. After doing some regex to get the functions pointers, I found there’s 769 <em>unique</em> functions, still a huge number.</p>
+<div><div><pre><code>% cat mod_init_func | sort -u | wc -l
+     769
+</code></pre></div></div>
+<p>Some of those are dummy functions that do nothing useful. For exampel the very first one loads a constant, stores it on the stack, then discards it and returns:</p>
+<div><div><pre><code>sub        sp,sp,#0x10
+adrp       x8,0x10641a000
+add        x8,x8,#0x340
+str        x8,[sp, #0x8]
+add        sp,sp,#0x10
+ret
+</code></pre></div></div>
+<p>Among those 769 functions some will definitely be doing some real initializations, and some could be there as another stealthy jailbreak/debugger detection. Filtering out the dummies should be easy, but we’re still talking about 700+ function, so to find the ones you’re interested in you’ll have to have some idea about how Snap is doing it, so you can get there without having to sift throught all those functions.</p>
+
+<h2 id="whats-next">What’s next</h2>
+<p>I’ll probably do a part II on how to bypass all of this.</p>
+
+
+
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

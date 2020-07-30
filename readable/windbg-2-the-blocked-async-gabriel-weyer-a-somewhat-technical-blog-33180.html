@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+WinDbg #2 - The blocked async &#x2013; Gabriel Weyer &#x2013; A somewhat technical blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="WinDbg #2 - The blocked async &#x2013; Gabriel Weyer &#x2013; A somewhat technical blog - linksfor.dev(s)"/>
+    <meta property="article:author" content="Gabriel Weyer"/>
+    <meta property="og:description" content="Troubleshoot blocked async with WinDbg."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://gabrielweyer.net/2018/05/04/windbg-2-blocked-async/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - WinDbg #2 - The blocked async &#x2013; Gabriel Weyer &#x2013; A somewhat technical blog</title>
+<div class="readable">
+        <h1>WinDbg #2 - The blocked async &#x2013; Gabriel Weyer &#x2013; A somewhat technical blog</h1>
+            <div>by Gabriel Weyer</div>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 16 Aug 2019</div>
+        <p><a href="https://gabrielweyer.net/2018/05/04/windbg-2-blocked-async/">https://gabrielweyer.net/2018/05/04/windbg-2-blocked-async/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+    
+
+
+    <div role="main">
+      <div>
+        
+
+
+
+
+<article>
+  <p>Today’s exercise is not an exercise! The investigation I’m about to describe was triggered by a production outage affecting multiple <code>API</code>s - albeit not at the same time - at a customer. For obvious reasons I’ll not be able to share the code and will have to alter / obfuscate some of the commands’ results. I still think this is a valuable exercise as it is a classic example of an easy to make mistake leading to a catastrophic result.</p>
+
+<p>The other interesting point is that I had no idea what the issue was so I’ll not be following a script as I did in the first instalment.<!--more--></p>
+
+<h2 id="the-symptoms">The symptoms</h2>
+
+<p>A week prior we had another production outage. One of our <code>API</code> became unresponsive, requests would sit in <code>Chrome</code> waiting for minutes for the server to reply. Logs did not yield anything interesting and according to <a href="https://newrelic.com/">New Relic</a> we had a quasiperfect <a href="https://docs.newrelic.com/docs/apm/new-relic-apm/apdex/apdex-measuring-user-satisfaction">Apdex</a>.</p>
+
+<ul>
+  <li>The working theory was that requests were failing early in the pipeline so that our logging did not pick anything</li>
+  <li>According to <code>New Relic</code> our traffic plummeted during the outage. So basically, <code>New Relic</code> was not capturing any of the failing requests and the dashboards were all green!</li>
+</ul>
+
+<p>At this stage I recommended to capture a memory dump before restarting the web app. The later happened but the former did not. The app recycled and started to serve production traffic again but we were left with few clues. Afterwards the operation team engaged Microsoft and learned than the thread count spiked during the outage.</p>
+
+<p>I then wrote a guide explaining how to write a memory dump and we instructed the operation team to capture a memory dump before recycling the app if the outage were to happen again.</p>
+
+<p>We were left with two clues:</p>
+
+<ul>
+  <li>Unresponsive web app</li>
+  <li>High thread count</li>
+</ul>
+
+<p>We had released a new version of this <code>API</code> a week before the outage. The release included a fix that I did for an intermittent <code>500</code> error that our testers and front-end teams experienced. The patch involved modifying the lifetime of some classes involved in the logging system. The Pull Request had been approved after a heated discussion and as soon as news of the outage broke, fingers were pointed at my fix.</p>
+
+<h2 id="draw-of-luck">Draw of luck</h2>
+
+<p>Come Friday morning, I’m sipping my Dirty Chai while absently looking at <code>Slack</code>. Suddenly a message catches my attention:</p>
+
+<p><img src="https://gabrielweyer.net/assets/windbg-2/unresponsive-again.png" alt="Unresponsive again"></p>
+
+<p>This is the same <code>API</code> that went down last week! My heart beats slightly faster while I fire up the <code>Azure</code> portal. And sure enough the thread count is far too high for the current dev traffic this API is serving:</p>
+
+<p><img src="https://gabrielweyer.net/assets/windbg-2/oh-my-thread-count.png" alt="Oh my thread count"></p>
+
+<p>I write a memory dump, slurp the end of my Dirty Chai and go to work thinking I’ll allocate some <code>WinDbg</code> time during the week-end.</p>
+
+<h2 id="were-down-again">We’re down again</h2>
+
+<p>A few hours later another <code>API</code> experiences a significant outage. The symptoms are eerily similar. I was waiting for another of my <code>PR</code> to get approved but the process is being delayed as our build server is <a href="https://githubengineering.com/crypto-deprecation-notice/">down</a>. I don’t have access to the memory dump that was written in production during the outage but it’s likely the outages have a common cause; hence I decide to take my frustration out on the memory dump I wrote in the morning.</p>
+
+<h2 id="investigation">Investigation</h2>
+
+<h3 id="threads-all-the-things">Threads all the things</h3>
+
+<p>The first question I had was: <strong>why do we have so many threads and what are they doing</strong>?</p>
+
+<p>I’ll start with the <code>Threads</code> <a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension#commands">SOS command</a>.</p>
+
+<blockquote>
+  <p>Displays all managed threads in the process.</p>
+</blockquote>
+
+<p><strong>Note</strong>: The first column is the thread <code>ID</code>.</p>
+
+<figure><pre><code data-lang="text">0:000&gt; !threads
+ThreadCount:      145
+UnstartedThread:  0
+BackgroundThread: 133
+PendingThread:    0
+DeadThread:       12
+Hosted Runtime:   no
+                                                                         Lock
+       ID OSID ThreadOBJ    State GC Mode     GC Alloc Context  Domain   Count Apt Exception
+   4    1 4420 05db3d78     28220 Preemptive  00000000:00000000 04e8e548 0     Ukn
+  22    2 c3ac 05dc9200     2b220 Preemptive  00000000:00000000 04e8e548 0     MTA (Finalizer)
+  23    3 108fc 05e0f738   102a220 Preemptive  00000000:00000000 04e8e548 0     MTA (Threadpool Worker)
+  25    4 10ddc 05e1c0f0     21220 Preemptive  00000000:00000000 04e8e548 0     Ukn
+  26    7 9010 05eb8e90   1020220 Preemptive  00000000:00000000 04e8e548 0     Ukn (Threadpool Worker)
+#
+# Abbreviated
+#
+ 144  127 ed88 23f294b0   1029220 Preemptive  0E65ACE0:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 145  141 ba3c 2407e100   3029220 Preemptive  0E61BF28:00000000 20e69ac0 0     MTA (Threadpool Worker)
+ 146  140 9cfc 23f20428   1029220 Preemptive  0A524AFC:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 147  131 194f8 20f753a8   3029220 Preemptive  00000000:00000000 20e69ac0 0     MTA (Threadpool Worker)
+ 148  144 f4a8 23f20970   1029220 Preemptive  064DFA28:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 149  145 9028 20f758f0     20220 Preemptive  06443CB8:00000000 04e8e548 0     Ukn
+ 150  143 16520 23f299f8   1029220 Preemptive  1253C4A8:00000000 04e8e548 0     MTA (Threadpool Worker)
+ 151  146 13db0 23f20eb8     20220 Preemptive  0E61FB98:00000000 04e8e548 0     Ukn</code></pre></figure>
+
+<p>I then pick a few threads to see what they’re doing. To achieve this I’ll combine two different commands:</p>
+
+<ul>
+  <li><a href="https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/-e--thread-specific-command-">Thread-Specific Command</a>: The <code>~e</code> command executes one or more commands for a specific thread</li>
+</ul>
+
+<figure><pre><code data-lang="text">~&lt;thread-ID&gt;e &lt;command&gt;</code></pre></figure>
+
+<ul>
+  <li><a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension#commands">CLRStack</a>: Provides a stack trace of managed code only</li>
+</ul>
+
+<h4 id="thread-143">Thread 143</h4>
+
+<figure><pre><code data-lang="text">0:000&gt; ~143e !CLRStack
+OS Thread Id: 0xb9ac (143)
+Child SP       IP Call Site
+2a8bd110 7712eb2c [GCFrame: 2a8bd110]
+2a8bd2b8 7712eb2c [GCFrame: 2a8bd2b8]
+2a8bd268 7712eb2c [HelperMethodFrame: 2a8bd268] System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)
+2a8bd2f8 21ab107d Autofac.Core.Lifetime.LifetimeScope.GetOrCreateAndShare(System.Guid, System.Func`1)
+2a8bd344 21ab0f15 Autofac.Core.Resolving.InstanceLookup.Execute()
+2a8bd370 21ab0a16 Autofac.Core.Resolving.ResolveOperation.GetOrCreateInstance(Autofac.Core.ISharingLifetimeScope, Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+2a8bd390 21ab20e1 Autofac.Core.Resolving.InstanceLookup.ResolveComponent(Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+# Abbreviated</code></pre></figure>
+
+<p>So thread <code>143</code> is trying to acquire a lock: <code>System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)</code>. Let’s look at another thread.</p>
+
+<h4 id="thread-136">Thread 136</h4>
+
+<figure><pre><code data-lang="text">0:000&gt; ~136e !CLRStack
+OS Thread Id: 0x17e4 (136)
+Child SP       IP Call Site
+2b07d610 7712eb2c [GCFrame: 2b07d610]
+2b07d7bc 7712eb2c [GCFrame: 2b07d7bc]
+2b07d76c 7712eb2c [HelperMethodFrame: 2b07d76c] System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)
+2b07d7fc 21ab107d Autofac.Core.Lifetime.LifetimeScope.GetOrCreateAndShare(System.Guid, System.Func`1)
+2b07d848 21ab0f15 Autofac.Core.Resolving.InstanceLookup.Execute()
+2b07d874 21ab0a16 Autofac.Core.Resolving.ResolveOperation.GetOrCreateInstance(Autofac.Core.ISharingLifetimeScope, Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+2b07d894 21ab20e1 Autofac.Core.Resolving.InstanceLookup.ResolveComponent(Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+# Abbreviated</code></pre></figure>
+
+<p>Thread <code>136</code> is also trying to acquire a lock.</p>
+
+<h4 id="thread-123">Thread 123</h4>
+
+<figure><pre><code data-lang="text">0:000&gt; ~123e !CLRStack
+OS Thread Id: 0x4ce4 (123)
+Child SP       IP Call Site
+3d14d850 7712eb2c [GCFrame: 3d14d850]
+3d14d9fc 7712eb2c [GCFrame: 3d14d9fc]
+3d14d9ac 7712eb2c [HelperMethodFrame: 3d14d9ac] System.Threading.Monitor.ReliableEnter(System.Object, Boolean ByRef)
+3d14da3c 21ab107d Autofac.Core.Lifetime.LifetimeScope.GetOrCreateAndShare(System.Guid, System.Func`1)
+3d14da88 21ab0f15 Autofac.Core.Resolving.InstanceLookup.Execute()
+3d14dab4 21ab0a16 Autofac.Core.Resolving.ResolveOperation.GetOrCreateInstance(Autofac.Core.ISharingLifetimeScope, Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+3d14dad4 21ab20e1 Autofac.Core.Resolving.InstanceLookup.ResolveComponent(Autofac.Core.IComponentRegistration, System.Collections.Generic.IEnumerable`1)
+# Abbreviated</code></pre></figure>
+
+<p>Thread <code>123</code> is also trying to acquire a lock. By now <strong>it’s safe to assume than many threads are trying to acquire a lock. How many of them exactly? And more importantly: which naughty thread is holding on the lock?</strong></p>
+
+<h3 id="who-is-holding-on-the-lock">Who is holding on the lock?</h3>
+
+<p>Time to use another <a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension#commands">SOS command</a>: <code>SyncBlk</code>.</p>
+
+<figure><pre><code data-lang="text">0:000&gt; !syncblk
+Index         SyncBlock MonitorHeld Recursion Owning Thread Info          SyncBlock Owner
+   52 20ee3118          229         2 20fc6ba0 9628  42   0a13ee8c System.Object
+-----------------------------
+Total           279
+CCW             4
+RCW             3
+ComClassFactory 0
+Free            206</code></pre></figure>
+
+<p>Thread <code>ID</code> <code>42</code> is holding the lock. The third column (<code>MonitorHeld</code>) indicates how many threads are trying to acquire the same lock. In this case it is <code>114</code> (<code>(229 - 1) / 2</code>). You can read more about how I computed this number in this <a href="https://stackoverflow.com/a/2203085/57369">Stack Overflow answer</a>.</p>
+
+<h3 id="what-is-thread-42-doing">What is thread 42 doing?</h3>
+
+<figure><pre><code data-lang="text">0:000&gt; ~42e !CLRStack
+OS Thread Id: 0x9628 (42)
+Child SP       IP Call Site
+293bd178 7712eb2c [GCFrame: 293bd178]
+293bd228 7712eb2c [HelperMethodFrame_1OBJ: 293bd228] System.Threading.Monitor.ObjWait(Boolean, Int32, System.Object)
+293bd2b4 707bc273 System.Threading.Monitor.Wait(System.Object, Int32, Boolean) [f:\dd\ndp\clr\src\BCL\system\threading\monitor.cs @ 203]
+293bd2c4 7084ca14 System.Threading.Monitor.Wait(System.Object, Int32) [f:\dd\ndp\clr\src\BCL\system\threading\monitor.cs @ 213]
+293bd2c8 707ccb56 System.Threading.ManualResetEventSlim.Wait(Int32, System.Threading.CancellationToken)
+293bd31c 707c785c System.Threading.Tasks.Task.SpinThenBlockingWait(Int32, System.Threading.CancellationToken) [f:\dd\ndp\clr\src\BCL\system\threading\Tasks\Task.cs @ 3320]
+293bd35c 70868aed System.Threading.Tasks.Task.InternalWait(Int32, System.Threading.CancellationToken) [f:\dd\ndp\clr\src\BCL\system\threading\Tasks\Task.cs @ 3259]
+293bd3c0 707c58ca System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(System.Threading.Tasks.Task) [f:\dd\ndp\clr\src\BCL\system\runtime\compilerservices\TaskAwaiter.cs @ 148]
+293bd3cc 1f4e5fd3 Contoso.AzureKeyVaultClient.GetSecretByName(System.String)
+293bd3d8 1f4e5d80 Contoso.SecureAppSettings.GetOrFail(System.String)
+293bd3f0 1f4e5ccb Contoso.CachableSecureAppSettings.GetOrFail(System.String)
+293bd404 218b4f94 Contoso.SomeSecureSettings..ctor(Contoso.ISecureSettings)
+293bd418 20af91eb DynamicClass.lambda_method(System.Runtime.CompilerServices.Closure, System.Object[])
+293bd424 21ab1ef5 Autofac.Core.Activators.Reflection.ConstructorParameterBinding.Instantiate()</code></pre></figure>
+
+<p>The last line executed in our code was:</p>
+
+<figure><pre><code data-lang="csharp"><span>Contoso</span><span>.</span><span>AzureKeyVaultClient</span><span>.</span><span>GetSecretByName</span><span>(</span><span>System</span><span>.</span><span>String</span><span>)</span></code></pre></figure>
+
+<p>Despite its name it seems to be executing <code>async</code> code and even more troubling it looks like we’re blocking. I have enough information to locate the source and find the following method:</p>
+
+<figure><pre><code data-lang="csharp"><span>public</span> <span>string</span> <span>GetSecretByName</span><span>(</span><span>string</span> <span>secretName</span><span>)</span>
+<span>{</span>
+    <span>return</span> <span>GetSecretByNameAsync</span><span>(</span><span>secretName</span><span>).</span><span>GetAwaiter</span><span>().</span><span>GetResult</span><span>();</span>
+<span>}</span></code></pre></figure>
+
+<p>Sure enough we’re blocking on an <code>async</code> method. I’ll let Stephen Cleary explains what’s wrong but it can be summed up as: <a href="http://blog.stephencleary.com/2012/07/dont-block-on-async-code.html">Don’t Block on Async Code</a> (seriously read the blog post).</p>
+
+<h2 id="solution">Solution</h2>
+
+<p>There are two alternatives:</p>
+
+<ul>
+  <li>
+    <p>Resolve the secret on application startup. At this stage we’re single threaded and there is no request context so we can block without risking a deadlock. It isn’t pretty and will slow down the application startup but it works.</p>
+  </li>
+  <li>
+    <p>A nicer option would be to resolve the secret when needed (lazy initialization). By then we’ll be in an <code>async</code> method and we will be able to call the <code>Async</code> overload.</p>
+  </li>
+</ul>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Once again <code>WinDbg</code> has delivered the goods. I write up my findings and communicate them to my colleagues. It’s 4:30 PM and the build server is still not fixed, I decide to call it a day.</p>
+
+
+</article>
+
+
+
+
+
+
+
+
+
+
+
+
+
+      </div>
+    </div>
+  </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

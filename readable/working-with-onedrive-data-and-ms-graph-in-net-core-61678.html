@@ -1,0 +1,1281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Working with OneDrive data and MS Graph in .NET Core - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Working with OneDrive data and MS Graph in .NET Core - linksfor.dev(s)"/>
+    <meta property="og:description" content="Learn how to interact with your OneDrive data via the GraphAPI, Azure AD and .NET Core. In this blog post I explain how to use .NET Core and the Graph API with the latest MSAL library to authenticate a user and then provide access to the OneDrive data. Full code sample also available on GitHub"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://cmatskas.azurewebsites.net/working-with-onedrive-data-with-ms-graph-and-net-core/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Working with OneDrive data and MS Graph in .NET Core</title>
+<div class="readable">
+        <h1>Working with OneDrive data and MS Graph in .NET Core</h1>
+            <div>Reading time: 22-28 minutes</div>
+        <div>Posted here: 14 May 2020</div>
+        <p><a href="https://cmatskas.azurewebsites.net/working-with-onedrive-data-with-ms-graph-and-net-core/">https://cmatskas.azurewebsites.net/working-with-onedrive-data-with-ms-graph-and-net-core/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section>
+                    <p>It's been a very long time since I tried to access my OneDrive data programmatically and I was curious to find out what the new experience is like. Especially since MS Graph now allows you to interact with your OneDrive data programmatically using .NET Core. The nice thing is that I didn't have to start from scratch and I was able to get the project off the ground quickly using one of the existing MS Graph tutorials. The code for this project is loosely based on <a href="https://docs.microsoft.com/en-us/graph/tutorials/dotnet-core">this .NET Core sample</a>. And it took a little bit of experimentation and looking up the Graph API documentation to find out how to make calls to my OneDrive via the <a href="https://docs.microsoft.com/en-us/graph/api/resources/onedrive?view=graph-rest-beta">MS Graph Files API</a>.</p><p>But before we even touch the code, we can get a feel of what it looks like to work with the Graph API for OneDrive via the <a href="https://developer.microsoft.com/en-us/graph/graph-explorer#">Graph Explorer</a> - I truly love this tool as it allows me to get a quick glance into the possibilities of MS Graph. </p><figure><img src="https://cmatskas.com/content/images/2020/05/image.png"></figure><p>Now that I have &nbsp;a good grasp of what I can do with with MS Graph, I'm ready to start playing with the code. For this project, we have the following components:</p><ul><li> .NET Core 3.1 </li><li>Visual Studio Code </li><li>MSAL (Microsoft Authentication Library)</li><li>Graph SD</li></ul><p>And since I'm using a console app, I am going with <a href="https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-device-code">Device Code Flow</a> for the authentication. <em>The device code flow is a type of authentication flow that is designed for native applications (desktop, mobile…) which are by nature considered “insecure” (in the sense that you do not have direct control over the execution context)</em>.</p><h3 id="create-the-net-console-app">Create the .NET console app</h3><p>Open the command prompt of choice and type the following to create the console app and add the appropriate dependencies/NuGet packages:</p><pre><code>mkdir OneDriveWithMsGraph
+cd OneDriveWithMSGraph
+dotnet new console
+
+dotnet add package Microsoft.Extensions.Configuration.UserSecrets --version 3.1.2
+dotnet add package Microsoft.Identity.Client --version 4.10.0
+dotnet add package Microsoft.Graph --version 3.0.1</code></pre><p>We now have a basic .NET Console app. The packages above add MS Graph and MSAL libraries as well as a standard .NET Core config extension where we can store user secrets such as API Keys etc that can be used during development. Although this is a bit of an overkill and for this exercise we don't have any sensitive information to store, it's a really good practice to follow :)</p><p>Next, we need to create an App registration in Azure Active Directory to allow our users to interact with their OneDrive data. For this scenario, I opted for a single-tenant, line of business (LOB) app assuming that we only want to give access to our corporate OneDrive data. It's a subtle configuration change in the AAD App with significant connotations. If you opt in for another registration model, the app can also allow be used to access personal OneDrive data using Microsoft Account.</p><p>To register a new application, head over to the Azure AD blade in the Azure Portal. </p><figure><img src="https://cmatskas.com/content/images/2020/05/image-1.png"></figure><p>Ensure to set the Redirect URI to <code>https://login.microsoftonline.com/common/oauth2/nativeclient</code>. Next, navigate to the Authentication tab and set the <strong>Default Client Type</strong> option to <strong>Yes </strong>under <strong>Advanced Settings</strong></p><figure><img src="https://cmatskas.com/content/images/2020/05/image-2.png"></figure><p>Go back to the Overview and grab both the Application ID and Tenant ID values as we will need them in our app. Our Azure AD configuration is complete</p><h3 id="implement-the-authentication-code">Implement the Authentication code</h3><p>Back in our .NET console app let's add the AppId to our our local secrets. Open the console and type the following:</p><pre><code>dotnet user-secrets init
+dotnet user-secrets set appId "YOUR_APP_ID_HERE"
+dotnet user-secrets set scopes "User.Read;Files.ReadWriteAll;Files.ReadWriteAppFolder"</code></pre><p>We also need to create a new class named <code>DeviceCodeAuthProvider</code> and add the following code to perform the authentication: </p><!--kg-card-begin: html--><div id="gist102857372">
+    <div>
+      <div>
+        <div>
+  <div id="file-devicecodeauthprovider-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-devicecodeauthprovider-cs-L1" data-line-number="1"></td>
+        <td id="file-devicecodeauthprovider-cs-LC1"><span>using</span> <span>Microsoft</span>.<span>Graph</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L2" data-line-number="2"></td>
+        <td id="file-devicecodeauthprovider-cs-LC2"><span>using</span> <span>Microsoft</span>.<span>Identity</span>.<span>Client</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L3" data-line-number="3"></td>
+        <td id="file-devicecodeauthprovider-cs-LC3"><span>using</span> <span>System</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L4" data-line-number="4"></td>
+        <td id="file-devicecodeauthprovider-cs-LC4"><span>using</span> <span>System</span>.<span>Net</span>.<span>Http</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L5" data-line-number="5"></td>
+        <td id="file-devicecodeauthprovider-cs-LC5"><span>using</span> <span>System</span>.<span>Net</span>.<span>Http</span>.<span>Headers</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L6" data-line-number="6"></td>
+        <td id="file-devicecodeauthprovider-cs-LC6"><span>using</span> <span>System</span>.<span>Threading</span>.<span>Tasks</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L7" data-line-number="7"></td>
+        <td id="file-devicecodeauthprovider-cs-LC7">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L8" data-line-number="8"></td>
+        <td id="file-devicecodeauthprovider-cs-LC8"><span>namespace</span> <span>OneDriveWithMSGraph</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L9" data-line-number="9"></td>
+        <td id="file-devicecodeauthprovider-cs-LC9">{</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L10" data-line-number="10"></td>
+        <td id="file-devicecodeauthprovider-cs-LC10">    <span>public</span> <span>class</span> <span>DeviceCodeAuthProvider</span> : <span>IAuthenticationProvider</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L11" data-line-number="11"></td>
+        <td id="file-devicecodeauthprovider-cs-LC11">    {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L12" data-line-number="12"></td>
+        <td id="file-devicecodeauthprovider-cs-LC12">        <span>private</span> <span>IPublicClientApplication</span> <span>_msalClient</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L13" data-line-number="13"></td>
+        <td id="file-devicecodeauthprovider-cs-LC13">        <span>private</span> <span>string</span>[] <span>_scopes</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L14" data-line-number="14"></td>
+        <td id="file-devicecodeauthprovider-cs-LC14">        <span>private</span> <span>IAccount</span> <span>_userAccount</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L15" data-line-number="15"></td>
+        <td id="file-devicecodeauthprovider-cs-LC15">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L16" data-line-number="16"></td>
+        <td id="file-devicecodeauthprovider-cs-LC16">        <span>public</span> <span>DeviceCodeAuthProvider</span>(<span>string</span> <span>appId</span>, <span>string</span>[] <span>scopes</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L17" data-line-number="17"></td>
+        <td id="file-devicecodeauthprovider-cs-LC17">        {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L18" data-line-number="18"></td>
+        <td id="file-devicecodeauthprovider-cs-LC18">            <span>_scopes</span> <span>=</span> <span>scopes</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L19" data-line-number="19"></td>
+        <td id="file-devicecodeauthprovider-cs-LC19">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L20" data-line-number="20"></td>
+        <td id="file-devicecodeauthprovider-cs-LC20">            <span>_msalClient</span> <span>=</span> <span>PublicClientApplicationBuilder</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L21" data-line-number="21"></td>
+        <td id="file-devicecodeauthprovider-cs-LC21">                .<span>Create</span>(<span>appId</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L22" data-line-number="22"></td>
+        <td id="file-devicecodeauthprovider-cs-LC22">                .<span>WithAuthority</span>(<span>AadAuthorityAudience</span>.<span>AzureAdMyOrg</span>, <span>true</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L23" data-line-number="23"></td>
+        <td id="file-devicecodeauthprovider-cs-LC23">                .<span>WithTenantId</span>(<span><span>"</span>b55f0c51-61a7-45c3-84df-33569b247796<span>"</span></span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L24" data-line-number="24"></td>
+        <td id="file-devicecodeauthprovider-cs-LC24">                .<span>Build</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L25" data-line-number="25"></td>
+        <td id="file-devicecodeauthprovider-cs-LC25">        }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L26" data-line-number="26"></td>
+        <td id="file-devicecodeauthprovider-cs-LC26">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L27" data-line-number="27"></td>
+        <td id="file-devicecodeauthprovider-cs-LC27">        <span>public</span> <span>async</span> <span>Task</span>&lt;<span>string</span>&gt; <span>GetAccessToken</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L28" data-line-number="28"></td>
+        <td id="file-devicecodeauthprovider-cs-LC28">        {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L29" data-line-number="29"></td>
+        <td id="file-devicecodeauthprovider-cs-LC29">            <span><span>//</span> If there is no saved user account, the user must sign-in</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L30" data-line-number="30"></td>
+        <td id="file-devicecodeauthprovider-cs-LC30">            <span>if</span> (<span>_userAccount</span> <span>==</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L31" data-line-number="31"></td>
+        <td id="file-devicecodeauthprovider-cs-LC31">            {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L32" data-line-number="32"></td>
+        <td id="file-devicecodeauthprovider-cs-LC32">                <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L33" data-line-number="33"></td>
+        <td id="file-devicecodeauthprovider-cs-LC33">                {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L34" data-line-number="34"></td>
+        <td id="file-devicecodeauthprovider-cs-LC34">                    <span><span>//</span> Invoke device code flow so user can sign-in with a browser</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L35" data-line-number="35"></td>
+        <td id="file-devicecodeauthprovider-cs-LC35">                    <span>var</span> <span>result</span> <span>=</span> <span>await</span> <span>_msalClient</span>.<span>AcquireTokenWithDeviceCode</span>(<span>_scopes</span>, <span>callback</span> <span>=&gt;</span> {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L36" data-line-number="36"></td>
+        <td id="file-devicecodeauthprovider-cs-LC36">                        <span>Console</span>.<span>WriteLine</span>(<span>callback</span>.<span>Message</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L37" data-line-number="37"></td>
+        <td id="file-devicecodeauthprovider-cs-LC37">                        <span>return</span> <span>Task</span>.<span>FromResult</span>(<span>0</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L38" data-line-number="38"></td>
+        <td id="file-devicecodeauthprovider-cs-LC38">                    }).<span>ExecuteAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L39" data-line-number="39"></td>
+        <td id="file-devicecodeauthprovider-cs-LC39">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L40" data-line-number="40"></td>
+        <td id="file-devicecodeauthprovider-cs-LC40">                    <span>_userAccount</span> <span>=</span> <span>result</span>.<span>Account</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L41" data-line-number="41"></td>
+        <td id="file-devicecodeauthprovider-cs-LC41">                    <span>return</span> <span>result</span>.<span>AccessToken</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L42" data-line-number="42"></td>
+        <td id="file-devicecodeauthprovider-cs-LC42">                }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L43" data-line-number="43"></td>
+        <td id="file-devicecodeauthprovider-cs-LC43">                <span>catch</span> (<span>Exception</span> <span>exception</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L44" data-line-number="44"></td>
+        <td id="file-devicecodeauthprovider-cs-LC44">                {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L45" data-line-number="45"></td>
+        <td id="file-devicecodeauthprovider-cs-LC45">                    <span>Console</span>.<span>WriteLine</span>(<span><span>$"</span>Error getting access token: {<span>exception</span>.<span>Message</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L46" data-line-number="46"></td>
+        <td id="file-devicecodeauthprovider-cs-LC46">                    <span>return</span> <span>null</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L47" data-line-number="47"></td>
+        <td id="file-devicecodeauthprovider-cs-LC47">                }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L48" data-line-number="48"></td>
+        <td id="file-devicecodeauthprovider-cs-LC48">            }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L49" data-line-number="49"></td>
+        <td id="file-devicecodeauthprovider-cs-LC49">            <span>else</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L50" data-line-number="50"></td>
+        <td id="file-devicecodeauthprovider-cs-LC50">            {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L51" data-line-number="51"></td>
+        <td id="file-devicecodeauthprovider-cs-LC51">                <span><span>//</span> If there is an account, call AcquireTokenSilent</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L52" data-line-number="52"></td>
+        <td id="file-devicecodeauthprovider-cs-LC52">                <span><span>//</span> By doing this, MSAL will refresh the token automatically if</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L53" data-line-number="53"></td>
+        <td id="file-devicecodeauthprovider-cs-LC53">                <span><span>//</span> it is expired. Otherwise it returns the cached token.</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L54" data-line-number="54"></td>
+        <td id="file-devicecodeauthprovider-cs-LC54">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L55" data-line-number="55"></td>
+        <td id="file-devicecodeauthprovider-cs-LC55">                    <span>var</span> <span>result</span> <span>=</span> <span>await</span> <span>_msalClient</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L56" data-line-number="56"></td>
+        <td id="file-devicecodeauthprovider-cs-LC56">                        .<span>AcquireTokenSilent</span>(<span>_scopes</span>, <span>_userAccount</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L57" data-line-number="57"></td>
+        <td id="file-devicecodeauthprovider-cs-LC57">                        .<span>ExecuteAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L58" data-line-number="58"></td>
+        <td id="file-devicecodeauthprovider-cs-LC58">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L59" data-line-number="59"></td>
+        <td id="file-devicecodeauthprovider-cs-LC59">                    <span>return</span> <span>result</span>.<span>AccessToken</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L60" data-line-number="60"></td>
+        <td id="file-devicecodeauthprovider-cs-LC60">            }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L61" data-line-number="61"></td>
+        <td id="file-devicecodeauthprovider-cs-LC61">        }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L62" data-line-number="62"></td>
+        <td id="file-devicecodeauthprovider-cs-LC62">
+</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L63" data-line-number="63"></td>
+        <td id="file-devicecodeauthprovider-cs-LC63">        <span><span>//</span> This is the required function to implement IAuthenticationProvider</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L64" data-line-number="64"></td>
+        <td id="file-devicecodeauthprovider-cs-LC64">        <span><span>//</span> The Graph SDK will call this function each time it makes a Graph</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L65" data-line-number="65"></td>
+        <td id="file-devicecodeauthprovider-cs-LC65">        <span><span>//</span> call.</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L66" data-line-number="66"></td>
+        <td id="file-devicecodeauthprovider-cs-LC66">        <span>public</span> <span>async</span> <span>Task</span> <span>AuthenticateRequestAsync</span>(<span>HttpRequestMessage</span> <span>requestMessage</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L67" data-line-number="67"></td>
+        <td id="file-devicecodeauthprovider-cs-LC67">        {</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L68" data-line-number="68"></td>
+        <td id="file-devicecodeauthprovider-cs-LC68">            <span>requestMessage</span>.<span>Headers</span>.<span>Authorization</span> <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L69" data-line-number="69"></td>
+        <td id="file-devicecodeauthprovider-cs-LC69">                <span>new</span> <span>AuthenticationHeaderValue</span>(<span><span>"</span>bearer<span>"</span></span>, <span>await</span> <span>GetAccessToken</span>());</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L70" data-line-number="70"></td>
+        <td id="file-devicecodeauthprovider-cs-LC70">        }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L71" data-line-number="71"></td>
+        <td id="file-devicecodeauthprovider-cs-LC71">    }</td>
+      </tr>
+      <tr>
+        <td id="file-devicecodeauthprovider-cs-L72" data-line-number="72"></td>
+        <td id="file-devicecodeauthprovider-cs-LC72">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<!--kg-card-end: html--><p>The difference here, when compared to the sample I based my code on, is that I'm explicitly configuring the my app to work with TenantId using the <code>.WithAuthority(AadAuthorityAudience.AzureAdMyOrg, true)</code> and <code>.WithTenantId(&lt;YourTenantId&gt;)</code> as per the complete code below:</p><pre><code>    _msalClient = PublicClientApplicationBuilder
+                .Create(appId)
+                .WithAuthority(AadAuthorityAudience.AzureAdMyOrg, true)
+                .WithTenantId("&lt;YourTenantId&gt;")
+                .Build();</code></pre><h3 id="add-the-graph-api-calls">Add the Graph API calls</h3><p>Next, we need to should add a <code>GraphHelper.cs</code> class to do the necessary MS Graph calls. Notably, we have 3 main methods:</p><ul><li>GetMeAsync()</li><li>GetOneDriveAsync()</li><li>GetDriveContentsAsync() </li></ul><!--kg-card-begin: html--><div id="gist102857487">
+    <div>
+      <div>
+        <div>
+  <div id="file-graphhelper-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-graphhelper-cs-L1" data-line-number="1"></td>
+        <td id="file-graphhelper-cs-LC1"><span>using</span> <span>Microsoft</span>.<span>Graph</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L2" data-line-number="2"></td>
+        <td id="file-graphhelper-cs-LC2"><span>using</span> <span>System</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L3" data-line-number="3"></td>
+        <td id="file-graphhelper-cs-LC3"><span>using</span> <span>System</span>.<span>Collections</span>.<span>Generic</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L4" data-line-number="4"></td>
+        <td id="file-graphhelper-cs-LC4"><span>using</span> <span>System</span>.<span>Threading</span>.<span>Tasks</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L5" data-line-number="5"></td>
+        <td id="file-graphhelper-cs-LC5">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L6" data-line-number="6"></td>
+        <td id="file-graphhelper-cs-LC6"><span>namespace</span> <span>OneDriveWithMSGraph</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L7" data-line-number="7"></td>
+        <td id="file-graphhelper-cs-LC7">{</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L8" data-line-number="8"></td>
+        <td id="file-graphhelper-cs-LC8">    <span>public</span> <span>class</span> <span>GraphHelper</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L9" data-line-number="9"></td>
+        <td id="file-graphhelper-cs-LC9">    {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L10" data-line-number="10"></td>
+        <td id="file-graphhelper-cs-LC10">        <span>private</span> <span>static</span> <span>GraphServiceClient</span> <span>graphClient</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L11" data-line-number="11"></td>
+        <td id="file-graphhelper-cs-LC11">        <span>public</span> <span>static</span> <span>void</span> <span>Initialize</span>(<span>IAuthenticationProvider</span> <span>authProvider</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L12" data-line-number="12"></td>
+        <td id="file-graphhelper-cs-LC12">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L13" data-line-number="13"></td>
+        <td id="file-graphhelper-cs-LC13">            <span>graphClient</span> <span>=</span> <span>new</span> <span>GraphServiceClient</span>(<span>authProvider</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L14" data-line-number="14"></td>
+        <td id="file-graphhelper-cs-LC14">            <span>graphClient</span>.<span>BaseUrl</span> <span>=</span> <span><span>"</span>https://graph.microsoft.com/beta<span>"</span></span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L15" data-line-number="15"></td>
+        <td id="file-graphhelper-cs-LC15">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L16" data-line-number="16"></td>
+        <td id="file-graphhelper-cs-LC16">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L17" data-line-number="17"></td>
+        <td id="file-graphhelper-cs-LC17">        <span>public</span> <span>static</span> <span>async</span> <span>Task</span>&lt;<span>User</span>&gt; <span>GetMeAsync</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L18" data-line-number="18"></td>
+        <td id="file-graphhelper-cs-LC18">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L19" data-line-number="19"></td>
+        <td id="file-graphhelper-cs-LC19">            <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L20" data-line-number="20"></td>
+        <td id="file-graphhelper-cs-LC20">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L21" data-line-number="21"></td>
+        <td id="file-graphhelper-cs-LC21">                <span><span>//</span> GET /me</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L22" data-line-number="22"></td>
+        <td id="file-graphhelper-cs-LC22">                <span>return</span> <span>await</span> <span>graphClient</span>.<span>Me</span>.<span>Request</span>().<span>GetAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L23" data-line-number="23"></td>
+        <td id="file-graphhelper-cs-LC23">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L24" data-line-number="24"></td>
+        <td id="file-graphhelper-cs-LC24">            <span>catch</span> (<span>ServiceException</span> <span>ex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L25" data-line-number="25"></td>
+        <td id="file-graphhelper-cs-LC25">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L26" data-line-number="26"></td>
+        <td id="file-graphhelper-cs-LC26">                <span>Console</span>.<span>WriteLine</span>(<span><span>$"</span>Error getting signed-in user: {<span>ex</span>.<span>Message</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L27" data-line-number="27"></td>
+        <td id="file-graphhelper-cs-LC27">                <span>return</span> <span>null</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L28" data-line-number="28"></td>
+        <td id="file-graphhelper-cs-LC28">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L29" data-line-number="29"></td>
+        <td id="file-graphhelper-cs-LC29">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L30" data-line-number="30"></td>
+        <td id="file-graphhelper-cs-LC30">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L31" data-line-number="31"></td>
+        <td id="file-graphhelper-cs-LC31">        <span>public</span> <span>static</span> <span>async</span> <span>Task</span>&lt;<span>Drive</span>&gt; <span>GetOneDriveAsync</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L32" data-line-number="32"></td>
+        <td id="file-graphhelper-cs-LC32">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L33" data-line-number="33"></td>
+        <td id="file-graphhelper-cs-LC33">            <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L34" data-line-number="34"></td>
+        <td id="file-graphhelper-cs-LC34">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L35" data-line-number="35"></td>
+        <td id="file-graphhelper-cs-LC35">                <span><span>//</span> GET /me</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L36" data-line-number="36"></td>
+        <td id="file-graphhelper-cs-LC36">                <span>return</span> <span>await</span> <span>graphClient</span>.<span>Me</span>.<span>Drive</span>.<span>Request</span>().<span>GetAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L37" data-line-number="37"></td>
+        <td id="file-graphhelper-cs-LC37">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L38" data-line-number="38"></td>
+        <td id="file-graphhelper-cs-LC38">            <span>catch</span> (<span>ServiceException</span> <span>ex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L39" data-line-number="39"></td>
+        <td id="file-graphhelper-cs-LC39">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L40" data-line-number="40"></td>
+        <td id="file-graphhelper-cs-LC40">                <span>Console</span>.<span>WriteLine</span>(<span><span>$"</span>Error getting OneDrive data: {<span>ex</span>.<span>Message</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L41" data-line-number="41"></td>
+        <td id="file-graphhelper-cs-LC41">                <span>return</span> <span>null</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L42" data-line-number="42"></td>
+        <td id="file-graphhelper-cs-LC42">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L43" data-line-number="43"></td>
+        <td id="file-graphhelper-cs-LC43">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L44" data-line-number="44"></td>
+        <td id="file-graphhelper-cs-LC44">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L45" data-line-number="45"></td>
+        <td id="file-graphhelper-cs-LC45">        <span>public</span> <span>static</span> <span>async</span> <span>Task</span>&lt;<span>IEnumerable</span>&lt;<span>DriveItem</span>&gt;&gt; <span>GetDriveContentsAsync</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L46" data-line-number="46"></td>
+        <td id="file-graphhelper-cs-LC46">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L47" data-line-number="47"></td>
+        <td id="file-graphhelper-cs-LC47">            <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L48" data-line-number="48"></td>
+        <td id="file-graphhelper-cs-LC48">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L49" data-line-number="49"></td>
+        <td id="file-graphhelper-cs-LC49">                <span>return</span> <span>await</span> <span>graphClient</span>.<span>Me</span>.<span>Drive</span>.<span>Root</span>.<span>Children</span>.<span>Request</span>().<span>GetAsync</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L50" data-line-number="50"></td>
+        <td id="file-graphhelper-cs-LC50">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L51" data-line-number="51"></td>
+        <td id="file-graphhelper-cs-LC51">            <span>catch</span> (<span>ServiceException</span> <span>ex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L52" data-line-number="52"></td>
+        <td id="file-graphhelper-cs-LC52">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L53" data-line-number="53"></td>
+        <td id="file-graphhelper-cs-LC53">                <span>Console</span>.<span>WriteLine</span>(<span><span>$"</span>Error getting One Drive contents: {<span>ex</span>.<span>Message</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L54" data-line-number="54"></td>
+        <td id="file-graphhelper-cs-LC54">                <span>return</span> <span>null</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L55" data-line-number="55"></td>
+        <td id="file-graphhelper-cs-LC55">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L56" data-line-number="56"></td>
+        <td id="file-graphhelper-cs-LC56">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L57" data-line-number="57"></td>
+        <td id="file-graphhelper-cs-LC57">    }</td>
+      </tr>
+      <tr>
+        <td id="file-graphhelper-cs-L58" data-line-number="58"></td>
+        <td id="file-graphhelper-cs-LC58">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<!--kg-card-end: html--><h3 id="make-it-all-work-onedrive-with-ms-graph">Make it all work - OneDrive with MS Graph</h3><p>The last step is to implement the code that calls our helpers and pulls the OneDrive data we need. Open the <code>Program.cs</code> file and paste the following code:</p><!--kg-card-begin: html--><div id="gist102857571">
+    <div>
+      <div>
+        <div>
+  <div id="file-graphcallsinmain-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-graphcallsinmain-cs-L1" data-line-number="1"></td>
+        <td id="file-graphcallsinmain-cs-LC1"><span>using</span> <span>System</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L2" data-line-number="2"></td>
+        <td id="file-graphcallsinmain-cs-LC2"><span>using</span> <span>System</span>.<span>Collections</span>.<span>Generic</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L3" data-line-number="3"></td>
+        <td id="file-graphcallsinmain-cs-LC3"><span>using</span> <span>System</span>.<span>Drawing</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L4" data-line-number="4"></td>
+        <td id="file-graphcallsinmain-cs-LC4"><span>using</span> <span>System</span>.<span>Linq</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L5" data-line-number="5"></td>
+        <td id="file-graphcallsinmain-cs-LC5"><span>using</span> <span>System</span>.<span>Text</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L6" data-line-number="6"></td>
+        <td id="file-graphcallsinmain-cs-LC6"><span>using</span> <span>System</span>.<span>Threading</span>.<span>Tasks</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L7" data-line-number="7"></td>
+        <td id="file-graphcallsinmain-cs-LC7"><span>using</span> <span>Microsoft</span>.<span>Extensions</span>.<span>Configuration</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L8" data-line-number="8"></td>
+        <td id="file-graphcallsinmain-cs-LC8"><span>using</span> <span>Microsoft</span>.<span>Graph</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L9" data-line-number="9"></td>
+        <td id="file-graphcallsinmain-cs-LC9">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L10" data-line-number="10"></td>
+        <td id="file-graphcallsinmain-cs-LC10"><span>namespace</span> <span>OneDriveWithMSGraph</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L11" data-line-number="11"></td>
+        <td id="file-graphcallsinmain-cs-LC11">{</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L12" data-line-number="12"></td>
+        <td id="file-graphcallsinmain-cs-LC12">    <span>class</span> <span>Program</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L13" data-line-number="13"></td>
+        <td id="file-graphcallsinmain-cs-LC13">    {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L14" data-line-number="14"></td>
+        <td id="file-graphcallsinmain-cs-LC14">        <span>static</span> <span>async</span> <span>Task</span> <span>Main</span>(<span>string</span>[] <span>args</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L15" data-line-number="15"></td>
+        <td id="file-graphcallsinmain-cs-LC15">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L16" data-line-number="16"></td>
+        <td id="file-graphcallsinmain-cs-LC16">            <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Working with Graph and One Drive is fun!<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L17" data-line-number="17"></td>
+        <td id="file-graphcallsinmain-cs-LC17">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L18" data-line-number="18"></td>
+        <td id="file-graphcallsinmain-cs-LC18">            <span>var</span> <span>appConfig</span> <span>=</span> <span>LoadAppSettings</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L19" data-line-number="19"></td>
+        <td id="file-graphcallsinmain-cs-LC19">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L20" data-line-number="20"></td>
+        <td id="file-graphcallsinmain-cs-LC20">            <span>if</span> (<span>appConfig</span> <span>==</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L21" data-line-number="21"></td>
+        <td id="file-graphcallsinmain-cs-LC21">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L22" data-line-number="22"></td>
+        <td id="file-graphcallsinmain-cs-LC22">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Missing or invalid appsettings.json...exiting<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L23" data-line-number="23"></td>
+        <td id="file-graphcallsinmain-cs-LC23">                <span>return</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L24" data-line-number="24"></td>
+        <td id="file-graphcallsinmain-cs-LC24">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L25" data-line-number="25"></td>
+        <td id="file-graphcallsinmain-cs-LC25">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L26" data-line-number="26"></td>
+        <td id="file-graphcallsinmain-cs-LC26">            <span>var</span> <span>appId</span> <span>=</span> <span>appConfig</span>[<span><span>"</span>appId<span>"</span></span>];</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L27" data-line-number="27"></td>
+        <td id="file-graphcallsinmain-cs-LC27">            <span>var</span> <span>scopesString</span> <span>=</span> <span>appConfig</span>[<span><span>"</span>scopes<span>"</span></span>];</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L28" data-line-number="28"></td>
+        <td id="file-graphcallsinmain-cs-LC28">            <span>var</span> <span>scopes</span> <span>=</span> <span>scopesString</span>.<span>Split</span>(<span>';'</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L29" data-line-number="29"></td>
+        <td id="file-graphcallsinmain-cs-LC29">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L30" data-line-number="30"></td>
+        <td id="file-graphcallsinmain-cs-LC30">            <span><span>//</span> Initialize the auth provider with values from appsettings.json</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L31" data-line-number="31"></td>
+        <td id="file-graphcallsinmain-cs-LC31">            <span>var</span> <span>authProvider</span> <span>=</span> <span>new</span> <span>DeviceCodeAuthProvider</span>(<span>appId</span>, <span>scopes</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L32" data-line-number="32"></td>
+        <td id="file-graphcallsinmain-cs-LC32">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L33" data-line-number="33"></td>
+        <td id="file-graphcallsinmain-cs-LC33">            <span><span>//</span> Request a token to sign in the user</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L34" data-line-number="34"></td>
+        <td id="file-graphcallsinmain-cs-LC34">            <span>var</span> <span>accessToken</span> <span>=</span> <span>authProvider</span>.<span>GetAccessToken</span>().<span>Result</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L35" data-line-number="35"></td>
+        <td id="file-graphcallsinmain-cs-LC35">            <span>GraphHelper</span>.<span>Initialize</span>(<span>authProvider</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L36" data-line-number="36"></td>
+        <td id="file-graphcallsinmain-cs-LC36">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L37" data-line-number="37"></td>
+        <td id="file-graphcallsinmain-cs-LC37">            <span>int</span> <span>choice</span> <span>=</span> <span>-</span><span>1</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L38" data-line-number="38"></td>
+        <td id="file-graphcallsinmain-cs-LC38">            <span>while</span> (<span>choice</span> <span>!=</span> <span>0</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L39" data-line-number="39"></td>
+        <td id="file-graphcallsinmain-cs-LC39">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L40" data-line-number="40"></td>
+        <td id="file-graphcallsinmain-cs-LC40">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Please choose one of the following options:<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L41" data-line-number="41"></td>
+        <td id="file-graphcallsinmain-cs-LC41">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>0. Exit<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L42" data-line-number="42"></td>
+        <td id="file-graphcallsinmain-cs-LC42">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>1. Display your access token<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L43" data-line-number="43"></td>
+        <td id="file-graphcallsinmain-cs-LC43">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>2. Get your OneDrive root folder<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L44" data-line-number="44"></td>
+        <td id="file-graphcallsinmain-cs-LC44">                <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>3. List your OneDrive contents<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L45" data-line-number="45"></td>
+        <td id="file-graphcallsinmain-cs-LC45">                <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L46" data-line-number="46"></td>
+        <td id="file-graphcallsinmain-cs-LC46">                {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L47" data-line-number="47"></td>
+        <td id="file-graphcallsinmain-cs-LC47">                    <span>choice</span> <span>=</span> <span>int</span>.<span>Parse</span>(<span>Console</span>.<span>ReadLine</span>());</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L48" data-line-number="48"></td>
+        <td id="file-graphcallsinmain-cs-LC48">                }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L49" data-line-number="49"></td>
+        <td id="file-graphcallsinmain-cs-LC49">                <span>catch</span> (<span>System</span>.<span>FormatException</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L50" data-line-number="50"></td>
+        <td id="file-graphcallsinmain-cs-LC50">                {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L51" data-line-number="51"></td>
+        <td id="file-graphcallsinmain-cs-LC51">                    <span><span>//</span> Set to invalid value</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L52" data-line-number="52"></td>
+        <td id="file-graphcallsinmain-cs-LC52">                    <span>choice</span> <span>=</span> <span>-</span><span>1</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L53" data-line-number="53"></td>
+        <td id="file-graphcallsinmain-cs-LC53">                }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L54" data-line-number="54"></td>
+        <td id="file-graphcallsinmain-cs-LC54">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L55" data-line-number="55"></td>
+        <td id="file-graphcallsinmain-cs-LC55">                <span>switch</span> (<span>choice</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L56" data-line-number="56"></td>
+        <td id="file-graphcallsinmain-cs-LC56">                {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L57" data-line-number="57"></td>
+        <td id="file-graphcallsinmain-cs-LC57">                    <span>case</span> <span>0</span>:</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L58" data-line-number="58"></td>
+        <td id="file-graphcallsinmain-cs-LC58">                        <span><span>//</span> Exit the program</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L59" data-line-number="59"></td>
+        <td id="file-graphcallsinmain-cs-LC59">                        <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Goodbye...<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L60" data-line-number="60"></td>
+        <td id="file-graphcallsinmain-cs-LC60">                        <span>break</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L61" data-line-number="61"></td>
+        <td id="file-graphcallsinmain-cs-LC61">                    <span>case</span> <span>1</span>:</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L62" data-line-number="62"></td>
+        <td id="file-graphcallsinmain-cs-LC62">                        <span><span>//</span> Display access token</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L63" data-line-number="63"></td>
+        <td id="file-graphcallsinmain-cs-LC63">                        <span>Console</span>.<span>WriteLine</span>(<span><span>$"</span>The access token is:{<span>accessToken</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L64" data-line-number="64"></td>
+        <td id="file-graphcallsinmain-cs-LC64">                        <span>break</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L65" data-line-number="65"></td>
+        <td id="file-graphcallsinmain-cs-LC65">                    <span>case</span> <span>2</span>:</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L66" data-line-number="66"></td>
+        <td id="file-graphcallsinmain-cs-LC66">                        <span><span>//</span> Get OneDrive Info</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L67" data-line-number="67"></td>
+        <td id="file-graphcallsinmain-cs-LC67">                        <span>Console</span>.<span>WriteLine</span>(<span>string</span>.<span>Empty</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L68" data-line-number="68"></td>
+        <td id="file-graphcallsinmain-cs-LC68">                        <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>Green</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L69" data-line-number="69"></td>
+        <td id="file-graphcallsinmain-cs-LC69">                        <span>var</span> <span>driveInfo</span> <span>=</span> <span>await</span> <span>GraphHelper</span>.<span>GetOneDrive</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L70" data-line-number="70"></td>
+        <td id="file-graphcallsinmain-cs-LC70">                        <span>Console</span>.<span>WriteLine</span>(<span>FormatDriveInfo</span>(<span>driveInfo</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L71" data-line-number="71"></td>
+        <td id="file-graphcallsinmain-cs-LC71">                        <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>White</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L72" data-line-number="72"></td>
+        <td id="file-graphcallsinmain-cs-LC72">                        <span>break</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L73" data-line-number="73"></td>
+        <td id="file-graphcallsinmain-cs-LC73">                    <span>case</span> <span>3</span>:</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L74" data-line-number="74"></td>
+        <td id="file-graphcallsinmain-cs-LC74">                        <span><span>//</span> Get OneDrive contents</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L75" data-line-number="75"></td>
+        <td id="file-graphcallsinmain-cs-LC75">                        <span>var</span> <span>driveContents</span> <span>=</span> <span>await</span> <span>GraphHelper</span>.<span>GetDriveContents</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L76" data-line-number="76"></td>
+        <td id="file-graphcallsinmain-cs-LC76">                        <span>Console</span>.<span>WriteLine</span>(<span>string</span>.<span>Empty</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L77" data-line-number="77"></td>
+        <td id="file-graphcallsinmain-cs-LC77">                        <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>Green</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L78" data-line-number="78"></td>
+        <td id="file-graphcallsinmain-cs-LC78">                        <span>Console</span>.<span>WriteLine</span>(<span>ListOneDriveContents</span>(<span>driveContents</span>.<span>ToList</span>()));</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L79" data-line-number="79"></td>
+        <td id="file-graphcallsinmain-cs-LC79">                        <span>Console</span>.<span>ForegroundColor</span> <span>=</span> <span>ConsoleColor</span>.<span>White</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L80" data-line-number="80"></td>
+        <td id="file-graphcallsinmain-cs-LC80">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L81" data-line-number="81"></td>
+        <td id="file-graphcallsinmain-cs-LC81">                        <span>break</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L82" data-line-number="82"></td>
+        <td id="file-graphcallsinmain-cs-LC82">                    <span>default</span>:</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L83" data-line-number="83"></td>
+        <td id="file-graphcallsinmain-cs-LC83">                        <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Invalid choice! Please try again.<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L84" data-line-number="84"></td>
+        <td id="file-graphcallsinmain-cs-LC84">                        <span>break</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L85" data-line-number="85"></td>
+        <td id="file-graphcallsinmain-cs-LC85">                }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L86" data-line-number="86"></td>
+        <td id="file-graphcallsinmain-cs-LC86">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L87" data-line-number="87"></td>
+        <td id="file-graphcallsinmain-cs-LC87">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L88" data-line-number="88"></td>
+        <td id="file-graphcallsinmain-cs-LC88">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L89" data-line-number="89"></td>
+        <td id="file-graphcallsinmain-cs-LC89">        <span>static</span> <span>IConfigurationRoot</span> <span>LoadAppSettings</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L90" data-line-number="90"></td>
+        <td id="file-graphcallsinmain-cs-LC90">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L91" data-line-number="91"></td>
+        <td id="file-graphcallsinmain-cs-LC91">            <span>var</span> <span>appConfig</span> <span>=</span> <span>new</span> <span>ConfigurationBuilder</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L92" data-line-number="92"></td>
+        <td id="file-graphcallsinmain-cs-LC92">                .<span>AddUserSecrets</span>&lt;<span>Program</span>&gt;()</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L93" data-line-number="93"></td>
+        <td id="file-graphcallsinmain-cs-LC93">                .<span>Build</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L94" data-line-number="94"></td>
+        <td id="file-graphcallsinmain-cs-LC94">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L95" data-line-number="95"></td>
+        <td id="file-graphcallsinmain-cs-LC95">            <span>if</span> (<span>string</span>.<span>IsNullOrEmpty</span>(<span>appConfig</span>[<span><span>"</span>appId<span>"</span></span>]) <span>||</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L96" data-line-number="96"></td>
+        <td id="file-graphcallsinmain-cs-LC96">                <span>string</span>.<span>IsNullOrEmpty</span>(<span>appConfig</span>[<span><span>"</span>scopes<span>"</span></span>]))</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L97" data-line-number="97"></td>
+        <td id="file-graphcallsinmain-cs-LC97">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L98" data-line-number="98"></td>
+        <td id="file-graphcallsinmain-cs-LC98">                <span>return</span> <span>null</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L99" data-line-number="99"></td>
+        <td id="file-graphcallsinmain-cs-LC99">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L100" data-line-number="100"></td>
+        <td id="file-graphcallsinmain-cs-LC100">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L101" data-line-number="101"></td>
+        <td id="file-graphcallsinmain-cs-LC101">            <span>return</span> <span>appConfig</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L102" data-line-number="102"></td>
+        <td id="file-graphcallsinmain-cs-LC102">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L103" data-line-number="103"></td>
+        <td id="file-graphcallsinmain-cs-LC103">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L104" data-line-number="104"></td>
+        <td id="file-graphcallsinmain-cs-LC104">        <span>static</span> <span>string</span> <span>FormatDriveInfo</span>(<span>Drive</span> <span>drive</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L105" data-line-number="105"></td>
+        <td id="file-graphcallsinmain-cs-LC105">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L106" data-line-number="106"></td>
+        <td id="file-graphcallsinmain-cs-LC106">            <span>var</span> <span>str</span> <span>=</span> <span>new</span> <span>StringBuilder</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L107" data-line-number="107"></td>
+        <td id="file-graphcallsinmain-cs-LC107">            <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>The OneDrive Name is: {<span>drive</span>.<span>Name</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L108" data-line-number="108"></td>
+        <td id="file-graphcallsinmain-cs-LC108">            <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>The OneDrive Ownder is: {<span>drive</span>.<span>Owner</span>.<span>User</span>.<span>DisplayName</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L109" data-line-number="109"></td>
+        <td id="file-graphcallsinmain-cs-LC109">            <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>The OneDrive id is: {<span>drive</span>.<span>Id</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L110" data-line-number="110"></td>
+        <td id="file-graphcallsinmain-cs-LC110">            <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>The OneDrive was modified last by: {<span>drive</span><span>?</span>.<span>LastModifiedBy</span><span>?</span>.<span>User</span><span>?</span>.<span>DisplayName</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L111" data-line-number="111"></td>
+        <td id="file-graphcallsinmain-cs-LC111">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L112" data-line-number="112"></td>
+        <td id="file-graphcallsinmain-cs-LC112">            <span>return</span> <span>str</span>.<span>ToString</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L113" data-line-number="113"></td>
+        <td id="file-graphcallsinmain-cs-LC113">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L114" data-line-number="114"></td>
+        <td id="file-graphcallsinmain-cs-LC114">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L115" data-line-number="115"></td>
+        <td id="file-graphcallsinmain-cs-LC115">        <span>static</span> <span>string</span> <span>ListOneDriveContents</span>(<span>List</span>&lt;<span>DriveItem</span>&gt; <span>contents</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L116" data-line-number="116"></td>
+        <td id="file-graphcallsinmain-cs-LC116">        {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L117" data-line-number="117"></td>
+        <td id="file-graphcallsinmain-cs-LC117">            <span>if</span> (<span>contents</span> <span>==</span> <span>null</span> <span>||</span> <span>contents</span>.<span>Count</span> <span>==</span> <span>0</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L118" data-line-number="118"></td>
+        <td id="file-graphcallsinmain-cs-LC118">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L119" data-line-number="119"></td>
+        <td id="file-graphcallsinmain-cs-LC119">                <span>return</span> <span><span>"</span>No content found<span>"</span></span>;</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L120" data-line-number="120"></td>
+        <td id="file-graphcallsinmain-cs-LC120">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L121" data-line-number="121"></td>
+        <td id="file-graphcallsinmain-cs-LC121">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L122" data-line-number="122"></td>
+        <td id="file-graphcallsinmain-cs-LC122">            <span>var</span> <span>str</span> <span>=</span> <span>new</span> <span>StringBuilder</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L123" data-line-number="123"></td>
+        <td id="file-graphcallsinmain-cs-LC123">            <span>foreach</span> (<span>var</span> <span>item</span> <span>in</span> <span>contents</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L124" data-line-number="124"></td>
+        <td id="file-graphcallsinmain-cs-LC124">            {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L125" data-line-number="125"></td>
+        <td id="file-graphcallsinmain-cs-LC125">                <span>if</span> (<span>item</span>.<span>Folder</span> <span>!=</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L126" data-line-number="126"></td>
+        <td id="file-graphcallsinmain-cs-LC126">                {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L127" data-line-number="127"></td>
+        <td id="file-graphcallsinmain-cs-LC127">                    <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>'{<span>item</span>.<span>Name</span>}' is a folder<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L128" data-line-number="128"></td>
+        <td id="file-graphcallsinmain-cs-LC128">                }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L129" data-line-number="129"></td>
+        <td id="file-graphcallsinmain-cs-LC129">                <span>else</span> <span>if</span> (<span>item</span>.<span>File</span> <span>!=</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L130" data-line-number="130"></td>
+        <td id="file-graphcallsinmain-cs-LC130">                { </td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L131" data-line-number="131"></td>
+        <td id="file-graphcallsinmain-cs-LC131">                        <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>'{<span>item</span>.<span>Name</span>}' is a file with size {<span>item</span>.<span>Size</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L132" data-line-number="132"></td>
+        <td id="file-graphcallsinmain-cs-LC132">                }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L133" data-line-number="133"></td>
+        <td id="file-graphcallsinmain-cs-LC133">                <span>else</span> <span>if</span> (<span>item</span>.<span>Audio</span> <span>!=</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L134" data-line-number="134"></td>
+        <td id="file-graphcallsinmain-cs-LC134">                {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L135" data-line-number="135"></td>
+        <td id="file-graphcallsinmain-cs-LC135">                    <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>'{<span>item</span>.<span>Audio</span>.<span>Title</span>}' is an audio file with size {<span>item</span>.<span>Size</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L136" data-line-number="136"></td>
+        <td id="file-graphcallsinmain-cs-LC136">                }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L137" data-line-number="137"></td>
+        <td id="file-graphcallsinmain-cs-LC137">                <span>else</span></td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L138" data-line-number="138"></td>
+        <td id="file-graphcallsinmain-cs-LC138">                {</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L139" data-line-number="139"></td>
+        <td id="file-graphcallsinmain-cs-LC139">                    <span>str</span>.<span>AppendLine</span>(<span><span>$"</span>Generic drive item found with name {<span>item</span>.<span>Name</span>}<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L140" data-line-number="140"></td>
+        <td id="file-graphcallsinmain-cs-LC140">                }            </td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L141" data-line-number="141"></td>
+        <td id="file-graphcallsinmain-cs-LC141">            }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L142" data-line-number="142"></td>
+        <td id="file-graphcallsinmain-cs-LC142">
+</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L143" data-line-number="143"></td>
+        <td id="file-graphcallsinmain-cs-LC143">            <span>return</span> <span>str</span>.<span>ToString</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L144" data-line-number="144"></td>
+        <td id="file-graphcallsinmain-cs-LC144">        }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L145" data-line-number="145"></td>
+        <td id="file-graphcallsinmain-cs-LC145">    }</td>
+      </tr>
+      <tr>
+        <td id="file-graphcallsinmain-cs-L146" data-line-number="146"></td>
+        <td id="file-graphcallsinmain-cs-LC146">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<!--kg-card-end: html--><p>The code above:</p><ul><li>Creates an appconfig and pulls our secrets in</li><li>Initializes the authentication provider helper class</li><li>Passes the auth provider to the GraphClient</li><li>Provides an interactive way for the user to pull the data in the console app</li></ul><p>If you run the code the first time and select option "1" you are presented with your Authentication Token. &nbsp;</p><figure><img src="https://cmatskas.com/content/images/2020/05/image-5.png"></figure><p>You can grab your authentication token and use the <a href="https://jwt.com/">jwt.ms</a> website to inspect it like in the example below (always handy if you want to ensure that your jwt tokens are in order:</p><figure><img src="https://cmatskas.com/content/images/2020/05/image-3.png"></figure><p>Running the app and selecting option 2 or option 3 returns the following results respectively:</p><figure><img src="https://cmatskas.com/content/images/2020/05/image-4.png"></figure><p>Fairly basic functionality so far but with all this in place, we are now able to start adding, removing editing files and folders in our OneDrive. In effect, we can programmatically do whatever the UI offers and more!</p><p>As always, you can find a fully working code sample on <a href="https://github.com/cmatskas/OneDriveWithMSGraph">GitHub</a>.</p><h3 id="summary">Summary</h3><p>I was pleasantly suprised to see that MS Graph and MSAL have transfored the way we programmatically interact with not just OneDrive but all our Office365 data. The next time you are creating an app for your enterprise, think about how you can delight your users and create richer, more immersive experiences by leveraging the power of MS Graph and MSAL. Let me know what you think and feel free to reach out if you have any questions :)</p>
+                </section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

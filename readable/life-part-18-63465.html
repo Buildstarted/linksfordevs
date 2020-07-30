@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 18 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 18 - linksfor.dev(s)"/>
+    <meta property="og:description" content="Code for this episode is"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/06/25/life-part-18/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 18</title>
+<div class="readable">
+        <h1>Life, part 18</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 26 Jun 2020</div>
+        <p><a href="https://ericlippert.com/2020/06/25/life-part-18/">https://ericlippert.com/2020/06/25/life-part-18/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p>Code for this episode is <a href="https://github.com/ericlippert/ConwaysLife/tree/episode18">here</a>.</p>
+<hr>
+<p>A couple episodes back we did a first cut at implementing Stafford’s algorithm using the triplet data structure to store the current and upcoming states of three cells and their living neighbour counts, all in 15 bits of a 16 bit short. Unsurprisingly, it was quite a bit slower than the same algorithm that did one byte per cell; any win from parallelism is swamped by, I conjectured, all the extra bit twiddling.</p>
+<p>Is there a way to eliminate some of that bit twiddling?</p>
+<p>Today we’ll look at the inner loop of the first pass, which identifies cells that need to change by setting their next state bits:</p>
+<pre>Triplet c = triplets[x, y];
+Triplet t = c;
+int lc = t.LeftCount;
+int mc = t.MiddleCount;
+int rc = t.RightCount;
+t = t.SetLeftNext(lc == 3 | t.LeftCurrent &amp; lc == 2);
+t = t.SetMiddleNext(mc == 3 | t.MiddleCurrent &amp; mc == 2);
+t = t.SetRightNext(rc == 3 | t.RightCurrent &amp; rc == 2);
+if (t.Changed)
+{
+  currentChanges.Add((x, y));
+  triplets[x, y] = t;
+}</pre>
+<p>What <em>essentially</em> are we doing here?</p>
+<ul>
+<li>Compute the new triplet t from the old triplet c.</li>
+<li>If t is different than c, cause two side effects: update an array, and update a list.</li>
+</ul>
+<p>There’s nothing we can do about the side effects, but we can observe that the computation has the following characteristics:</p>
+<ul>
+<li>We compute the left, middle and right actual counts; each does bit twiddling to extract one or two states, and one three-bit integer, and then some addition.</li>
+<li>We then do bit twiddling to again extract the three states…</li>
+<li>and then we do a bunch of comparison logic on all of the above</li>
+<li>The net result is the three “next state” bits, which we again use bit twiddling to get into place in the new triplet.</li>
+<li>And, cherry on top, we do a bunch of bit twiddling to extract the current and next state bits to ask “was there a change?”</li>
+<li>Oh, the pain.</li>
+</ul>
+<p>We have a function that consumes 12 bits of a 16 bit short and produces a new 16 bit short and a Boolean saying whether it changed. But given those 12 bits, the short and the Boolean produced are always the same. <strong>We can precompute the results for every possible input <em>once</em> and look them up as our inner loop.</strong></p>
+<p>That is, we can move the vast majority of the bit twiddling backwards in time to <strong>before the algorithm runs the first step.</strong></p>
+<p>We will need a lookup key comprised of the twelve bits we need; fortunately, they are the bottom twelve bits so we can extract them with a minimum of bit twiddling by adding a helper to the triplet struct:</p>
+<pre>public int LookupKey1 =&gt; triplet &amp; 0x0fff;</pre>
+<p>I’ll create two lookups, one for “will there be a change?” and one for “what is the new triplet?” Since the lookups are keyed on a 12-bit integer, we can simply make them both arrays; there’s no need for anything fancier:</p>
+<pre>static class TripletLookup
+{
+  public static Triplet[] lookup;
+  public static bool[] changed;
+</pre>
+<p>and initialize them in a static constructor; we just create every possible triplet based on the bottom 12 bits, and compute what the inner loop of the first pass did in the previous version:</p>
+<pre>  static TripletLookup()
+  {
+    lookup = new Triplet[1 &lt;&lt; 12];
+    changed = new bool[1 &lt;&lt; 12];
+    for (int left = 0; left &lt; 2; left += 1)
+      for (int middle = 0; middle &lt; 2; middle += 1)
+        for (int right = 0; right &lt; 2; right += 1)
+          for (int lc = 0; lc &lt; 8; lc += 1)
+            for (int mc = 0; mc &lt; 7; mc += 1)
+              for (int rc = 0; rc &lt; 8; rc += 1)
+              {
+                Triplet t = new Triplet()
+                  .SetLeftCurrent(left == 1)
+                  .SetMiddleCurrent(middle == 1)
+                  .SetRightCurrent(right == 1)
+                  .SetLeftCountRaw(lc)
+                  .SetMiddleCountRaw(mc)
+                  .SetRightCountRaw(rc)
+                  .SetLeftNext(
+                    (lc + middle == 3) | (left == 1) &amp; (lc + middle == 2))
+                  .SetMiddleNext(
+                     (left + mc + right == 3) | (middle == 1) &amp; (left + mc + right == 2))
+                  .SetRightNext(
+                    (middle + rc == 3) | (right == 1) &amp; (middle + rc == 2));
+                lookup[t.LookupKey1] = t;
+                changed[t.LookupKey1] = t.Changed;
+              }
+  }</pre>
+<p>And that’s that.</p>
+<p>A few things to note here. First, honestly, how often are you justified in writing a six-deep nested loop? Not very often, so let’s take the opportunity while we’ve got it!</p>
+<p>Second, a great many of these lookup conditions are impossible. In Life you cannot get into a situation where the middle cell of a triplet has seven living neighbours that are not left or right, AND left and right both have zero living neighbours other than the middle. Who cares? These two tables take up 12KB of memory, total. We can waste some. And the cost of doing the unnecessary calculations is only paid once, at startup.</p>
+<p>Moreover, in Stafford’s original implementation he went even further and did not bother to pull out the twelve bits for the key; he just precomputed the entire triplet-to-triplet function and made a table with 65536 entries. Why do any bit twiddling at all?</p>
+<p>Anyway, we can now replace the entire inner loop of the first pass with:</p>
+<pre>int key1 = triplets[tx, y].LookupKey1;
+if (TripletLookup.changed[key1])
+{
+  triplets[tx, y] = TripletLookup.lookup[key1];
+  currentChanges.Add((tx, y));
+}</pre>
+<p>So much nicer to read, and much faster. Let’s once again run 5000 generations of acorn on an 8-quad:</p>
+<pre>Algorithm           time(ms)  ticks  size(quad)    megacells/s
+Naïve (Optimized):   4000       5K      8               82
+Abrash                550       5K      8              596
+Abrash w/ changes     190       5K      8             1725 
+Abrash, O(c)          240       5K      8             1365
+Stafford v1           340       5K      8              963
+Stafford v2           210       5K      8             1560
+</pre>
+<p>We are back in business! We have a three-cells-per-short O(c) algorithm that beats the one-cell-per-byte O(c) algorithm and is within striking distance of beating the “copy the array every time” version.</p>
+<hr>
+<p><strong>Aside:&nbsp;</strong>I told a small fib earlier in this episode; did you catch it?</p>
+<p>Give that some thought and then scroll down.</p>
+<p>.</p>
+<p>.</p>
+<p>.</p>
+<p>.</p>
+<p>.</p>
+<p>.</p>
+<p>.</p>
+<blockquote><p>…we can move the vast majority of the bit twiddling backwards in time to <strong>before the algorithm runs the first step.</strong></p></blockquote>
+<p>I put my fib in boldface for added foolery.</p>
+<p>When <em>exactly</em> does the lookup initialization happen? I worked on the compiler team and the language design team and <a href="https://csharpindepth.com/Articles/BeforeFieldInit">I still always have to double-check Jon’s page on the subject whenever it comes up.</a></p>
+<p>Since we have a static class with a static constructor, the static constructor will run when a member is accessed for the first time; we are not using the “relaxed” semantics. That means: the cost of precomputing the tables is incurred <em>during </em>the first call to Step, not <em>before</em>. This could make a difference to our performance metrics!</p>
+<p>It does not, because when I collected those metrics I ensured that Step had already been called at least once before I started the stopwatch. But I had to know to do that.</p>
+<p>Incidentally, the purpose of the “relaxed” semantics is to allow the initialization of the static fields to happen <em>when the first method that accesses those fields is jitted</em>. That way the jitter does not have to emit <em>code</em> to ensure that the fields are initialized; it just initializes them and then it knows they are initialized! I’ve always found it a little ironic that the “relaxed” semantic means that the jitter gets <em>more eager </em>about calling the initializers early. More eagerness seems like an odd thing to characterize as “relaxed”.</p>
+<hr>
+<p><strong>Next time on FAIC:</strong> Optimizing the first pass was pretty straightforward. Optimizing the second pass is maybe not so easy. We will do so, and finish up our exploration of Stafford’s algorithm.</p>
+<hr>
+<p>For today’s extra content: last time I mentioned that a common technique is to use eaters to constrain unwanted expansion of some pattern in an oscillator; this has been used for a long time, as evidenced by two oscillators discovered in 1972 by Robert Wainwright: <a href="https://www.conwaylife.com/wiki/Dinner_table">dinner table</a>, and <a href="https://www.conwaylife.com/wiki/Roteightor">roteightor</a>. (Images from wiki; see links.)</p>
+<p><a href="https://ericlippert.files.wordpress.com/2020/06/dinnertable.gif"><img data-attachment-id="7304" data-permalink="https://ericlippert.com/2020/06/25/life-part-18/dinnertable/" data-orig-file="https://ericlippert.files.wordpress.com/2020/06/dinnertable.gif" data-orig-size="242,242" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="Dinnertable" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/06/dinnertable.gif?w=242" data-large-file="https://ericlippert.files.wordpress.com/2020/06/dinnertable.gif?w=242" src="https://ericlippert.files.wordpress.com/2020/06/dinnertable.gif?w=584" alt=""></a><a href="https://ericlippert.files.wordpress.com/2020/06/roteightor.gif"><img data-attachment-id="7305" data-permalink="https://ericlippert.com/2020/06/25/life-part-18/roteightor/" data-orig-file="https://ericlippert.files.wordpress.com/2020/06/roteightor.gif" data-orig-size="258,258" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="Roteightor" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/06/roteightor.gif?w=258" data-large-file="https://ericlippert.files.wordpress.com/2020/06/roteightor.gif?w=258" src="https://ericlippert.files.wordpress.com/2020/06/roteightor.gif?w=584" alt=""></a></p>
+
+
+
+			</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

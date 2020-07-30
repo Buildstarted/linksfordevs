@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Hardware Intrinsics in .NET Core | .NET Blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Hardware Intrinsics in .NET Core | .NET Blog - linksfor.dev(s)"/>
+    <meta property="article:author" content="Tanner GoodingSoftware Engineer,&#xA0;.NET TeamFollow Tanner"/>
+    <meta property="og:description" content="Several years ago,&#xA0;we decided that it was time to support SIMD code in .NET. We introduced the System.Numerics namespace with&#xA0;Vector2,&#xA0;Vector3,&#xA0;Vector4,&#xA0;Vector&lt;T&gt;, and related types. These types expose a general-purpose API for creating, accessing, and operating on them using hardware vector instructions (when available)."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://devblogs.microsoft.com/dotnet/hardware-intrinsics-in-net-core/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Hardware Intrinsics in .NET Core | .NET Blog</title>
+<div class="readable">
+        <h1>Hardware Intrinsics in .NET Core | .NET Blog</h1>
+            <div>by Tanner GoodingSoftware Engineer,&#xA0;.NET TeamFollow Tanner</div>
+            <div>Reading time: 22-28 minutes</div>
+        <div>Posted here: 03 Sep 2019</div>
+        <p><a href="https://devblogs.microsoft.com/dotnet/hardware-intrinsics-in-net-core/">https://devblogs.microsoft.com/dotnet/hardware-intrinsics-in-net-core/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="featured"><div><div><div><div><p><img src="https://secure.gravatar.com/avatar/45d46131d8cd64c7fb83cba998b67c6f?s=58&amp;d=mm&amp;r=g" width="58" height="58" alt="Avatar"></p><p>Tanner</p></div></div></div><p>September 3rd, 2019</p><p data-line="2">Several years ago,&nbsp;<a title="https://devblogs.microsoft.com/dotnet/the-jit-finally-proposed-jit-and-simd-are-getting-married/" href="https://devblogs.microsoft.com/dotnet/the-jit-finally-proposed-jit-and-simd-are-getting-married/">we decided that it was time to support SIMD code in .NET</a>. We introduced the System.Numerics namespace with&nbsp;<code>Vector2</code>,&nbsp;<code>Vector3</code>,&nbsp;<code>Vector4</code>,&nbsp;<code>Vector&lt;T&gt;</code>, and related types. These types expose a general-purpose API for creating, accessing, and operating on them using hardware vector instructions (when available). They also provide a software fallback for when the hardware does not provide the appropriate instructions. This enabled a number of common algorithms to be vectorized, often with only minor refactorings. However, the generality of this approach made it difficult for programs to take full advantage of all vector instructions available on modern hardware. Additionally, modern hardware often exposes a number of specialized non-vector instructions that can dramatically improve performance. In this blog post, I’m exploring how we’ve addressed this limitation in .NET Core 3.0.</p><h3 id="what-are-hardware-intrinsics" data-line="4">What are hardware intrinsics?</h3><p data-line="6">In .NET Core 3.0, we added a new feature called&nbsp;<em>hardware intrinsics</em>. Hardware intrinsics provide access to many of these hardware specific instructions that can’t easily be exposed in a more general-purpose mechanism. They differ from the existing SIMD intrinsics in that they are not general-purpose (the new hardware intrinsics are not cross-platform and the architecture does not provide a software fallback) and instead directly expose platform and hardware specific functionality to the .NET developer. The existing SIMD intrinsics, in comparison, are cross-platform, provide a software fallback, and are slightly abstracted from the underlying hardware. That abstraction can come at a cost and prevent certain functionality from being exposed (when said functionality does not exist or is not easily emulated on all target hardware).</p><p data-line="8">The new intrinsics and supporting types are exposed under the&nbsp;<code>System.Runtime.Intrinsics</code>&nbsp;namespace. For .NET Core 3.0 there currently exists one namespace:&nbsp;<code>System.Runtime.Intrinsics.X86</code>. We are working on exposing hardware intrinsics for other platforms, such as&nbsp;<code>System.Runtime.Intrinsics.Arm</code>.</p><p data-line="10">Under the platform specific namespaces, intrinsics are grouped into classes which represent logical hardware instruction groups (frequently referred to as&nbsp;<em>Instruction Set Architectures</em>&nbsp;or ISAs). Each class then exposes an&nbsp;<code>IsSupported</code>&nbsp;property that indicates whether the hardware you are currently executing on supports that instruction set. Each class then also exposes a set of methods that map to the underlying instructions exposed by that instruction set. There is sometimes additionally a subclass that is part of the same instruction set but that may be limited to specific hardware. For example, the&nbsp;<code>Lzcnt</code>&nbsp;class provides access to the leading zero count instructions. There is then a subclass named&nbsp;<code>X64</code>&nbsp;which exposes the forms of the instruction that are only usable on 64-bit machines.</p><p data-line="12">Some of the classes are also hierarchical in nature. For example, if&nbsp;<code>Lzcnt.X64.IsSupported</code>&nbsp;returns true, then&nbsp;<code>Lzcnt.IsSupported</code>&nbsp;must also return true since it is an explicit subclass. Likewise, if&nbsp;<code>Sse2.IsSupported</code>&nbsp;returns true, then&nbsp;<code>Sse.IsSupported</code>&nbsp;must also return true because&nbsp;<code>Sse2</code>&nbsp;explicitly inherits from the&nbsp;<code>Sse</code>class. However, it is worth noting that just because classes have similar names does not mean they are definitely hierarchical. For example,&nbsp;<code>Bmi2</code>&nbsp;does not inherit from&nbsp;<code>Bmi1</code>&nbsp;and so the&nbsp;<code>IsSupported</code>&nbsp;checks for the two instruction sets are distinct from each other. The design philosophy of these types is to truthfully represent the ISA specification. SSE2 requires to support SSE1, so we exposed a subclass and since BMI2 doesn’t require supporting BMI1, we didn’t use inheritance.</p><p data-line="14">An example of the API shape described above is the following:</p><div id="gist98089556">
+    <div>
+      <div>
+        <div>
+  <div id="file-apishape-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8">
+      <tbody><tr>
+        <td id="file-apishape-cs-L1" data-line-number="1"></td>
+        <td id="file-apishape-cs-LC1"><span>namespace</span> <span>System</span>.<span>Runtime</span>.<span>Intrinsics</span>.<span>X86</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L2" data-line-number="2"></td>
+        <td id="file-apishape-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L3" data-line-number="3"></td>
+        <td id="file-apishape-cs-LC3">    <span>public</span> <span>abstract</span> <span>class</span> <span>Sse</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L4" data-line-number="4"></td>
+        <td id="file-apishape-cs-LC4">    {</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L5" data-line-number="5"></td>
+        <td id="file-apishape-cs-LC5">        <span>public</span> <span>static</span> <span>bool</span> <span>IsSupported</span> { <span>get</span>; }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L6" data-line-number="6"></td>
+        <td id="file-apishape-cs-LC6">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L7" data-line-number="7"></td>
+        <td id="file-apishape-cs-LC7">        <span>public</span> <span>static</span> <span>Vector128</span>&lt;<span>float</span>&gt; <span>Add</span>(<span>Vector128</span>&lt;<span>float</span>&gt; <span>left</span>, <span>Vector128</span>&lt;<span>float</span>&gt; <span>right</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L8" data-line-number="8"></td>
+        <td id="file-apishape-cs-LC8">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L9" data-line-number="9"></td>
+        <td id="file-apishape-cs-LC9">        <span><span>//</span> Additional APIs</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L10" data-line-number="10"></td>
+        <td id="file-apishape-cs-LC10">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L11" data-line-number="11"></td>
+        <td id="file-apishape-cs-LC11">        <span>public</span> <span>abstract</span> <span>class</span> <span>X64</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L12" data-line-number="12"></td>
+        <td id="file-apishape-cs-LC12">        {</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L13" data-line-number="13"></td>
+        <td id="file-apishape-cs-LC13">            <span>public</span> <span>static</span> <span>bool</span> <span>IsSupported</span> { <span>get</span>; }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L14" data-line-number="14"></td>
+        <td id="file-apishape-cs-LC14">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L15" data-line-number="15"></td>
+        <td id="file-apishape-cs-LC15">            <span>public</span> <span>static</span> <span>long</span> <span>ConvertToInt64</span>(<span>Vector128</span>&lt;<span>float</span>&gt; <span>value</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L16" data-line-number="16"></td>
+        <td id="file-apishape-cs-LC16">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L17" data-line-number="17"></td>
+        <td id="file-apishape-cs-LC17">            <span><span>//</span> Additional APIs</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L18" data-line-number="18"></td>
+        <td id="file-apishape-cs-LC18">        }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L19" data-line-number="19"></td>
+        <td id="file-apishape-cs-LC19">    }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L20" data-line-number="20"></td>
+        <td id="file-apishape-cs-LC20">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L21" data-line-number="21"></td>
+        <td id="file-apishape-cs-LC21">    <span>public</span> <span>abstract</span> <span>class</span> <span>Sse2</span> : <span>Sse</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L22" data-line-number="22"></td>
+        <td id="file-apishape-cs-LC22">    {</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L23" data-line-number="23"></td>
+        <td id="file-apishape-cs-LC23">        <span>public</span> <span>static</span> <span>new</span> <span>bool</span> <span>IsSupported</span> { <span>get</span>; }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L24" data-line-number="24"></td>
+        <td id="file-apishape-cs-LC24"> </td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L25" data-line-number="25"></td>
+        <td id="file-apishape-cs-LC25">        <span>public</span> <span>static</span> <span>Vector128</span>&lt;<span>byte</span>&gt; <span>Add</span>(<span>Vector128</span>&lt;<span>byte</span>&gt; <span>left</span>, <span>Vector128</span>&lt;<span>byte</span>&gt; <span>right</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L26" data-line-number="26"></td>
+        <td id="file-apishape-cs-LC26">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L27" data-line-number="27"></td>
+        <td id="file-apishape-cs-LC27">        <span><span>//</span> Additional APIs</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L28" data-line-number="28"></td>
+        <td id="file-apishape-cs-LC28"> </td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L29" data-line-number="29"></td>
+        <td id="file-apishape-cs-LC29">        <span>public</span> <span>new</span> <span>abstract</span> <span>class</span> <span>X64</span> : <span>Sse</span>.<span>X64</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L30" data-line-number="30"></td>
+        <td id="file-apishape-cs-LC30">        {</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L31" data-line-number="31"></td>
+        <td id="file-apishape-cs-LC31">            <span>public</span> <span>static</span> <span>bool</span> <span>IsSupported</span> { <span>get</span>; }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L32" data-line-number="32"></td>
+        <td id="file-apishape-cs-LC32">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L33" data-line-number="33"></td>
+        <td id="file-apishape-cs-LC33">            <span>public</span> <span>static</span> <span>long</span> <span>ConvertToInt64</span>(<span>Vector128</span>&lt;<span>double</span>&gt; <span>value</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L34" data-line-number="34"></td>
+        <td id="file-apishape-cs-LC34">
+</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L35" data-line-number="35"></td>
+        <td id="file-apishape-cs-LC35">            <span><span>//</span> Additional APIs</span></td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L36" data-line-number="36"></td>
+        <td id="file-apishape-cs-LC36">        }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L37" data-line-number="37"></td>
+        <td id="file-apishape-cs-LC37">    }</td>
+      </tr>
+      <tr>
+        <td id="file-apishape-cs-L38" data-line-number="38"></td>
+        <td id="file-apishape-cs-LC38">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<p>You can also see a more complete list by browsing the source code on&nbsp;<a title="https://source.dot.net/#System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse.PlatformNotSupported.cs" href="https://source.dot.net/#System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse.PlatformNotSupported.cs" target="_blank">source.dot.net</a>&nbsp;or&nbsp;<a title="https://github.com/dotnet/coreclr/blob/master/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse.cs" href="https://github.com/dotnet/coreclr/blob/master/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse.cs" target="_blank">dotnet/coreclr on GitHub</a>.</p><p data-line="58">The&nbsp;<code>IsSupported</code>&nbsp;checks are treated as runtime constants by the JIT (when optimizations are enabled) and so you do not need to cross-compile to support multiple different ISAs, platforms, or architectures. Instead, you just write your code using&nbsp;<code>if</code>-statements and the unused code paths (any code path which is not executed, due to the condition for the branch being&nbsp;<code>false</code>&nbsp;or an earlier branch being taken instead) are dropped from the generated code (the native assembly code generated by the JIT at runtime).</p><p data-line="60">It is essential that you guard usage of hardware intrinsics with the appropriate&nbsp;<code>IsSupported</code>&nbsp;check. If your code is unguarded and runs on a machine or architecture/platform that doesn’t support the intrinsic, a&nbsp;<code>PlatformNotSupportedException</code>&nbsp;is thrown by the runtime.</p><h3 id="what-benefits-do-these-provide-me" data-line="62">What benefits do these provide me?</h3><p data-line="64">Hardware Intrinsics definitely aren’t for everyone, but they can be used to boost perf in some computationally heavy workloads. Frameworks such as CoreFX or&nbsp;<a title="http://ml.net/" href="http://ml.net/" target="_blank">ML.NET</a>&nbsp;take advantage of these methods to help accelerate things like copying memory, searching for the index of an item in an array/string, resizing images, or working with vectors, matrices, and tensors. Manually vectorizing some code that has been identified as a bottleneck can also be easier than it seems. Vectorizing your code is really all about performing multiple operations at once, generally using Single-Instruction Multiple Data (<code>SIMD</code>) instructions.</p><p data-line="66">It is important to profile your code before vectorizing to ensure that the code you are optimizing is part of a hot spot (and therefore the optimization will be impactful). It is also important to profile while you are iterating on the vectorized code, as not all code will benefit from vectorization.</p><h3 id="vectorizing-a-simple-algorithm" data-line="68">Vectorizing a simple algorithm</h3><p data-line="70">Take for example an algorithm which sums all elements in an array or span. This code is a perfect candidate for vectorization because it does the same unconditional operation every iteration of the loop and those operations are fairly trivial in nature.</p><p data-line="72">An example of such an algorithm might look like the following:</p><div id="gist98089556">
+    <div>
+      <div>
+        <div>
+  <div id="file-sum-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8">
+      <tbody><tr>
+        <td id="file-sum-cs-L1" data-line-number="1"></td>
+        <td id="file-sum-cs-LC1"><span>public</span> <span>int</span> <span>Sum</span>(<span>ReadOnlySpan</span>&lt;<span>int</span>&gt; <span>source</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L2" data-line-number="2"></td>
+        <td id="file-sum-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L3" data-line-number="3"></td>
+        <td id="file-sum-cs-LC3">    <span>int</span> <span>result</span> <span>=</span> <span>0</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L4" data-line-number="4"></td>
+        <td id="file-sum-cs-LC4">            </td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L5" data-line-number="5"></td>
+        <td id="file-sum-cs-LC5">    <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>source</span>.<span>Length</span>; <span>i</span><span>++</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L6" data-line-number="6"></td>
+        <td id="file-sum-cs-LC6">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L7" data-line-number="7"></td>
+        <td id="file-sum-cs-LC7">        <span>result</span> <span>+=</span> <span>source</span>[<span>i</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L8" data-line-number="8"></td>
+        <td id="file-sum-cs-LC8">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L9" data-line-number="9"></td>
+        <td id="file-sum-cs-LC9">            </td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L10" data-line-number="10"></td>
+        <td id="file-sum-cs-LC10">    <span>return</span> <span>result</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sum-cs-L11" data-line-number="11"></td>
+        <td id="file-sum-cs-LC11">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<p data-line="87">The code is simple and understandable, but it is also not particularly fast for large inputs since you are only doing a single trivial operation per loop iteration.</p><div id="gist98089556">
+    <div>
+      <div>
+        <div>
+  <div id="file-machineinfo">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8">
+      <tbody><tr>
+        <td id="file-machineinfo-L1" data-line-number="1"></td>
+        <td id="file-machineinfo-LC1">BenchmarkDotNet=v0.11.5, OS=Windows 10.0.18362</td>
+      </tr>
+      <tr>
+        <td id="file-machineinfo-L2" data-line-number="2"></td>
+        <td id="file-machineinfo-LC2">AMD Ryzen 7 1800X, 1 CPU, 16 logical and 8 physical cores</td>
+      </tr>
+      <tr>
+        <td id="file-machineinfo-L3" data-line-number="3"></td>
+        <td id="file-machineinfo-LC3">.NET Core SDK=3.0.100-preview9-013775</td>
+      </tr>
+      <tr>
+        <td id="file-machineinfo-L4" data-line-number="4"></td>
+        <td id="file-machineinfo-LC4">  [Host]     : .NET Core 3.0.0-preview9-19410-10 (CoreCLR 4.700.19.40902, CoreFX 4.700.19.40917), 64bit RyuJIT  [AttachedDebugger]</td>
+      </tr>
+      <tr>
+        <td id="file-machineinfo-L5" data-line-number="5"></td>
+        <td id="file-machineinfo-LC5">  DefaultJob : .NET Core 3.0.0-preview9-19410-10 (CoreCLR 4.700.19.40902, CoreFX 4.700.19.40917), 64bit RyuJIT</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<table><thead><tr><th>Method</th><th>Count</th><th>Mean</th><th>Error</th><th>StdDev</th></tr></thead><tbody><tr><td>Sum</td><td>1</td><td>2.477 ns</td><td>0.0192 ns</td><td>0.0179 ns</td></tr><tr><td>Sum</td><td>2</td><td>2.164 ns</td><td>0.0265 ns</td><td>0.0235 ns</td></tr><tr><td>Sum</td><td>4</td><td>3.224 ns</td><td>0.0302 ns</td><td>0.0267 ns</td></tr><tr><td>Sum</td><td>8</td><td>4.347 ns</td><td>0.0665 ns</td><td>0.0622 ns</td></tr><tr><td>Sum</td><td>16</td><td>8.444 ns</td><td>0.2042 ns</td><td>0.3734 ns</td></tr><tr><td>Sum</td><td>32</td><td>13.963 ns</td><td>0.2182 ns</td><td>0.2041 ns</td></tr><tr><td>Sum</td><td>64</td><td>50.374 ns</td><td>0.2955 ns</td><td>0.2620 ns</td></tr><tr><td>Sum</td><td>128</td><td>60.139 ns</td><td>0.3890 ns</td><td>0.3639 ns</td></tr><tr><td>Sum</td><td>256</td><td>106.416 ns</td><td>0.6404 ns</td><td>0.5990 ns</td></tr><tr><td>Sum</td><td>512</td><td>291.450 ns</td><td>3.5148 ns</td><td>3.2878 ns</td></tr><tr><td>Sum</td><td>1024</td><td>574.243 ns</td><td>9.5851 ns</td><td>8.4970 ns</td></tr><tr><td>Sum</td><td>2048</td><td>1,137.819 ns</td><td>5.9363 ns</td><td>5.5529 ns</td></tr><tr><td>Sum</td><td>4096</td><td>2,228.341 ns</td><td>22.8882 ns</td><td>21.4097 ns</td></tr><tr><td>Sum</td><td>8192</td><td>2,973.040 ns</td><td>14.2863 ns</td><td>12.6644 ns</td></tr><tr><td>Sum</td><td>16384</td><td>5,883.504 ns</td><td>15.9619 ns</td><td>14.9308 ns</td></tr><tr><td>Sum</td><td>32768</td><td>11,699.237 ns</td><td>104.0970 ns</td><td>97.3724 ns</td></tr></tbody></table><h4 id="improving-the-perf-by-unrolling-the-loop" data-line="116">Improving the perf by unrolling the loop</h4><p data-line="118">Modern CPUs have many ways of increasing the throughput at which it executes your code. For single-threaded applications, one of the ways it can do this is by executing multiple primitive operations in a single cycle (a cycle is the basic unit of time in a CPU).</p><p data-line="120">Most modern CPUs can execute about 4 add operations in a single cycle (under optimal conditions), so by laying out your code correctly and profiling it, you can sometimes optimize your code to have better performance, even when only executing on a single-thread.</p><p data-line="122">While the JIT can perform loop unrolling itself, it is conservative in deciding when to do so due to the larger codegen it produces. So, it can be beneficial to manually unroll the loop in your source code instead.</p><p data-line="124">You might unroll your code like the following:</p><div id="gist98089556">
+    <div>
+      <div>
+        <div>
+  <div id="file-sumunrolled-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8">
+      <tbody><tr>
+        <td id="file-sumunrolled-cs-L1" data-line-number="1"></td>
+        <td id="file-sumunrolled-cs-LC1"><span>public</span> <span>unsafe</span> <span>int</span> <span>SumUnrolled</span>(<span>ReadOnlySpan</span>&lt;<span>int</span>&gt; <span>source</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L2" data-line-number="2"></td>
+        <td id="file-sumunrolled-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L3" data-line-number="3"></td>
+        <td id="file-sumunrolled-cs-LC3">    <span>int</span> <span>result</span> <span>=</span> <span>0</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L4" data-line-number="4"></td>
+        <td id="file-sumunrolled-cs-LC4">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L5" data-line-number="5"></td>
+        <td id="file-sumunrolled-cs-LC5">    <span>int</span> <span>i</span> <span>=</span> <span>0</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L6" data-line-number="6"></td>
+        <td id="file-sumunrolled-cs-LC6">    <span>int</span> <span>lastBlockIndex</span> <span>=</span> <span>source</span>.<span>Length</span> <span>-</span> (<span>source</span>.<span>Length</span> <span>%</span> <span>4</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L7" data-line-number="7"></td>
+        <td id="file-sumunrolled-cs-LC7">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L8" data-line-number="8"></td>
+        <td id="file-sumunrolled-cs-LC8">    <span><span>//</span> Pin source so we can elide the bounds checks</span></td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L9" data-line-number="9"></td>
+        <td id="file-sumunrolled-cs-LC9">    <span>fixed</span> (<span>int</span><span>*</span> <span>pSource</span> <span>=</span> <span>source</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L10" data-line-number="10"></td>
+        <td id="file-sumunrolled-cs-LC10">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L11" data-line-number="11"></td>
+        <td id="file-sumunrolled-cs-LC11">        <span>while</span> (<span>i</span> <span>&lt;</span> <span>lastBlockIndex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L12" data-line-number="12"></td>
+        <td id="file-sumunrolled-cs-LC12">        {</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L13" data-line-number="13"></td>
+        <td id="file-sumunrolled-cs-LC13">            <span>result</span> <span>+=</span> <span>pSource</span>[<span>i</span> <span>+</span> <span>0</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L14" data-line-number="14"></td>
+        <td id="file-sumunrolled-cs-LC14">            <span>result</span> <span>+=</span> <span>pSource</span>[<span>i</span> <span>+</span> <span>1</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L15" data-line-number="15"></td>
+        <td id="file-sumunrolled-cs-LC15">            <span>result</span> <span>+=</span> <span>pSource</span>[<span>i</span> <span>+</span> <span>2</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L16" data-line-number="16"></td>
+        <td id="file-sumunrolled-cs-LC16">            <span>result</span> <span>+=</span> <span>pSource</span>[<span>i</span> <span>+</span> <span>3</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L17" data-line-number="17"></td>
+        <td id="file-sumunrolled-cs-LC17">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L18" data-line-number="18"></td>
+        <td id="file-sumunrolled-cs-LC18">            <span>i</span> <span>+=</span> <span>4</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L19" data-line-number="19"></td>
+        <td id="file-sumunrolled-cs-LC19">        }</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L20" data-line-number="20"></td>
+        <td id="file-sumunrolled-cs-LC20">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L21" data-line-number="21"></td>
+        <td id="file-sumunrolled-cs-LC21">        <span>while</span> (<span>i</span> <span>&lt;</span> <span>source</span>.<span>Length</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L22" data-line-number="22"></td>
+        <td id="file-sumunrolled-cs-LC22">        {</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L23" data-line-number="23"></td>
+        <td id="file-sumunrolled-cs-LC23">            <span>result</span> <span>+=</span> <span>pSource</span>[<span>i</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L24" data-line-number="24"></td>
+        <td id="file-sumunrolled-cs-LC24">            <span>i</span> <span>+=</span> <span>1</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L25" data-line-number="25"></td>
+        <td id="file-sumunrolled-cs-LC25">        }</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L26" data-line-number="26"></td>
+        <td id="file-sumunrolled-cs-LC26">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L27" data-line-number="27"></td>
+        <td id="file-sumunrolled-cs-LC27">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L28" data-line-number="28"></td>
+        <td id="file-sumunrolled-cs-LC28">    <span>return</span> <span>result</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumunrolled-cs-L29" data-line-number="29"></td>
+        <td id="file-sumunrolled-cs-LC29">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<p data-line="157">The code is slightly more complicated but takes better advantage of your hardware.</p><p data-line="159">For really small loops, the code ends up being slightly slower, but that normalizes itself for inputs that have 8 elements and then starts getting faster for inputs with even more elements (taking 26% less time at 32k elements). It’s also worth noting that this optimization doesn’t always improve performance. For example, when handling&nbsp;<code>float</code>, the unrolled version is practically the same speed as the original version, so it’s important to profile your code accordingly.</p><table><thead><tr><th>Method</th><th>Count</th><th>Mean</th><th>Error</th><th>StdDev</th></tr></thead><tbody><tr><td>SumUnrolled</td><td>1</td><td>2.922 ns</td><td>0.0651 ns</td><td>0.0609 ns</td></tr><tr><td>SumUnrolled</td><td>2</td><td>3.576 ns</td><td>0.0116 ns</td><td>0.0109 ns</td></tr><tr><td>SumUnrolled</td><td>4</td><td>3.708 ns</td><td>0.0157 ns</td><td>0.0139 ns</td></tr><tr><td>SumUnrolled</td><td>8</td><td>4.832 ns</td><td>0.0486 ns</td><td>0.0454 ns</td></tr><tr><td>SumUnrolled</td><td>16</td><td>7.490 ns</td><td>0.1131 ns</td><td>0.1058 ns</td></tr><tr><td>SumUnrolled</td><td>32</td><td>11.277 ns</td><td>0.0910 ns</td><td>0.0851 ns</td></tr><tr><td>SumUnrolled</td><td>64</td><td>19.761 ns</td><td>0.2016 ns</td><td>0.1885 ns</td></tr><tr><td>SumUnrolled</td><td>128</td><td>36.639 ns</td><td>0.3043 ns</td><td>0.2847 ns</td></tr><tr><td>SumUnrolled</td><td>256</td><td>77.969 ns</td><td>0.8409 ns</td><td>0.7866 ns</td></tr><tr><td>SumUnrolled</td><td>512</td><td>146.357 ns</td><td>1.3209 ns</td><td>1.2356 ns</td></tr><tr><td>SumUnrolled</td><td>1024</td><td>287.354 ns</td><td>0.9223 ns</td><td>0.8627 ns</td></tr><tr><td>SumUnrolled</td><td>2048</td><td>566.405 ns</td><td>4.0155 ns</td><td>3.5596 ns</td></tr><tr><td>SumUnrolled</td><td>4096</td><td>1,131.016 ns</td><td>7.3601 ns</td><td>6.5246 ns</td></tr><tr><td>SumUnrolled</td><td>8192</td><td>2,259.836 ns</td><td>8.6539 ns</td><td>8.0949 ns</td></tr><tr><td>SumUnrolled</td><td>16384</td><td>4,501.295 ns</td><td>6.4186 ns</td><td>6.0040 ns</td></tr><tr><td>SumUnrolled</td><td>32768</td><td>8,979.690 ns</td><td>19.5265 ns</td><td>18.2651 ns</td></tr></tbody></table><h4 id="improving-the-perf-by-vectorizing-the-loop" data-line="183"><a href="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-1024x808.png" data-featherlight="image"> <img src="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-1024x808.png" alt="" width="640" height="505" srcset="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-1024x808.png 1024w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-300x237.png 300w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-768x606.png 768w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled.png 1026w" sizes="(max-width: 640px) 100vw, 640px"> </a></h4><h4 data-line="183">Improving the perf by vectorizing the loop</h4><p data-line="185">However, we can still optimize the code a bit more. SIMD instructions are another way modern CPUs allow you to improve throughput. Using a single instruction they allow you to perform multiple operations in a single cycle. This can be better than the loop unrolling because it performs essentially the same operation, but with smaller generated code.</p><p data-line="187">To elaborate a bit, each one of the add instructions from the unrolled loop is 4 bytes in size, so it takes 16-bytes of space to have all 4 adds in the unrolled form. However, the SIMD add instruction also performs 4 additions, but it only takes 4 bytes to encode. This means there are less instructions for the CPU to decode and execute each iteration of the loop. There are also other things the CPU can assume and optimize around for this single instruction, but those are out of scope for this blog post. What’s even better is that modern CPUs can also execute more than one SIMD instruction per cycle, so in certain cases you can then unroll your vectorized code to improve the performance further.</p><p data-line="189">You should generally start by looking at whether the general-purpose&nbsp;<code>Vector&lt;T&gt;</code>&nbsp;class will suit your needs. It, like the newer hardware intrinsics, will emit SIMD instructions, but given that it is general-purpose you can reduce the amount of code you need to write/maintain.</p><p data-line="191">The code might look like:</p><div id="gist98089556">
+    <div>
+      <div>
+        <div>
+  <div id="file-sumvectort-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8">
+      <tbody><tr>
+        <td id="file-sumvectort-cs-L1" data-line-number="1"></td>
+        <td id="file-sumvectort-cs-LC1"><span>public</span> <span>int</span> <span>SumVectorT</span>(<span>ReadOnlySpan</span>&lt;<span>int</span>&gt; <span>source</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L2" data-line-number="2"></td>
+        <td id="file-sumvectort-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L3" data-line-number="3"></td>
+        <td id="file-sumvectort-cs-LC3">    <span>int</span> <span>result</span> <span>=</span> <span>0</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L4" data-line-number="4"></td>
+        <td id="file-sumvectort-cs-LC4">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L5" data-line-number="5"></td>
+        <td id="file-sumvectort-cs-LC5">    <span>Vector</span>&lt;<span>int</span>&gt; <span>vresult</span> <span>=</span> <span>Vector</span>&lt;<span>int</span>&gt;.<span>Zero</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L6" data-line-number="6"></td>
+        <td id="file-sumvectort-cs-LC6">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L7" data-line-number="7"></td>
+        <td id="file-sumvectort-cs-LC7">    <span>int</span> <span>i</span> <span>=</span> <span>0</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L8" data-line-number="8"></td>
+        <td id="file-sumvectort-cs-LC8">    <span>int</span> <span>lastBlockIndex</span> <span>=</span> <span>source</span>.<span>Length</span> <span>-</span> (<span>source</span>.<span>Length</span> <span>%</span> <span>Vector</span>&lt;<span>int</span>&gt;.<span>Count</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L9" data-line-number="9"></td>
+        <td id="file-sumvectort-cs-LC9">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L10" data-line-number="10"></td>
+        <td id="file-sumvectort-cs-LC10">    <span>while</span> (<span>i</span> <span>&lt;</span> <span>lastBlockIndex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L11" data-line-number="11"></td>
+        <td id="file-sumvectort-cs-LC11">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L12" data-line-number="12"></td>
+        <td id="file-sumvectort-cs-LC12">        <span>vresult</span> <span>+=</span> <span>new</span> <span>Vector</span>&lt;<span>int</span>&gt;(<span>source</span>.<span>Slice</span>(<span>i</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L13" data-line-number="13"></td>
+        <td id="file-sumvectort-cs-LC13">        <span>i</span> <span>+=</span> <span>Vector</span>&lt;<span>int</span>&gt;.<span>Count</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L14" data-line-number="14"></td>
+        <td id="file-sumvectort-cs-LC14">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L15" data-line-number="15"></td>
+        <td id="file-sumvectort-cs-LC15">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L16" data-line-number="16"></td>
+        <td id="file-sumvectort-cs-LC16">    <span>for</span> (<span>int</span> <span>n</span> <span>=</span> <span>0</span>; <span>n</span> <span>&lt;</span> <span>Vector</span>&lt;<span>int</span>&gt;.<span>Count</span>; <span>n</span><span>++</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L17" data-line-number="17"></td>
+        <td id="file-sumvectort-cs-LC17">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L18" data-line-number="18"></td>
+        <td id="file-sumvectort-cs-LC18">        <span>result</span> <span>+=</span> <span>vresult</span>[<span>n</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L19" data-line-number="19"></td>
+        <td id="file-sumvectort-cs-LC19">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L20" data-line-number="20"></td>
+        <td id="file-sumvectort-cs-LC20">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L21" data-line-number="21"></td>
+        <td id="file-sumvectort-cs-LC21">    <span>while</span> (<span>i</span> <span>&lt;</span> <span>source</span>.<span>Length</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L22" data-line-number="22"></td>
+        <td id="file-sumvectort-cs-LC22">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L23" data-line-number="23"></td>
+        <td id="file-sumvectort-cs-LC23">        <span>result</span> <span>+=</span> <span>source</span>[<span>i</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L24" data-line-number="24"></td>
+        <td id="file-sumvectort-cs-LC24">        <span>i</span> <span>+=</span> <span>1</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L25" data-line-number="25"></td>
+        <td id="file-sumvectort-cs-LC25">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L26" data-line-number="26"></td>
+        <td id="file-sumvectort-cs-LC26">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L27" data-line-number="27"></td>
+        <td id="file-sumvectort-cs-LC27">    <span>return</span> <span>result</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectort-cs-L28" data-line-number="28"></td>
+        <td id="file-sumvectort-cs-LC28">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<p data-line="223">The code is faster, but we have to fall back to accessing individual elements when computing the overall sum.&nbsp;<code>Vector&lt;T&gt;</code>&nbsp;also does not have a well-defined size and can vary based on the hardware you are running against. The hardware intrinsics provide some additional functionality that can make this code a bit nicer and faster still (at the cost of additional code complexity and maintainence requirements).</p><table><thead><tr><th>Method</th><th>Count</th><th>Mean</th><th>Error</th><th>StdDev</th></tr></thead><tbody><tr><td>SumVectorT</td><td>1</td><td>4.517 ns</td><td>0.0752 ns</td><td>0.0703 ns</td></tr><tr><td>SumVectorT</td><td>2</td><td>4.853 ns</td><td>0.0609 ns</td><td>0.0570 ns</td></tr><tr><td>SumVectorT</td><td>4</td><td>5.047 ns</td><td>0.0909 ns</td><td>0.0850 ns</td></tr><tr><td>SumVectorT</td><td>8</td><td>5.671 ns</td><td>0.0251 ns</td><td>0.0223 ns</td></tr><tr><td>SumVectorT</td><td>16</td><td>6.579 ns</td><td>0.0330 ns</td><td>0.0276 ns</td></tr><tr><td>SumVectorT</td><td>32</td><td>10.460 ns</td><td>0.0241 ns</td><td>0.0226 ns</td></tr><tr><td>SumVectorT</td><td>64</td><td>17.148 ns</td><td>0.0407 ns</td><td>0.0381 ns</td></tr><tr><td>SumVectorT</td><td>128</td><td>23.239 ns</td><td>0.0853 ns</td><td>0.0756 ns</td></tr><tr><td>SumVectorT</td><td>256</td><td>62.146 ns</td><td>0.8319 ns</td><td>0.7782 ns</td></tr><tr><td>SumVectorT</td><td>512</td><td>114.863 ns</td><td>0.4175 ns</td><td>0.3906 ns</td></tr><tr><td>SumVectorT</td><td>1024</td><td>172.129 ns</td><td>1.8673 ns</td><td>1.7467 ns</td></tr><tr><td>SumVectorT</td><td>2048</td><td>429.722 ns</td><td>1.0461 ns</td><td>0.9786 ns</td></tr><tr><td>SumVectorT</td><td>4096</td><td>654.209 ns</td><td>3.6215 ns</td><td>3.0241 ns</td></tr><tr><td>SumVectorT</td><td>8192</td><td>1,675.046 ns</td><td>14.5231 ns</td><td>13.5849 ns</td></tr><tr><td>SumVectorT</td><td>16384</td><td>2,514.778 ns</td><td>5.3369 ns</td><td>4.9921 ns</td></tr><tr><td>SumVectorT</td><td>32768</td><td>6,689.829 ns</td><td>13.9947 ns</td><td>13.0906 ns</td></tr></tbody></table><p data-line="244"><a href="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-1024x808.png" data-featherlight="image"> <img src="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-1024x808.png" alt="" width="640" height="505" srcset="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-1024x808.png 1024w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-300x237.png 300w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-768x606.png 768w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort.png 1026w" sizes="(max-width: 640px) 100vw, 640px"> </a></p><p data-line="246"><em>NOTE:</em>&nbsp;For the purposes of this blogpost, I forced the size of&nbsp;<code>Vector&lt;T&gt;</code>&nbsp;to 16-bytes using an internal configuration knob (<code>COMPlus_SIMD16ByteOnly=1</code>). This normalized the results when comparing&nbsp;<code>SumVectorT</code>&nbsp;to&nbsp;<code>SumVectorizedSse</code>&nbsp;and kept the latter code simpler. Namely, it avoided the need to write an&nbsp;<code>if (Avx2.IsSupported) { }</code>&nbsp;code path. Such a code path is nearly identical to the&nbsp;<code>Sse2</code>&nbsp;path, but deals with&nbsp;<code>Vector256&lt;T&gt;</code>&nbsp;(32-bytes) and processes even more elements per loop iteration.</p><p data-line="249">So, you might take advantage of the new hardware intrinsics like so:</p><div id="gist98089556">
+    <div>
+      <div>
+        <div>
+  <div id="file-sumvectorized-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8">
+      <tbody><tr>
+        <td id="file-sumvectorized-cs-L1" data-line-number="1"></td>
+        <td id="file-sumvectorized-cs-LC1"><span>public</span> <span>int</span> <span>SumVectorized</span>(<span>ReadOnlySpan</span>&lt;<span>int</span>&gt; <span>source</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L2" data-line-number="2"></td>
+        <td id="file-sumvectorized-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L3" data-line-number="3"></td>
+        <td id="file-sumvectorized-cs-LC3">    <span>if</span> (<span>Sse2</span>.<span>IsSupported</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L4" data-line-number="4"></td>
+        <td id="file-sumvectorized-cs-LC4">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L5" data-line-number="5"></td>
+        <td id="file-sumvectorized-cs-LC5">        <span>return</span> <span>SumVectorizedSse2</span>(<span>source</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L6" data-line-number="6"></td>
+        <td id="file-sumvectorized-cs-LC6">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L7" data-line-number="7"></td>
+        <td id="file-sumvectorized-cs-LC7">    <span>else</span></td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L8" data-line-number="8"></td>
+        <td id="file-sumvectorized-cs-LC8">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L9" data-line-number="9"></td>
+        <td id="file-sumvectorized-cs-LC9">        <span>return</span> <span>SumVectorT</span>(<span>source</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L10" data-line-number="10"></td>
+        <td id="file-sumvectorized-cs-LC10">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L11" data-line-number="11"></td>
+        <td id="file-sumvectorized-cs-LC11">}</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L12" data-line-number="12"></td>
+        <td id="file-sumvectorized-cs-LC12">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L13" data-line-number="13"></td>
+        <td id="file-sumvectorized-cs-LC13"><span>public</span> <span>unsafe</span> <span>int</span> <span>SumVectorizedSse2</span>(<span>ReadOnlySpan</span>&lt;<span>int</span>&gt; <span>source</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L14" data-line-number="14"></td>
+        <td id="file-sumvectorized-cs-LC14">{</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L15" data-line-number="15"></td>
+        <td id="file-sumvectorized-cs-LC15">    <span>int</span> <span>result</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L16" data-line-number="16"></td>
+        <td id="file-sumvectorized-cs-LC16">            </td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L17" data-line-number="17"></td>
+        <td id="file-sumvectorized-cs-LC17">    <span>fixed</span> (<span>int</span><span>*</span> <span>pSource</span> <span>=</span> <span>source</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L18" data-line-number="18"></td>
+        <td id="file-sumvectorized-cs-LC18">    {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L19" data-line-number="19"></td>
+        <td id="file-sumvectorized-cs-LC19">        <span>Vector128</span>&lt;<span>int</span>&gt; <span>vresult</span> <span>=</span> <span>Vector128</span>&lt;<span>int</span>&gt;.<span>Zero</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L20" data-line-number="20"></td>
+        <td id="file-sumvectorized-cs-LC20">            </td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L21" data-line-number="21"></td>
+        <td id="file-sumvectorized-cs-LC21">        <span>int</span> <span>i</span> <span>=</span> <span>0</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L22" data-line-number="22"></td>
+        <td id="file-sumvectorized-cs-LC22">        <span>int</span> <span>lastBlockIndex</span> <span>=</span> <span>source</span>.<span>Length</span> <span>-</span> (<span>source</span>.<span>Length</span> <span>%</span> <span>4</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L23" data-line-number="23"></td>
+        <td id="file-sumvectorized-cs-LC23">            </td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L24" data-line-number="24"></td>
+        <td id="file-sumvectorized-cs-LC24">        <span>while</span> (<span>i</span> <span>&lt;</span> <span>lastBlockIndex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L25" data-line-number="25"></td>
+        <td id="file-sumvectorized-cs-LC25">        {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L26" data-line-number="26"></td>
+        <td id="file-sumvectorized-cs-LC26">            <span>vresult</span> <span>=</span> <span>Sse2</span>.<span>Add</span>(<span>vresult</span>, <span>Sse2</span>.<span>LoadVector128</span>(<span>pSource</span> <span>+</span> <span>i</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L27" data-line-number="27"></td>
+        <td id="file-sumvectorized-cs-LC27">            <span>i</span> <span>+=</span> <span>4</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L28" data-line-number="28"></td>
+        <td id="file-sumvectorized-cs-LC28">        }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L29" data-line-number="29"></td>
+        <td id="file-sumvectorized-cs-LC29">            </td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L30" data-line-number="30"></td>
+        <td id="file-sumvectorized-cs-LC30">        <span>if</span> (<span>Ssse3</span>.<span>IsSupported</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L31" data-line-number="31"></td>
+        <td id="file-sumvectorized-cs-LC31">        {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L32" data-line-number="32"></td>
+        <td id="file-sumvectorized-cs-LC32">            <span>vresult</span> <span>=</span> <span>Ssse3</span>.<span>HorizontalAdd</span>(<span>vresult</span>, <span>vresult</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L33" data-line-number="33"></td>
+        <td id="file-sumvectorized-cs-LC33">            <span>vresult</span> <span>=</span> <span>Ssse3</span>.<span>HorizontalAdd</span>(<span>vresult</span>, <span>vresult</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L34" data-line-number="34"></td>
+        <td id="file-sumvectorized-cs-LC34">        }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L35" data-line-number="35"></td>
+        <td id="file-sumvectorized-cs-LC35">        <span>else</span></td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L36" data-line-number="36"></td>
+        <td id="file-sumvectorized-cs-LC36">        {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L37" data-line-number="37"></td>
+        <td id="file-sumvectorized-cs-LC37">            <span>vresult</span> <span>=</span> <span>Sse2</span>.<span>Add</span>(<span>vresult</span>, <span>Sse2</span>.<span>Shuffle</span>(<span>vresult</span>, <span>0x4E</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L38" data-line-number="38"></td>
+        <td id="file-sumvectorized-cs-LC38">            <span>vresult</span> <span>=</span> <span>Sse2</span>.<span>Add</span>(<span>vresult</span>, <span>Sse2</span>.<span>Shuffle</span>(<span>vresult</span>, <span>0xB1</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L39" data-line-number="39"></td>
+        <td id="file-sumvectorized-cs-LC39">        }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L40" data-line-number="40"></td>
+        <td id="file-sumvectorized-cs-LC40">        <span>result</span> <span>=</span> <span>vresult</span>.<span>ToScalar</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L41" data-line-number="41"></td>
+        <td id="file-sumvectorized-cs-LC41">            </td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L42" data-line-number="42"></td>
+        <td id="file-sumvectorized-cs-LC42">        <span>while</span> (<span>i</span> <span>&lt;</span> <span>source</span>.<span>Length</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L43" data-line-number="43"></td>
+        <td id="file-sumvectorized-cs-LC43">        {</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L44" data-line-number="44"></td>
+        <td id="file-sumvectorized-cs-LC44">            <span>result</span> <span>+=</span> <span>pSource</span>[<span>i</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L45" data-line-number="45"></td>
+        <td id="file-sumvectorized-cs-LC45">            <span>i</span> <span>+=</span> <span>1</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L46" data-line-number="46"></td>
+        <td id="file-sumvectorized-cs-LC46">        }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L47" data-line-number="47"></td>
+        <td id="file-sumvectorized-cs-LC47">    }</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L48" data-line-number="48"></td>
+        <td id="file-sumvectorized-cs-LC48">            </td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L49" data-line-number="49"></td>
+        <td id="file-sumvectorized-cs-LC49">    <span>return</span> <span>result</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-sumvectorized-cs-L50" data-line-number="50"></td>
+        <td id="file-sumvectorized-cs-LC50">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<p data-line="303">The code is again slightly more complicated, but it’s significantly faster for all but the smallest workloads. At 32k elements, it’s taking 75% less time than the unrolled loop and 81% less than the original code.</p><p data-line="305">You’ll notice that we have a few&nbsp;<code>IsSupported</code>&nbsp;checks. The first checks if the hardware intrinsics are supported for the current platform at all and falls back to the unrolled loop if they aren’t. This path will currently be hit for platforms like ARM/ARM64 which don’t have hardware intrinsics or if someone disables them for any reason. The second&nbsp;<code>IsSupported</code>&nbsp;check is in the&nbsp;<code>SumVectorizedSse</code>&nbsp;method and is used to produce slightly better codegen on newer hardware that additionally supports the&nbsp;<code>Ssse3</code>&nbsp;instruction set.</p><p data-line="307">Otherwise, most of the logic is essentially the same as what we had done for the unrolled version.&nbsp;<code>Vector128&lt;T&gt;</code>&nbsp;is a 128-bit type that contains&nbsp;<code>Vector128&lt;T&gt;.Count</code>&nbsp;elements. In the case of&nbsp;<code>uint</code>, which is itself 32-bits, you have&nbsp;<code>4</code>&nbsp;(<code>128 / 32</code>) elements, which is exactly how much we unrolled the loop by.</p><table><thead><tr><th>Method</th><th>Count</th><th>Mean</th><th>Error</th><th>StdDev</th></tr></thead><tbody><tr><td>SumVectorized</td><td>1</td><td>4.555 ns</td><td>0.0192 ns</td><td>0.0179 ns</td></tr><tr><td>SumVectorized</td><td>2</td><td>4.848 ns</td><td>0.0147 ns</td><td>0.0137 ns</td></tr><tr><td>SumVectorized</td><td>4</td><td>5.381 ns</td><td>0.0210 ns</td><td>0.0186 ns</td></tr><tr><td>SumVectorized</td><td>8</td><td>4.838 ns</td><td>0.0209 ns</td><td>0.0186 ns</td></tr><tr><td>SumVectorized</td><td>16</td><td>5.107 ns</td><td>0.0175 ns</td><td>0.0146 ns</td></tr><tr><td>SumVectorized</td><td>32</td><td>5.646 ns</td><td>0.0230 ns</td><td>0.0204 ns</td></tr><tr><td>SumVectorized</td><td>64</td><td>6.763 ns</td><td>0.0338 ns</td><td>0.0316 ns</td></tr><tr><td>SumVectorized</td><td>128</td><td>9.308 ns</td><td>0.1041 ns</td><td>0.0870 ns</td></tr><tr><td>SumVectorized</td><td>256</td><td>15.634 ns</td><td>0.0927 ns</td><td>0.0821 ns</td></tr><tr><td>SumVectorized</td><td>512</td><td>34.706 ns</td><td>0.2851 ns</td><td>0.2381 ns</td></tr><tr><td>SumVectorized</td><td>1024</td><td>68.110 ns</td><td>0.4016 ns</td><td>0.3756 ns</td></tr><tr><td>SumVectorized</td><td>2048</td><td>136.533 ns</td><td>1.3104 ns</td><td>1.2257 ns</td></tr><tr><td>SumVectorized</td><td>4096</td><td>277.930 ns</td><td>0.5913 ns</td><td>0.5531 ns</td></tr><tr><td>SumVectorized</td><td>8192</td><td>554.720 ns</td><td>3.5133 ns</td><td>3.2864 ns</td></tr><tr><td>SumVectorized</td><td>16384</td><td>1,110.730 ns</td><td>3.3043 ns</td><td>3.0909 ns</td></tr><tr><td>SumVectorized</td><td>32768</td><td>2,200.996 ns</td><td>21.0538 ns</td><td>19.6938 ns</td></tr></tbody></table><p data-line="328"><a href="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-vectorized-1024x808.png" data-featherlight="image"> <img src="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-vectorized-1024x808.png" alt="" width="640" height="505" srcset="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-vectorized-1024x808.png 1024w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-vectorized-300x237.png 300w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-vectorized-768x606.png 768w, https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/09/base-unrolled-vectort-vectorized.png 1026w" sizes="(max-width: 640px) 100vw, 640px"> </a></p><h3 id="summary" data-line="330">Summary</h3><p data-line="332">The new hardware intrinsics allow you to take advantage of platform-specific functionality for the machine you’re running on. There are approximately 1,500 APIs for x86 and x64 spread across 15 instruction sets and far too many to cover in a single blog post. By profiling your code to identify hot spots you can also potentially identify areas of your code that would benefit from vectorization and see some pretty good performance gains. There are multiple scenarios where vectorization can be applied and loop unrolling is just the beginning.</p><p data-line="334">Anyone wanting to see more examples can search for uses of the intrinsics in the framework (see the&nbsp;<a title="https://github.com/search?l=C%23&amp;q=org:dotnet+System.Runtime.Intrinsics&amp;type=Code" href="https://github.com/search?l=C%23&amp;q=org:dotnet+System.Runtime.Intrinsics&amp;type=Code" target="_blank">dotnet</a>&nbsp;and&nbsp;<a title="https://github.com/search?l=C%23&amp;q=org:aspnet+System.Runtime.Intrinsics&amp;type=Code" href="https://github.com/search?l=C%23&amp;q=org:aspnet+System.Runtime.Intrinsics&amp;type=Code" target="_blank">aspnet</a>&nbsp;organizations) or in various other blog posts written by the community. And while the currently exposed intrinsics are extensive, there is still a lot of functionality that&nbsp;<strong>could</strong>&nbsp;be exposed. If you have functionality you would like exposed, feel free to log an API request against&nbsp;<a title="https://github.com/dotnet/corefx/issues" href="https://github.com/dotnet/corefx/issues" target="_blank">dotnet/corefx on GitHub</a>. The API review process is detailed&nbsp;<a title="https://github.com/dotnet/corefx/blob/master/Documentation/project-docs/api-review-process.md" href="https://github.com/dotnet/corefx/blob/master/Documentation/project-docs/api-review-process.md" target="_blank">here</a>&nbsp;and there is a&nbsp;<a title="https://github.com/dotnet/corefx/issues/271" href="https://github.com/dotnet/corefx/issues/271" target="_blank">good example</a>&nbsp;for the API Request template listed under Step 1.</p><h3 id="special-thanks" data-line="336">Special Thanks</h3><p data-line="338">A special thanks to our community members&nbsp;<a title="https://github.com/fiigii" href="https://github.com/fiigii" target="_blank">Fei Peng (@fiigii)</a>&nbsp;and&nbsp;<a title="https://github.com/4creators" href="https://github.com/4creators" target="_blank">Jacek Blaszczynski (@4creators)</a>&nbsp;who helped implement the hardware intrinsics. Also to all the community members who have provided valuable feedback to the design, implementation, and usability of the feature.</p></div></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

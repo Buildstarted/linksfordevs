@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Borderland between Rendering and Editor - Part 1 &#xB7; Our Machinery - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Borderland between Rendering and Editor - Part 1 &#xB7; Our Machinery - linksfor.dev(s)"/>
+    <meta property="og:description" content="Describes how grid drawing is implemented in The Machinery."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ourmachinery.com/post/borderland-between-rendering-and-editor-part-1/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Borderland between Rendering and Editor - Part 1 &#xB7; Our Machinery</title>
+<div class="readable">
+        <h1>Borderland between Rendering and Editor - Part 1 &#xB7; Our Machinery</h1>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 09 Mar 2020</div>
+        <p><a href="https://ourmachinery.com/post/borderland-between-rendering-and-editor-part-1/">https://ourmachinery.com/post/borderland-between-rendering-and-editor-part-1/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div role="main">
+
+  <article>
+
+    
+
+    <section>
+      <p>We are pushing full steam ahead to take <em>The Machinery</em> from its current <em>alpha</em> state into <em>beta</em>.
+We’ll be writing more about going into <em>beta</em> and what that means in the near future. Today, I will
+instead share the first part of a mini-series of blog posts covering a few editor features that sit
+somewhere in the borderland between rendering and editor code, or more precisely:</p>
+
+
+
+<ul>
+<li>Grid rendering</li>
+<li>Mouse picking</li>
+<li>Selection highlighting</li>
+</ul>
+
+<p>I might add to this list if I end up working on something more in this area that feels interesting
+to write about.</p>
+
+<p>In common for all three of the topics above is that they have been itching for attention in the back
+of my head for quite some time now. While we’ve had some kind of half-assed solution for them in
+<em>The Machinery</em> editor, I’ve been painfully aware that they’ve definitely been in need of some love.
+Yet I’ve struggled with finding the motivation and time to replace the existing solutions with
+something better, but as we are getting ready to ship our beta we really want the first impression
+when starting to work with the editor to feel nice, so the time for procrastination is over.</p>
+
+<p>Ironically when I finally put aside some time to work on this, all three turned out much easier to
+significantly improve than I had anticipated.</p>
+
+
+<figure>
+    
+        <img src="https://ourmachinery.com/images/borderland-1.png">
+    
+    
+    <figcaption>
+        <h4>Grid in different views</h4>
+        
+    </figcaption>
+    
+</figure>
+
+
+<p>In this first part, we’ll be talking rendering of grids. To be honest I hadn’t really thought much
+about rendering a decent looking grid before we started Our Machinery. Instead, I’ve somewhat
+arrogantly just consider it being the problem for a tools programmer to solve. While they usually
+did an excellent job implementing various types of snapping tools and grids, they never got any
+attention or help visualize them nicely. Typically that meant they resolved to using some basic
+debug line drawing API. Not only was this bad from a performance point of view, it usually also
+meant the grid lines lacked any kind of anti-aliasing, because who cares about the visual quality of
+debug lines?</p>
+
+<p>Since one of our main objectives with Our Machinery is to figure out how to architect engine
+technology in a way that makes tools development faster and hopefully also bridge the knowledge gap
+between tools programmers and “runtime” programmers, at least to some extent, I figured it would
+make sense to share how I implemented the current grid renderer that we will roll out in the soon to
+be released beta of <em>The Machinery</em>.</p>
+
+<p>First, let’s take a look at our requirements for grid rendering:</p>
+
+<ul>
+<li><p>We want a simple API to use from the editor code that allows rendering of one or multiple grids in
+one or many viewports.</p></li>
+
+<li><p>We want to be able to freely specify grid size, transform, cell size, as well and color without
+having to care too much about any potential performance impact.</p></li>
+
+<li><p>We want to be able to highlight every tenth line to increase the readability of the grid.</p></li>
+
+<li><p>We want the grid lines to be rendered with anti-aliasing.</p></li>
+
+<li><p>We want the grid to look pleasant from any viewpoint (i.e we want as little
+<a href="https://en.wikipedia.org/wiki/Moir%C3%A9_pattern">moire</a> as possible).</p></li>
+
+<li><p>We want the grid to fade out as it reaches its extents.</p></li>
+</ul>
+
+<p>So let’s take a look at the C-API:</p>
+
+<pre><code><span>typedef</span> <span>struct</span> <span>tm_visual_grid_t</span>
+{
+    
+    <span>tm_mat44_t</span> tm;
+    
+    <span>float</span> grid_size;
+    
+    <span>float</span> cell_size;
+    
+    <span>tm_color_srgb_t</span> thin_lines_color;
+    
+    <span>tm_color_srgb_t</span> thick_lines_color;
+} <span>tm_visual_grid_t</span>;
+
+<span>struct</span> tm_grid_renderer_api
+{
+    <span>void</span> (*render)(<span>const</span> <span>tm_visual_grid_t</span> *grid,
+        <span>const</span> <span>struct</span> tm_shader_system_context_o *context, 
+        <span>struct</span> tm_shader_o *grid_shader, 
+        <span>struct</span> tm_renderer_resource_command_buffer_o *res_buf, 
+        <span>struct</span> tm_renderer_command_buffer_o *cmd_buf);
+};
+</code></pre>
+
+<p>From an editor point of view, we only have to care about <code>tm_visual_grid_t</code> which is a POD struct.
+Currently, we only support specifying quadratic grid extents and cell sizes, there’s nothing
+stopping us from handling nonsquare extents (or cell sizes) but I fail to see any case you ever want
+that so I opted for minimalism. As we render grids after post-processing and tone mapping, it makes
+the most sense to specify the colors in 8-bit sRGB color space, making the color space consistent
+with the rest of the UI code.</p>
+
+<p>When it’s time to render the viewport <code>tm_grid_renderer_api</code><code>-&gt;</code><code>render()</code> is called for each grid
+the editor wants to draw. Internally this API doesn’t do anything else than writing the contents of
+<code>tm_visual_grid_t</code> to a constant buffer owned by the <code>grid_shader</code> and issuing a draw call with 6
+vertices. The rest happens in the shader.</p>
+
+<p>In the vertex shader the 6 vertices are interpreted as the corners of two triangles spanning the
+extents of the grid in X,Z plane (we use a right-handed Y+ up coordinate system in <em>The Machinery</em>).
+Input to the pixel shader is the interpolated 2D grid coordinates going from { -extent, -extent } to
+{ extent, extent }.</p>
+
+<p>Let’s take a look at the code for the pixel shader:</p>
+
+<pre><code>
+float2 uv = input.grid_position;
+
+
+float2 dudv = float2(length(float2(ddx(uv.x), ddy(uv.x))), 
+    length(float2(ddx(uv.y), ddy(uv.y))) );       
+
+
+<span>const</span> <span>float</span> min_pixels_between_cells = <span>1.f</span>;
+
+
+
+<span>float</span> cs = load_cell_size();
+
+
+<span>float</span> lod_level = max(<span>0</span>, <span>log10</span>((length(dudv) * min_pixels_between_cells) / cs) + <span>1</span>);
+<span>float</span> lod_fade = frac(lod_level);
+
+
+<span>float</span> lod0_cs = cs * <span>pow</span>(<span>10</span>, <span>floor</span>(lod_level));
+<span>float</span> lod1_cs = lod0_cs * <span>10.f</span>;
+<span>float</span> lod2_cs = lod1_cs * <span>10.f</span>;
+
+
+dudv *= <span>2</span>;
+
+
+float2 lod0_cross_a = <span>1.f</span> - <span>abs</span>(saturate(<span>fmod</span>(uv, lod0_cs) / dudv) * <span>2</span> - <span>1.f</span>);
+
+<span>float</span> lod0_a = max(lod0_cross_a.x, lod0_cross_a.y);
+float2 lod1_cross_a = <span>1.f</span> - <span>abs</span>(saturate(<span>fmod</span>(uv, lod1_cs) / dudv) * <span>2</span> - <span>1.f</span>);
+<span>float</span> lod1_a = max(lod1_cross_a.x, lod1_cross_a.y);
+float2 lod2_cross_a = <span>1.f</span> - <span>abs</span>(saturate(<span>fmod</span>(uv, lod2_cs) / dudv) * <span>2</span> - <span>1.f</span>);
+<span>float</span> lod2_a = max(lod2_cross_a.x, lod2_cross_a.y);
+
+
+float4 thin_color = load_thin_lines_color();
+float4 thick_color = load_thick_lines_color();
+
+
+float4 c = lod2_a &gt; <span>0</span> ? thick_color : lod1_a &gt; <span>0</span> ? lerp(thick_color, thin_color, lod_fade) : thin_color;
+
+
+float3 view_dir = normalize(input.view_dir);
+<span>float</span> op_gracing = <span>1.f</span> - <span>pow</span>(<span>1.f</span> - <span>abs</span>(dot(view_dir, load_tm()<span>._</span>m10_m11_m12)), <span>16</span>);
+<span>float</span> op_distance = (<span>1.f</span> - saturate(length(uv) / load_grid_size()));
+<span>float</span> op = op_gracing * op_distance;
+
+
+c.a *= (lod2_a &gt; <span>0</span> ? lod2_a : lod1_a &gt; <span>0</span> ? lod1_a : (lod0_a * (<span>1</span>-lod_fade))) * op;
+
+output.color = c;  
+</code></pre>
+
+<p>For the experienced shader programmer, this code is probably fairly self-explanatory (and I’m sure
+there might be better or more efficient ways to implement this, feel free to enlighten me). For the
+rest of you, I’ll do a walk-through:</p>
+
+<ol>
+<li><p>We start by finding the length of the derivatives (ddx/ddy) of the current grid coordinate. This
+is essentially how much we move in grid space from one pixel to the next.</p></li>
+
+<li><p>Since we had a requirement of being able to specify any cell size (in world units, which in The
+Machinery is <em>meters</em>) without having to care about the location of the viewer we need some kind
+of automatic Level-Of-Detail (LOD) to avoid ending up in moire hell. We define the LOD
+transition metric to be the minimum allowed distance in pixels between two cell lines
+(<code>min_pixels_between_cells</code>) before the line has completely faded out and the transition to the
+next LOD-step has fully occurred. Since we highlight the gridline between every tenth cell it
+makes sense to use that to define a LOD-step. This is where the <code>log10()</code> and <code>pow(10,
+lod_level)</code> comes from, for each LOD level we will cover <em>10^lod_level x</em> more cells of the
+smallest size (<code>cell_size</code> in <code>tm_visual_grid_t</code>).</p></li>
+
+<li><p>Since we want to blend between the LOD-steps we’ll calculate grid line coverage for the three
+different cell sizes (<code>lod0_cs</code>, <code>lod1_cs</code>, <code>lod2_cs</code>) calculated in (2). The cell size is
+essentially the frequency at which a new line should be visible. It’s easier to show graphically
+exactly what’s going on when calculating the coverage value, therefor eI’ve created a small
+<a href="https://www.desmos.com/calculator/hy8n1oqy6v">demos graph</a>.</p>
+
+<p>In the graph <em>w</em> is the line width (<code>dudv</code> in the code above) and <em>c</em> is the line frequency
+(<code>lod0_cs, lod1_cs, lod2_cs</code>). The demos graph works in 1D but we are working on the grid plane
+in 2D with grid lines crossing each other, so we simply take the maximum coverage of X,Y and use
+that as out <em>alpha mask</em> value for each LOD-step (<code>lod0_a, lod1_a, lod2_a</code>).</p></li>
+
+<li><p>This is fairly handwavy, but essentially here we simply calculate the fade between the thin and
+thick line colors based on the <code>lod_fade</code> and how much we consider the current pixel belongs to a
+certain LOD-step using the coverage alpha values calculated in (3).</p></li>
+
+<li><p>Calculates opacity fade-out for all grid lines based on viewing angle and distance to the center
+of the graph. This is a bit temporary and will likely be tweaked further, some knobs might need
+to get exposed in <code>tm_visual_grid_t</code> .</p></li>
+
+<li><p>Lastly, we modulate the final alpha value of the pixel with another handwavy mix of the line
+coverage masks for the three LOD-steps and multiply the whole shebang with the opacity value
+calculated in (5).</p></li>
+</ol>
+
+<p>That’s it. A nice looking grid. Implement one yourself or check it out in our beta release coming
+soon.</p>
+
+<p><em>Note:</em> In a future post I might follow up with some floating-point precision considerations to be
+aware of when using this technique, and maybe something about playing nicely with depth testing
+against your TAA-jittered depth buffer, but time is up and I need to get this posted and get back
+working on the beta. 🙂</p>
+    </section>
+
+
+  
+</article>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

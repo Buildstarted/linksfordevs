@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Community Tutorial: Using NPoco with CockroachDB and C# / .NET Core | Cockroach Labs - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Community Tutorial: Using NPoco with CockroachDB and C# / .NET Core | Cockroach Labs - linksfor.dev(s)"/>
+    <meta property="article:author" content="Written by Darrien Rushing"/>
+    <meta property="og:description" content="Hi, I&#x2019;m Darrien, and I&#x2019;m building a distributed, near-real time, &#x201C;OSINT data reconnaissance&#x201D; system. For this system, I&#x2019;ll be using CockroachDB for its distribu"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.cockroachlabs.com/blog/npoco-dotnet-cockroachdb/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Community Tutorial: Using NPoco with CockroachDB and C# / .NET Core | Cockroach Labs</title>
+<div class="readable">
+        <h1>Community Tutorial: Using NPoco with CockroachDB and C# / .NET Core | Cockroach Labs</h1>
+            <div>by Written by Darrien Rushing</div>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 30 Mar 2020</div>
+        <p><a href="https://www.cockroachlabs.com/blog/npoco-dotnet-cockroachdb/">https://www.cockroachlabs.com/blog/npoco-dotnet-cockroachdb/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="text">
+		<div>
+				<p><img src="https://d33wubrfki0l68.cloudfront.net/2a3b4a5c251a0f372393770bd645d46056b7923e/5cc57/wp-content/themes/cockroach-labs-2019/includes/img/close.svg" alt="close icon">
+				</p>
+
+				<div>
+					<p>Get blog posts to your inbox.</p>
+
+
+					
+					</div>
+
+				
+
+			</div>
+		
+
+		<p><span>Hi, I’m Darrien, and I’m building a distributed, </span><i><span>near-</span></i><span>real time, “OSINT data reconnaissance” system. For this system, I’ll be using CockroachDB for its distributed nature, and connecting it to a <a href="https://docs.microsoft.com/en-us/dotnet/">.NET Core API</a> via <a href="https://github.com/schotime/NPoco">NPoco</a> and <a href="https://www.npgsql.org/">Npgsql</a>. In this post, I’ll give a w</span><span>alkthrough of how I’m building the system, and how these connections </span><span>work, so you can use them too.</span></p>
+<h2><strong>An Exercise in Curiosity and Data Sets</strong></h2>
+<p><span>When I first learned about network penetration testing I was enamored with the reconnaissance tools available for gathering data. However, I quickly learned these tools returned disparate data sets and formats. So this presented two problems:</span></p>
+<ul>
+<li><span>The lack of organization caused writing reports to be just as tedious as performing the test.</span></li>
+<li><span>Differing data formats make it difficult to relate and analyze the data sets from the tools.</span></li>
+</ul>
+<p><span>I thought introducing some level of automation could make this “gather and organize” process easier (some clever modeling could alleviate that). To take this idea a step further, if such a system was designed to be distributed across IoT hardware it could introduce new possibilities for physical network pentests. For example: synchronize WiFi signals with perimeter photos. Previous attempts at designing such a system left me with scalability issues. However, a studious suggestion from a professional mentor turned me to Apache Kafka and CockroachDB to handle the data storage and distribution concern of the project. Together, these two technologies could give me distributed message queue connected to a persistent data store!</span></p>
+<p><span>Being most of my software engineering experience has been in C#, I was left with a question of how to move data from .NET Core to this new distributed database I had never seen before. I’m electing to use the NPoco micro-ORM to make the connection a little easier. So, below I’ll be covering how I connected .NET Core, NPoco, and CRDB.</span></p>
+<p><span>Currently, this is the (loose) tech stack of the larger OSINT project:</span></p>
+<ul>
+<li><b>Front-end</b><span>: React + redux</span></li>
+<li><b>Back-end</b><span>: C#/.NET Core, SignalR, Rx.NET, NPoco</span></li>
+<li><b>“Data flow”</b><span>: CockroachDB, Apache Kafka</span></li>
+<li><b>OSINT tooling/consumption</b><span>: Python + Flask, metagoofil, recon-ng, FOCA, and nmap</span></li>
+</ul>
+<h2><strong>NPoco, Or: Why use an ORM?</strong></h2>
+<p><span>I’ll admit my immediate reasoning for using an ORM because I commonly rely on one when interfacing with a SQL-compliant database. So, it’s familiar. Also, in my opinion, it helps the data access code become predictable.</span></p>
+<p><span>A few other immediate benefits:</span></p>
+<ul>
+<li><span>Improved code readability around queries</span></li>
+<li><span>Easier data mapping to declared types</span></li>
+<li><i><span>hopefully…leading to quicker app prototyping</span></i></li>
+</ul>
+<p><span>Choosing an ORM (or micro-ORM for that matter) is almost never an objective decision. For a while EntityFramework was the go-to data framework for C#. Then later versions had some reported performance issues, hence there was a push to third-party libraries. Granted, a lot of improvements have been made with the release of Entity Framework Core, but in that time I’d already grown <a href="https://github.com/schotime/NPoco">accustomed to NPoco</a>. If you’d rather use something other than NPoco–go ahead! Just note that this post is specific to NPoco and CockroachDB.&nbsp;</span></p>
+<p><span>Alright, let’s jump into the tutorial.</span></p>
+<h2><strong>Tutorial: Using NPoco with CRDB and .NET Core</strong></h2>
+<p><span>Prerequisites: If you don’t already have a running version of CRDB, follow </span><a href="https://www.cockroachlabs.com/docs/stable/start-a-local-cluster.html"><span>this tutorial by Cockroach Labs</span></a><span> to get started. We’ll use a slightly different schema than used in that tutorial, but if you’ve never used CRDB before it’s a good place to start.</span></p>
+<p><span>It’s not required, but you may also want to read through this “</span><a href="https://www.cockroachlabs.com/docs/stable/build-a-csharp-app-with-cockroachdb.html"><span>Build a C# App w/ CRDB</span></a><span>” article as well. I’ll be borrowing heavily from the code in that article to make a connection to our database.</span></p>
+<h3><strong>Step 1: Create a New .NET Core Web API Project</strong></h3>
+<p><span>First, we’ll walk through the normal initial steps of creating a new .NET Core Web API project in Visual Studio. Be sure to target .NET Core 3.x.</span></p>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_cockroach-1024x711.png" alt="" width="980" height="680" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_cockroach-1024x711.png 1024w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_cockroach-300x208.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_cockroach-768x533.png 768w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_cockroach-150x104.png 150w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_cockroach.png 1026w" sizes="(max-width: 980px) 100vw, 980px"></p>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb1-1024x711.png" alt="" width="980" height="680" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb1-1024x711.png 1024w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb1-300x208.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb1-768x533.png 768w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb1-150x104.png 150w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb1.png 1025w" sizes="(max-width: 980px) 100vw, 980px"></p>
+<h3><strong>Step 2: Install Packages</strong></h3>
+<p><span>Since CockroachDB <a href="https://www.cockroachlabs.com/blog/why-postgres/">is compatible with PostgreSQL</a>, we are able to use <a href="https://www.nuget.org/packages/Npgsql/">Npgsql as a data provider</a>, and don’t have to worry about one built specifically for CRDB. Further, we are able to use <a href="https://www.nuget.org/packages/NPoco/">NPoco as a micro-ORM</a> for the same reason: it has Postgres support built in.</span></p>
+<h3><strong>Step 3: Prepare the Database and create our schema</strong></h3>
+<p><span>Before we do anything else, we’ll need to ensure CRDB is running and start a SQL session so we can issue commands.</span></p>
+<p><span>Open a new terminal to start CRDB:&nbsp;</span></p>
+<pre><code>cockroach.exe start --insecure</code></pre>
+<p><span>In another terminal session, start a SQL session. Our work will take place here.</span></p>
+<pre><code>cockroach.exe sql --insecure</code></pre>
+<p><span>Note: </span><i><span>If you still have an ‘accounts’ table in your ‘bank’ database (from the article linked above) you’ll need to drop it to continue:</span></i></p>
+<pre><code>DROP TABLE bank.accounts;</code></pre>
+<p><span>Now we create the database ‘bank’, and set it as the database we’ll be working from.</span></p>
+<pre><code>CREATE DATABASE bank;
+SET DATABASE TO bank;</code></pre>
+<p><span>Finally, we create our ‘accounts’ table with the following:</span></p>
+<pre><code>CREATE TABLE accounts(
+	id UUID NOT NULL DEFAULT gen_random_uuid(),
+	accountownwer STRING,
+	balance DECIMAL(15,2),
+	datecreated TIMESTAMPTZ,
+	lastupdated TIMESTAMPTZ);
+</code></pre>
+<h3>Step 4: Create a Basic Model</h3>
+<p><span>Now that the database is setup, let’s create the class our data will be mapped to. In your project, create a folder and name it “DataAccess”.</span></p>
+<p><span>Inside that folder, create a new class: Account</span></p>
+<pre><code>public class Account
+{
+    	public Guid Id { get; set; }
+    	public string AccountOwner { get; set; }
+    	public decimal Balance { get; set; }
+    	public DateTime DateCreated { get; set; }
+    	public DateTime LastUpdated { get; set; }
+}
+</code></pre>
+<p><span>Then we’ll decorate the class with these three attributes. These attributes are the mechanism NPoco uses to map between SQL and your C# classes–so they are crucial!</span></p>
+<ul>
+<li><span>[TableName(“accounts”)]</span></li>
+<li><span>[PrimaryKey(“id”)]</span></li>
+<li><span>[Column(“id”)]</span></li>
+</ul>
+<p><span>Afterwards, your class should look something like this:</span></p>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_tablenames.png" alt="" width="536" height="275" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_tablenames.png 536w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_tablenames-300x154.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_tablenames-150x77.png 150w" sizes="(max-width: 536px) 100vw, 536px"></p>
+<p><span>The TableName and PrimaryKey attributes map the underlying class to key pieces of the specified table schema. If they aren’t specified here, then you will need to specify them later in the various NPoco methods querying the database. The same importance can be placed on the Column attribute. If it’s not defined here, there is no reasonable way for NPoco to map class fields to table columns.</span></p>
+<p><span>Further, notice that all of the attribute names included are completely lowercase. Not camelCase or Pascal-cased, </span><i><span>strictly lowercase</span></i><span>. This was tricky until I realized how important the casing was, and it resulted in a few mapping failures. Paying close attention to error messages was key here.</span></p>
+<p><span><strong>A Brief Note on Data Types</strong></span></p>
+<p><span>Matching types was the most difficult part of the puzzle. I used an (educated) guess-and-check process to determine which CRDB types matched with the C# types. Several times using the wrong schema in CRDB didn’t break the application, but did result in data being inserted in an unexpected format. Determining the CRDB type for a C# Guid and DateTime were the most troublesome for me, because of the extra flexibility CRDB provides. However, discussing the minutiae of these data types is outside of the scope of this article. So, if you’d like to know more, take a look at </span><a href="https://www.cockroachlabs.com/docs/stable/data-types.html"><span>this CRDB data type reference</span></a><span>.</span></p>
+<h3><strong>Step 4: Create Basic Database Class</strong></h3>
+<p><span>Now that our data mappings are created, let’s make the connection from C# to CRDB. Back in the project, create a new class called “Database”.</span></p>
+<p><span>This is the class we’ll use to establish a connection to CRDB and write some basic CRUD operations. The implementation is rather simplistic, but it will work for our needs.</span></p>
+<p><span>First, we lay out a constructor for our class, and use the NpgsqlConnectionStringBuilder class to build our connection string in pieces. Notice, these values are just the defaults with the database ‘bank’ coming from our previous setup. This code is pulled directly from “</span><a href="https://www.cockroachlabs.com/docs/stable/build-a-csharp-app-with-cockroachdb.html"><span>Build a C# App with Cockroach DB</span></a><span>”.</span></p>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_4.png" alt="" width="567" height="299" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_4.png 567w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_4-300x158.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_4-150x79.png 150w" sizes="(max-width: 567px) 100vw, 567px"></p>
+<h2><strong>Kicking the Tires</strong></h2>
+<p><span>Awesome! At this point we can start using NPoco to write some simple queries. Let’s take it for a spin.&nbsp;</span></p>
+<h3><strong>Simple Actions: Select &amp; ‘where’ clause</strong></h3>
+<p><span>Let’s start with retrieving a single record. First, we’ll use a couple “</span><span><code>using</code></span><span>” blocks for creating the connection to the database and a database object. This also sets up automatic disposing of the resources we’re using for the database connection.</span><span>This method selects a single record based on the ‘id’ parameter. First, NPoco opts for using the term “</span><span><code>Fetch</code></span><span>” instead of “</span><span><code>Select</code></span><span>”, but you can think of these synonymously. Then, we use the LINQ expression “</span><span><code>Where</code></span><span>” to filter the resulting list based on the “</span><span><code>Id</code></span><span>” field. Finally, we call “</span><span><code>FirstOrDefault()</code></span><span>” to return a single </span><span><code>Account</code></span><span>, not </span><span><code>List&lt;Account&gt;</code></span><span>.</span></p>
+<pre><code>public Account GetSingle(string id)
+{
+        Account acc;
+
+        using (var conn = new NpgsqlConnection(connectionString))
+        {
+            using (var db = new NPoco.Database(conn))
+            {
+                db.Connection.Open();
+                acc = db.Fetch().Where(a =&gt; a.Id == new Guid(id)).FirstOrDefault();
+                db.Connection.Close();
+            }
+        }
+
+        return acc;
+}
+</code></pre>
+<h3>Simple Actions: Insert</h3>
+<p><span>NPoco makes inserts really simple. We supply the object to be inserted as a parameter, and call “<code>Insert()</code>”.</span></p>
+<p><span><code>db.Insert&lt;Account&gt;("accounts", "id", account);</code></span></p>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_insert.png" alt="" width="665" height="246" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_insert.png 508w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_insert-300x111.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_insert-150x56.png 150w" sizes="(max-width: 665px) 100vw, 665px"></p>
+<p><span>The method I’ve referenced has a few other parts to it, though. Here, “</span><span><code>Insert()</code></span><span>” becomes “</span><span><code>Insert&lt;Account&gt;()</code></span><span>” to specify we’re acting on the </span><span><code>Account</code></span><span> type. Further, an overload for “</span><span><code>Insert</code></span><span>” is used which requires specifying the table, primary key, and finally the object for insertion. This is one of those weird cases where I encountered some strange behavior of NPoco, the PostgreSql driver, and CRDB not lining up exactly. So, I resolved to supplying as much information as possible to the method.</span></p>
+<h3><strong>Simple Actions: Update/Upsert</strong></h3>
+<p><span>There are several ways to update records with NPoco, and it can be done with a lot of nuance. However, I’ll keep things simple, and cover two of the simpler ways.</span></p>
+<h4><span>For an update, we supply the object </span><i><span>after field updates have been made</span></i><span>, so the record should still have the same unaltered ‘id’ from the database. Then we pass this to NPoco’s “</span><span><code>Update</code></span><span>” method. Remember those attributes we decorated the Account class with?–TableName, PrimaryKey, and Column. NPoco uses that metadata to create the proper update statement in SQL!</span></h4>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_Cockroachdb_update.png" alt="" width="603" height="228" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_Cockroachdb_update.png 513w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_Cockroachdb_update-300x113.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_Cockroachdb_update-150x57.png 150w" sizes="(max-width: 603px) 100vw, 603px"></p>
+<h4><span>An “upsert” is just as easy. The “</span><span>Save</span><span>” method in NPoco is known to perform an “upsert” operation, as documented here: </span><a href="https://github.com/schotime/NPoco/issues/295"><span>https://github.com/schotime/NPoco/issues/295</span></a><span>. Other than that, we supply our </span><i><span>already updated object</span></i><span> the same as we did for “</span><span><code>Update</code></span><span>”, but we specify “</span><span><code>Save</code></span><span>”. That’s it!</span></h4>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_upsert.png" alt="Npoco + CRDB Upsert details" width="609" height="226" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_upsert.png 512w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_upsert-300x111.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/npoco_crdb_upsert-150x56.png 150w" sizes="(max-width: 609px) 100vw, 609px"></p>
+<h3><strong>Simple Actions: Delete</strong></h3>
+<p><span>Deletes are just as easy. We supply our object as a parameter, and call “</span><span><code>Delete()</code></span><span>”. Again the metadata supplied by the attributes on the Account class allow NPoco to do its heavy-lifting for this.</span></p>
+<p><span><code>var res = db.Delete&lt;Account&gt;(account);</code></span></p>
+<p><img src="https://www.cockroachlabs.com/wp-content/uploads/2020/01/image5.png" alt="NPoco and CockroachDB 'Remove' function" width="567" height="234" srcset="https://www.cockroachlabs.com/wp-content/uploads/2020/01/image5.png 567w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/image5-300x124.png 300w, https://www.cockroachlabs.com/wp-content/uploads/2020/01/image5-150x62.png 150w" sizes="(max-width: 567px) 100vw, 567px"></p>
+<p><span>Once again, I encountered some weirdness between NPoco, the Npgsql driver, and CRDB when I tried to supply only a record’s primary key value to perform a delete. I wasn’t able to track down what was failing, but using the whole object, like above, worked well.</span></p>
+<p><b>Benefit of This Approach</b></p>
+<p><span>Each ORM has its virtues. I chose NPoco in part because it offers the flexibility to submit complex SQL queries without leaving the pattern used in simpler queries–</span><i><span>and with full control over parameterization.</span></i><span> Just for fun, below we have an (admittedly contrived) example of how we could implement a CTE query while still utilizing </span><i><span>a minimal amount </span></i><span>of NPoco.</span></p>
+<p><a href="https://www.cockroachlabs.com/docs/stable/common-table-expressions.html"><span>https://www.cockroachlabs.com/docs/stable/common-table-expressions.html</span></a></p>
+<pre><code>
+string col3 = "someColumnName";
+const string MyTableName = "some_special_table";
+
+        	using (var conn = new NpgsqlConnection(connectionString))
+        	{
+            	using (var db = new NPoco.Database(conn))
+            	{
+                	db.Connection.Open();
+
+                	var res = db.Execute(new Sql($@"
+                    	WITH bankers_cte AS (SELECT * FROM employees WHERE type == 'banker')
+
+                    	select col1, col2, {col3}
+                    	from {MyTableName} sst
+                    	where sst.col1 == bankers_cte.colX", col3));
+
+                	db.Connection.Close();
+            	}
+        	}
+</code></pre>
+<p>In case you aren’t familiar with C#’s string formatting options, the ‘$’ character provides a sugar-syntax alternative to the older “<code>String.format()</code>”, and the ‘<code>@</code>’ allows for multi-line string. A nice two-handed punch for when you want to write multi-line SQL queries in your code without confusing formatting issues.</p>
+<h2><strong>Closing: Quick Gains, a Word about a Prototype Project</strong></h2>
+<p><span>I’m still in the early stages of working with CRDB and NPoco, so there are no guarantees that I’ll continue with this pairing, but already it’s allowed me to get off the ground with CRDB just like I would any other SQL-compliant database. For now, it’s great to be able to query data knowing CRDB is doing the hard work underneath to keep things scalable.&nbsp;</span></p>
+<p><span>I’ll continue developing my prototype application, and should this crazy idea work I’ll share more about prototyping with CRDB and my adventures with its distributed and “</span><i><span>real-time</span></i><span>” capabilities. As a part of that continued effort, I’d like to experiment with adapting this architecture for IoT, specifically on Raspberry Pi. The release of the RaspberryPi 4 opened the hardware up to 64-bit processing and now 4GB of RAM. </span><i><span>Ideally</span></i><span>, all of this experimentation would prove a concept for a data streaming system, running on IoT hardware, across a MANET (mobile ad-hoc network).</span></p>
+<p><span>Maybe it’ll work…maybe I’ll fry a few boards. 😉</span></p>
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

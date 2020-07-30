@@ -1,0 +1,1328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Await | Writing an OS in Rust - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Await | Writing an OS in Rust - linksfor.dev(s)"/>
+    <meta property="article:author" content="Philipp Oppermann"/>
+    <meta property="og:description" content="In this post we explore cooperative multitasking and the async/await feature of Rust. We take a detailed look how async/await works in Rust, including&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://os.phil-opp.com/async-await/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Await | Writing an OS in Rust</title>
+<div class="readable">
+        <h1>Await | Writing an OS in Rust</h1>
+            <div>by Philipp Oppermann</div>
+            <div>Reading time: 95-121 minutes</div>
+        <div>Posted here: 30 Mar 2020</div>
+        <p><a href="https://os.phil-opp.com/async-await/">https://os.phil-opp.com/async-await/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+    
+    <time datetime="2020-03-27">
+        Mar 27, 2020
+        
+    </time>
+
+    
+
+    <p>In this post we explore <em>cooperative multitasking</em> and the <em>async/await</em> feature of Rust. We take a detailed look how async/await works in Rust, including the design of the <code>Future</code> trait, the state machine transformation, and <em>pinning</em>. We then add basic support for async/await to our kernel by creating an asynchronous keyboard task and a basic executor.</p>
+<span id="continue-reading"></span>
+<p>This blog is openly developed on <a href="https://github.com/phil-opp/blog_os">GitHub</a>. If you have any problems or questions, please open an issue there. You can also leave comments <a href="https://os.phil-opp.com/async-await/#comments">at the bottom</a>. The complete source code for this post can be found in the <a href="https://github.com/phil-opp/blog_os/tree/post-12"><code>post-12</code></a> branch.</p>
+<p>As a personal side note, I'm currently looking for a job in Karlsruhe (Germany) or remote. I would love to do systems programming using Rust, but I'm also open to other opportuni­ties. For more information, see my <a href="https://www.linkedin.com/in/phil-opp/"><em>LinkedIn</em> profile</a> or contact me at <a href="mailto:job@phil-opp.com">job@phil-opp.com</a>.</p>
+
+    <details id="toc-inline">
+        <summary><b>Table of Contents</b></summary>
+        <ul>
+            <li>
+                <a href="#multitasking">Multitasking</a>
+                <ul>
+                    <li>
+                        <a href="#preemptive-multitasking">Preemptive Multitasking</a>
+                    </li><li>
+                        <a href="#cooperative-multitasking">Cooperative Multitasking</a>
+                    </li>
+                </ul>
+            </li><li>
+                <a href="#async-await-in-rust">Async/Await in Rust</a>
+                <ul>
+                    <li>
+                        <a href="#futures">Futures</a>
+                    </li><li>
+                        <a href="#working-with-futures">Working with Futures</a>
+                    </li><li>
+                        <a href="#the-async-await-pattern">The Async/Await Pattern</a>
+                    </li><li>
+                        <a href="#pinning">Pinning</a>
+                    </li><li>
+                        <a href="#executors-and-wakers">Executors and Wakers</a>
+                    </li><li>
+                        <a href="#cooperative-multitasking-1">Cooperative Multitasking?</a>
+                    </li>
+                </ul>
+            </li><li>
+                <a href="#implementation">Implementation</a>
+                <ul>
+                    <li>
+                        <a href="#task">Task</a>
+                    </li><li>
+                        <a href="#simple-executor">Simple Executor</a>
+                    </li><li>
+                        <a href="#async-keyboard-input">Async Keyboard Input</a>
+                    </li><li>
+                        <a href="#executor-with-waker-support">Executor with Waker Support</a>
+                    </li>
+                </ul>
+            </li><li>
+                <a href="#summary">Summary</a>
+                
+            </li><li>
+                <a href="#what-s-next">What's Next?</a>
+                
+            </li>
+            
+        </ul>
+    </details>
+
+<h2 id="multitasking"><a href="#multitasking" aria-label="Anchor link for: multitasking">🔗</a>Multitasking</h2>
+<p>One of the fundamental features of most operating systems is <a href="https://en.wikipedia.org/wiki/Computer_multitasking"><em>multitasking</em></a>, which is the ability to execute multiple tasks concurrently. For example, you probably have other programs open while looking at this post, such as a text editor or a terminal window. Even if you have only a single browser window open, there are probably various background tasks for managing your desktop windows, checking for updates, or indexing files.</p>
+<p>While it seems like all tasks run in parallel, only a single task can be executed on a CPU core at a time. To create the illusion that the tasks run in parallel, the operating system rapidly switches between active tasks so that each one can make a bit of progress. Since computers are fast, we don't notice these switches most of the time.</p>
+<p>While single-core CPUs can only execute a single task at a time, multi-core CPUs can run multiple tasks in a truly parallel way. For example, a CPU with 8 cores can run 8 tasks at the same time. We will explain how to setup multi-core CPUs in a future post. For this post, we will focus on single-core CPUs for simplicity. (It's worth noting that all multi-core CPUs start with only a single active core, so we can treat them as single-core CPUs for now.)</p>
+<p>There are two forms of multitasking: <em>Cooperative</em> multitasking requires tasks to regularly give up control of the CPU so that other tasks can make progress. <em>Preemptive</em> multitasking uses operating system functionality to switch threads at arbitrary points in time by forcibly pausing them. In the following we will explore the two forms of multitasking in more detail and discuss their respective advantages and drawbacks.</p>
+<h3 id="preemptive-multitasking"><a href="#preemptive-multitasking" aria-label="Anchor link for: preemptive-multitasking">🔗</a>Preemptive Multitasking</h3>
+<p>The idea behind preemptive multitasking is that the operating system controls when to switch tasks. For that, it utilizes the fact that it regains control of the CPU on each interrupt. This makes it possible to switch tasks whenever new input is available to the system. For example, it would be possible to switch tasks when the mouse is moved or a network packet arrives. The operating system can also determine the exact time that a task is allowed to run by configuring a hardware timer to send an interrupt after that time.</p>
+<p>The following graphic illustrates the task switching process on a hardware interrupt:</p>
+<p><img src="https://os.phil-opp.com/async-await/regain-control-on-interrupt.svg" alt=""></p>
+<p>In the first row, the CPU is executing task <code>A1</code> of program <code>A</code>. All other tasks are paused. In the second row, a hardware interrupt arrives at the CPU. As described in the <a href="https://os.phil-opp.com/hardware-interrupts/"><em>Hardware Interrupts</em></a> post, the CPU immediately stops the execution of task <code>A1</code> and jumps to the interrupt handler defined in the interrupt descriptor table (IDT). Through this interrupt handler, the operating system now has control of the CPU again, which allows it to switch to task <code>B1</code> instead of continuing task <code>A1</code>.</p>
+<h4 id="saving-state"><a href="#saving-state" aria-label="Anchor link for: saving-state">🔗</a>Saving State</h4>
+<p>Since tasks are interrupted at arbitrary points in time, they might be in the middle of some calculations. In order to be able to resume them later, the operating system must backup the whole state of the task, including its <a href="https://en.wikipedia.org/wiki/Call_stack">call stack</a> and the values of all CPU registers. This process is called a <a href="https://en.wikipedia.org/wiki/Context_switch"><em>context switch</em></a>.</p>
+<p>As the call stack can be very large, the operating system typically sets up a separate call stack for each task instead of backing up the call stack content on each task switch. Such a task with a separate stack is called a <a href="https://en.wikipedia.org/wiki/Thread_(computing)"><em>thread of execution</em></a> or <em>thread</em> for short. By using a separate stack for each task, only the register contents need to be saved on a context switch (including the program counter and stack pointer). This approach minimizes the performance overhead of a context switch, which is very important since context switches often occur up to 100 times per second.</p>
+<h4 id="discussion"><a href="#discussion" aria-label="Anchor link for: discussion">🔗</a>Discussion</h4>
+<p>The main advantage of preemptive multitasking is that the operating system can fully control the allowed execution time of a task. This way, it can guarantee that each task gets a fair share of the CPU time, without the need to trust the tasks to cooperate. This is especially important when running third-party tasks or when multiple users share a system.</p>
+<p>The disadvantage of preemption is that each task requires its own stack. Compared to a shared stack, this results in a higher memory usage per task and often limits the number of tasks in the system. Another disadvantage is that the operating system always has to save the complete CPU register state on each task switch, even if the task only used a small subset of the registers.</p>
+<p>Preemptive multitasking and threads are fundamental components of an operating system because they make it possible to run untrusted userspace programs. We will discuss these concepts in full detail in future posts. For this post, however, we will focus on cooperative multitasking, which also provides useful capabilities for our kernel.</p>
+<h3 id="cooperative-multitasking"><a href="#cooperative-multitasking" aria-label="Anchor link for: cooperative-multitasking">🔗</a>Cooperative Multitasking</h3>
+<p>Instead of forcibly pausing running tasks at arbitrary points in time, cooperative multitasking lets each task run until it voluntarily gives up control of the CPU. This allows tasks to pause themselves at convenient points in time, for example when it needs to wait for an I/O operation anyway.</p>
+<p>Cooperative multitasking is often used at the language level, for example in form of <a href="https://en.wikipedia.org/wiki/Coroutine">coroutines</a> or <a href="https://rust-lang.github.io/async-book/01_getting_started/04_async_await_primer.html">async/await</a>. The idea is that either the programmer or the compiler inserts <a href="https://en.wikipedia.org/wiki/Yield_(multithreading)"><em>yield</em></a> operations into the program, which give up control of the CPU and allow other tasks to run. For example, a yield could be inserted after each iteration of a complex loop.</p>
+<p>It is common to combine cooperative multitasking with <a href="https://en.wikipedia.org/wiki/Asynchronous_I/O">asynchronous operations</a>. Instead of waiting until an operation is finished and preventing other tasks to run in this time, asynchronous operations return a "not ready" status if the operation is not finished yet. In this case, the waiting task can execute a yield operation to let other tasks run.</p>
+<h4 id="saving-state-1"><a href="#saving-state-1" aria-label="Anchor link for: saving-state-1">🔗</a>Saving State</h4>
+<p>Since tasks define their pause points themselves, they don't need the operating system to save their state. Instead, they can save exactly the state they need for continuation before they pause themselves, which often results in better performance. For example, a task that just finished a complex computation might only need to backup the final result of the computation since it does not need the intermediate results anymore.</p>
+<p>Language-supported implementations of cooperative tasks are often even able to backup up the required parts of the call stack before pausing. As an example, Rust's async/await implementation stores all local variables that are still needed in an automatically generated struct (see below). By backing up the relevant parts of the call stack before pausing, all tasks can share a single call stack, which results in a much smaller memory consumption per task. This makes it possible to create an almost arbitrary number of cooperative tasks without running out of memory.</p>
+<h4 id="discussion-1"><a href="#discussion-1" aria-label="Anchor link for: discussion-1">🔗</a>Discussion</h4>
+<p>The drawback of cooperative multitasking is that an uncooperative task can potentially run for an unlimited amount of time. Thus, a malicious or buggy task can prevent other tasks from running and slow down or even block the whole system. For this reason, cooperative multitasking should only be used when all tasks are known to cooperate. As a counterexample, it's not a good idea to make the operating system rely on the cooperation of arbitrary userlevel programs.</p>
+<p>However, the strong performance and memory benefits of cooperative multitasking make it a good approach for usage <em>within</em> a program, especially in combination with asynchronous operations. Since an operating system kernel is a performance-critical program that interacts with asynchronous hardware, cooperative multitasking seems like a good approach for implementing concurrency.</p>
+<h2 id="async-await-in-rust"><a href="#async-await-in-rust" aria-label="Anchor link for: async-await-in-rust">🔗</a>Async/Await in Rust</h2>
+<p>The Rust language provides first-class support for cooperative multitasking in form of async/await. Before we can explore what async/await is and how it works, we need to understand how <em>futures</em> and asynchronous programming work in Rust.</p>
+<h3 id="futures"><a href="#futures" aria-label="Anchor link for: futures">🔗</a>Futures</h3>
+<p>A <em>future</em> represents a value that might not be available yet. This could be for example an integer that is computed by another task or a file that is downloaded from the network. Instead of waiting until the value is available, futures make it possible to continue execution until the value is needed.</p>
+<h4 id="example"><a href="#example" aria-label="Anchor link for: example">🔗</a>Example</h4>
+<p>The concept of futures is best illustrated with a small example:</p>
+<p><img src="https://os.phil-opp.com/async-await/async-example.svg" alt="Sequence diagram: main calls read_file and is blocked until it returns; then it calls foo() and is also blocked until it returns. The same process is repeated, but this time async_read_file is called, which directly returns a future; then foo() is called again, which now runs concurrently to the file load. The file is available before foo() returns."></p>
+<p>This sequence diagram shows a <code>main</code> function that reads a file from the file system and then calls a function <code>foo</code>. This process is repeated two times: Once with a synchronous <code>read_file</code> call and once with an asynchronous <code>async_read_file</code> call.</p>
+<p>With the synchronous call, the <code>main</code> function needs to wait until the file is loaded from the file system. Only then it can call the <code>foo</code> function, which requires it to again wait for the result.</p>
+<p>With the asynchronous <code>async_read_file</code> call, the file system directly returns a future and loads the file asynchronously in the background. This allows the <code>main</code> function to call <code>foo</code> much earlier, which then runs in parallel with the file load. In this example, the file load even finishes before <code>foo</code> returns, so <code>main</code> can directly work with the file without further waiting after <code>foo</code> returns.</p>
+<h4 id="futures-in-rust"><a href="#futures-in-rust" aria-label="Anchor link for: futures-in-rust">🔗</a>Futures in Rust</h4>
+<p>In Rust, futures are represented by the <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html"><code>Future</code></a> trait, which looks like this:</p>
+<pre><span>pub trait </span><span>Future {
+    </span><span>type </span><span>Output</span><span>;
+    </span><span>fn </span><span>poll(self: Pin&lt;</span><span>&amp;mut Self</span><span>&gt;, cx: </span><span>&amp;mut</span><span> Context) -&gt; Poll&lt;</span><span>Self::</span><span>Output&gt;;
+}
+</span></pre>
+<p>The <a href="https://doc.rust-lang.org/book/ch19-03-advanced-traits.html#specifying-placeholder-types-in-trait-definitions-with-associated-types">associated type</a> <code>Output</code> specifies the type of the asynchronous value. For example, the <code>async_read_file</code> function in the diagram above would return a <code>Future</code> instance with <code>Output</code> set to <code>File</code>.</p>
+<p>The <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html#tymethod.poll"><code>poll</code></a> method allows to check if the value is already available. It returns a <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html#tymethod.poll"><code>Poll</code></a> enum, which looks like this:</p>
+<pre><span>pub enum </span><span>Poll&lt;T&gt; {
+    Ready(T),
+    Pending,
+}
+</span></pre>
+<p>When the value is already available (e.g. the file was fully read from disk), it is returned wrapped in the <code>Ready</code> variant. Otherwise, the <code>Pending</code> variant is returned, which signals the caller that the value is not yet available.</p>
+<p>The <code>poll</code> method takes two arguments: <code>self: Pin&lt;&amp;mut Self&gt;</code> and <code>cx: &amp;mut Context</code>. The former behaves like a normal <code>&amp;mut self</code> reference, with the difference that the <code>Self</code> value is <a href="https://doc.rust-lang.org/nightly/core/pin/index.html"><em>pinned</em></a> to its memory location. Understanding <code>Pin</code> and why it is needed is difficult without understanding how async/await works first. We will therefore explain it later in this post.</p>
+<p>The purpose of the <code>cx: &amp;mut Context</code> parameter is to pass a <a href="https://doc.rust-lang.org/nightly/core/task/struct.Waker.html"><code>Waker</code></a> instance to the asynchronous task, e.g. the file system load. This <code>Waker</code> allows the asynchronous task to signal that it (or a part of it) is finished, e.g. that the file was loaded from disk. Since the main task knows that it will be notified when the <code>Future</code> is ready, it does not need to call <code>poll</code> over and over again. We will explain this process in more detail later in this post when we implement our own waker type.</p>
+<h3 id="working-with-futures"><a href="#working-with-futures" aria-label="Anchor link for: working-with-futures">🔗</a>Working with Futures</h3>
+<p>We now know how futures are defined and understand the basic idea behind the <code>poll</code> method. However, we still don't know how to effectively work with futures. The problem is that futures represent results of asynchronous tasks, which might be not available yet. In practice, however, we often need these values directly for further calculations. So the question is: How can we efficiently retrieve the value of a future when we need it?</p>
+<h4 id="waiting-on-futures"><a href="#waiting-on-futures" aria-label="Anchor link for: waiting-on-futures">🔗</a>Waiting on Futures</h4>
+<p>One possible answer is to wait until a future becomes ready. This could look something like this:</p>
+<pre><span>let</span><span> future </span><span>= </span><span>async_read_file(</span><span>"foo.txt"</span><span>);
+</span><span>let</span><span> file_content </span><span>= loop </span><span>{
+    </span><span>match</span><span> future.poll(…) {
+        Poll::Ready(value) </span><span>=&gt; break</span><span> value,
+        Poll::Pending </span><span>=&gt; </span><span>{}, </span><span>// do nothing
+    </span><span>}
+}
+</span></pre>
+<p>Here we <em>actively</em> wait for the future by calling <code>poll</code> over and over again in a loop. The arguments to <code>poll</code> don't matter here, so we omitted them. While this solution works, it is very inefficient because we keep the CPU busy until the value becomes available.</p>
+<p>A more efficient approach could be to <em>block</em> the current thread until the future becomes available. This is of course only possible if you have threads, so this solution does not work for our kernel, at least not yet. Even on systems where blocking is supported, it is often not desired because it turns an asynchronous task into a synchronous task again, thereby inhibiting the potential performance benefits of parallel tasks.</p>
+<h4 id="future-combinators"><a href="#future-combinators" aria-label="Anchor link for: future-combinators">🔗</a>Future Combinators</h4>
+<p>An alternative to waiting is to use future combinators. Future combinators are methods like <code>map</code> that allow chaining and combining futures together, similar to the methods on <a href="https://doc.rust-lang.org/stable/core/iter/trait.Iterator.html"><code>Iterator</code></a>. Instead of waiting on the future, these combinators return a future themselves, which applies the mapping operation on <code>poll</code>.</p>
+<p>As an example, a simple <code>string_len</code> combinator for converting a <code>Future&lt;Output = String&gt;</code> to a <code>Future&lt;Output = usize&gt;</code> could look like this:</p>
+<pre><span>struct </span><span>StringLen&lt;F&gt; {
+    inner_future: F,
+}
+
+</span><span>impl</span><span>&lt;F&gt; Future </span><span>for </span><span>StringLen&lt;F&gt; </span><span>where</span><span> F: Future&lt;Output = String&gt; {
+    </span><span>type </span><span>Output </span><span>= usize</span><span>;
+
+    </span><span>fn </span><span>poll(</span><span>mut </span><span>self: Pin&lt;</span><span>&amp;mut Self</span><span>&gt;, cx: </span><span>&amp;mut </span><span>Context&lt;'</span><span>_</span><span>&gt;) -&gt; Poll&lt;T&gt; {
+        </span><span>match </span><span>self.inner_future.poll(cx) {
+            Poll::Ready(s) </span><span>=&gt; </span><span>Poll::Ready(s.len()),
+            Poll::Pending </span><span>=&gt; </span><span>Poll::Pending,
+        }
+    }
+}
+
+</span><span>fn </span><span>string_len(string: impl Future&lt;Output = String&gt;)
+    -&gt; impl Future&lt;Output = </span><span>usize</span><span>&gt;
+{
+    StringLen {
+        inner_future: string,
+    }
+}
+
+</span><span>// Usage
+</span><span>fn </span><span>file_len() -&gt; impl Future&lt;Output = </span><span>usize</span><span>&gt; {
+    </span><span>let</span><span> file_content_future </span><span>= </span><span>async_read_file(</span><span>"foo.txt"</span><span>);
+    string_len(file_content_future)
+}
+</span></pre>
+<p>This code does not quite work because it does not handle <a href="https://doc.rust-lang.org/stable/core/pin/index.html"><em>pinning</em></a>, but it suffices as an example. The basic idea is that the <code>string_len</code> function wraps a given <code>Future</code> instance into a new <code>StringLen</code> struct, which also implements <code>Future</code>. When the wrapped future is polled, it polls the inner future. If the value is not ready yet, <code>Poll::Pending</code> is returned from the wrapped future too. If the value is ready, the string is extracted from the <code>Poll::Ready</code> variant and its length is calculated. Afterwards, it is wrapped in <code>Poll::Ready</code> again and returned.</p>
+<p>With this <code>string_len</code> function, we can calculate the length of an asynchronous string without waiting for it. Since the function returns a <code>Future</code> again, the caller can't work directly on the returned value, but needs to use combinator functions again. This way, the whole call graph becomes asynchronous and we can efficiently wait for multiple futures at once at some point, e.g. in the main function.</p>
+<p>Manually writing combinator functions is difficult, therefore they are often provided by libraries. While the Rust standard library itself provides no combinator methods yet, the semi-official (and <code>no_std</code> compatible) <a href="https://docs.rs/futures/0.3.4/futures/"><code>futures</code></a> crate does. Its <a href="https://docs.rs/futures/0.3.4/futures/future/trait.FutureExt.html"><code>FutureExt</code></a> trait provides high-level combinator methods such as <a href="https://docs.rs/futures/0.3.4/futures/future/trait.FutureExt.html#method.map"><code>map</code></a> or <a href="https://docs.rs/futures/0.3.4/futures/future/trait.FutureExt.html#method.then"><code>then</code></a>, which can be used to manipulate the result with arbitrary closures.</p>
+<h5 id="advantages"><a href="#advantages" aria-label="Anchor link for: advantages">🔗</a>Advantages</h5>
+<p>The big advantage of future combinators is that they keep the operations asynchronous. In combination with asynchronous I/O interfaces, this approach can lead to very high performance. The fact that future combinators are implemented as normal structs with trait implementations allows the compiler to excessively optimize them. For more details, see the <a href="https://aturon.github.io/blog/2016/08/11/futures/"><em>Zero-cost futures in Rust</em></a> post, which announced the addition of futures to the Rust ecosystem.</p>
+<h5 id="drawbacks"><a href="#drawbacks" aria-label="Anchor link for: drawbacks">🔗</a>Drawbacks</h5>
+<p>While future combinators make it possible to write very efficient code, they can be difficult to use in some situations because of the type system and the closure based interface. For example, consider code like this:</p>
+<pre><span>fn </span><span>example(min_len: </span><span>usize</span><span>) -&gt; impl Future&lt;Output = String&gt; {
+    async_read_file(</span><span>"foo.txt"</span><span>).then(</span><span>move |</span><span>content</span><span>| </span><span>{
+        </span><span>if</span><span> content.len() </span><span>&lt;</span><span> min_len {
+            Either::Left(async_read_file(</span><span>"bar.txt"</span><span>).map(|s| content </span><span>+ &amp;</span><span>s))
+        } </span><span>else </span><span>{
+            Either::Right(future::ready(content))
+        }
+    })
+}
+</span></pre>
+<p>(<a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=91fc09024eecb2448a85a7ef6a97b8d8">Try it on the playground</a>)</p>
+<p>Here we read the file <code>foo.txt</code> and then use the <a href="https://docs.rs/futures/0.3.4/futures/future/trait.FutureExt.html#method.then"><code>then</code></a> combinator to chain a second future based on the file content. If the content length is smaller than the given <code>min_len</code>, we read a different <code>bar.txt</code> file and append it to <code>content</code> using the <a href="https://docs.rs/futures/0.3.4/futures/future/trait.FutureExt.html#method.map"><code>map</code></a> combinator. Otherwise we return only the content of <code>foo.txt</code>.</p>
+<p>We need to use the <a href="https://doc.rust-lang.org/std/keyword.move.html"><code>move</code> keyword</a> for the closure passed to <code>then</code> because otherwise there would be a lifetime error for <code>min_len</code>. The reason for the <a href="https://docs.rs/futures/0.3.4/futures/future/enum.Either.html"><code>Either</code></a> wrapper is that if and else blocks must always have the same type. Since we return different future types in the blocks, we must use the wrapper type to unify them into a single type. The <a href="https://docs.rs/futures/0.3.4/futures/future/fn.ready.html"><code>ready</code></a> function wraps a value into a future, which is immediately ready. The function is required here because the <code>Either</code> wrapper expects that the wrapped value implements <code>Future</code>.</p>
+<p>As you can imagine, this can quickly lead to very complex code for larger projects. It gets especially complicated if borrowing and different lifetimes are involved. For this reason, a lot of work was invested to add support for async/await to Rust, with the goal of making asynchronous code radically simpler to write.</p>
+<h3 id="the-async-await-pattern"><a href="#the-async-await-pattern" aria-label="Anchor link for: the-async-await-pattern">🔗</a>The Async/Await Pattern</h3>
+<p>The idea behind async/await is to let the programmer write code that <em>looks</em> like normal synchronous code, but is turned into asynchronous code by the compiler. It works based on the two keywords <code>async</code> and <code>await</code>. The <code>async</code> keyword can be used in a function signature to turn a synchronous function into an asynchronous function that returns a future:</p>
+<pre><span>async </span><span>fn </span><span>foo() -&gt; </span><span>u32 </span><span>{
+    </span><span>0
+</span><span>}
+
+</span><span>// the above is roughly translated by the compiler to:
+</span><span>fn </span><span>foo() -&gt; impl Future&lt;Output = </span><span>u32</span><span>&gt; {
+    future::ready(</span><span>0</span><span>)
+}
+</span></pre>
+<p>This keyword alone wouldn't be that useful. However, inside <code>async</code> functions, the <code>await</code> keyword can be used to retrieve the asynchronous value of a future:</p>
+<pre><span>async </span><span>fn </span><span>example(min_len: </span><span>usize</span><span>) -&gt; String {
+    </span><span>let</span><span> content </span><span>= </span><span>async_read_file(</span><span>"foo.txt"</span><span>).await;
+    </span><span>if</span><span> content.len() </span><span>&lt;</span><span> min_len {
+        content </span><span>+ &amp;</span><span>async_read_file(</span><span>"bar.txt"</span><span>).await
+    } </span><span>else </span><span>{
+        content
+    }
+}
+</span></pre>
+<p>(<a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=d93c28509a1c67661f31ff820281d434">Try it on the playground</a>)</p>
+<p>This function is a direct translation of the <code>example</code> function that used combinator functions from <a href="https://os.phil-opp.com/async-await/#drawbacks">above</a>. Using the <code>.await</code> operator, we can retrieve the value of a future without needing any closures or <code>Either</code> types. As a result, we can write our code like we write normal synchronous code, with the difference that <em>this is still asynchronous code</em>.</p>
+<h4 id="state-machine-transformation"><a href="#state-machine-transformation" aria-label="Anchor link for: state-machine-transformation">🔗</a>State Machine Transformation</h4>
+<p>What the compiler does behind this scenes is to transform the body of the <code>async</code> function into a <a href="https://en.wikipedia.org/wiki/Finite-state_machine"><em>state machine</em></a>, with each <code>.await</code> call representing a different state. For the above <code>example</code> function, the compiler creates a state machine with the following four states:</p>
+<p><img src="https://os.phil-opp.com/async-await/async-state-machine-states.svg" alt="Four states: start, waiting on foo.txt, waiting on bar.txt, end"></p>
+<p>Each state represents a different pause point of the function. The <em>"Start"</em> and <em>"End"</em> states represent the function at the beginning and end of its execution. The <em>"Waiting on foo.txt"</em> state represents that the function is currently waiting for the first <code>async_read_file</code> result. Similarly, the <em>"Waiting on bar.txt"</em> state represents the pause point where the function is waiting on the second <code>async_read_file</code> result.</p>
+<p>The state machine implements the <code>Future</code> trait by making each <code>poll</code> call a possible state transition:</p>
+<p><img src="https://os.phil-opp.com/async-await/async-state-machine-basic.svg" alt="Four states: start, waiting on foo.txt, waiting on bar.txt, end"></p>
+<p>The diagram uses arrows to represent state switches and diamond shapes to represent alternative ways. For example, if the <code>foo.txt</code> file is not ready, the path marked with <em>"no"</em> is taken and the <em>"Waiting on foo.txt"</em> state is reached. Otherwise, the <em>"yes"</em> path is taken. The small red diamond without caption represents the <code>if content.len() &lt; 100</code> branch of the <code>example</code> function.</p>
+<p>We see that the first <code>poll</code> call starts the function and lets it run until it reaches a future that is not ready yet. If all futures on the path are ready, the function can run till the <em>"End"</em> state, where it returns its result wrapped in <code>Poll::Ready</code>. Otherwise, the state machine enters a waiting state and returns <code>Poll::Pending</code>. On the next <code>poll</code> call, the state machine then starts from the last waiting state and retries the last operation.</p>
+<h4 id="saving-state-2"><a href="#saving-state-2" aria-label="Anchor link for: saving-state-2">🔗</a>Saving State</h4>
+<p>In order to be able to continue from the last waiting state, the state machine must keep track of the current state internally. In addition, it must save all the variables that it needs to continue execution on the next <code>poll</code> call. This is where the compiler can really shine: Since it knows which variables are used when, it can automatically generate structs with exactly the variables that are needed.</p>
+<p>As an example, the compiler generates structs like the following for the above <code>example</code> function:</p>
+<pre><span>// The `example` function again so that you don't have to scroll up
+</span><span>async </span><span>fn </span><span>example(min_len: </span><span>usize</span><span>) -&gt; String {
+    </span><span>let</span><span> content </span><span>= </span><span>async_read_file(</span><span>"foo.txt"</span><span>).await;
+    </span><span>if</span><span> content.len() </span><span>&lt;</span><span> min_len {
+        content </span><span>+ &amp;</span><span>async_read_file(</span><span>"bar.txt"</span><span>).await
+    } </span><span>else </span><span>{
+        content
+    }
+}
+
+</span><span>// The compiler-generated state structs:
+
+</span><span>struct </span><span>StartState {
+    min_len: </span><span>usize</span><span>,
+}
+
+</span><span>struct </span><span>WaitingOnFooTxtState {
+    min_len: </span><span>usize</span><span>,
+    foo_txt_future: impl Future&lt;Output = String&gt;,
+}
+
+</span><span>struct </span><span>WaitingOnBarTxtState {
+    content: String,
+    bar_txt_future: impl Future&lt;Output = String&gt;,
+}
+
+</span><span>struct </span><span>EndState {}
+</span></pre>
+<p>In the "start" and <em>"Waiting on foo.txt"</em> states, the <code>min_len</code> parameter needs to be stored because it is required for the comparison with <code>content.len()</code> later. The <em>"Waiting on foo.txt"</em> state additionally stores a <code>foo_txt_future</code>, which represents the future returned by the <code>async_read_file</code> call. This future needs to be polled again when the state machine continues, so it needs to be saved.</p>
+<p>The <em>"Waiting on bar.txt"</em> state contains the <code>content</code> variable because it is needed for the string concatenation after <code>bar.txt</code> is ready. It also stores a <code>bar_txt_future</code> that represents the in-progress load of <code>bar.txt</code>. The struct does not contain the <code>min_len</code> variable because it is no longer needed after the <code>content.len()</code> comparison. In the <em>"end"</em> state, no variables are stored because the function did already run to completion.</p>
+<p>Keep in mind that this is only an example for the code that the compiler could generate. The struct names and the field layout are an implementation detail and might be different.</p>
+<h4 id="the-full-state-machine-type"><a href="#the-full-state-machine-type" aria-label="Anchor link for: the-full-state-machine-type">🔗</a>The Full State Machine Type</h4>
+<p>While the exact compiler-generated code is an implementation detail, it helps in understanding to imagine how the generated state machine <em>could</em> look for the <code>example</code> function. We already defined the structs representing the different states and containing the required variables. To create a state machine on top of them, we can combine them into an <a href="https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html"><code>enum</code></a>:</p>
+<pre><span>enum </span><span>ExampleStateMachine {
+    Start(StartState),
+    WaitingOnFooTxt(WaitingOnFooTxtState),
+    WaitingOnBarTxt(WaitingOnBarTxtState),
+    End(EndState),
+}
+</span></pre>
+<p>We define a separate enum variant for each state and add the corresponding state struct to each variant as a field. To implement the state transitions, the compiler generates an implementation of the <code>Future</code> trait based on the <code>example</code> function:</p>
+<pre><span>impl </span><span>Future </span><span>for </span><span>ExampleStateMachine {
+    </span><span>type </span><span>Output </span><span>= </span><span>String; </span><span>// return type of `example`
+
+    </span><span>fn </span><span>poll(self: Pin&lt;</span><span>&amp;mut Self</span><span>&gt;, cx: </span><span>&amp;mut</span><span> Context) -&gt; Poll&lt;</span><span>Self::</span><span>Output&gt; {
+        </span><span>loop </span><span>{
+            </span><span>match </span><span>self { </span><span>// TODO: handle pinning
+                </span><span>ExampleStateMachine::Start(state) </span><span>=&gt; </span><span>{…}
+                ExampleStateMachine::WaitingOnFooTxt(state) </span><span>=&gt; </span><span>{…}
+                ExampleStateMachine::WaitingOnBarTxt(state) </span><span>=&gt; </span><span>{…}
+                ExampleStateMachine::End(state) </span><span>=&gt; </span><span>{…}
+            }
+        }
+    }
+}
+</span></pre>
+<p>The <code>Output</code> type of the future is <code>String</code> because it's the return type of the <code>example</code> function. To implement the <code>poll</code> function, we use a match statement on the current state inside a <code>loop</code>. The idea is that we switch to the next state as long as possible and use an explicit <code>return Poll::Pending</code> when we can't continue.</p>
+<p>For simplicity, we only show simplified code and don't handle <a href="https://doc.rust-lang.org/stable/core/pin/index.html">pinning</a>, ownership, lifetimes, etc. So this and the following code should be treated as pseudo-code and not used directly. Of course, the real compiler-generated code handles everything correctly, albeit possibly in a different way.</p>
+<p>To keep the code excerpts small, we present the code for each match arm separately. Let's begin with the <code>Start</code> state:</p>
+<pre><span>ExampleStateMachine::Start(state) </span><span>=&gt; </span><span>{
+    </span><span>// from body of `example`
+    </span><span>let</span><span> foo_txt_future </span><span>= </span><span>async_read_file(</span><span>"foo.txt"</span><span>);
+    </span><span>// `.await` operation
+    </span><span>let</span><span> state </span><span>=</span><span> WaitingOnFooTxtState {
+        min_len: state.min_len,
+        foo_txt_future,
+    };
+    </span><span>*</span><span>self </span><span>= </span><span>ExampleStateMachine::WaitingOnFooTxt(state);
+}
+</span></pre>
+<p>The state machine is in the <code>Start</code> state when it is right at the beginning of the function. In this case, we execute all the code from the body of the <code>example</code> function until the first <code>.await</code>. To handle the <code>.await</code> operation, we change the state of the <code>self</code> state machine to <code>WaitingOnFooTxt</code>, which includes the construction of the <code>WaitingOnFooTxtState</code> struct.</p>
+<p>Since the <code>match self {…}</code> statement is executed in a loop, the execution jumps to the <code>WaitingOnFooTxt</code> arm next:</p>
+<pre><span>ExampleStateMachine::WaitingOnFooTxt(state) </span><span>=&gt; </span><span>{
+    </span><span>match</span><span> state.foo_txt_future.poll(cx) {
+        Poll::Pending </span><span>=&gt; return </span><span>Poll::Pending,
+        Poll::Ready(content) </span><span>=&gt; </span><span>{
+            </span><span>// from body of `example`
+            </span><span>if</span><span> content.len() </span><span>&lt;</span><span> state.min_len {
+                </span><span>let</span><span> bar_txt_future </span><span>= </span><span>async_read_file(</span><span>"bar.txt"</span><span>);
+                </span><span>// `.await` operation
+                </span><span>let</span><span> state </span><span>=</span><span> WaitingOnBarTxtState {
+                    content,
+                    bar_txt_future,
+                };
+                </span><span>*</span><span>self </span><span>= </span><span>ExampleStateMachine::WaitingOnBarTxt(state);
+            } </span><span>else </span><span>{
+                </span><span>*</span><span>self </span><span>= </span><span>ExampleStateMachine::End(EndState));
+                </span><span>return </span><span>Poll::Ready(content);
+            }
+        }
+    }
+}
+</span></pre>
+<p>In this match arm we first call the <code>poll</code> function of the <code>foo_txt_future</code>. If it is not ready, we exit the loop and return <code>Poll::Pending</code>. Since <code>self</code> stays in the <code>WaitingOnFooTxt</code> state in this case, the next <code>poll</code> call on the state machine will enter the same match arm and retry polling the <code>foo_txt_future</code>.</p>
+<p>When the <code>foo_txt_future</code> is ready, we assign the result to the <code>content</code> variable and continue to execute the code of the <code>example</code> function: If <code>content.len()</code> is smaller than the <code>min_len</code> saved in the state struct, the <code>bar.txt</code> file is read asynchronously. We again translate the <code>.await</code> operation into a state change, this time into the <code>WaitingOnBarTxt</code> state. Since we're executing the <code>match</code> inside a loop, the execution directly jumps to the match arm for the new state afterwards, where the <code>bar_txt_future</code> is polled.</p>
+<p>In case we enter the <code>else</code> branch, no further <code>.await</code> operation occurs. We reach the end of the function and return <code>content</code> wrapped in <code>Poll::Ready</code>. We also change the current state to the <code>End</code> state.</p>
+<p>The code for the <code>WaitingOnBarTxt</code> state looks like this:</p>
+<pre><span>ExampleStateMachine::WaitingOnBarTxt(state) </span><span>=&gt; </span><span>{
+    </span><span>match</span><span> state.bar_txt_future.poll(cx) {
+        Poll::Pending </span><span>=&gt; return </span><span>Poll::Pending,
+        Poll::Ready(bar_txt) </span><span>=&gt; </span><span>{
+            </span><span>*</span><span>self </span><span>= </span><span>ExampleStateMachine::End(EndState));
+            </span><span>// from body of `example`
+            </span><span>return </span><span>Poll::Ready(state.content </span><span>+ &amp;</span><span>bar_txt);
+        }
+    }
+}
+</span></pre>
+<p>Similar to the <code>WaitingOnFooTxt</code> state, we start by polling the <code>bar_txt_future</code>. If it is still pending, we exit the loop and return <code>Poll::Pending</code>. Otherwise, we can perform the last operation of the <code>example</code> function: Concatenating the <code>content</code> variable with the result from the future. We update the state machine to the <code>End</code> state and then return the result wrapped in <code>Poll::Ready</code>.</p>
+<p>Finally, the code for the <code>End</code> state looks like this:</p>
+<pre><span>ExampleStateMachine::End(</span><span>_</span><span>) </span><span>=&gt; </span><span>{
+    panic!(</span><span>"poll called after Poll::Ready was returned"</span><span>);
+}
+</span></pre>
+<p>Futures should not be polled again after they returned <code>Poll::Ready</code>, therefore we panic if <code>poll</code> is called when we are already in the <code>End</code> state.</p>
+<p>We now know how the compiler-generated state machine and its implementation of the <code>Future</code> trait <em>could</em> look like. In practice, the compiler generates code in different way. (In case you're interested, the implementation is currently based on <a href="https://doc.rust-lang.org/nightly/unstable-book/language-features/generators.html"><em>generators</em></a>, but this is only an implementation detail.)</p>
+<p>The last piece of the puzzle is the generated code for the <code>example</code> function itself. Remember, the function header was defined like this:</p>
+<pre><span>async </span><span>fn </span><span>example(min_len: </span><span>usize</span><span>) -&gt; String
+</span></pre>
+<p>Since the complete function body is now implemented by the state machine, the only thing that the function needs to do is to initialize the state machine and return it. The generated code for this could look like this:</p>
+<pre><span>fn </span><span>example(min_len: </span><span>usize</span><span>) -&gt; ExampleStateMachine {
+    ExampleStateMachine::Start(StartState {
+        min_len,
+    })
+}
+</span></pre>
+<p>The function no longer has an <code>async</code> modifier since it now explicitly returns a <code>ExampleStateMachine</code> type, which implements the <code>Future</code> trait. As expected, the state machine is constructed in the <code>Start</code> state and the corresponding state struct is initialized with the <code>min_len</code> parameter.</p>
+<p>Note that this function does not start the execution of the state machine. This is a fundamental design decision of futures in Rust: They do nothing until they are polled for the first time.</p>
+<h3 id="pinning"><a href="#pinning" aria-label="Anchor link for: pinning">🔗</a>Pinning</h3>
+<p>We already stumbled across <em>pinning</em> multiple times in this post. Now is finally the time to explore what pinning is and why it is needed.</p>
+<h4 id="self-referential-structs"><a href="#self-referential-structs" aria-label="Anchor link for: self-referential-structs">🔗</a>Self-Referential Structs</h4>
+<p>As explained above, the state machine transformation stores the local variables of each pause point in a struct. For small examples like our <code>example</code> function, this was straightforward and did not lead to any problems. However, things become more difficult when variables reference each other. For example, consider this function:</p>
+<pre><span>async </span><span>fn </span><span>pin_example() -&gt; </span><span>i32 </span><span>{
+    </span><span>let</span><span> array </span><span>= </span><span>[</span><span>1</span><span>, </span><span>2</span><span>, </span><span>3</span><span>];
+    </span><span>let</span><span> element </span><span>= &amp;</span><span>array[</span><span>2</span><span>];
+    async_write_file(</span><span>"foo.txt"</span><span>, element.to_string()).await;
+    </span><span>*</span><span>element
+}
+</span></pre>
+<p>This function creates a small <code>array</code> with the contents <code>1</code>, <code>2</code>, and <code>3</code>. It then creates a reference to the last array element and stores it in an <code>element</code> variable. Next, it asynchronously writes the number converted to a string to a <code>foo.txt</code> file. Finally, it returns the number referenced by <code>element</code>.</p>
+<p>Since the function uses a single <code>await</code> operation, the resulting state machine has three states: start, end, and "waiting on write". The function takes no arguments, so the struct for the start state is empty. Like before, the struct for the end state is empty too because the function is finished at this point. The struct for the "waiting on write" state is more interesting:</p>
+<pre><span>struct </span><span>WaitingOnWriteState {
+    array: [1, 2, 3],
+    element: 0x1001a, </span><span>// address of the last array element
+</span><span>}
+</span></pre>
+<p>We need to store both the <code>array</code> and <code>element</code> variables because <code>element</code> is required for the return value and <code>array</code> is referenced by <code>element</code>. Since <code>element</code> is a reference, it stores a <em>pointer</em> (i.e. a memory address) to the referenced element. We used <code>0x1001a</code> as an example memory address here. In reality it needs to be the address of the last element of the <code>array</code> field, so it depends on where the struct lives in memory. Structs with such internal pointers are called <em>self-referential</em> structs because they reference themselves from one of their fields.</p>
+<h4 id="the-problem-with-self-referential-structs"><a href="#the-problem-with-self-referential-structs" aria-label="Anchor link for: the-problem-with-self-referential-structs">🔗</a>The Problem with Self-Referential Structs</h4>
+<p>The internal pointer of our self-referential struct leads to a fundamental problem, which becomes apparent when we look at its memory layout:</p>
+<p><img src="https://os.phil-opp.com/async-await/self-referential-struct.svg" alt="array at 0x10014 with fields 1, 2, and 3; element at address 0x10020, pointing to the last array element at 0x1001a"></p>
+<p>The <code>array</code> field starts at address 0x10014 and the <code>element</code> field at address 0x10020. It points to address 0x1001a because the last array element lives at this address. At this point, everything is still fine. However, an issue occurs when we move this struct to a different memory address:</p>
+<p><img src="https://os.phil-opp.com/async-await/self-referential-struct-moved.svg" alt="array at 0x10024 with fields 1, 2, and 3; element at address 0x10030, still pointing to 0x1001a, even though the last array element now lives at 0x1002a"></p>
+<p>We moved the struct a bit so that it starts at address <code>0x10024</code> now. This could for example happen when we pass the struct as a function argument or assign it to a different stack variable. The problem is that the <code>element</code> field still points to address <code>0x1001a</code> even though the last <code>array</code> element now lives at address <code>0x1002a</code>. Thus, the pointer is dangling with the result that undefined behavior occurs on the next <code>poll</code> call.</p>
+<h4 id="possible-solutions"><a href="#possible-solutions" aria-label="Anchor link for: possible-solutions">🔗</a>Possible Solutions</h4>
+<p>There are three fundamental approaches to solve the dangling pointer problem:</p>
+<ul>
+<li>
+<p><strong>Update the pointer on move:</strong> The idea is to update the internal pointer whenever the struct is moved in memory so that it is still valid after the move. Unfortunately, this approach would require extensive changes to Rust that would result in potentially huge performance losses. The reason is that some kind of runtime would need to keep track of the type of all struct fields and check on every move operation whether a pointer update is required.</p>
+</li>
+<li>
+<p><strong>Store an offset instead of self-references:</strong>: To avoid the requirement for updating pointers, the compiler could try to store self-references as offsets from the struct's beginning instead. For example, the <code>element</code> field of the above <code>WaitingOnWriteState</code> struct could be stored in form of an <code>element_offset</code> field with value 8 because the array element that the reference points to starts 8 bytes after the struct's beginning. Since the offset stays the same when the struct is moved, no field updates are required.</p>
+<p>The problem of this approach is that it requires the compiler to detect all self-references. This is not possible at compile-time because the value of a reference might depend on user input, so we would need a runtime system again to analyze references and correctly create the state structs. This would not only result in runtime costs, but also prevent certain compiler optimizations, so that it would cause large performance losses again.</p>
+</li>
+<li>
+<p><strong>Forbid moving the struct:</strong> As we saw above, the dangling pointer only occurs when we move the struct in memory. By completely forbidding move operations on self-referential structs, the problem can be also avoided. The big advantage of this approach is that it can be implemented at the type system level without additional runtime costs. The drawback is that it puts the burden of dealing with move operations on possibly self-referential structs on the programmer.</p>
+</li>
+</ul>
+<p>Because its principle to provide <em>zero cost abstractions</em>, which means that abstractions should not impose additional runtime costs, Rust decided for the third solution. For this, the <a href="https://doc.rust-lang.org/stable/core/pin/index.html"><em>pinning</em></a> API was proposed in <a href="https://github.com/rust-lang/rfcs/blob/master/text/2349-pin.md">RFC 2349</a>. In the following, we will give a short overview of this API and explain how it works with async/await and futures.</p>
+<h4 id="heap-values"><a href="#heap-values" aria-label="Anchor link for: heap-values">🔗</a>Heap Values</h4>
+<p>The first observation is that <a href="https://os.phil-opp.com/heap-allocation/">heap allocated</a> values already have a fixed memory address most of the time. They are created using a call to <code>allocate</code> and then referenced by a pointer type such as <code>Box&lt;T&gt;</code>. While moving the pointer type is possible, the heap value that the pointer points to stays at the same memory address until it is freed through a <code>deallocate</code> call again.</p>
+<p>Using heap allocation, we can try to create a self-referential struct:</p>
+<pre><span>fn </span><span>main() {
+    </span><span>let mut</span><span> heap_value </span><span>= </span><span>Box::new(SelfReferential {
+        self_ptr: </span><span>0 </span><span>as *const _</span><span>,
+    });
+    </span><span>let</span><span> ptr </span><span>= &amp;*</span><span>heap_value </span><span>as *const</span><span> SelfReferential;
+    heap_value.self_ptr </span><span>=</span><span> ptr;
+    println!(</span><span>"heap value at: </span><span>{:p}</span><span>"</span><span>, heap_value);
+    println!(</span><span>"internal reference: </span><span>{:p}</span><span>"</span><span>, heap_value.self_ptr);
+}
+
+</span><span>struct </span><span>SelfReferential {
+    self_ptr: </span><span>*const Self</span><span>,
+}
+</span></pre>
+<p>(<a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=ce1aff3a37fcc1c8188eeaf0f39c97e8">Try it on the playground</a>)</p>
+<p>We create a simple struct named <code>SelfReferential</code> that contains a single pointer field. First, we initialize this struct with a null pointer and then allocate it on the heap using <code>Box::new</code>. We then determine the memory address of the heap allocated struct and store it in a <code>ptr</code> variable. Finally, we make the struct self-referential by assigning the <code>ptr</code> variable to the <code>self_ptr</code> field.</p>
+<p>When we execute this code <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=ce1aff3a37fcc1c8188eeaf0f39c97e8">on the playground</a>, we see that the address of heap value and its internal pointer are equal, which means that the <code>self_ptr</code> field is a valid self-reference. Since the <code>heap_value</code> variable is only a pointer, moving it (e.g. by passing it to a function) does not change the address of the struct itself, so the <code>self_ptr</code> stays valid even if the pointer is moved.</p>
+<p>However, there is still a way to break this example: We can move out of a <code>Box&lt;T&gt;</code> or replace its content:</p>
+<pre><span>let</span><span> stack_value </span><span>= </span><span>mem::replace(</span><span>&amp;mut *</span><span>heap_value, SelfReferential {
+    self_ptr: </span><span>0 </span><span>as *const _</span><span>,
+});
+println!(</span><span>"value at: </span><span>{:p}</span><span>"</span><span>, </span><span>&amp;</span><span>stack_value);
+println!(</span><span>"internal reference: </span><span>{:p}</span><span>"</span><span>, stack_value.self_ptr);
+</span></pre>
+<p>(<a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=e160ee8a64cba4cebc1c0473dcecb7c8">Try it on the playground</a>)</p>
+<p>Here we use the <a href="https://doc.rust-lang.org/nightly/core/mem/fn.replace.html"><code>mem::replace</code></a> function to replace the heap allocated value with a new struct instance. This allows us to move the original <code>heap_value</code> to the stack, while the <code>self_ptr</code> field of the struct is now a dangling pointer that still points to the old heap address. When you try to run the example on the playground, you see that the printed <em>"value at:"</em> and <em>"internal reference:"</em> lines show indeed different pointers. So heap allocating a value is not enough to make self-references safe.</p>
+<p>The fundamental problem that allowed the above breakage is that <code>Box&lt;T&gt;</code> allows us to get a <code>&amp;mut T</code> reference to the heap allocated value. This <code>&amp;mut</code> reference makes it possible to use methods like <a href="https://doc.rust-lang.org/nightly/core/mem/fn.replace.html"><code>mem::replace</code></a> or <a href="https://doc.rust-lang.org/nightly/core/mem/fn.swap.html"><code>mem::swap</code></a> to invalidate the heap allocated value. To resolve this problem, we must prevent that <code>&amp;mut</code> references to self-referential structs can be created.</p>
+<h4 id="pin-box-t-and-unpin"><a href="#pin-box-t-and-unpin" aria-label="Anchor link for: pin-box-t-and-unpin">🔗</a><code>Pin&lt;Box&lt;T&gt;&gt;</code> and <code>Unpin</code></h4>
+<p>The pinning API provides a solution to the <code>&amp;mut T</code> problem in form of the <a href="https://doc.rust-lang.org/stable/core/pin/struct.Pin.html"><code>Pin</code></a> wrapper type and the <a href="https://doc.rust-lang.org/nightly/std/marker/trait.Unpin.html"><code>Unpin</code></a> marker trait. The idea behind these types is to gate all methods of <code>Pin</code> that can be used to get <code>&amp;mut</code> references to the wrapped value (e.g. <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#method.get_mut"><code>get_mut</code></a> or <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#impl-DerefMut"><code>deref_mut</code></a>) on the <code>Unpin</code> trait. The <code>Unpin</code> trait is an <a href="https://doc.rust-lang.org/reference/special-types-and-traits.html#auto-traits"><em>auto trait</em></a>, which is automatically implemented for all types except types that explicitly opt-out. By making self-referential structs opt-out of <code>Unpin</code>, there is no (safe) way to get a <code>&amp;mut T</code> from a <code>Pin&lt;Box&lt;T&gt;&gt;</code> type for them. As a result, their internal self-references are guaranteed to stay valid.</p>
+<p>As an example, let's update the <code>SelfReferential</code> type from above to opt-out of <code>Unpin</code>:</p>
+<pre><span>use </span><span>core::marker::PhantomPinned;
+
+</span><span>struct </span><span>SelfReferential {
+    self_ptr: </span><span>*const Self</span><span>,
+    _pin: PhantomPinned,
+}
+</span></pre>
+<p>We opt-out by adding a second <code>_pin</code> field of type <a href="https://doc.rust-lang.org/nightly/core/marker/struct.PhantomPinned.html"><code>PhantomPinned</code></a>. This type is a zero-sized marker type whose only purpose is to <em>not</em> implement the <code>Unpin</code> trait. Because of the way <a href="https://doc.rust-lang.org/reference/special-types-and-traits.html#auto-traits">auto traits</a> work, a single field that is not <code>Unpin</code> suffices to make the complete struct opt-out of <code>Unpin</code>.</p>
+<p>The second step is to change the <code>Box&lt;SelfReferential&gt;</code> type in the example to a <code>Pin&lt;Box&lt;SelfReferential&gt;&gt;</code> type. The easiest way to do this is to use the <a href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html#method.pin"><code>Box::pin</code></a> function instead of <a href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html#method.new"><code>Box::new</code></a> for creating the heap allocated value:</p>
+<pre><span>let mut</span><span> heap_value </span><span>= </span><span>Box::pin(SelfReferential {
+    self_ptr: </span><span>0 </span><span>as *const _</span><span>,
+    _pin: PhantomPinned,
+});
+</span></pre>
+<p>In addition to changing <code>Box::new</code> to <code>Box::pin</code>, we also need to add the new <code>_pin</code> field in the struct initializer. Since <code>PhantomPinned</code> is a zero sized type, we only need its type name to initialize it.</p>
+<p>When we <a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=961b0db194bbe851ff4d0ed08d3bd98a">try to run our adjusted example</a> now, we see that it no longer works:</p>
+<pre><span>error[E0594]: cannot assign to data in a dereference of `std::pin::Pin&lt;std::boxed::Box&lt;SelfReferential&gt;&gt;`
+  --&gt; src/main.rs:10:5
+   |
+10 |     heap_value.self_ptr = ptr;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ cannot assign
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `std::pin::Pin&lt;std::boxed::Box&lt;SelfReferential&gt;&gt;`
+
+error[E0596]: cannot borrow data in a dereference of `std::pin::Pin&lt;std::boxed::Box&lt;SelfReferential&gt;&gt;` as mutable
+  --&gt; src/main.rs:16:36
+   |
+16 |     let stack_value = mem::replace(&amp;mut *heap_value, SelfReferential {
+   |                                    ^^^^^^^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `std::pin::Pin&lt;std::boxed::Box&lt;SelfReferential&gt;&gt;`
+</span></pre>
+<p>Both errors occur because the <code>Pin&lt;Box&lt;SelfReferential&gt;&gt;</code> type no longer implements the <code>DerefMut</code> trait. This exactly what we wanted because the <code>DerefMut</code> trait would return a <code>&amp;mut</code> reference, which we want to prevent. This only happens because we both opted-out of <code>Unpin</code> and changed <code>Box::new</code> to <code>Box::pin</code>.</p>
+<p>The problem now is that the compiler does not only prevent moving the type in line 16, but also forbids to initialize the <code>self_ptr</code> field in line 10. This happens because the compiler can't differentiate between valid and invalid uses of <code>&amp;mut</code> references. To get the initialization working again, we have to use the unsafe <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#method.get_unchecked_mut"><code>get_unchecked_mut</code></a> method:</p>
+<pre><span>// safe because modifying a field doesn't move the whole struct
+</span><span>unsafe </span><span>{
+    </span><span>let</span><span> mut_ref </span><span>= </span><span>Pin::as_mut(</span><span>&amp;mut</span><span> heap_value);
+    Pin::get_unchecked_mut(mut_ref).self_ptr </span><span>=</span><span> ptr;
+}
+</span></pre>
+<p>(<a href="https://play.rust-lang.org/?version=stable&amp;mode=debug&amp;edition=2018&amp;gist=b9ebbb11429d9d79b3f9fffe819e2018">Try it on the playground</a>)</p>
+<p>The <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#method.get_unchecked_mut"><code>get_unchecked_mut</code></a> function works on a <code>Pin&lt;&amp;mut T&gt;</code> instead of a <code>Pin&lt;Box&lt;T&gt;&gt;</code>, so we have to use the <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#method.as_mut"><code>Pin::as_mut</code></a> for converting the value before. Then we can set the <code>self_ptr</code> field using the <code>&amp;mut</code> reference returned by <code>get_unchecked_mut</code>.</p>
+<p>Now the only error left is the desired error on <code>mem::replace</code>. Remember, this operation tries to move the heap allocated value to stack, which would break the self-reference stored in the <code>self_ptr</code> field. By opting out of <code>Unpin</code> and using <code>Pin&lt;Box&lt;T&gt;&gt;</code>, we can prevent this operation at compile time and thus safely work with self-referential structs. As we saw, the compiler is not able to prove that the creation of the self-reference is safe (yet), so we need to use an unsafe block and verify the correctness ourselves.</p>
+<h4 id="stack-pinning-and-pin-mut-t"><a href="#stack-pinning-and-pin-mut-t" aria-label="Anchor link for: stack-pinning-and-pin-mut-t">🔗</a>Stack Pinning and <code>Pin&lt;&amp;mut T&gt;</code></h4>
+<p>In the previous section we learned how to use <code>Pin&lt;Box&lt;T&gt;&gt;</code> to safely create a heap allocated self-referential value. While this approach works fine and is relatively safe (apart from the unsafe construction), the required heap allocation comes with a performance cost. Since Rust always wants to provide <em>zero-cost abstractions</em> when possible, the pinning API also allows to create <code>Pin&lt;&amp;mut T&gt;</code> instances that point to stack allocated values.</p>
+<p>Unlike <code>Pin&lt;Box&lt;T&gt;&gt;</code> instances, which have <em>ownership</em> of the wrapped value, <code>Pin&lt;&amp;mut T&gt;</code> instances only temporarily borrow the wrapped value. This makes things more complicated, as it requires the programmer to ensure additional guarantees themself. Most importantly, a <code>Pin&lt;&amp;mut T&gt;</code> must stay pinned for the whole lifetime of the referenced <code>T</code>, which can be difficult to verify for stack based variables. To help with this, crates like <a href="https://docs.rs/pin-utils/0.1.0-alpha.4/pin_utils/"><code>pin-utils</code></a> exist, but I still wouldn't recommend pinning to the stack unless you really know what you're doing.</p>
+<p>For further reading, check out the documentation of the <a href="https://doc.rust-lang.org/nightly/core/pin/index.html"><code>pin</code> module</a> and the <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#method.new_unchecked"><code>Pin::new_unchecked</code></a> method.</p>
+<h4 id="pinning-and-futures"><a href="#pinning-and-futures" aria-label="Anchor link for: pinning-and-futures">🔗</a>Pinning and Futures</h4>
+<p>As we already saw in this post, the <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html#tymethod.poll"><code>Future::poll</code></a> method uses pinning in form of a <code>Pin&lt;&amp;mut Self&gt;</code> parameter:</p>
+<pre><span>fn </span><span>poll(self: Pin&lt;</span><span>&amp;mut Self</span><span>&gt;, cx: </span><span>&amp;mut</span><span> Context) -&gt; Poll&lt;</span><span>Self::</span><span>Output&gt;
+</span></pre>
+<p>The reason that this method takes <code>self: Pin&lt;&amp;mut Self&gt;</code> instead of the normal <code>&amp;mut self</code> is that future instances created from async/await are often self-referential, as we saw <a href="https://os.phil-opp.com/async-await/#self-referential-structs">above</a>. By wrapping <code>Self</code> into <code>Pin</code> and letting the compiler opt-out of <code>Unpin</code> for self-referentual futures generated from async/await, it is guaranteed that the futures are not moved in memory between <code>poll</code> calls. This ensures that all internal references are still valid.</p>
+<p>It is worth noting that moving futures before the first <code>poll</code> call is fine. This is a result of the fact that futures are lazy and do nothing until they're polled for the first time. The <code>start</code> state of the generated state machines therefore only contains the function arguments, but no internal references. In order to call <code>poll</code>, the caller must wrap the future into <code>Pin</code> first, which ensures that the future cannot be moved in memory anymore. Since stack pinning is more difficult to get right, I recommend to always use <a href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html#method.pin"><code>Box::pin</code></a> combined with <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#method.as_mut"><code>Pin::as_mut</code></a> for this.</p>
+<p>In case you're interested in understanding how to safely implement a future combinator function using stack pinning yourself, take a look at the relatively short <a href="https://docs.rs/futures-util/0.3.4/src/futures_util/future/future/map.rs.html">source of the <code>map</code> combinator method</a> of the <code>futures</code> crate and the section about <a href="https://doc.rust-lang.org/stable/std/pin/index.html#projections-and-structural-pinning">projections and structural pinning</a> of the pin documentation.</p>
+<h3 id="executors-and-wakers"><a href="#executors-and-wakers" aria-label="Anchor link for: executors-and-wakers">🔗</a>Executors and Wakers</h3>
+<p>Using async/await, it is possible to ergonomically work with futures in a completely asynchronous way. However, as we learned above, futures do nothing until they are polled. This means we have to have to call <code>poll</code> on them at some point, otherwise the asynchronous code is never executed.</p>
+<p>With a single future, we can always wait for each future manually using a loop <a href="https://os.phil-opp.com/async-await/#waiting-on-futures">as described above</a>. However, this approach is very inefficient and not practical for programs that create a large number of futures. The most common solution for this problem is to define a global <em>executor</em> that is responsible for polling all futures in the system until they are finished.</p>
+<h4 id="executors"><a href="#executors" aria-label="Anchor link for: executors">🔗</a>Executors</h4>
+<p>The purpose of an executor is to allow spawning futures as independent tasks, typically through some sort of <code>spawn</code> method. The executor is then responsible for polling all futures until they are completed. The big advantage of managing all futures in a central place is that the executor can switch to a different future whenever a future returns <code>Poll::Pending</code>. Thus, asynchronous operations are run in parallel and the CPU is kept busy.</p>
+<p>Many executor implementations can also take advantage of systems with multiple CPU cores. They create a <a href="https://en.wikipedia.org/wiki/Thread_pool">thread pool</a> that is able to utilize all cores if there is enough work available and use techniques such as <a href="https://en.wikipedia.org/wiki/Work_stealing">work stealing</a> to balance the load between cores. There are also special executor implementations for embedded systems that optimize for low latency and memory overhead.</p>
+<p>To avoid the overhead of polling futures over and over again, executors typically also take advantage of the <em>waker</em> API supported by Rust's futures.</p>
+<h4 id="wakers"><a href="#wakers" aria-label="Anchor link for: wakers">🔗</a>Wakers</h4>
+<p>The idea behind the waker API is that a special <a href="https://doc.rust-lang.org/nightly/core/task/struct.Waker.html"><code>Waker</code></a> type is passed to each invocation of <code>poll</code>, wrapped in the <a href="https://doc.rust-lang.org/nightly/core/task/struct.Context.html"><code>Context</code></a> type. This <code>Waker</code> type is created by the executor and can be used by the asynchronous task to signal its (partial) completion. As a result, the executor does not need to call <code>poll</code> on a future that previously returned <code>Poll::Pending</code> until it is notified by the corresponding waker.</p>
+<p>This is best illustrated by a small example:</p>
+<pre><span>async </span><span>fn </span><span>write_file() {
+    async_write_file(</span><span>"foo.txt"</span><span>, </span><span>"Hello"</span><span>).await;
+}
+</span></pre>
+<p>This function asynchronously writes the string "Hello" to a <code>foo.txt</code> file. Since hard disk writes take some time, the first <code>poll</code> call on this future will likely return <code>Poll::Pending</code>. However, the hard disk driver will internally store the <code>Waker</code> passed to the <code>poll</code> call and use it to notify the executor when the file was written to disk. This way, the executor does not need to waste any time trying to <code>poll</code> the future again before it receives the waker notification.</p>
+<p>We will see how the <code>Waker</code> type works in detail when we create our own executor with waker support in the implementation section of this post.</p>
+<h3 id="cooperative-multitasking-1"><a href="#cooperative-multitasking-1" aria-label="Anchor link for: cooperative-multitasking-1">🔗</a>Cooperative Multitasking?</h3>
+<p>At the beginning of this post we talked about preemptive and cooperative multitasking. While preemptive multitasking relies on the operating system to forcibly switch between running tasks, cooperative multitasking requires that the tasks voluntarily give up control of the CPU through a <em>yield</em> operation on a regular basis. The big advantage of the cooperative approach is that tasks can save their state themselves, which results in more efficient context switches and makes it possible to share the same call stack between tasks.</p>
+<p>It might not be immediately apparent, but futures and async/await are an implementation of the cooperative multitasking pattern:</p>
+<ul>
+<li>Each future that is added to the executor is basically an cooperative task.</li>
+<li>Instead of using an explicit yield operation, futures give up control of the CPU core by returning <code>Poll::Pending</code> (or <code>Poll::Ready</code> at the end).
+<ul>
+<li>There is nothing that forces futures to give up the CPU. If they want, they can never return from <code>poll</code>, e.g. by spinning endlessly in a loop.</li>
+<li>Since each future can block the execution of the other futures in the executor, we need to trust them to be not malicious.</li>
+</ul>
+</li>
+<li>Futures internally store all the state they need to continue execution on the next <code>poll</code> call. With async/await, the compiler automatically detects all variables that are needed and stores them inside the generated state machine.
+<ul>
+<li>Only the minimum state required for continuation is saved.</li>
+<li>Since the <code>poll</code> method gives up the call stack when it returns, the same stack can be used for polling other futures.</li>
+</ul>
+</li>
+</ul>
+<p>We see that futures and async/await fit the cooperative multitasking pattern perfectly, they just use some different terminology. In the following, we will therefore use the terms "task" and "future" interchangeably.</p>
+<h2 id="implementation"><a href="#implementation" aria-label="Anchor link for: implementation">🔗</a>Implementation</h2>
+<p>Now that we understand how cooperative multitasking based on futures and async/await works in Rust, it's time to add support for it to our kernel. Since the <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html"><code>Future</code></a> trait is part of the <code>core</code> library and async/await is a feature of the language itself, there is nothing special we need to do to use it in our <code>#![no_std]</code> kernel. The only requirement is that we use at least nightly <code>2020-03-25</code> of Rust because async/await was not <code>no_std</code> compatible before. <span>(There is no nightly with the rustfmt and clippy components since then, so you might have to pass the <code>--force</code> flag to <code>rustup update</code>, which performs the update even if it removes some installed components.)</span></p>
+<p>With a recent-enough nightly, we can start using async/await in our <code>main.rs</code>:</p>
+<pre><span>// in src/main.rs
+</span><span>
+async </span><span>fn </span><span>async_number() -&gt; </span><span>u32 </span><span>{
+    </span><span>42
+</span><span>}
+
+async </span><span>fn </span><span>example_task() {
+    </span><span>let</span><span> number </span><span>= </span><span>async_number().await;
+    println!(</span><span>"async number: </span><span>{}</span><span>"</span><span>, number);
+}
+</span></pre>
+<p>The <code>async_number</code> function is an <code>async fn</code>, so the compiler transforms it into a state machine that implements <code>Future</code>. Since the function only returns <code>42</code>, the resulting future will directly return <code>Poll::Ready(42)</code> on the first <code>poll</code> call. Like <code>async_number</code>, the <code>example_task</code> function is also an <code>async fn</code>. It awaits the number returned by <code>async_number</code> and then prints it using the <code>println</code> macro.</p>
+<p>To run the future returned by <code>example_task</code>, we need to call <code>poll</code> on it until it signals its completion by returning <code>Poll::Ready</code>. To do this, we need to create a simple executor type.</p>
+<h3 id="task"><a href="#task" aria-label="Anchor link for: task">🔗</a>Task</h3>
+<p>Before we start the executor implementation, we create a new <code>task</code> module with a <code>Task</code> type:</p>
+<pre><span>// in src/lib.rs
+
+</span><span>pub mod </span><span>task;
+</span></pre><pre><span>// in src/task/mod.rs
+
+</span><span>use </span><span>core::{future::Future, pin::Pin};
+</span><span>use </span><span>alloc::boxed::Box;
+
+</span><span>pub struct </span><span>Task {
+    future: Pin&lt;Box&lt;dyn Future&lt;Output = ()&gt;&gt;&gt;,
+}
+</span></pre>
+<p>The <code>Task</code> struct is a newtype wrapper around a pinned, heap allocated, and dynamically dispatched future with the empty type <code>()</code> as output. Let's go through it in detail:</p>
+<ul>
+<li>We require that the future associated with a task returns <code>()</code>. This means that tasks don't return any result, they are just executed for its side effects. For example, the <code>example_task</code> function we defined above has no return value, but it prints something to the screen as a side effect.</li>
+<li>The <code>dyn</code> keyword indicates that we store a <a href="https://doc.rust-lang.org/book/ch17-02-trait-objects.html"><em>trait object</em></a> in the <code>Box</code>. This means that the methods on the future are <a href="https://doc.rust-lang.org/book/ch17-02-trait-objects.html#trait-objects-perform-dynamic-dispatch"><em>dynamically dispatched</em></a>, which makes it possible to store different types of futures in the <code>Task</code> type. This is important because each <code>async fn</code> has its own type and we want to be able to create multiple different tasks.</li>
+<li>As we learned in the <a href="https://os.phil-opp.com/async-await/#pinning">section about pinning</a>, the <code>Pin&lt;Box&gt;</code> type ensures that a value cannot be moved in memory by placing it on the heap and preventing the creation of <code>&amp;mut</code> references to it. This is important because futures generated by async/await might be self-referential, i.e. contain pointers to itself that would be invalidated when the future is moved.</li>
+</ul>
+<p>To allow the creation of new <code>Task</code> structs from futures, we create a <code>new</code> function:</p>
+<pre><span>// in src/task/mod.rs
+
+</span><span>impl </span><span>Task {
+    </span><span>pub fn </span><span>new(future: impl Future&lt;Output = ()&gt; + </span><span>'static</span><span>) -&gt; Task {
+        Task {
+            future: Box::pin(future),
+        }
+    }
+}
+</span></pre>
+<p>The function takes an arbitrary future with output type <code>()</code> and pins it in memory through the <a href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html#method.pin"><code>Box::pin</code></a> function. Then it wraps the boxed future in the <code>Task</code> struct and returns it. The <code>'static</code> lifetime is required here because the returned <code>Task</code> can live for an arbitrary time, so the future needs to be valid for that time too.</p>
+<p>We also add a <code>poll</code> method to allow the executor to poll the stored future:</p>
+<pre><span>// in src/task/mod.rs
+
+</span><span>use </span><span>core::task::{Context, Poll};
+
+</span><span>impl </span><span>Task {
+    </span><span>fn </span><span>poll(</span><span>&amp;mut </span><span>self, context: </span><span>&amp;mut</span><span> Context) -&gt; Poll&lt;()&gt; {
+        self.future.as_mut().poll(context)
+    }
+}
+</span></pre>
+<p>Since the <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html#tymethod.poll"><code>poll</code></a> method of the <code>Future</code> trait expects to be called on a <code>Pin&lt;&amp;mut T&gt;</code> type, we use the <a href="https://doc.rust-lang.org/nightly/core/pin/struct.Pin.html#method.as_mut"><code>Pin::as_mut</code></a> method to convert the <code>self.future</code> field of type <code>Pin&lt;Box&lt;T&gt;&gt;</code> first. Then we call <code>poll</code> on the converted <code>self.future</code> field and return the result. Since the <code>Task::poll</code> method should be only called by the executor that we create in a moment, we keep the function private to the <code>task</code> module.</p>
+<h3 id="simple-executor"><a href="#simple-executor" aria-label="Anchor link for: simple-executor">🔗</a>Simple Executor</h3>
+<p>Since executors can be quite complex, we deliberately start with creating a very basic executor before we implement a more featureful executor later. For this, we first create a new <code>task::simple_executor</code> submodule:</p>
+<pre><span>// in src/task/mod.rs
+
+</span><span>pub mod </span><span>simple_executor;
+</span></pre><pre><span>// in src/task/simple_executor.rs
+
+</span><span>use super</span><span>::Task;
+</span><span>use </span><span>alloc::collections::VecDeque;
+
+</span><span>pub struct </span><span>SimpleExecutor {
+    task_queue: VecDeque&lt;Task&gt;,
+}
+
+</span><span>impl </span><span>SimpleExecutor {
+    </span><span>pub fn </span><span>new() -&gt; SimpleExecutor {
+        SimpleExecutor {
+            task_queue: VecDeque::new(),
+        }
+    }
+
+    </span><span>pub fn </span><span>spawn(</span><span>&amp;mut </span><span>self, task: Task) {
+        self.task_queue.push_back(task)
+    }
+}
+</span></pre>
+<p>The struct contains a single <code>task_queue</code> field of type <a href="https://doc.rust-lang.org/stable/alloc/collections/vec_deque/struct.VecDeque.html"><code>VecDeque</code></a>, which is basically a vector that allows to push and pop operations on both ends. The idea behind using this type is that we insert new tasks through the <code>spawn</code> method at the end and pop the next task for execution from the front. This way, we get a simple <a href="https://en.wikipedia.org/wiki/FIFO_(computing_and_electronics)">FIFO queue</a> (<em>"first in, first out"</em>).</p>
+<h4 id="dummy-waker"><a href="#dummy-waker" aria-label="Anchor link for: dummy-waker">🔗</a>Dummy Waker</h4>
+<p>In order to call the <code>poll</code> method, we need to create a <a href="https://doc.rust-lang.org/nightly/core/task/struct.Context.html"><code>Context</code></a> type, which wraps a <a href="https://doc.rust-lang.org/nightly/core/task/struct.Waker.html"><code>Waker</code></a> type. To start simple, we will first create a dummy waker that does nothing. For this, we create a <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWaker.html"><code>RawWaker</code></a> instance, which defines the implementation of the different <code>Waker</code> methods, and then use the <a href="https://doc.rust-lang.org/stable/core/task/struct.Waker.html#method.from_raw"><code>Waker::from_raw</code></a> function to turn it into a <code>Waker</code>:</p>
+<pre><span>// in src/task/simple_executor.rs
+
+</span><span>use </span><span>core::task::{Waker, RawWaker};
+
+</span><span>fn </span><span>dummy_raw_waker() -&gt; RawWaker {
+    todo!();
+}
+
+</span><span>fn </span><span>dummy_waker() -&gt; Waker {
+    </span><span>unsafe </span><span>{ Waker::from_raw(dummy_raw_waker()) }
+}
+</span></pre>
+<p>The <code>from_raw</code> function is unsafe because undefined behavior can occur if the programmer does not uphold the documented requirements of <code>RawWaker</code>. Before we look at the implementation of the <code>dummy_raw_waker</code> function, we first try to understand how the <code>RawWaker</code> type works.</p>
+<h5 id="rawwaker"><a href="#rawwaker" aria-label="Anchor link for: rawwaker">🔗</a><code>RawWaker</code></h5>
+<p>The <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWaker.html"><code>RawWaker</code></a> type requires the programmer to explicitly define a <a href="https://en.wikipedia.org/wiki/Virtual_method_table"><em>virtual method table</em></a> (<em>vtable</em>) that specifies the functions that should be called when the <code>RawWaker</code> is cloned, woken, or dropped. The layout of this vtable is defined by the <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWakerVTable.html"><code>RawWakerVTable</code></a> type. Each function receives a <code>*const ()</code> argument that is basically a <em>type-erased</em> <code>&amp;self</code> pointer to some struct, e.g. allocated on the heap. The reason for using a <code>*const ()</code> pointer instead of a proper reference is that the <code>RawWaker</code> type should be non-generic but still support arbitrary types. The pointer value that is passed to the functions is the <code>data</code> pointer given to <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWaker.html#method.new"><code>RawWaker::new</code></a>.</p>
+<p>Typically, the <code>RawWaker</code> is created for some heap allocated struct that is wrapped into the <a href="https://doc.rust-lang.org/stable/alloc/boxed/struct.Box.html"><code>Box</code></a> or <a href="https://doc.rust-lang.org/stable/alloc/sync/struct.Arc.html"><code>Arc</code></a> type. For such types, methods like <a href="https://doc.rust-lang.org/stable/alloc/boxed/struct.Box.html#method.into_raw"><code>Box::into_raw</code></a> can be used to convert the <code>Box&lt;T&gt;</code> to a <code>*const T</code> pointer. This pointer can then be casted to an anonymous <code>*const ()</code> pointer and passed to <code>RawWaker::new</code>. Since each vtable function receives the same <code>*const ()</code> as argument, the functions can safely cast the pointer back to a <code>Box&lt;T&gt;</code> or a <code>&amp;T</code> to operate on it. As you can imagine, this process is highly dangerous and can easily lead to undefined behavior on mistakes. For this reason, manually creating a <code>RawWaker</code> is not recommended unless necessary.</p>
+<h5 id="a-dummy-rawwaker"><a href="#a-dummy-rawwaker" aria-label="Anchor link for: a-dummy-rawwaker">🔗</a>A Dummy <code>RawWaker</code></h5>
+<p>While manually creating a <code>RawWaker</code> is not recommended, there is currently no other way to create a dummy <code>Waker</code> that does nothing. Fortunately, the fact that we want to do nothing makes it relatively safe to implement the <code>dummy_raw_waker</code> function:</p>
+<pre><span>// in src/task/simple_executor.rs
+
+</span><span>use </span><span>core::task::RawWakerVTable;
+
+</span><span>fn </span><span>dummy_raw_waker() -&gt; RawWaker {
+    </span><span>fn </span><span>no_op(</span><span>_</span><span>: </span><span>*const </span><span>()) {}
+    </span><span>fn </span><span>clone(</span><span>_</span><span>: </span><span>*const </span><span>()) -&gt; RawWaker {
+        dummy_raw_waker()
+    }
+
+    </span><span>let</span><span> vtable </span><span>= &amp;</span><span>RawWakerVTable::new(clone, no_op, no_op, no_op);
+    RawWaker::new(</span><span>0 </span><span>as *const </span><span>(), vtable)
+}
+</span></pre>
+<p>First, we define two inner functions named <code>no_op</code> and <code>clone</code>. The <code>no_op</code> function takes a <code>*const ()</code> pointer and does nothing. The <code>clone</code> function also takes a <code>*const ()</code> pointer and returns a new <code>RawWaker</code> by calling <code>dummy_raw_waker</code> again. We use these two functions to create a minimal <code>RawWakerVTable</code>: The <code>clone</code> function is used for the cloning operations and the <code>no_op</code> function is used for all other operations. Since the <code>RawWaker</code> does nothing, it does not matter that we return a new <code>RawWaker</code> from <code>clone</code> instead of cloning it.</p>
+<p>After creating the <code>vtable</code>, we use the <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWaker.html#method.new"><code>RawWaker::new</code></a> function to create the <code>RawWaker</code>. The passed <code>*const ()</code> does not matter since none of the vtable function uses it. For this reason, we simply pass a null pointer.</p>
+<h4 id="a-run-method"><a href="#a-run-method" aria-label="Anchor link for: a-run-method">🔗</a>A <code>run</code> Method</h4>
+<p>Now we have a way to create a <code>Waker</code> instance, we can use it to implement a <code>run</code> method on our executor. The most simple <code>run</code> method is to repeatedly poll all queued tasks in a loop until all are done. This is not very efficient since it does not utilize the notifications of the <code>Waker</code> type, but it is an easy way to get things running:</p>
+<pre><span>// in src/task/simple_executor.rs
+
+</span><span>use </span><span>core::task::{Context, Poll};
+
+</span><span>impl </span><span>SimpleExecutor {
+    </span><span>pub fn </span><span>run(</span><span>&amp;mut </span><span>self) {
+        </span><span>while let </span><span>Some(</span><span>mut</span><span> task) </span><span>= </span><span>self.task_queue.pop_front() {
+            </span><span>let</span><span> waker </span><span>= </span><span>dummy_waker();
+            </span><span>let mut</span><span> context </span><span>= </span><span>Context::from_waker(</span><span>&amp;</span><span>waker);
+            </span><span>match</span><span> task.poll(</span><span>&amp;mut</span><span> context) {
+                Poll::Ready(()) </span><span>=&gt; </span><span>{} </span><span>// task done
+                </span><span>Poll::Pending </span><span>=&gt; </span><span>self.task_queue.push_back(task),
+            }
+        }
+    }
+}
+</span></pre>
+<p>The function uses a <code>while let</code> loop to handle all tasks in the <code>task_queue</code>. For each task, it first creates a <code>Context</code> type by wrapping a <code>Waker</code> instance returned by our <code>dummy_waker</code> function. Then it invokes the <code>Task::poll</code> method with this <code>context</code>. If the <code>poll</code> method returns <code>Poll::Ready</code>, the task is finished and we can continue with the next task. If the task is still <code>Poll::Pending</code>, we add it to the back of the queue again so that it will be polled again in a subsequent loop iteration.</p>
+<h4 id="trying-it"><a href="#trying-it" aria-label="Anchor link for: trying-it">🔗</a>Trying It</h4>
+<p>With our <code>SimpleExecutor</code> type, we can now try running the task returned by the <code>example_task</code> function in our <code>main.rs</code>:</p>
+<pre><span>// in src/main.rs
+
+</span><span>use </span><span>blog_os::task::{Task, simple_executor::SimpleExecutor};
+
+</span><span>fn </span><span>kernel_main(boot_info: </span><span>&amp;'static</span><span> BootInfo) -&gt; </span><span>! </span><span>{
+    </span><span>// […] initialization routines, including `init_heap`
+
+    </span><span>let mut</span><span> executor </span><span>= </span><span>SimpleExecutor::new();
+    executor.spawn(Task::new(example_task()));
+    executor.run();
+
+    </span><span>// […] test_main, "it did not crash" message, hlt_loop
+</span><span>}
+
+
+</span><span>// Below is the example_task function again so that you don't have to scroll up
+</span><span>
+async </span><span>fn </span><span>async_number() -&gt; </span><span>u32 </span><span>{
+    </span><span>42
+</span><span>}
+
+async </span><span>fn </span><span>example_task() {
+    </span><span>let</span><span> number </span><span>= </span><span>async_number().await;
+    println!(</span><span>"async number: </span><span>{}</span><span>"</span><span>, number);
+}
+</span></pre>
+<p>When we run it, we see that the expected <em>"async number: 42"</em> message is printed to the screen:</p>
+<p><img src="https://os.phil-opp.com/async-await/qemu-simple-executor.png" alt="QEMU printing &quot;Hello World&quot;, &quot;async number: 42&quot;, and &quot;It did not crash!&quot;"></p>
+<p>Let's summarize the various steps that happen for this example:</p>
+<ul>
+<li>First, a new instance of our <code>SimpleExecutor</code> type is created with an empty <code>task_queue</code>.</li>
+<li>Next, we call the asynchronous <code>example_task</code> function, which returns a future. We wrap this future in the <code>Task</code> type, which moves it to the heap and pins it, and then add the task to the <code>task_queue</code> of the executor through the <code>spawn</code> method.</li>
+<li>We then call the <code>run</code> method to start the execution of the single task in the queue. This involves:
+<ul>
+<li>Popping the task from the front of the <code>task_queue</code>.</li>
+<li>Creating a <code>RawWaker</code> for the task, converting it to a <a href="https://doc.rust-lang.org/nightly/core/task/struct.Waker.html"><code>Waker</code></a> instance, and then creating a <a href="https://doc.rust-lang.org/nightly/core/task/struct.Context.html"><code>Context</code></a> instance from it.</li>
+<li>Calling the <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html#tymethod.poll"><code>poll</code></a> method on the future of the task, using the <code>Context</code> we just created.</li>
+<li>Since the <code>example_task</code> does not wait for anything, it can directly run til its end on the first <code>poll</code> call. This is where the <em>"async number: 42"</em> line is printed.</li>
+<li>Since the <code>example_task</code> directly returns <code>Poll::Ready</code>, it is not added back to the task queue.</li>
+</ul>
+</li>
+<li>The <code>run</code> method returns after the <code>task_queue</code> becomes empty. The execution of our <code>kernel_main</code> function continues and the <em>"It did not crash!"</em> message is printed.</li>
+</ul>
+<h3 id="async-keyboard-input"><a href="#async-keyboard-input" aria-label="Anchor link for: async-keyboard-input">🔗</a>Async Keyboard Input</h3>
+<p>Our simple executor does not utilize the <code>Waker</code> notifications and simply loops over all tasks until they are done. This wasn't a problem for our example since our <code>example_task</code> can directly run to finish on the first <code>poll</code> call. To see the performance advantages of a proper <code>Waker</code> implementation, we first need to create a task that is truly asynchronous, i.e. a task that will probably return <code>Poll::Pending</code> on the first <code>poll</code> call.</p>
+<p>We already have some kind of asynchronicity in our system that we can use for this: hardware interrupts. As we learned in the <a href="https://os.phil-opp.com/hardware-interrupts/"><em>Interrupts</em></a> post, hardware interrupts can occur at arbitrary points in time, determined by some external device. For example, a hardware timer sends an interrupt to the CPU after some predefined time elapsed. When the CPU receives an interrupt, it immediately transfers control to the corresponding handler function defined in the interrupt descriptor table (IDT).</p>
+<p>In the following, we will create an asynchronous task based on the keyboard interrupt. The keyboard interrupt is a good candidate for this because it is both non-deterministic and latency-critical. Non-deteministic means that there is no way to predict when the next key press will occur because it is entirely dependent on the user. Latency-critical means that we want to handle the keyboard input in a timely manner, otherwise the user will feel a lag. To support such a task in an efficient way, it will be essential that the executor has proper support for <code>Waker</code> notifications.</p>
+<h4 id="scancode-queue"><a href="#scancode-queue" aria-label="Anchor link for: scancode-queue">🔗</a>Scancode Queue</h4>
+<p>Currently, we handle the keyboard input directly in the interrupt handler. This is not a good idea for the long term because interrupt handlers should stay as short as possible as they might interrupt important work. Instead, interrupt handlers should only perform the minimal amount of work necessary (e.g. reading the keyboard scancode) and leave the rest of the work (e.g. interpreting the scancode) to a background task.</p>
+<p>A common pattern for delegating work to a background task is to create some sort of queue. The interrupt handler pushes work units of work to the queue and the background task handles the work in the queue. Applied to our keyboard interrupt, this means that the interrupt handler only reads the scancode from the keyboard, pushes it to the queue, and then returns. The keyboard task sits on the other end of the queue and interprets and handles each scancode that is pushed to it:</p>
+<p><img src="https://os.phil-opp.com/async-await/scancode-queue.svg" alt="Scancode queue with 8 slots on the top. Keyboard interrupt handler on the bottom left with a &quot;push scancode&quot; arrow to the left of the queue. Keyboard task on the bottom right with a &quot;pop scancode&quot; queue coming from the right side of the queue."></p>
+<p>A simple implementation of that queue could be a mutex-protected <a href="https://doc.rust-lang.org/stable/alloc/collections/vec_deque/struct.VecDeque.html"><code>VecDeque</code></a>. However, using mutexes in interrupt handlers is not a good idea since it can easily lead to deadlocks. For example, when the user presses a key while the keyboard task has locked the queue, the interrupt handler tries to acquire the lock again and hangs indefinitely. Another problem with this approach is that <code>VecDeque</code> automatically increases its capacity by performing a new heap allocation when it becomes full. This can lead to deadlocks again because our allocator also uses a mutex internally. Further problems are that heap allocations can fail or take a considerable amount of time when the heap is fragmented.</p>
+<p>To prevent these problems, we need a queue implementation that does not require mutexes or allocations for its <code>push</code> operation. Such queues can be implemented by using lock-free <a href="https://doc.rust-lang.org/core/sync/atomic/index.html">atomic operations</a> for pushing and popping elements. This way, it is possible to create <code>push</code> and <code>pop</code> operations that only require a <code>&amp;self</code> reference and are thus usable without a mutex. To avoid allocations on <code>push</code>, the queue can be backed by a pre-allocated fixed-size buffer. While this makes the queue <em>bounded</em> (i.e. it has a maximum length), it is often possible to define reasonable upper bounds for the queue length in practice so that this isn't a big problem.</p>
+<h5 id="the-crossbeam-crate"><a href="#the-crossbeam-crate" aria-label="Anchor link for: the-crossbeam-crate">🔗</a>The <code>crossbeam</code> Crate</h5>
+<p>Implementing such a queue in a correct and efficient way is very difficult, so I recommend to stick to existing, well-tested implementations. One popular Rust project that implements various mutex-free types for concurrent programming is <a href="https://github.com/crossbeam-rs/crossbeam"><code>crossbeam</code></a>. It provides a type named <a href="https://docs.rs/crossbeam/0.7.3/crossbeam/queue/struct.ArrayQueue.html"><code>ArrayQueue</code></a> that is exactly what we need in this case. And we're lucky: The type is fully compatible to <code>no_std</code> crates with allocation support.</p>
+<p>To use the type, we need to add a dependency on the <code>crossbeam-queue</code> crate:</p>
+<pre><span># in Cargo.toml
+
+</span><span>[</span><span>dependencies.crossbeam-queue</span><span>]
+</span><span>version </span><span>= </span><span>"0.2.1"
+</span><span>default-features </span><span>= </span><span>false
+features </span><span>= [</span><span>"alloc"</span><span>]
+</span></pre>
+<p>By default, the crate depends on the standard library. To make it <code>no_std</code> compatible, we need to disable its default features and instead enable the <code>alloc</code> feature. <span>(Note that depending on the main <code>crossbeam</code> crate does not work here because it is missing an export of the <code>queue</code> module for <code>no_std</code>. I filed a <a href="https://github.com/crossbeam-rs/crossbeam/pull/480">pull request</a> to fix this, but it wasn't released on crates.io yet.)</span></p>
+<h5 id="queue-implementation"><a href="#queue-implementation" aria-label="Anchor link for: queue-implementation">🔗</a>Queue Implementation</h5>
+<p>Using the <code>ArrayQueue</code> type, we can now create a global scancode queue in a new <code>task::keyboard</code> module:</p>
+<pre><span>// in src/task/mod.rs
+
+</span><span>pub mod </span><span>keyboard;
+</span></pre><pre><span>// in src/task/keyboard.rs
+
+</span><span>use </span><span>conquer_once::spin::OnceCell;
+</span><span>use </span><span>crossbeam_queue::ArrayQueue;
+
+</span><span>static </span><span>SCANCODE_QUEUE</span><span>: OnceCell&lt;ArrayQueue&lt;</span><span>u8</span><span>&gt;&gt; </span><span>= </span><span>OnceCell::uninit();
+</span></pre>
+<p>Since the <a href="https://docs.rs/crossbeam/0.7.3/crossbeam/queue/struct.ArrayQueue.html#method.new"><code>ArrayQueue::new</code></a> performs a heap allocation, which are not possible at compile time (<a href="https://github.com/rust-lang/const-eval/issues/20">yet</a>), we can't initialize the static variable directly. Instead, we use the <a href="https://docs.rs/conquer-once/0.2.0/conquer_once/raw/struct.OnceCell.html"><code>OnceCell</code></a> type of the <a href="https://docs.rs/conquer-once/0.2.0/conquer_once/index.html"><code>conquer_once</code></a> crate, which makes it possible to perform safe one-time initialization of static values. To include the crate, we need to add it as a dependency in our <code>Cargo.toml</code>:</p>
+<pre><span># in Cargo.toml
+
+</span><span>[</span><span>dependencies.conquer-once</span><span>]
+</span><span>version </span><span>= </span><span>"0.2.0"
+</span><span>default-features </span><span>= </span><span>false
+</span></pre>
+<p>Instead of the <a href="https://docs.rs/conquer-once/0.2.0/conquer_once/raw/struct.OnceCell.html"><code>OnceCell</code></a> primitive, we could also use the <a href="https://docs.rs/lazy_static/1.4.0/lazy_static/index.html"><code>lazy_static</code></a> macro here. However, the <code>OnceCell</code> type has the advantage that we can ensure that the initialization does not happen in the interrupt handler, thus preventing that the interrupt handler performs a heap allocation.</p>
+<h4 id="filling-the-queue"><a href="#filling-the-queue" aria-label="Anchor link for: filling-the-queue">🔗</a>Filling the Queue</h4>
+<p>To fill the scancode queue, we create a new <code>add_scancode</code> function that we will call from the interrupt handler:</p>
+<pre><span>// in src/task/keyboard.rs
+
+</span><span>use crate</span><span>::println;
+
+</span><span>/// Called by the keyboard interrupt handler
+///
+/// Must not block or allocate.
+</span><span>pub</span><span>(</span><span>crate</span><span>) </span><span>fn </span><span>add_scancode(scancode: </span><span>u8</span><span>) {
+    </span><span>if let </span><span>Ok(queue) </span><span>= </span><span>SCANCODE_QUEUE</span><span>.try_get() {
+        </span><span>if let </span><span>Err(</span><span>_</span><span>) </span><span>=</span><span> queue.push(scancode) {
+            println!(</span><span>"WARNING: scancode queue full; dropping keyboard input"</span><span>);
+        }
+    } </span><span>else </span><span>{
+        println!(</span><span>"WARNING: scancode queue uninitialized"</span><span>);
+    }
+}
+</span></pre>
+<p>We use the <a href="https://docs.rs/conquer-once/0.2.0/conquer_once/raw/struct.OnceCell.html#method.try_get"><code>OnceCell::try_get</code></a> to get a reference to the initialized queue. If the queue is not initialized yet, we ignore the keyboard scancode and print a warning. It's important that we don't try to initialize the queue in this function because it will be called by the interrupt handler, which should not perform heap allocations. Since this function should not be callable from our <code>main.rs</code>, we use the <code>pub(crate)</code> visibility to make it only available to our <code>lib.rs</code>.</p>
+<p>The fact that the <a href="https://docs.rs/crossbeam/0.7.3/crossbeam/queue/struct.ArrayQueue.html#method.push"><code>ArrayQueue::push</code></a> method requires only a <code>&amp;self</code> reference makes it very simple to call the method on the static queue. The <code>ArrayQueue</code> type performs all necessary synchronization itself, so we don't need a mutex wrapper here. In case the queue is full, we print a warning too.</p>
+<p>To call the <code>add_scancode</code> function on keyboard interrupts, we update our <code>keyboard_interrupt_handler</code> function in the <code>interrupts</code> module:</p>
+<pre><span>// in src/interrupts.rs
+
+</span><span>extern </span><span>"x86-interrupt" </span><span>fn </span><span>keyboard_interrupt_handler(
+    _stack_frame: </span><span>&amp;mut</span><span> InterruptStackFrame
+) {
+    </span><span>use </span><span>x86_64::instructions::port::Port;
+
+    </span><span>let mut</span><span> port </span><span>= </span><span>Port::new(</span><span>0x60</span><span>);
+    </span><span>let</span><span> scancode: </span><span>u8 = unsafe </span><span>{ port.read() };
+    </span><span>crate</span><span>::task::keyboard::add_scancode(scancode); </span><span>// new
+
+    </span><span>unsafe </span><span>{
+        </span><span>PICS</span><span>.lock()
+            .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+    }
+}
+</span></pre>
+<p>We removed all the keyboard handling code from this function and instead added a call to the <code>add_scancode</code> function. The rest of the function stays the same as before.</p>
+<p>As expected, keypresses are no longer printed to the screen when we run our project using <code>cargo xrun</code> now. Instead, we see the warning that the scancode queue is uninitialized for every keystroke.</p>
+<h4 id="scancode-stream"><a href="#scancode-stream" aria-label="Anchor link for: scancode-stream">🔗</a>Scancode Stream</h4>
+<p>To initialize the <code>SCANCODE_QUEUE</code> and read the scancodes from the queue in an asynchronous way, we create a new <code>ScancodeStream</code> type:</p>
+<pre><span>// in src/task/keyboard.rs
+
+</span><span>pub struct </span><span>ScancodeStream {
+    _private: (),
+}
+
+</span><span>impl </span><span>ScancodeStream {
+    </span><span>pub fn </span><span>new() -&gt; </span><span>Self </span><span>{
+        </span><span>SCANCODE_QUEUE</span><span>.try_init_once(|| ArrayQueue::new(</span><span>100</span><span>))
+            .expect(</span><span>"ScancodeStream::new should only be called once"</span><span>);
+        ScancodeStream { _private: () }
+    }
+}
+</span></pre>
+<p>The purpose of the <code>_private</code> field is to prevent construction of the struct from outside of the module. This makes the <code>new</code> function the only way to construct the type. In the function, we first try to initialize the <code>SCANCODE_QUEUE</code> static. We panic if it is already initialized to ensure that only a single <code>ScancodeStream</code> instance can be created.</p>
+<p>To make the scancodes available to asynchronous tasks, the next step is to implement <code>poll</code>-like method that tries to pop the next scancode off the queue. While this sounds like we should implement <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html"><code>Future</code></a> trait for our type, this does not quite fit here. The problem is that the <code>Future</code> trait only abstracts over a single asynchronous value and expects that the <code>poll</code> method is not called again after it returns <code>Poll::Ready</code>. Our scancode queue, however, contains multiple asynchronous values so that it is ok to keep polling it.</p>
+<h5 id="the-stream-trait"><a href="#the-stream-trait" aria-label="Anchor link for: the-stream-trait">🔗</a>The <code>Stream</code> Trait</h5>
+<p>Since types that yield multiple asynchronous values are common, the <a href="https://docs.rs/futures/0.3.4/futures/"><code>futures</code></a> crate provides a useful abstraction for such types: the <a href="https://rust-lang.github.io/async-book/05_streams/01_chapter.html"><code>Stream</code></a> trait. The trait is defined like this:</p>
+<pre><span>pub trait </span><span>Stream {
+    </span><span>type </span><span>Item</span><span>;
+
+    </span><span>fn </span><span>poll_next(self: Pin&lt;</span><span>&amp;mut Self</span><span>&gt;, cx: </span><span>&amp;mut</span><span> Context)
+        -&gt; Poll&lt;Option&lt;</span><span>Self::</span><span>Item&gt;&gt;;
+}
+</span></pre>
+<p>This definition is quite similar to the <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html"><code>Future</code></a> trait, with the following differences:</p>
+<ul>
+<li>The associated type is named <code>Item</code> instead of <code>Output</code>.</li>
+<li>Instead of a <code>poll</code> method that returns <code>Poll&lt;Self::Item&gt;</code>, the <code>Stream</code> trait defines a <code>poll_next</code> method that returns a <code>Poll&lt;Option&lt;Self::Item&gt;&gt;</code> (note the additional <code>Option</code>).</li>
+</ul>
+<p>There is also a semantic difference: The <code>poll_next</code> can be called repeatedly, until it returns <code>Poll::Ready(None)</code> to signal that the stream is finished. In this regard, the method is similar to the <a href="https://doc.rust-lang.org/stable/core/iter/trait.Iterator.html#tymethod.next"><code>Iterator::next</code></a> method, which also returns <code>None</code> after the last value.</p>
+<h5 id="implementing-stream"><a href="#implementing-stream" aria-label="Anchor link for: implementing-stream">🔗</a>Implementing <code>Stream</code></h5>
+<p>Let's implement the <code>Stream</code> trait for our <code>ScancodeStream</code> to provide the values of the <code>SCANCODE_QUEUE</code> in an asynchronous way. For this, we first need to add a dependency on the <code>futures-util</code> crate, which contains the <code>Stream</code> type:</p>
+<pre><span># in Cargo.toml
+
+</span><span>[</span><span>dependencies.futures-util</span><span>]
+</span><span>version </span><span>= </span><span>"0.3.4"
+</span><span>default-features </span><span>= </span><span>false
+features </span><span>= [</span><span>"alloc"</span><span>]
+</span></pre>
+<p>We disable the default features to make the crate <code>no_std</code> compatible and enable the <code>alloc</code> feature to make its allocation-based types available (we will need this later). <span>(Note that we could also add a dependency on the main <code>futures</code> crate, which re-exports the <code>futures-util</code> crate, but this would result in a larger number of dependencies and longer compile times.)</span></p>
+<p>Now we can import and implement the <code>Stream</code> trait:</p>
+<pre><span>// in src/task/keyboard.rs
+
+</span><span>use </span><span>core::{pin::Pin, task::{Poll, Context}};
+</span><span>use </span><span>futures_util::stream::Stream;
+
+</span><span>impl </span><span>Stream </span><span>for </span><span>ScancodeStream {
+    </span><span>type </span><span>Item </span><span>= u8</span><span>;
+
+    </span><span>fn </span><span>poll_next(self: Pin&lt;</span><span>&amp;mut Self</span><span>&gt;, cx: </span><span>&amp;mut</span><span> Context) -&gt; Poll&lt;Option&lt;</span><span>u8</span><span>&gt;&gt; {
+        </span><span>let</span><span> queue </span><span>= </span><span>SCANCODE_QUEUE</span><span>.try_get().expect(</span><span>"not initialized"</span><span>);
+        </span><span>match</span><span> queue.pop() {
+            Ok(scancode) </span><span>=&gt; </span><span>Poll::Ready(Some(scancode)),
+            Err(crossbeam_queue::PopError) </span><span>=&gt; </span><span>Poll::Pending,
+        }
+    }
+}
+</span></pre>
+<p>We first use the <a href="https://docs.rs/conquer-once/0.2.0/conquer_once/raw/struct.OnceCell.html#method.try_get"><code>OnceCell::try_get</code></a> method to get a reference to the initialized scancode queue. This should never fail since we initialize the queue in the <code>new</code> function, so we can safely use the <code>expect</code> method to panic if it's not initialized. Next, we use the <a href="https://docs.rs/crossbeam/0.7.3/crossbeam/queue/struct.ArrayQueue.html#method.pop"><code>ArrayQueue::pop</code></a>  method to try to get the next element from the queue. If it succeeds we return the scancode wrapped in <code>Poll::Ready(Some(…))</code>. If it fails, it means that the queue is empty. In that case, we return <code>Poll::Pending</code>.</p>
+<h4 id="waker-support"><a href="#waker-support" aria-label="Anchor link for: waker-support">🔗</a>Waker Support</h4>
+<p>Like the <code>Futures::poll</code> method, the <code>Stream::poll_next</code> method requires that the asynchronous task notifies the executor when it becomes ready after <code>Poll::Pending</code> is returned. This way, the executor does not need to poll the same task again until it is notified, which greatly reduces the performance overhead of waiting tasks.</p>
+<p>To send this notification, the task should extract the <a href="https://doc.rust-lang.org/nightly/core/task/struct.Waker.html"><code>Waker</code></a> from the passed <a href="https://doc.rust-lang.org/nightly/core/task/struct.Context.html"><code>Context</code></a> reference and store it somewhere. When the task becomes ready, it should invoke the <a href="https://doc.rust-lang.org/stable/core/task/struct.Waker.html#method.wake"><code>wake</code></a> method on the stored <code>Waker</code> to notify the executor that the task should be polled again.</p>
+<h5 id="atomicwaker"><a href="#atomicwaker" aria-label="Anchor link for: atomicwaker">🔗</a>AtomicWaker</h5>
+<p>To implement the <code>Waker</code> notification for our <code>ScancodeStream</code>, we need a place where we can store the <code>Waker</code> between poll calls. We can't store it as a field in the <code>ScancodeStream</code> itself because it needs to be accessible from the <code>add_scancode</code> function. The solution for this is to use a static variable of the <a href="https://docs.rs/futures-util/0.3.4/futures_util/task/struct.AtomicWaker.html"><code>AtomicWaker</code></a> type provided by the <code>futures-util</code> crate. Like the <code>ArrayQueue</code> type, this type is based on atomic instructions and can be safely stored in a static and modified concurrently.</p>
+<p>Let's use the <a href="https://docs.rs/futures-util/0.3.4/futures_util/task/struct.AtomicWaker.html"><code>AtomicWaker</code></a> type to define a static <code>WAKER</code>:</p>
+<pre><span>// in src/task/keyboard.rs
+
+</span><span>use </span><span>futures_util::task::AtomicWaker;
+
+</span><span>static </span><span>WAKER</span><span>: AtomicWaker </span><span>= </span><span>AtomicWaker::new();
+</span></pre>
+<p>The idea is that the <code>poll_next</code> implementation stores the current waker in this static and the <code>add_scancode</code> function calls the <code>wake</code> function on it when a new scancode is added to the queue.</p>
+<h5 id="storing-a-waker"><a href="#storing-a-waker" aria-label="Anchor link for: storing-a-waker">🔗</a>Storing a Waker</h5>
+<p>The contract defined by <code>poll</code>/<code>poll_next</code> requires that the task registers a wakeup for the passed <code>Waker</code> when it returns <code>Poll::Pending</code>. Let's modify our <code>poll_next</code> implementation to satisfy these requirement:</p>
+<pre><span>// in src/task/keyboard.rs
+
+</span><span>impl </span><span>Stream </span><span>for </span><span>ScancodeStream {
+    </span><span>type </span><span>Item </span><span>= u8</span><span>;
+
+    </span><span>fn </span><span>poll_next(self: Pin&lt;</span><span>&amp;mut Self</span><span>&gt;, cx: </span><span>&amp;mut</span><span> Context) -&gt; Poll&lt;Option&lt;</span><span>u8</span><span>&gt;&gt; {
+        </span><span>let</span><span> queue </span><span>= </span><span>SCANCODE_QUEUE
+            </span><span>.try_get()
+            .expect(</span><span>"scancode queue not initialized"</span><span>);
+
+        </span><span>// fast path
+        </span><span>if let </span><span>Ok(scancode) </span><span>=</span><span> queue.pop() {
+            </span><span>return </span><span>Poll::Ready(Some(scancode));
+        }
+
+        </span><span>WAKER</span><span>.register(</span><span>&amp;</span><span>cx.waker());
+        </span><span>match</span><span> queue.pop() {
+            Ok(scancode) </span><span>=&gt; </span><span>{
+                </span><span>WAKER</span><span>.take();
+                Poll::Ready(Some(scancode))
+            }
+            Err(crossbeam_queue::PopError) </span><span>=&gt; </span><span>Poll::Pending,
+        }
+    }
+}
+</span></pre>
+<p>Like before, we first use the <a href="https://docs.rs/conquer-once/0.2.0/conquer_once/raw/struct.OnceCell.html#method.try_get"><code>OnceCell::try_get</code></a> function to get a reference to the initialized scancode queue. We then optimistically try to <code>pop</code> from the queue and return <code>Poll::Ready</code> when it succeeds. This way, we can avoid the performance overhead of registering a waker when the queue is not empty.</p>
+<p>If the first call to <code>queue.pop()</code> does not succeed, the queue is potentially empty. Only potentially because the interrupt handler might have filled the queue asynchronously immediately after the check. Since this race condition can occur again for the next check, we need to register the <code>Waker</code> in the <code>WAKER</code> static before the second check. This way, a wakeup might happen before we return <code>Poll::Pending</code>, but it is guaranteed that we get a wakeup for any scancodes pushed after the check.</p>
+<p>After registering the <code>Waker</code> contained in the passed <a href="https://doc.rust-lang.org/nightly/core/task/struct.Context.html"><code>Context</code></a> through the <a href="https://docs.rs/futures-util/0.3.4/futures_util/task/struct.AtomicWaker.html#method.register"><code>AtomicWaker::register</code></a> function, we try popping from the queue a second time. If it now succeeds, we return <code>Poll::Ready</code>. We also remove the registered waker again using <a href="https://docs.rs/futures/0.3.4/futures/task/struct.AtomicWaker.html#method.take"><code>AtomicWaker::take</code></a> because a waker notification is no longer needed. In case <code>queue.pop()</code> fails for a second time, we return <code>Poll::Pending</code> like before, but this time with a registered wakeup.</p>
+<p>Note that there are two ways that a wakeup can happen for a task that did not return <code>Poll::Pending</code> (yet). One way is the mentioned race condition when the wakeup happens immediately before returning <code>Poll::Pending</code>. The other way is when the queue is no longer empty after registering the waker so that <code>Poll::Ready</code> is returned. Since these spurious wakeups are not preventable, the executor needs to be able to handle them correctly.</p>
+<h5 id="waking-the-stored-waker"><a href="#waking-the-stored-waker" aria-label="Anchor link for: waking-the-stored-waker">🔗</a>Waking the Stored Waker</h5>
+<p>To wake the stored <code>Waker</code>, we add a call to <code>WAKER.wake()</code> in the <code>add_scancode</code> function:</p>
+<pre><span>// in src/task/keyboard.rs
+
+</span><span>pub</span><span>(</span><span>crate</span><span>) add_scancode(scancode: </span><span>u8</span><span>) {
+    </span><span>if let </span><span>Ok(queue) </span><span>= </span><span>SCANCODE_QUEUE</span><span>.try_get() {
+        </span><span>if let </span><span>Err(</span><span>_</span><span>) </span><span>=</span><span> scancode_queue.push(scancode) {
+            println!(</span><span>"WARNING: scancode queue full; dropping keyboard input"</span><span>);
+        } </span><span>else </span><span>{
+            </span><span>WAKER</span><span>.wake(); </span><span>// new
+        </span><span>}
+    } </span><span>else </span><span>{
+        println!(</span><span>"WARNING: scancode queue uninitialized"</span><span>);
+    }
+}
+</span></pre>
+<p>The only change that we performed is to add a call to <code>WAKER.wake()</code> if the push to the scancode queue succeeds. If a waker is registered in the <code>WAKER</code> static, this method will call the equally-named <a href="https://doc.rust-lang.org/stable/core/task/struct.Waker.html#method.wake"><code>wake</code></a> method on it, which notifies the executor. Otherwise, the operation is a no-op, i.e. nothing happens.</p>
+<p>It is important that we call <code>wake</code> only after pushing to the queue because otherwise the task might be woken too early when the queue is still empty. This can for example happen when using a multi-threaded executor that starts the woken task concurrently on a different CPU core. While we don't have thread support yet, we will add it soon and we don't want things to break then.</p>
+<h4 id="keyboard-task"><a href="#keyboard-task" aria-label="Anchor link for: keyboard-task">🔗</a>Keyboard Task</h4>
+<p>Now that we implemented the <code>Stream</code> trait for our <code>ScancodeStream</code>, we can use it to create an asynchronous keyboard task:</p>
+<pre><span>// in src/task/keyboard.rs
+
+</span><span>use </span><span>futures_util::stream::StreamExt;
+</span><span>use </span><span>pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
+</span><span>use crate</span><span>::print;
+
+</span><span>pub</span><span> async </span><span>fn </span><span>print_keypresses() {
+    </span><span>let mut</span><span> scancodes </span><span>= </span><span>ScancodeStream::new();
+    </span><span>let mut</span><span> keyboard </span><span>= </span><span>Keyboard::new(layouts::Us104Key, ScancodeSet1,
+        HandleControl::Ignore);
+
+    </span><span>while let </span><span>Some(scancode) </span><span>=</span><span> scancodes.next().await {
+        </span><span>if let </span><span>Ok(Some(key_event)) </span><span>=</span><span> keyboard.add_byte(scancode) {
+            </span><span>if let </span><span>Some(key) </span><span>=</span><span> keyboard.process_keyevent(key_event) {
+                </span><span>match</span><span> key {
+                    DecodedKey::Unicode(character) </span><span>=&gt; </span><span>print!(</span><span>"</span><span>{}</span><span>"</span><span>, character),
+                    DecodedKey::RawKey(key) </span><span>=&gt; </span><span>print!(</span><span>"</span><span>{:?}</span><span>"</span><span>, key),
+                }
+            }
+        }
+    }
+}
+</span></pre>
+<p>The code is very similar to the code we had in our <a href="https://os.phil-opp.com/hardware-interrupts/#interpreting-the-scancodes">keyboard interrupt handler</a> before we modified it in this post. The only difference is that, instead of reading the scancode from an I/O port, we take it from the <code>ScancodeStream</code>. For this, we first create a new <code>Scancode</code> stream and then repeatedly use the <a href="https://docs.rs/futures-util/0.3.4/futures_util/stream/trait.StreamExt.html#method.next"><code>next</code></a> method provided by the <a href="https://docs.rs/futures-util/0.3.4/futures_util/stream/trait.StreamExt.html"><code>StreamExt</code></a> trait to get a <code>Future</code> that resolves to the next element in the stream. By using the <code>await</code> operator on it, we asynchronously wait for the result of the future.</p>
+<p>We use <code>while let</code> to loop until the stream returns <code>None</code> to signal its end. Since our <code>poll_next</code> method never returns <code>None</code>, this is effectively an endless loop, so the <code>print_keypresses</code> task never finishes.</p>
+<p>Let's add the <code>print_keypresses</code> task to our executor in our <code>main.rs</code> to get working keyboard input again:</p>
+<pre><span>// in src/main.rs
+
+</span><span>use </span><span>blog_os::task::keyboard; </span><span>// new
+
+</span><span>fn </span><span>kernel_main(boot_info: </span><span>&amp;'static</span><span> BootInfo) -&gt; </span><span>! </span><span>{
+
+    </span><span>// […] initialization routines, including init_heap, test_main
+
+    </span><span>let mut</span><span> executor </span><span>= </span><span>SimpleExecutor::new();
+    executor.spawn(Task::new(example_task()));
+    executor.spawn(Task::new(keyboard::print_keypresses())); </span><span>// new
+</span><span>    executor.run();
+
+    </span><span>// […] "it did not crash" message, hlt_loop
+</span><span>}
+</span></pre>
+<p>When we execute <code>cargo xrun</code> now, we see that keyboard input works again:</p>
+<p><img src="https://os.phil-opp.com/async-await/qemu-keyboard-output.gif" alt="QEMU printing &quot;.....H...e...l...l..o..... ...W..o..r....l...d...!&quot;"></p>
+<p>If you keep an eye on the CPU utilization of your computer, you will see that the <code>QEMU</code> process now continuously keeps the CPU busy. This happens because our <code>SimpleExecutor</code> polls tasks over and over again in a loop. So even if we don't press any keys on the keyboard, the executor repeatedly calls <code>poll</code> on our <code>print_keypresses</code> task, even though the task cannot make any progress and will return <code>Poll::Pending</code> each time.</p>
+<h3 id="executor-with-waker-support"><a href="#executor-with-waker-support" aria-label="Anchor link for: executor-with-waker-support">🔗</a>Executor with Waker Support</h3>
+<p>To fix the performance problem, we need to create an executor that properly utilizes the <code>Waker</code> notifications. This way, the executor is notified when the next keyboard interrupt occurs, so it does not need to keep polling the <code>print_keypresses</code> task over and over again.</p>
+<h4 id="task-id"><a href="#task-id" aria-label="Anchor link for: task-id">🔗</a>Task Id</h4>
+<p>The first step in creating an executor with proper support for waker notifications is to give each task an unique ID. This is required because we need a way to specify which task should be woken. We start by creating a new <code>TaskId</code> wrapper type:</p>
+<pre><span>// in src/task/mod.rs
+
+</span><span>#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+</span><span>struct </span><span>TaskId(</span><span>usize</span><span>);
+</span></pre>
+<p>The <code>TaskId</code> struct is a simple wrapper type around <code>usize</code>. We derive a number of traits for it to make it printable, copyable, comparable, and sortable. The latter is important because we want to use <code>TaskId</code> as the key type of a <a href="https://doc.rust-lang.org/alloc/collections/btree_map/struct.BTreeMap.html"><code>BTreeMap</code></a> in a moment.</p>
+<p>To assign each task an unique ID, we utilize the fact that each task stores a pinned, heap-allocated future:</p>
+<pre><span>pub struct </span><span>Task {
+    future: Pin&lt;Box&lt;dyn Future&lt;Output = ()&gt;&gt;&gt;,
+}
+</span></pre>
+<p>The idea is to use the memory address of this future as an ID. This address is unique because no two futures are stored at the same address. The <code>Pin</code> type ensures that they can't move in memory, so we also know that the address stays the same as long as the task exists. These properties make the address a good candidate for an ID.</p>
+<p>The implementation looks like this:</p>
+<pre><span>// in src/task/mod.rs
+
+</span><span>impl </span><span>Task {
+    </span><span>fn </span><span>id(</span><span>&amp;</span><span>self) -&gt; TaskId {
+        </span><span>use </span><span>core::ops::Deref;
+
+        </span><span>let</span><span> addr </span><span>= </span><span>Pin::deref(</span><span>&amp;</span><span>self.future) </span><span>as *const _ as *const </span><span>() </span><span>as usize</span><span>;
+        TaskId(addr)
+    }
+}
+</span></pre>
+<p>We use the <code>deref</code> method of the <a href="https://doc.rust-lang.org/core/ops/trait.Deref.html"><code>Deref</code></a> trait to get a reference to the heap allocated future. To get the corresponding memory address, we convert this reference to a raw pointer and then to an <code>usize</code>. Finally, we return the address wrapped in the <code>TaskId</code> struct.</p>
+<h4 id="the-executor-type"><a href="#the-executor-type" aria-label="Anchor link for: the-executor-type">🔗</a>The <code>Executor</code> Type</h4>
+<p>We create our new <code>Executor</code> type in a <code>task::executor</code> module:</p>
+<pre><span>// in src/task/mod.rs
+
+</span><span>pub mod </span><span>executor;
+</span></pre><pre><span>// in src/task/executor.rs
+
+</span><span>use super</span><span>::{Task, TaskId};
+</span><span>use </span><span>alloc::{collections::{BTreeMap, VecDeque}, sync::Arc};
+</span><span>use </span><span>core::task::Waker;
+</span><span>use </span><span>crossbeam_queue::ArrayQueue;
+
+</span><span>pub struct </span><span>Executor {
+    task_queue: VecDeque&lt;Task&gt;,
+    waiting_tasks: BTreeMap&lt;TaskId, Task&gt;,
+    wake_queue: Arc&lt;ArrayQueue&lt;TaskId&gt;&gt;,
+    waker_cache: BTreeMap&lt;TaskId, Waker&gt;,
+}
+
+</span><span>impl </span><span>Executor {
+    </span><span>pub fn </span><span>new() -&gt; </span><span>Self </span><span>{
+        Executor {
+            task_queue: VecDeque::new(),
+            waiting_tasks: BTreeMap::new(),
+            wake_queue: Arc::new(ArrayQueue::new(</span><span>100</span><span>)),
+            waker_cache: BTreeMap::new(),
+        }
+    }
+}
+</span></pre>
+<p>In addition to a <code>task_queue</code>, which stores the tasks that are ready to execute, the type has a <code>waiting_tasks</code> map, a <code>wake_queue</code> and a <code>waker_cache</code>. These fields have the following purpose:</p>
+<ul>
+<li>
+<p>The <code>waiting_tasks</code> map stores tasks that returned <code>Poll::Pending</code>. The map is indexed by the <code>TaskId</code> to allow efficient continuation of a specific task.</p>
+</li>
+<li>
+<p>The <code>wake_queue</code> is <a href="https://docs.rs/crossbeam/0.7.3/crossbeam/queue/struct.ArrayQueue.html"><code>ArrayQueue</code></a> of task IDs, wrapped into the <a href="https://doc.rust-lang.org/stable/alloc/sync/struct.Arc.html"><code>Arc</code></a> type that implements <em>reference counting</em>. Reference counting makes it possible to share ownership of the value between multiple owners. It works by allocating the value on the heap and counting the number of active references to it. When the number of active references reaches zero, the value is no longer needed and can be deallocated.</p>
+<p>We use the <code>Arc</code> wrapper for the <code>wake_queue</code> because it will be shared between the executor and wakers. The idea is that the wakers push the ID of the woken task to the queue. The executor sits on the receiving end of the queue and moves all woken tasks from the <code>waiting_tasks</code> map back to the <code>task_queue</code>. The reason for using a fixed-size queue instead of an unbounded queue such as <a href="https://docs.rs/crossbeam-queue/0.2.1/crossbeam_queue/struct.SegQueue.html"><code>SegQueue</code></a> is that interrupt handlers that should not allocate will push to this queue.</p>
+</li>
+<li>
+<p>The <code>waker_cache</code> map caches the <a href="https://doc.rust-lang.org/nightly/core/task/struct.Waker.html"><code>Waker</code></a> of a task after its creation. This has two reasons: First, it improves performance by reusing the same waker for multiple wake-ups of the same task instead of creating a new waker each time. Second, it ensures that reference-counted wakers are not deallocated inside interrupt handlers because it could lead to deadlocks (there are more details on this below).</p>
+</li>
+</ul>
+<p>To create an <code>Executor</code>, we provide a simple <code>new</code> function. We choose a capacity of 100 for the <code>wake_queue</code>, which should be more than enough for the foreseeable future. In case our system will have more than 100 concurrent tasks at some point, we can easily increase this size.</p>
+<h4 id="spawning-tasks"><a href="#spawning-tasks" aria-label="Anchor link for: spawning-tasks">🔗</a>Spawning Tasks</h4>
+<p>As for the <code>SimpleExecutor</code>, we provide a <code>spawn</code> method on our <code>Executor</code> type that adds a given task to the <code>task_queue</code>:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>impl </span><span>Executor {
+    </span><span>pub fn </span><span>spawn(</span><span>&amp;mut </span><span>self, task: Task) {
+        self.task_queue.push_back(task)
+    }
+}
+</span></pre>
+<p>While this method requires a <code>&amp;mut</code> reference to the executor it is not callable after the executor has been started. If it should be possible to let tasks themselves spawn additional tasks at some point, we could change the type of the task queue to a concurrent queue such as <a href="https://docs.rs/crossbeam-queue/0.2.1/crossbeam_queue/struct.SegQueue.html"><code>SegQueue</code></a> and share a reference to this queue with tasks.</p>
+<h4 id="running-tasks"><a href="#running-tasks" aria-label="Anchor link for: running-tasks">🔗</a>Running Tasks</h4>
+<p>To execute all tasks in the <code>task_queue</code>, we create a private <code>run_ready_tasks</code> method:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>use </span><span>core::task::{Context, Poll};
+
+</span><span>impl </span><span>Executor {
+    </span><span>fn </span><span>run_ready_tasks(</span><span>&amp;mut </span><span>self) {
+        </span><span>while let </span><span>Some(</span><span>mut</span><span> task) </span><span>= </span><span>self.task_queue.pop_front() {
+            </span><span>let</span><span> task_id </span><span>=</span><span> task.id();
+            </span><span>if !</span><span>self.waker_cache.contains_key(</span><span>&amp;</span><span>task_id) {
+                self.waker_cache.insert(task_id, self.create_waker(task_id));
+            }
+            </span><span>let</span><span> waker </span><span>= </span><span>self.waker_cache.get(</span><span>&amp;</span><span>task_id).expect(</span><span>"should exist"</span><span>);
+            </span><span>let mut</span><span> context </span><span>= </span><span>Context::from_waker(waker);
+            </span><span>match</span><span> task.poll(</span><span>&amp;mut</span><span> context) {
+                Poll::Ready(()) </span><span>=&gt; </span><span>{
+                    </span><span>// task done -&gt; remove cached waker
+                    </span><span>self.waker_cache.remove(</span><span>&amp;</span><span>task_id);
+                }
+                Poll::Pending </span><span>=&gt; </span><span>{
+                    </span><span>if </span><span>self.waiting_tasks.insert(task_id, task).is_some() {
+                        panic!(</span><span>"task with same ID already in waiting_tasks"</span><span>);
+                    }
+                },
+            }
+        }
+    }
+}
+</span></pre>
+<p>The basic idea of this function is similar to our <code>SimpleExecutor</code>: Loop over all tasks in the <code>task_queue</code>, create a waker for each task, and then poll it. However, instead of adding pending tasks back to the end of the <code>task_queue</code>, we store them in the <code>waiting_tasks</code> map until they are woken again. The waker creation is done by a method named <code>create_waker</code>, whose implemenation will be shown in a moment.</p>
+<p>To avoid the performance overhead of creating a waker on each poll, we use the <code>waker_cache</code> map to store the waker for each task after it has been created. For this, we first use the <a href="https://doc.rust-lang.org/alloc/collections/btree_map/struct.BTreeMap.html#method.contains_key"><code>BTreeMap::contains_key</code></a> method to check whether a cached waker exists for the task. If not, we use the <a href="https://doc.rust-lang.org/alloc/collections/btree_map/struct.BTreeMap.html#method.insert"><code>BTreeMap::insert</code></a> method to create it. Afterwards, we can be sure that the waker exists, so we use the <a href="https://doc.rust-lang.org/alloc/collections/btree_map/struct.BTreeMap.html#method.get"><code>BTreeMap::get</code></a> method in combination with an <a href="https://doc.rust-lang.org/core/option/enum.Option.html#method.expect"><code>expect</code></a> call to get a reference to it.</p>
+<p>Note that reusing wakers like this is not possible for all waker implementations, but our implemenation will allow it. To clean up the <code>waker_cache</code> when a task is finished, we use use the <a href="https://doc.rust-lang.org/alloc/collections/btree_map/struct.BTreeMap.html#method.remove"><code>BTreeMap::remove</code></a> method to remove any cached waker for that task from the map.</p>
+<h4 id="waker-design"><a href="#waker-design" aria-label="Anchor link for: waker-design">🔗</a>Waker Design</h4>
+<p>The job of the waker is to push the ID of the woken task to the <code>wake_queue</code> of the executor. We implement this by creating a new <code>TaskWaker</code> struct that stores the task ID and a reference to the <code>wake_queue</code>:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>struct </span><span>TaskWaker {
+    task_id: TaskId,
+    wake_queue: Arc&lt;ArrayQueue&lt;TaskId&gt;&gt;,
+}
+</span></pre>
+<p>Since the ownership of the <code>wake_queue</code> is shared between the executor and wakers, we use the <a href="https://doc.rust-lang.org/stable/alloc/sync/struct.Arc.html"><code>Arc</code></a> wrapper type to implement shared reference-counted ownership.</p>
+<p>The implementation of the wake operation is quite simple:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>impl </span><span>TaskWaker {
+    </span><span>fn </span><span>wake_task(</span><span>&amp;</span><span>self) {
+        self.wake_queue.push(self.task_id).expect(</span><span>"wake_queue full"</span><span>);
+    }
+}
+</span></pre>
+<p>We push the <code>task_id</code> to the referenced <code>wake_queue</code>. Since modifications of the <a href="https://docs.rs/crossbeam/0.7.3/crossbeam/queue/struct.ArrayQueue.html"><code>ArrayQueue</code></a> type only require a shared reference, we can implement this method on <code>&amp;self</code> instead of <code>&amp;mut self</code>.</p>
+<h5 id="the-wake-trait"><a href="#the-wake-trait" aria-label="Anchor link for: the-wake-trait">🔗</a>The <code>Wake</code> Trait</h5>
+<p>In order to use our <code>TaskWaker</code> type for polling futures, we need to convert it to a <a href="https://doc.rust-lang.org/nightly/core/task/struct.Waker.html"><code>Waker</code></a> instance first. This is required because the <a href="https://doc.rust-lang.org/nightly/core/future/trait.Future.html#tymethod.poll"><code>Future::poll</code></a> method takes a <a href="https://doc.rust-lang.org/nightly/core/task/struct.Context.html"><code>Context</code></a> instance as argument, which can only be constructed from the <code>Waker</code> type. While we could do this by providing an implementation of the <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWaker.html"><code>RawWaker</code></a> type, it's both simpler and safer to instead implement the <code>Arc</code>-based <a href="https://doc.rust-lang.org/nightly/alloc/task/trait.Wake.html"><code>Wake</code></a> trait and then using the <a href="https://doc.rust-lang.org/nightly/core/convert/trait.From.html"><code>From</code></a> implementations provided by the standard library to construct the <code>Waker</code>.</p>
+<p>The trait implementation looks like this:</p>
+<pre><span>// in src/task/simple_executor.rs
+
+</span><span>use </span><span>alloc::task::Wake;
+
+</span><span>impl </span><span>Wake </span><span>for </span><span>TaskWaker {
+    </span><span>fn </span><span>wake(self: Arc&lt;</span><span>Self</span><span>&gt;) {
+        self.wake_task();
+    }
+
+    </span><span>fn </span><span>wake_by_ref(self: </span><span>&amp;</span><span>Arc&lt;</span><span>Self</span><span>&gt;) {
+        self.wake_task();
+    }
+}
+</span></pre>
+<p>The trait is still unstable, so we have to add <strong><code>#![feature(wake_trait)]</code></strong> to the top of our <code>lib.rs</code> to use it. Since wakers are commonly shared between the executor and the asynchronous tasks, the trait methods require that the <code>Self</code> instance is wrapped in the <a href="https://doc.rust-lang.org/stable/alloc/sync/struct.Arc.html"><code>Arc</code></a> type, which implements reference-counted ownership. This means that we have to move our <code>TaskWaker</code> to an <code>Arc</code> to in order to call them.</p>
+<p>The difference between the <code>wake</code> and <code>wake_by_ref</code> methods is that the latter only requires a reference the <code>Arc</code>, while the former takes ownership of the <code>Arc</code> and thus often requires an increase of the reference count. Not all types support waking by reference, so implementing the <code>wake_by_ref</code> method is optional, however it can lead to better performance because it avoids unnecessary reference count modifications. In our case, we can simply forward both trait methods to our <code>wake_task</code> function, which requires only a shared <code>&amp;self</code> reference.</p>
+<h5 id="creating-wakers"><a href="#creating-wakers" aria-label="Anchor link for: creating-wakers">🔗</a>Creating Wakers</h5>
+<p>Since the <code>Waker</code> type supports <a href="https://doc.rust-lang.org/nightly/core/convert/trait.From.html"><code>From</code></a> conversions for all <code>Arc</code>-wrapped values that implement the <code>Wake</code> trait, we can now implement the <code>Executor::create_waker</code> method using our <code>TaskWaker</code>:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>impl </span><span>Executor {
+    </span><span>fn </span><span>create_waker(</span><span>&amp;</span><span>self, task_id: TaskId) -&gt; Waker {
+        Waker::from(Arc::new(TaskWaker {
+            task_id,
+            wake_queue: self.wake_queue.clone(),
+        }))
+    }
+}
+</span></pre>
+<p>We create the <code>TaskWaker</code> using the passed <code>task_id</code> and a clone of the <code>wake_queue</code>. Since the <code>wake_queue</code> is wrapped into <code>Arc</code>, the <code>clone</code> only increases the reference count of the value, but still points to the same heap allocated queue. We store the <code>TaskWaker</code> in an <code>Arc</code> too because the <code>Waker::from</code> implementation requires it. This function then takes care of constructing a <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWakerVTable.html"><code>RawWakerVTable</code></a> and a <a href="https://doc.rust-lang.org/stable/core/task/struct.RawWaker.html"><code>RawWaker</code></a> instance for our <code>TaskWaker</code> type. In case you're interested in how it works in detail, check out the <a href="https://github.com/rust-lang/rust/blob/cdb50c6f2507319f29104a25765bfb79ad53395c/src/liballoc/task.rs#L58-L87">implementation in the <code>alloc</code> crate</a>.</p>
+<h5 id="handling-wake-ups"><a href="#handling-wake-ups" aria-label="Anchor link for: handling-wake-ups">🔗</a>Handling Wake-Ups</h5>
+<p>To handle wake-ups in our executor, we add a <code>wake_tasks</code> method:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>impl </span><span>Executor {
+    </span><span>fn </span><span>wake_tasks(</span><span>&amp;mut </span><span>self) {
+        </span><span>while let </span><span>Ok(task_id) </span><span>= </span><span>self.wake_queue.pop() {
+            </span><span>if let </span><span>Some(task) </span><span>= </span><span>self.waiting_tasks.remove(</span><span>&amp;</span><span>task_id) {
+                self.task_queue.push_back(task);
+            }
+        }
+    }
+}
+</span></pre>
+<p>We use a <code>while let</code> loop to pop all items from the <code>wake_queue</code>. For each popped task ID, we remove the corresponding task from the <code>waiting_tasks</code> map and add it to the back of the <code>task_queue</code>. Since we register wakers before checking whether a task needs to be put to sleep, it might happen that a wake-up occurs for tasks even though they are not in the <code>waiting_tasks</code> map. In this case, we simply ignore the wake-up.</p>
+<h4 id="a-run-method-1"><a href="#a-run-method-1" aria-label="Anchor link for: a-run-method-1">🔗</a>A <code>run</code> Method</h4>
+<p>With our waker implementation in place, we can finally construct a <code>run</code> method for our executor:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>impl </span><span>Executor {
+    </span><span>pub fn </span><span>run(</span><span>&amp;mut </span><span>self) -&gt; </span><span>! </span><span>{
+        </span><span>loop </span><span>{
+            self.wake_tasks();
+            self.run_ready_tasks();
+        }
+    }
+}
+</span></pre>
+<p>This method just calls the <code>wake_tasks</code> and <code>run_ready_tasks</code> functions in a loop. While we could theoretically return from the function when both the <code>task_queue</code> and the <code>waiting_tasks</code> map become empty, this would never happen since our <code>keyboard_task</code> never finishes, so a simply <code>loop</code> should suffice. Since the function never returns, we use the <code>!</code> return type to mark the function as <a href="https://doc.rust-lang.org/stable/rust-by-example/fn/diverging.html">diverging</a> to the compiler.</p>
+<p>We can now change our <code>kernel_main</code> to use our new <code>Executor</code> instead of the <code>SimpleExecutor</code>:</p>
+<pre><span>// in src/main.rs
+
+</span><span>use </span><span>blog_os::task::executor::Executor; </span><span>// new
+
+</span><span>fn </span><span>kernel_main(boot_info: </span><span>&amp;'static</span><span> BootInfo) -&gt; </span><span>! </span><span>{
+    </span><span>// […] initialization routines, including init_heap, test_main
+
+    </span><span>let mut</span><span> executor </span><span>= </span><span>Executor::new(); </span><span>// new
+</span><span>    executor.spawn(Task::new(example_task()));
+    executor.spawn(Task::new(keyboard::print_keypresses()));
+    executor.run();
+}
+</span></pre>
+<p>We only need to change the import and the type name. Since our <code>run</code> function is marked as diverging, the compiler knows that it never returns so that we no longer need a call to <code>hlt_loop</code> at the end of our <code>kernel_main</code> function.</p>
+<p>When we run our kernel using <code>cargo xrun</code> now, we see that keyboard input still works:</p>
+<p><img src="https://os.phil-opp.com/async-await/qemu-keyboard-output-again.gif" alt="QEMU printing &quot;.....H...e...l...l..o..... ...a..g..a....i...n...!&quot;"></p>
+<p>However, the CPU utilization of QEMU did not get any better. The reason for this is that we still keep the CPU busy for the whole time. We no longer poll tasks until they are woken again, but we still check the <code>wake_queue</code> and the <code>task_queue</code> in a busy loop. To fix this, we need to put the CPU to sleep if there is no more work to do.</p>
+<h4 id="sleep-if-idle"><a href="#sleep-if-idle" aria-label="Anchor link for: sleep-if-idle">🔗</a>Sleep If Idle</h4>
+<p>The basic idea is to execute the <a href="https://en.wikipedia.org/wiki/HLT_(x86_instruction)"><code>hlt</code> instruction</a> when both the <code>task_queue</code> and the <code>wake_queue</code> are empty. This instruction puts the CPU to sleep until the next interrupt arrives. The fact that the CPU immediately becomes active again on interrupts ensures that we can still directly react when an interrupt handler pushes to the <code>wake_queue</code>.</p>
+<p>To implement this, we create a new <code>sleep_if_idle</code> method to our executor and call it from our <code>run</code> method:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>impl </span><span>Executor {
+    </span><span>pub fn </span><span>run(</span><span>&amp;mut </span><span>self) -&gt; </span><span>! </span><span>{
+        </span><span>loop </span><span>{
+            self.wake_tasks();
+            self.run_ready_tasks();
+            self.sleep_if_idle();   </span><span>// new
+        </span><span>}
+    }
+
+    </span><span>fn </span><span>sleep_if_idle(</span><span>&amp;</span><span>self) {
+        </span><span>if </span><span>self.wake_queue.is_empty() {
+            x86_64::instructions::hlt();
+        }
+    }
+}
+</span></pre>
+<p>Since we call <code>sleep_if_idle</code> directly after <code>run_ready_tasks</code>, which loops until the <code>task_queue</code> becomes empty, we only need to check the <code>wake_queue</code>. If it is empty too, there is no task that is ready to run, so we execute the <code>hlt</code> instruction through the <a href="https://docs.rs/x86_64/0.9.6/x86_64/instructions/fn.hlt.html"><code>instructions::hlt</code></a> wrapper function provided by the <a href="https://docs.rs/x86_64/0.9.6/x86_64/index.html"><code>x86_64</code></a> crate.</p>
+<p>Unfortunately, there is a subtle race condition in this implementation. Since interrupts are asynchronous and can happen at any time, it is possible that an interrupt happens between the <code>is_empty</code> check and the call to <code>hlt</code>:</p>
+<pre><span>if </span><span>self.wake_queue.is_empty() {
+    </span><span>/// &lt;--- interrupt can happen here
+    </span><span>x86_64::instructions::hlt();
+}
+</span></pre>
+<p>In case this interrupt pushes to the <code>wake_queue</code>, we put the CPU to sleep even though there is now a ready task. In the worst case, this could delay the handling of a keyboard interrupt until the next keypress or the next timer interrupt. So how do we prevent it?</p>
+<p>The answer is to disable interrupts on the CPU before the check and atomically enable them again together with the <code>hlt</code> instruction. This way, all interrupts that happen between in between are delayed after the <code>hlt</code> instruction so that no wake-ups are missed. To implement this approach, we can use the <a href="https://docs.rs/x86_64/0.9.6/x86_64/instructions/interrupts/fn.enable_interrupts_and_hlt.html"><code>enable_interrupts_and_hlt</code></a> function provided by the <a href="https://docs.rs/x86_64/0.9.6/x86_64/index.html"><code>x86_64</code></a> crate. This function is only available since version 0.9.6, so you might need to update your <code>x86_64</code> dependency to use it.</p>
+<p>The updated implementation of our <code>sleep_if_idle</code> function looks like this:</p>
+<pre><span>// in src/task/executor.rs
+
+</span><span>impl </span><span>Executor {
+    </span><span>fn </span><span>sleep_if_idle(</span><span>&amp;</span><span>self) {
+        </span><span>use </span><span>x86_64::instructions::interrupts::{self, enable_interrupts_and_hlt};
+
+        </span><span>// fast path
+        </span><span>if !</span><span>self.wake_queue.is_empty() {
+            </span><span>return</span><span>;
+        }
+
+        interrupts::disable();
+        </span><span>if </span><span>self.wake_queue.is_empty() {
+            enable_interrupts_and_hlt();
+        } </span><span>else </span><span>{
+            interrupts::enable();
+        }
+    }
+}
+</span></pre>
+<p>To avoid unnecessarily disabling interrupts, we early return if the <code>wake_queue</code> is not empty. Otherwise, we disable interrupts and check the <code>wake_queue</code> again. If it is still empty, we use the <a href="https://docs.rs/x86_64/0.9.6/x86_64/instructions/interrupts/fn.enable_interrupts_and_hlt.html"><code>enable_interrupts_and_hlt</code></a> function to enable interrupts and put the CPU to sleep as a single atomic operation. In case the queue is no longer empty, it means that an interrupt woke a task between the first and the second check. In that case, we enable interrupts again and directly continue execution without executing <code>hlt</code>.</p>
+<p>Now our executor properly puts the CPU to sleep when there is nothing to do. We can see that the QEMU process as a much lower CPU utilization when we run our kernel using <code>cargo xrun</code> again.</p>
+<h4 id="possible-extensions"><a href="#possible-extensions" aria-label="Anchor link for: possible-extensions">🔗</a>Possible Extensions</h4>
+<p>Our executor is now able to run tasks in an efficient way. It utilizes waker notifications to avoid polling waiting tasks and puts the CPU to sleep when there is currently no work to do. However, our executor is still quite basic and there are many possible ways to extend its functionality:</p>
+<ul>
+<li><strong>Scheduling:</strong> We currently use the <a href="https://doc.rust-lang.org/stable/alloc/collections/vec_deque/struct.VecDeque.html"><code>VecDeque</code></a> type to implement a <em>first in first out</em> (FIFO) strategy for our <code>task_queue</code>, which is often also called <em>round robin</em> scheduling. This strategy might not be the most efficient for all workloads. For example, it might make sense to prioritize latency-critical tasks or task that do a lot of I/O. See the <a href="http://pages.cs.wisc.edu/~remzi/OSTEP/cpu-sched.pdf">scheduling chapter</a> of the <a href="http://pages.cs.wisc.edu/~remzi/OSTEP/"><em>Operating Systems: Three Easy Pieces</em></a> book or the <a href="https://en.wikipedia.org/wiki/Scheduling_(computing)">Wikipedia article on scheduling</a> for more information.</li>
+<li><strong>Task Spawning</strong>: Our <code>Executor::spawn</code> method currently requires a <code>&amp;mut self</code> reference and is thus no longer available after starting the <code>run</code> method. To fix this, we could create an additional <code>Spawner</code> type that shares some kind of queue with the executor and allows task creation from within tasks themselves. The queue could be for example the <code>task_queue</code> directly or a separate queue that the executor checks in its run loop.</li>
+<li><strong>Utilizing Threads</strong>: We don't have support for threads yet, but we will add it in the next post. This will make it possible to launch multiple instances of the executor in different threads. The advantage of this approach is that the delay imposed by long running tasks can be reduced because other tasks can run concurrently. This approach also allows it to utilize multiple CPU cores.</li>
+<li><strong>Load Balancing</strong>: When adding threading support, it becomes important how to distribute the tasks between the executors to ensure that all CPU cores are utilized. A common technique for this is <a href="https://en.wikipedia.org/wiki/Work_stealing"><em>work stealing</em></a>.</li>
+</ul>
+<h2 id="summary"><a href="#summary" aria-label="Anchor link for: summary">🔗</a>Summary</h2>
+<p>We started this post by introducing <strong>multitasking</strong> and differentiating between <em>preemptive</em> multitasking, which forcibly interrupts running tasks regularly, and <em>cooperative</em> multitasking, which lets tasks run until they voluntarily give up control of the CPU.</p>
+<p>We then explored how Rust's support of <strong>async/await</strong> provides a language-level implementation of cooperative multitasking. Rust bases its implementation on top of the polling-based <code>Future</code> trait, which abstracts asynchronous tasks. Using async/await, it is possible to work with futures almost like with normal synchronous code. The difference is that asynchronous functions return a <code>Future</code> again, which needs to be added to an executor at some point in order to run it.</p>
+<p>Behind the scenes, the compiler transforms async/await code to <em>state machines</em>, with each <code>.await</code> operation corresponding to a possible pause point. By utilizing its knowledge about the program, the compiler is able to save only the minimal state for each pause point, resulting in a very small memory consumption per task. One challenge is that the generated state machines might contain <em>self-referential</em> structs, for example when local variables of the asynchronous function reference each other. To prevent pointer invalidation, Rust uses the <code>Pin</code> type to ensure that futures cannot be moved in memory anymore after they have been polled for the first time.</p>
+<p>For our <strong>implementation</strong>, we first created a very basic executor that polls all spawned tasks in a busy loop without using the <code>Waker</code> type at all. We then showed the advantage of waker notifications by implementing an asynchronous keyboard task. The task defines a static <code>SCANCODE_QUEUE</code> using the mutex-free <code>ArrayQueue</code> type provided by the <code>crossbeam</code> crate. Instead of handling keypresses directly, the keyboard interrupt handler now puts all received scancodes in the queue and then wakes the registered <code>Waker</code> to signal that new input is available. On the receiving end, we created a <code>ScancodeStream</code> type to provide a <code>Future</code> resolving to the next scancode in the queue. This made it possible to create an asynchronous <code>print_keypresses</code> task that uses async/await to interpret and print the scancodes in the queue.</p>
+<p>To utilize the waker notifications of the keyboard task, we created a new <code>Executor</code> type that differentiates between ready and waiting tasks. Using an <code>Arc</code>-shared <code>wake_queue</code>, we implemented a <code>TaskWaker</code> type that sends wake-up notifications directly to the executor, which can then mark the corresponding task as ready again. To save power when no tasks are runnable, we added support for putting the CPU to sleep using the <code>hlt</code> instruction. Finally, we discussed some potential extensions of our executor, for example for providing multi-core support.</p>
+<h2 id="what-s-next"><a href="#what-s-next" aria-label="Anchor link for: what-s-next">🔗</a>What's Next?</h2>
+<p>Using async/wait, we now have basic support for cooperative multitasking in our kernel. While cooperative multitasking is very efficient, it leads to latency problems when individual tasks keep running for too long and thus prevent other tasks to run. For this reason, it makes sense to also add support for preemptive multitasking to our kernel.</p>
+<p>In the next post, we will introduce <em>threads</em> as the most common form of preemptive multitasking. In addition to resolving the problem of long running tasks, threads will also prepare us for utilizing multiple CPU cores and running untrusted user programs in the future.</p>
+
+
+    
+
+    <hr>
+    
+
+    <hr>
+    <section>
+        
+        
+    
+
+    </section>
+
+    
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

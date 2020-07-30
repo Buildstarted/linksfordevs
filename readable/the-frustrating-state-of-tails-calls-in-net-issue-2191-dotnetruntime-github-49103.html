@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+The frustrating state of tails calls in .NET &#xB7; Issue #2191 &#xB7; dotnet/runtime - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="The frustrating state of tails calls in .NET &#xB7; Issue #2191 &#xB7; dotnet/runtime - linksfor.dev(s)"/>
+    <meta property="article:author" content="Dotnet-GitSync-Bot"/>
+    <meta property="og:description" content="The frustrating state of tails calls in .NET I listened to Microsoft Language &amp;amp; Runtime Community standup on twitch were they said they like &amp;quot;aggressive&amp;quot; well-informed feedback from t..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/dotnet/runtime/issues/2191"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - The frustrating state of tails calls in .NET &#xB7; Issue #2191 &#xB7; dotnet/runtime</title>
+<div class="readable">
+        <h1>The frustrating state of tails calls in .NET &#xB7; Issue #2191 &#xB7; dotnet/runtime</h1>
+            <div>by Dotnet-GitSync-Bot</div>
+            <div>Reading time: 20-25 minutes</div>
+        <div>Posted here: 25 Jan 2020</div>
+        <p><a href="https://github.com/dotnet/runtime/issues/2191">https://github.com/dotnet/runtime/issues/2191</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div disabled="" sortable="">
+<div>
+          
+<p>I listened to <a href="https://www.twitch.tv/visualstudio" rel="nofollow">Microsoft Language &amp; Runtime Community standup on twitch</a><br>
+were they said they like "aggressive" well-informed feedback from the community<br>
+so I figured I bring up something that has been rubbing me the wrong way a long<br>
+time in .NET; tail call performance.</p>
+<p>I am sure that has been discussed before but I am going to add more fuel to the debate.</p>
+<h2>Tails calls in .NET</h2>
+<p>In .NET it's possible that annotate calls with a <code>.tail</code> attribute allowing the<br>
+jitter to eliminate stack frames and thus avoiding to run out of stack space.</p>
+<p>If you are a C# developer you probably never encountered tail calls as the C#<br>
+compiler as of now (AFAIK?) doesn't emit <code>.tail</code> attributes (might change with <code>tail return</code>?).</p>
+<p>It's different for F# developers though where the compiler does emit <code>.tail</code><br>
+attributes.</p>
+<h2>The problem</h2>
+<p>Avoiding running out stack space is a good thing so what's the problem?</p>
+<p>The problem is the abysmal performance of tail calls in the general case.</p>
+<p>Let me demonstrate by implementing a simple data pipeline based on push rather than pull (<code>IEnumerable&lt;_&gt;</code> is pull based).</p>
+<div><pre><span>// Minimalistic PushStream</span>
+<span>//  A PushStream accepts a receiver function that will be called</span>
+<span>//  with each value in the PushStream</span>
+<span>type</span> <span>'T PushStream </span><span>=</span> ('T <span>-&gt;</span> <span>unit</span>) <span>-&gt;</span> <span>unit</span>
+
+<span><span>module</span> <span>PushStream </span>=</span>
+  <span>let inline</span> <span>zero</span>      <span>()</span>       <span>=</span> LanguagePrimitives.GenericZero
+  <span>let inline</span> <span>push</span>      <span>r</span> <span>v</span>      <span>=</span> r v
+
+  <span>// Creates a PushStream with all integers from b to e (inclusive)</span>
+  <span>let inline</span> <span>fromRange</span> <span>b</span> <span>e</span>    <span>r</span> <span>=</span> <span>for</span> i <span>=</span> b to e <span>do</span> push r i
+  <span>// Maps all values in ps using mapping function f</span>
+  <span>let inline</span> <span>map</span>       <span>f</span>   <span>ps</span> <span>r</span> <span>=</span> ps (<span>fun</span> <span>v</span> -<span>&gt;</span> push r (f v))
+  <span>// Filters all values in ps using filter function f</span>
+  <span>let inline</span> <span>filter</span>    <span>f</span>   <span>ps</span> <span>r</span> <span>=</span> ps (<span>fun</span> <span>v</span> -<span>&gt;</span> <span>if</span> f v <span>then</span> push r v)
+  <span>// Sums all values in ps</span>
+  <span>let inline</span> <span>sum</span>           <span>ps</span>   <span>=</span> <span>let mutable</span> <span>s</span> <span>=</span> zero <span>()</span> <span>in</span> ps (<span>fun</span> <span>v</span> -<span>&gt;</span> s <span>&lt;-</span> s <span>+</span> v)<span>;</span> s</pre></div>
+<p>For a simple data pipeline designed to detect the overhead of the pipeline the push stream shows some promising performance when comparing it to LINQ.</p>
+<div><pre><span>// Uses BenchmarkDotNet</span>
+<span>type</span> <span>Benchmarks </span><span>()</span> <span>=</span>
+  <span>[&lt;Params (<span>10000</span>, <span>1000</span>, <span>100</span>)&gt;]</span> 
+  <span>member</span> <span>val</span> <span>public</span> <span>Count</span> <span>=</span> <span>100</span> <span>with</span> get, set
+
+  <span>[&lt;Benchmark&gt;]</span>
+  <span>member</span> <span>x.SimpleImperativeTest</span> <span>()</span> <span>=</span>
+    <span>let mutable</span> <span>i</span>   <span>=</span> x.Count
+    <span>let mutable</span> <span>sum</span> <span>=</span> <span>0</span>L
+    <span>while</span> i <span>&gt;=</span> <span>0</span> <span>do</span>
+      <span>let</span> <span>v</span> <span>=</span>  int64 i
+      i     <span>&lt;-</span> i <span>-</span> <span>1</span>
+      <span>if</span> (v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L <span>then</span>
+        sum <span>&lt;-</span> sum <span>+</span> (v <span>+</span> <span>1</span>L)
+    sum
+
+  <span>[&lt;Benchmark&gt;]</span>
+  <span>member</span> <span>x.SimpleLinqTest</span> <span>()</span> <span>=</span>
+    Enumerable.Range(<span>0</span>, x.Count)
+      .Select(int64)
+      .Where(<span>fun</span> <span>v</span> -<span>&gt;</span> (v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L)
+      .Select((<span>+</span>) <span>1</span>L)
+      .Sum<span>()</span>
+
+  <span>[&lt;Benchmark&gt;]</span>
+  <span>member</span> <span>x.SimplePushStreamTest</span> <span>()</span> <span>=</span>
+    PushStream.fromRange  <span>0</span> x.Count
+    <span>|&gt;</span> PushStream.map     int64
+    <span>|&gt;</span> PushStream.filter  (<span>fun</span> <span>v</span> -<span>&gt;</span> (v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L)
+    <span>|&gt;</span> PushStream.map     ((<span>+</span>) <span>1</span>L)
+    <span>|&gt;</span> PushStream.sum</pre></div>
+<pre><code>BenchmarkDotNet=v0.12.0, OS=Windows 10.0.18363
+Intel Core i5-3570K CPU 3.40GHz (Ivy Bridge), 1 CPU, 4 logical and 4 physical cores
+.NET Core SDK=3.1.100
+  [Host]     : .NET Core 3.1.0 (CoreCLR 4.700.19.56402, CoreFX 4.700.19.56404), X64 RyuJIT DEBUG
+  DefaultJob : .NET Core 3.1.0 (CoreCLR 4.700.19.56402, CoreFX 4.700.19.56404), X64 RyuJIT
+|               Method | Count |          Mean |      Error |     StdDev |
+|--------------------- |------ |--------------:|-----------:|-----------:|
+| SimpleImperativeTest |   100 |      73.36 ns |   0.259 ns |   0.243 ns |
+|       SimpleLinqTest |   100 |   1,550.18 ns |   7.837 ns |   7.331 ns |
+| SimplePushStreamTest |   100 |     419.71 ns |   1.768 ns |   1.654 ns |
+| SimpleImperativeTest |  1000 |     611.51 ns |   2.081 ns |   1.946 ns |
+|       SimpleLinqTest |  1000 |  13,677.24 ns |  47.074 ns |  44.033 ns |
+| SimplePushStreamTest |  1000 |   3,576.24 ns |  11.202 ns |  10.478 ns |
+| SimpleImperativeTest | 10000 |   5,996.41 ns |  27.344 ns |  25.578 ns |
+|       SimpleLinqTest | 10000 | 134,129.03 ns | 443.042 ns | 414.422 ns |
+| SimplePushStreamTest | 10000 |  34,988.54 ns | 126.441 ns | 118.273 ns |
+</code></pre>
+<p>The imperative "pipeline" does the best as expected as there's no pipeline<br>
+overhead but the push stream is doing a lot better than LINQ. Great right?</p>
+<p>Not so fast! If we add a second test which does the same thing in a slightly<br>
+different way then what happens?</p>
+<div><pre>  <span>[&lt;Benchmark&gt;]</span>
+  <span>member</span> <span>x.StructLinqStreamTest</span> <span>()</span> <span>=</span>
+    Enumerable.Range(<span>0</span>, x.Count)
+      .Select(int64)
+      .Select(<span>fun</span> <span>v</span> -<span>&gt;</span> <span>struct</span> ((v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L, v))
+      .Select(<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>struct</span> (b, v <span>+</span> <span>1</span>L))
+      .Select(<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>if</span> b <span>then</span> v <span>else</span> <span>0</span>L)
+      .Sum<span>()</span>
+
+  <span>[&lt;Benchmark&gt;]</span>
+  <span>member</span> <span>x.StructPushStreamTest</span> <span>()</span> <span>=</span>
+    PushStream.fromRange <span>0</span> x.Count
+    <span>|&gt;</span> PushStream.map     int64
+    <span>|&gt;</span> PushStream.map     (<span>fun</span> <span>v</span> -<span>&gt;</span> <span>struct</span> ((v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L, v))
+    <span>|&gt;</span> PushStream.map     (<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>struct</span> (b, v <span>+</span> <span>1</span>L))
+    <span>|&gt;</span> PushStream.map     (<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>if</span> b <span>then</span> v <span>else</span> <span>0</span>L)
+    <span>|&gt;</span> PushStream.sum</pre></div>
+<p>Suddenly the push stream performance is abysmal.</p>
+<pre><code>|               Method | Count |            Mean |        Error |       StdDev |
+|--------------------- |------ |----------------:|-------------:|-------------:|
+| StructLinqStreamTest |   100 |     3,060.52 ns |    15.855 ns |    14.831 ns |
+| StructPushStreamTest |   100 |    60,241.31 ns |   256.031 ns |   239.492 ns |
+| StructLinqStreamTest |  1000 |    27,813.86 ns |    99.601 ns |    93.167 ns |
+| StructPushStreamTest |  1000 |   591,909.97 ns | 1,710.549 ns | 1,600.048 ns |
+| StructLinqStreamTest | 10000 |   274,592.50 ns |   591.566 ns |   553.351 ns |
+| StructPushStreamTest | 10000 | 5,908,867.08 ns | 9,791.398 ns | 9,158.880 ns |
+</code></pre>
+<p>We see the LINQ now performs 20x times better? What's going on?</p>
+<p>Let's fix the problem using magic! Rewrite the <code>push</code> function from this:</p>
+<div><pre><span>// Original push function, just invokes the function r with v</span>
+<span>let inline</span> <span>push</span>       <span>r</span> <span>v</span>      <span>=</span> r v</pre></div>
+<p>Replace it with this nonsense:</p>
+<div><pre><span>// New invoke. Seems just to add redundant code that does nothing</span>
+<span>let inline</span> <span>push</span>      <span>r</span> <span>v</span>      <span>=</span> <span>match</span> r v <span>with</span> <span>()</span> <span>-&gt;</span> <span>()</span></pre></div>
+<p>Now push stream compares favorably in all cases</p>
+<pre><code>|               Method | Count |          Mean |        Error |       StdDev |
+|--------------------- |------ |--------------:|-------------:|-------------:|
+| SimpleImperativeTest |   100 |      73.52 ns |     0.290 ns |     0.271 ns |
+|       SimpleLinqTest |   100 |   1,552.31 ns |     4.984 ns |     4.418 ns |
+| SimplePushStreamTest |   100 |     503.42 ns |     3.451 ns |     3.228 ns |
+| StructLinqStreamTest |   100 |   3,079.51 ns |    18.761 ns |    17.549 ns |
+| StructPushStreamTest |   100 |   2,531.61 ns |     9.913 ns |     9.273 ns |
+| SimpleImperativeTest |  1000 |     612.66 ns |     1.832 ns |     1.713 ns |
+|       SimpleLinqTest |  1000 |  13,667.12 ns |    41.531 ns |    38.848 ns |
+| SimplePushStreamTest |  1000 |   4,346.26 ns |    16.795 ns |    15.710 ns |
+| StructLinqStreamTest |  1000 |  28,029.09 ns |    70.510 ns |    58.879 ns |
+| StructPushStreamTest |  1000 |  22,131.33 ns |    63.323 ns |    59.232 ns |
+| SimpleImperativeTest | 10000 |   6,007.44 ns |    19.996 ns |    18.704 ns |
+|       SimpleLinqTest | 10000 | 133,865.57 ns |   355.534 ns |   332.567 ns |
+| SimplePushStreamTest | 10000 |  42,625.87 ns |    75.884 ns |    67.270 ns |
+| StructLinqStreamTest | 10000 | 321,961.25 ns | 1,074.170 ns | 1,004.780 ns |
+| StructPushStreamTest | 10000 | 242,181.19 ns |   419.269 ns |   392.185 ns |
+</code></pre>
+<p>What's going on?</p>
+<h2>The difference are the tail calls.</h2>
+<p>With the original <code>push</code> function the IL code to invoke the receiver function looks like this:</p>
+<div><pre><span>// let inline </span><span>push</span><span>      r v      = r v</span>
+
+<span>// Tell the jitter th</span><span>at</span> <span>the </span><span>call</span><span> is a tail </span><span>call</span>
+<span>IL_000D: tail.</span>
+<span>// </span><span>Call</span><span> invoke virtually</span>
+<span>IL_000F: callvirt  instance !</span><span>1</span><span> class &lt;&gt;::Invoke</span>
+<span>// For a tail </span><span>call</span><span> the </span><span>call</span><span> function has to be followed by </span><span>ret</span>
+<span>IL_0014: </span><span>ret</span></pre></div>
+<p>The modified <code>push</code> function which doesn't change the meaning of the program at all the IL code looks like this:</p>
+<div><pre><span>// let inline </span><span>push</span><span>      r v      = match r v with () </span><span>-</span><span>&gt; ()</span>
+
+<span>// </span><span>Call</span><span> Invoke (no tail </span><span>call</span><span>)</span>
+<span>callvirt  instance !</span><span>1</span><span> class </span><span>[</span><span>FSharp.Core</span><span>]</span><span>Microsoft.FSharp.Core.FSharpFunc`</span><span>2</span><span>&lt;int64</span><span>,</span><span> class </span><span>[</span><span>FSharp.Core</span><span>]</span><span>Microsoft.FSharp.Core.Unit&gt;::Invoke(!</span><span>0</span><span>)</span>
+<span>// Throw away the result (which is the unit value anyway)</span>
+<span>IL_0012: </span><span>pop</span>
+<span>// </span><span>Push</span><span> the result (the unit value is null)</span>
+<span>IL_0013: ldnull</span>
+<span>// Done</span>
+<span>IL_0014: </span><span>ret</span></pre></div>
+<p>As the modified <code>push</code> "looks" at the value (match) and then loads a new result this doesn't fit the pattern of a tail call. Thus the compiler doens't inject the <code>.tail</code> attribute.</p>
+<h2>Why do <code>.tail</code> calls sometimes go fast and sometimes go really really slow?</h2>
+<p>Let's look at the assembly code when <code>.tail</code> call executes quickly.</p>
+<h3>Fast <code>.tail</code> calls (Yay!)</h3>
+<div><pre><span>// This is the implementation of: PushStream.map (fun v </span><span>-</span><span>&gt; struct ((v &amp;&amp;&amp; 1L) = 0L</span><span>,</span><span> v))</span>
+
+<span>// Wh</span><span>at</span><span>'s this? Tiered compilation left behinds?</span>
+<span>00007fff`</span><span>90362010</span><span> 0f1f440000      </span><span>nop</span><span>     dword ptr </span><span>[</span><span>rax</span><span>+</span><span>rax</span><span>]</span>
+<span>00007fff`</span><span>90362015</span><span> 8bc2            </span><span>mov</span><span>     </span><span>eax</span><span>,</span><span>edx</span>
+<span>// Check is number odd</span>
+<span>00007fff`</span><span>90362017</span><span> a801            </span><span>test</span><span>    </span><span>al</span><span>,</span><span>1</span>
+<span>00007fff`</span><span>90362019</span><span> </span><span>7512</span><span>            </span><span>jne</span><span>     00007fff`9036202d</span>
+<span>// Number is even</span><span>,</span><span> pass value down the pipeline</span>
+<span>// This is a virtual </span><span>call</span><span> so we find the jump address by looking</span>
+<span>//  up the value </span><span>in</span><span> the vtables</span>
+<span>00007fff`9036201b 488b4908        </span><span>mov</span><span>     </span><span>rcx</span><span>,</span><span>qword ptr </span><span>[</span><span>rcx</span><span>+</span><span>8</span><span>]</span>
+<span>00007fff`9036201f 488b01          </span><span>mov</span><span>     </span><span>rax</span><span>,</span><span>qword ptr </span><span>[</span><span>rcx</span><span>]</span>
+<span>00007fff`</span><span>90362022</span><span> 488b4040        </span><span>mov</span><span>     </span><span>rax</span><span>,</span><span>qword ptr </span><span>[</span><span>rax</span><span>+</span><span>40h</span><span>]</span>
+<span>00007fff`</span><span>90362026</span><span> 488b4020        </span><span>mov</span><span>     </span><span>rax</span><span>,</span><span>qword ptr </span><span>[</span><span>rax</span><span>+</span><span>20h</span><span>]</span>
+<span>// </span><span>rax</span><span> now contains the address of the next step </span><span>in</span><span> the pipeline</span>
+<span>//  thanks to .tail </span><span>call</span><span> we do a </span><span>jmp</span><span> here </span><span>not</span><span> </span><span>call</span>
+<span>//  this means th</span><span>at</span> <span>when the pipeline finally returns it will return</span>
+<span>//  directly to the top </span><span>loop</span>
+<span>00007fff`9036202a 48ffe0          </span><span>jmp</span><span>     </span><span>rax</span>
+<span>// Number was odd</span><span>,</span><span> clear the result </span><span>and</span><span> return</span>
+<span>00007fff`9036202d 33c0            </span><span>xor</span><span>     </span><span>eax</span><span>,</span><span>eax</span>
+<span>00007fff`9036202f c3              </span><span>ret</span></pre></div>
+<p>So apart from the odd nop in the beginning and the usual vtable dance over<br>
+virtual functions (what are the conditions to make the jitter succeed with<br>
+devirtualizations?) it's quite ok. Actually suprisingly just 5x slower than the<br>
+fast imperative solution considering how much more junk happens in each step.</p>
+<p>Let's look at the slow <code>.tail</code> call</p>
+<h3>Slow <code>.tail</code> calls (Boo!)</h3>
+<div><pre><span>// This is the implementation of: PushStream.map (fun v </span><span>-</span><span>&gt; struct ((v &amp;&amp;&amp; 1L) = 0L</span><span>,</span><span> v))</span>
+
+<span>// Function prelude</span>
+<span>00007ff7`d77725e0 </span><span>56</span><span>              </span><span>push</span><span>    </span><span>rsi</span>
+<span>00007ff7`d77725e1 4883ec40        </span><span>sub</span><span>     </span><span>rsp</span><span>,</span><span>40h</span>
+<span>00007ff7`d77725e5 c5f877          </span><span>vzeroupper</span>
+<span>00007ff7`d77725e8 4c8d442430      </span><span>lea</span><span>     </span><span>r8</span><span>,[</span><span>rsp</span><span>+</span><span>30h</span><span>]</span>
+<span>00007ff7`d77725ed c5f857c0        </span><span>vxorps</span><span>  </span><span>xmm0</span><span>,</span><span>xmm0</span><span>,</span><span>xmm0</span>
+<span>00007ff7`d77725f1 c4c17a7f00      </span><span>vmovdqu</span><span> xmmword ptr </span><span>[</span><span>r8</span><span>],</span><span>xmm0</span>
+<span>00007ff7`d77725f6 488b7108        </span><span>mov</span><span>     </span><span>rsi</span><span>,</span><span>qword ptr </span><span>[</span><span>rcx</span><span>+</span><span>8</span><span>]</span>
+<span>00007ff7`d77725fa 448bc2          </span><span>mov</span><span>     </span><span>r8d</span><span>,</span><span>edx</span>
+<span>// Is number odd?</span>
+<span>00007ff7`d77725fd 41f6c001        </span><span>test</span><span>    </span><span>r8b</span><span>,</span><span>1</span>
+<span>00007ff7`d7772601 410f94c0        </span><span>sete</span><span>    </span><span>r8b</span>
+<span>00007ff7`d7772605 450fb6c0        </span><span>movzx</span><span>   </span><span>r8d</span><span>,</span><span>r8b</span>
+<span>// Save results</span>
+<span>00007ff7`d7772609 </span><span>4488442438</span><span>      </span><span>mov</span><span>     byte ptr </span><span>[</span><span>rsp</span><span>+</span><span>38h</span><span>],</span><span>r8b</span>
+<span>00007ff7`d777260e </span><span>4889542430</span><span>      </span><span>mov</span><span>     qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>30h</span><span>],</span><span>rdx</span>
+<span>00007ff7`d7772613 49b8784b6637f87f0000 </span><span>mov</span><span> </span><span>r8</span><span>,</span><span>offset </span>
+<span>// Checks: Volatile&lt;LONG&gt;       g_TrapReturningThreads</span><span>;</span>
+<span>coreclr!g_TrapReturningThreads (00007ff8`37664b78)</span>
+<span>// If true we need to suspend thread (by calling coreclr!JIT_PollGC ())</span>
+<span>00007ff7`d777261d </span><span>41833800</span><span>        </span><span>cmp</span><span>     dword ptr </span><span>[</span><span>r8</span><span>],</span><span>0</span>
+<span>00007ff7`d7772621 752e            </span><span>jne</span><span>     00007ff7`d7772651</span>
+<span>00007ff7`d7772623 4c8bc6          </span><span>mov</span><span>     </span><span>r8</span><span>,</span><span>rsi</span>
+<span>// Juggling with struct tuple values</span>
+<span>00007ff7`d7772626 c5fa6f442430    </span><span>vmovdqu</span><span> </span><span>xmm0</span><span>,</span><span>xmmword ptr </span><span>[</span><span>rsp</span><span>+</span><span>30h</span><span>]</span>
+<span>00007ff7`d777262c c5fa7f442420    </span><span>vmovdqu</span><span> xmmword ptr </span><span>[</span><span>rsp</span><span>+</span><span>20h</span><span>],</span><span>xmm0</span>
+<span>00007ff7`d7772632 4c8d4c2420      </span><span>lea</span><span>     </span><span>r9</span><span>,[</span><span>rsp</span><span>+</span><span>20h</span><span>]</span>
+<span>00007ff7`d7772637 48b990d162d7f77f0000 </span><span>mov</span><span> </span><span>rcx</span><span>,</span><span>7FF7D762D190h</span>
+<span>// Loading vtable to find the address to </span><span>call</span><span> to</span>
+<span>00007ff7`d7772641 498b10          </span><span>mov</span><span>     </span><span>rdx</span><span>,</span><span>qword ptr </span><span>[</span><span>r8</span><span>]</span>
+<span>00007ff7`d7772644 488b5240        </span><span>mov</span><span>     </span><span>rdx</span><span>,</span><span>qword ptr </span><span>[</span><span>rdx</span><span>+</span><span>40h</span><span>]</span>
+<span>00007ff7`d7772648 488b5220        </span><span>mov</span><span>     </span><span>rdx</span><span>,</span><span>qword ptr </span><span>[</span><span>rdx</span><span>+</span><span>20h</span><span>]</span>
+<span>// </span><span>Do</span><span> the </span><span>call</span><span> to next step through: coreclr!JIT_TailCall</span>
+<span>00007ff7`d777264c e89ff6c35f      </span><span>call</span><span>    coreclr!JIT_TailCall (00007ff8`373b1cf0)</span>
+<span>00007ff7`d7772651 e86ad6c35f      </span><span>call</span><span>    coreclr!JIT_PollGC (00007ff8`373afcc0)</span>
+<span>00007ff7`d7772656 ebcb            </span><span>jmp</span><span>     00007ff7`d7772623</span></pre></div>
+<p>So, there's lot more setup here but this is because this function actually needs<br>
+a stackframe to store intermediate results. Also I suspect because the stackframe<br>
+is needed it has to call <code>coreclr!JIT_TailCall</code> at the end which is the CPU hog.</p>
+<p>I don't know exactly what <code>coreclr!JIT_TailCall</code> does but it does a lot when<br>
+stepping through the assembly code. However, my suspicion is that its purpose is<br>
+eliminate the stackframe and call the next function. While it eliminates the stackframe it adds about 60x overhead to the <code>PushStream</code> pipeline.</p>
+<p>Finally let's look at the code for the modified <code>push</code> function to get back<br>
+predictable performance</p>
+<h3>Predictable calls</h3>
+<div><pre><span>// Function prelude</span>
+<span>00007ff7`d77725e1 4883ec40        </span><span>sub</span><span>     </span><span>rsp</span><span>,</span><span>58h</span>
+<span>00007ff7`d78625f4 c5f877          </span><span>vzeroupper</span>
+<span>00007ff7`d78625f7 33c0            </span><span>xor</span><span>     </span><span>eax</span><span>,</span><span>eax</span>
+<span>00007ff7`d78625f9 </span><span>4889442448</span><span>      </span><span>mov</span><span>     qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>48h</span><span>],</span><span>rax</span>
+<span>00007ff7`d78625fe </span><span>4889442450</span><span>      </span><span>mov</span><span>     qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>50h</span><span>],</span><span>rax</span>
+<span>00007ff7`d7862603 488d442438      </span><span>lea</span><span>     </span><span>rax</span><span>,[</span><span>rsp</span><span>+</span><span>38h</span><span>]</span>
+<span>00007ff7`d7862608 c5f857c0        </span><span>vxorps</span><span>  </span><span>xmm0</span><span>,</span><span>xmm0</span><span>,</span><span>xmm0</span>
+<span>00007ff7`d786260c c5fa7f00        </span><span>vmovdqu</span><span> xmmword ptr </span><span>[</span><span>rax</span><span>],</span><span>xmm0</span>
+<span>00007ff7`d7862610 8bc2            </span><span>mov</span><span>     </span><span>eax</span><span>,</span><span>edx</span>
+<span>// Is number odd?</span>
+<span>00007ff7`d7862612 a801            </span><span>test</span><span>    </span><span>al</span><span>,</span><span>1</span>
+<span>00007ff7`d7862614 0f94c0          </span><span>sete</span><span>    </span><span>al</span>
+<span>00007ff7`d7862617 0fb6c0          </span><span>movzx</span><span>   </span><span>eax</span><span>,</span><span>al</span>
+<span>// Juggling with struct tuple values</span>
+<span>00007ff7`d786261a </span><span>88442440</span><span>        </span><span>mov</span><span>     byte ptr </span><span>[</span><span>rsp</span><span>+</span><span>40h</span><span>],</span><span>al</span>
+<span>00007ff7`d786261e </span><span>4889542438</span><span>      </span><span>mov</span><span>     qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>38h</span><span>],</span><span>rdx</span>
+<span>00007ff7`d7862623 c5fa6f442438    </span><span>vmovdqu</span><span> </span><span>xmm0</span><span>,</span><span>xmmword ptr </span><span>[</span><span>rsp</span><span>+</span><span>38h</span><span>]</span>
+<span>00007ff7`d7862629 c5fa7f442448    </span><span>vmovdqu</span><span> xmmword ptr </span><span>[</span><span>rsp</span><span>+</span><span>48h</span><span>],</span><span>xmm0</span>
+<span>00007ff7`d786262f 488b4908        </span><span>mov</span><span>     </span><span>rcx</span><span>,</span><span>qword ptr </span><span>[</span><span>rcx</span><span>+</span><span>8</span><span>]</span>
+<span>00007ff7`d7862633 c5fa6f442448    </span><span>vmovdqu</span><span> </span><span>xmm0</span><span>,</span><span>xmmword ptr </span><span>[</span><span>rsp</span><span>+</span><span>48h</span><span>]</span>
+<span>00007ff7`d7862639 c5fa7f442428    </span><span>vmovdqu</span><span> xmmword ptr </span><span>[</span><span>rsp</span><span>+</span><span>28h</span><span>],</span><span>xmm0</span>
+<span>00007ff7`d786263f 488d542428      </span><span>lea</span><span>     </span><span>rdx</span><span>,[</span><span>rsp</span><span>+</span><span>28h</span><span>]</span>
+<span>// Loading vtable to find the address to </span><span>call</span><span> to</span>
+<span>00007ff7`d7862644 488b01          </span><span>mov</span><span>     </span><span>rax</span><span>,</span><span>qword ptr </span><span>[</span><span>rcx</span><span>]</span>
+<span>00007ff7`d7862647 488b4040        </span><span>mov</span><span>     </span><span>rax</span><span>,</span><span>qword ptr </span><span>[</span><span>rax</span><span>+</span><span>40h</span><span>]</span>
+<span>// </span><span>Call</span><span> the next step </span><span>in</span><span> the pipeline</span>
+<span>00007ff7`d786264b ff5020          </span><span>call</span><span>    qword ptr </span><span>[</span><span>rax</span><span>+</span><span>20h</span><span>]</span>
+<span>// The function returns</span><span>,</span><span> clear </span><span>eax</span>
+<span>00007ff7`d786264e 33c0            </span><span>xor</span><span>     </span><span>eax</span><span>,</span><span>eax</span>
+<span>// Deallocate stackframe</span>
+<span>00007ff7`d7862650 4883c458        </span><span>add</span><span>     </span><span>rsp</span><span>,</span><span>58h</span>
+<span>// Return to previous chain</span>
+<span>00007ff7`d7862654 c3              </span><span>ret</span></pre></div>
+<p>Because juggling with struct tuple is more complex than the first example it is<br>
+more complex code but at least the next step in the pipeline is invoked without<br>
+the need of <code>coreclr!JIT_TailCall</code> which means the performance is reasonable and<br>
+predictable.</p>
+<p>It turns out that the only overhead of <code>match r v with () -&gt; ()</code> ends up being a<br>
+<code>xor eax,eax</code> which is essentially free compared to everything else.</p>
+
+<p>I believe for most of us we only have to make that we just have to avoid writing<br>
+code that has TRUELY TERRIBLE PERFORMANCE. We can get away with bad performance<br>
+in 99% of all code we write.</p>
+<p>However, if I need to write performant code in F# (and maybe future versions of<br>
+C#) because tail calls are really really slow I have to be very careful to ensure<br>
+with the code I write so that the F# compiler don't emit the <code>.tail</code> attribute.</p>
+<p>Sure, I have a pattern that allows me to do it in this case but what if F# compiler improves in future releases and eliminate the nonsense code I wrote to avoid tail calls? The F# compiler has compiler options that allows me to suppress tail calls but F# also supports true inlining which means even if my library is compiled without tail calls when the functions are inlined into the calling assembly it might well inject tail calls.</p>
+<p>Further, sometimes the tail calls does go faster when no stack frame is needed.</p>
+<p>This puts me in a frustrating spot; I want tail calls but I don't want to pay the<br>
+price of the worst case tail call performance.</p>
+<p>Obviously the best solution would be that tail calls are always faster than normal<br>
+calls but I am sure that is tricky to implement (otherwise it would have been done already).</p>
+<p>The second best solution for my particular scenario would be, if the tail call<br>
+can be faster than normal calls let's do it otherwise fallback to normal calls.<br>
+That is probably confusing as then it doesn't always have the correct semantics<br>
+of a tail call but for this particular scenario that is what I want.</p>
+<p>I realize F# is a small language so I am hoping that the C# compiler will start<br>
+emitting <code>.tail</code> attributes so that the big C# community will notice the awkward<br>
+performance of tail calls.</p>
+<p>Be sure to complain to <a href="https://www.twitch.tv/visualstudio" rel="nofollow">Microsoft Language &amp; Runtime Community standup on twitch</a><br>
+if you were bored by this rant and want to see less of it.</p>
+<p>Regards.</p>
+
+<div><pre><span>// Turn off tiered compilation</span>
+<span>// $env:COMPlus_TieredCompilation="0"</span>
+
+<span>// dotnet core    : 3.1.100</span>
+<span>// FSharp.Core    : 4.7.0</span>
+<span>// BenchMarkDotNet: 0.12.0</span>
+
+<span><span>module</span> <span>TailCall </span>=</span>
+  <span>open</span> <span>System</span>
+  <span>open</span> <span>System.<span>Linq</span></span>
+  <span>open</span> <span>System.<span>Diagnostics</span></span>
+
+  <span>//    let inline push      r v      = match r v with () -&gt; ()</span>
+  <span>//    let inline push      r v      = r v</span>
+
+  <span>// Minimalistic PushStream</span>
+  <span>//  A PushStream accepts a receiver function that will be called</span>
+  <span>//  with each value in the PushStream</span>
+  <span>type</span> <span>'T PushStream </span><span>=</span> ('T <span>-&gt;</span> <span>unit</span>) <span>-&gt;</span> <span>unit</span>
+
+  <span><span>module</span> <span>PushStream </span>=</span>
+    <span>let inline</span> <span>zero</span>      <span>()</span>       <span>=</span> LanguagePrimitives.GenericZero
+    <span>let inline</span> <span>push</span>      <span>r</span> <span>v</span>      <span>=</span> r v
+
+    <span>// Creates a PushStream with all integers from b to e (inclusive)</span>
+    <span>let inline</span> <span>fromRange</span> <span>b</span> <span>e</span>    <span>r</span> <span>=</span> <span>for</span> i <span>=</span> b to e <span>do</span> push r i
+    <span>// Maps all values in ps using mapping function f</span>
+    <span>let inline</span> <span>map</span>       <span>f</span>   <span>ps</span> <span>r</span> <span>=</span> ps (<span>fun</span> <span>v</span> -<span>&gt;</span> push r (f v))
+    <span>// Filters all values in ps using filter function f</span>
+    <span>let inline</span> <span>filter</span>    <span>f</span>   <span>ps</span> <span>r</span> <span>=</span> ps (<span>fun</span> <span>v</span> -<span>&gt;</span> <span>if</span> f v <span>then</span> push r v)
+    <span>// Sums all values in ps</span>
+    <span>let inline</span> <span>sum</span>           <span>ps</span>   <span>=</span> <span>let mutable</span> <span>s</span> <span>=</span> zero <span>()</span> <span>in</span> ps (<span>fun</span> <span>v</span> -<span>&gt;</span> s <span>&lt;-</span> s <span>+</span> v)<span>;</span> s
+
+  <span><span>module</span> <span>Tests </span>=</span>
+    <span>open</span> <span>BenchmarkDotNet.<span>Attributes</span></span>
+    <span>open</span> <span>BenchmarkDotNet.<span>Running</span></span>
+
+    <span>type</span> <span>Benchmarks </span><span>()</span> <span>=</span>
+      <span>[&lt;Params (<span>10000</span>, <span>1000</span>, <span>100</span>)&gt;]</span> 
+      <span>member</span> <span>val</span> <span>public</span> <span>Count</span> <span>=</span> <span>100</span> <span>with</span> get, set
+
+      <span>[&lt;Benchmark&gt;]</span>
+      <span>member</span> <span>x.SimpleImperativeTest</span> <span>()</span> <span>=</span>
+        <span>let mutable</span> <span>i</span>   <span>=</span> x.Count
+        <span>let mutable</span> <span>sum</span> <span>=</span> <span>0</span>L
+        <span>while</span> i <span>&gt;=</span> <span>0</span> <span>do</span>
+          <span>let</span> <span>v</span> <span>=</span>  int64 i
+          i     <span>&lt;-</span> i <span>-</span> <span>1</span>
+          <span>if</span> (v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L <span>then</span>
+            sum <span>&lt;-</span> sum <span>+</span> (v <span>+</span> <span>1</span>L)
+        sum
+
+      <span>[&lt;Benchmark&gt;]</span>
+      <span>member</span> <span>x.SimpleLinqTest</span> <span>()</span> <span>=</span>
+        Enumerable.Range(<span>0</span>, x.Count)
+          .Select(int64)
+          .Where(<span>fun</span> <span>v</span> -<span>&gt;</span> (v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L)
+          .Select((<span>+</span>) <span>1</span>L)
+          .Sum<span>()</span>
+
+      <span>[&lt;Benchmark&gt;]</span>
+      <span>member</span> <span>x.SimplePushStreamTest</span> <span>()</span> <span>=</span>
+        PushStream.fromRange  <span>0</span> x.Count
+        <span>|&gt;</span> PushStream.map     int64
+        <span>|&gt;</span> PushStream.filter  (<span>fun</span> <span>v</span> -<span>&gt;</span> (v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L)
+        <span>|&gt;</span> PushStream.map     ((<span>+</span>) <span>1</span>L)
+        <span>|&gt;</span> PushStream.sum
+
+      <span>[&lt;Benchmark&gt;]</span>
+      <span>member</span> <span>x.StructLinqStreamTest</span> <span>()</span> <span>=</span>
+        Enumerable.Range(<span>0</span>, x.Count)
+          .Select(int64)
+          .Select(<span>fun</span> <span>v</span> -<span>&gt;</span> <span>struct</span> ((v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L, v))
+          .Select(<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>struct</span> (b, v <span>+</span> <span>1</span>L))
+          .Select(<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>if</span> b <span>then</span> v <span>else</span> <span>0</span>L)
+          .Sum<span>()</span>
+
+      <span>[&lt;Benchmark&gt;]</span>
+      <span>member</span> <span>x.StructPushStreamTest</span> <span>()</span> <span>=</span>
+        PushStream.fromRange <span>0</span> x.Count
+        <span>|&gt;</span> PushStream.map     int64
+        <span>|&gt;</span> PushStream.map     (<span>fun</span> <span>v</span> -<span>&gt;</span> <span>struct</span> ((v <span>&amp;&amp;&amp;</span> <span>1</span>L) <span>=</span> <span>0</span>L, v))
+        <span>|&gt;</span> PushStream.map     (<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>struct</span> (b, v <span>+</span> <span>1</span>L))
+        <span>|&gt;</span> PushStream.map     (<span>fun</span> <span>struct</span> (b, v) <span>-&gt;</span> <span>if</span> b <span>then</span> v <span>else</span> <span>0</span>L)
+        <span>|&gt;</span> PushStream.sum
+
+    <span>let</span> <span>now</span> <span>=</span>
+      <span>let</span> <span>sw</span> <span>=</span> Stopwatch <span>()</span>
+      sw.Start <span>()</span>
+      <span>fun</span> () <span>-&gt;</span> sw.ElapsedMilliseconds
+
+    <span>let</span> <span>time</span> <span>o</span> <span>a</span> <span>=</span>
+      <span>let inline</span> <span>cc</span> <span>n</span> <span>=</span> GC.CollectionCount n
+
+      <span>let</span> <span>v</span> <span>=</span> a <span>()</span>
+
+      GC.Collect (<span>2</span>, GCCollectionMode.Forced)
+      GC.WaitForFullGCComplete <span>()</span> <span>|&gt;</span> ignore
+
+      <span>let</span> <span>bcc0, bcc1, bcc2</span> <span>=</span> cc <span>0</span>, cc <span>1</span>, cc <span>2</span>
+
+      <span>let</span> <span>before</span> <span>=</span> now <span>()</span>
+
+      <span>for</span> <span>_</span> <span>=</span> <span>1</span> to o <span>do</span>
+        a <span>()</span> <span>|&gt;</span> ignore
+
+      <span>let</span> <span>after</span> <span>=</span> now <span>()</span>
+
+      <span>let</span> <span>acc0, acc1, acc2</span> <span>=</span> cc <span>0</span>, cc <span>1</span>, cc <span>2</span>
+
+      v, (after <span>-</span> before), (acc0 <span>-</span> bcc0, acc1 <span>-</span> bcc1, acc2 <span>-</span> bcc2)
+
+    <span>let</span> <span>run</span> <span>argv</span> <span>=</span> 
+      <span>let</span> <span>b</span> <span>=</span> BenchmarkSwitcher <span>[|</span>typeof<span>&lt;</span>Benchmarks<span>&gt;|]</span>
+      <span>let</span> <span>summary</span> <span>=</span> b.Run argv
+      printfn <span><span>"</span>%A<span>"</span></span> summary
+
+    <span>// BenchMarkDotNet is good but the runs takes too long for me for experimentation</span>
+    <span>//  Then I rely on quickRun</span>
+    <span>let</span> <span>quickRun</span> <span>()</span> <span>=</span> 
+
+      <span>let inline</span> <span>testCase</span> <span>n</span> <span>a</span> <span>=</span> n, <span>fun</span> <span>c</span> -<span>&gt;</span> string (a c)
+
+      <span>let</span> <span>benchmarks</span> <span>=</span> Benchmarks <span>()</span>
+
+      <span>let</span> <span>testCases</span> <span>=</span> 
+        <span>[|</span>
+          testCase  <span><span>"</span>simple, imperative<span>"</span></span>  benchmarks.SimpleImperativeTest
+          testCase  <span><span>"</span>simple, linq<span>"</span></span>        benchmarks.SimpleLinqTest
+          testCase  <span><span>"</span>simple, pushstream<span>"</span></span>  benchmarks.SimplePushStreamTest
+<span>//          testCase  "struct, linq"        benchmarks.StructLinqStreamTest</span>
+<span>//          testCase  "struct, pushstream"  benchmarks.StructPushStreamTest</span>
+        <span>|]</span>
+
+      <span>let</span> <span>total</span>   <span>=</span> <span>100000000</span>
+      <span>let</span> <span>inners</span>  <span>=</span> <span>[|</span><span>1000000</span><span>;</span> <span>10000</span><span>;</span> <span>100</span><span>|]</span>
+      <span>for</span> inner <span>in</span> inners <span>do</span>
+        <span>let</span> <span>outer</span> <span>=</span> total <span>/</span> inner
+
+        benchmarks.Count <span>&lt;-</span> inner
+
+        printfn <span><span>"</span>Performance test, total: %d, outer: %d, inner: %d<span>"</span></span> total outer inner
+
+        <span>for</span> n, a <span>in</span> testCases <span>do</span>
+          printfn <span><span>"</span>  Running '%s'...<span>"</span></span> n
+          <span>let</span> <span>v, r, cc</span> <span>=</span> time outer a
+          printfn <span><span>"</span>    result is %A, it took %d ms to produce with (%A) CC<span>"</span></span> v r cc
+
+<span>[&lt;EntryPoint&gt;]</span>
+<span>let</span> <span>main</span> <span>argv</span> <span>=</span>
+<span>//  TailCall.Tests.quickRun ()</span>
+  TailCall.Tests.run argv
+  <span>0</span></pre></div>
+      </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

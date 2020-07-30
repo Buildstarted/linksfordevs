@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+A Story About .csproj, Large Solutions and Memory Usage - .NET Tools Blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="A Story About .csproj, Large Solutions and Memory Usage - .NET Tools Blog - linksfor.dev(s)"/>
+    <meta property="article:author" content="Posted on"/>
+    <meta property="og:description" content="We discussed the motivations and our push toward running Rider on .NET Core in our previous post. As part of that effort, we are looking into converting projects in the ReSharper and Rider solution to using the new, simpler, SDK-based &#x2026; Continue reading &#x2192;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.jetbrains.com/dotnet/2020/05/11/story-csproj-large-solutions-memory-usage/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - A Story About .csproj, Large Solutions and Memory Usage - .NET Tools Blog</title>
+<div class="readable">
+        <h1>A Story About .csproj, Large Solutions and Memory Usage - .NET Tools Blog</h1>
+            <div>by Posted on</div>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 12 May 2020</div>
+        <p><a href="https://blog.jetbrains.com/dotnet/2020/05/11/story-csproj-large-solutions-memory-usage/">https://blog.jetbrains.com/dotnet/2020/05/11/story-csproj-large-solutions-memory-usage/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+            <p>We discussed the motivations and our push toward <a href="https://blog.jetbrains.com/dotnet/2020/04/14/net-core-performance-revolution-rider-2020-1/">running Rider on .NET Core</a> in our previous post. As part of that effort, we are looking into <strong>converting projects in the ReSharper and Rider solution to using the new, simpler, SDK-based projects introduced with .NET Core</strong>.</p>
+<p>In this post, we will <strong>see why</strong> we want to do this migration. We’ll talk about how we <strong>ran into some development-time issues</strong> when using the newer project style with large solutions, and how that led into finding a similar issue with the “old .csproj” format. We’ll also share a workaround with you. Let’s dive in!<span id="more-25016"></span></p>
+<h2>Moving ReSharper and Rider to SDK-Style Project Format</h2>
+<p><strong>SDK-style projects</strong> are built on top of the <a href="https://github.com/microsoft/VSProjectSystem/blob/master/doc/overview/intro.md">Common Project System (CPS)</a>, and <strong>are a much simpler format than the “old .csproj” format</strong>. They typically have an <code>Sdk="..."</code> attribute defined, which specifies the tools and additional build targets that will be loaded for a project. For .NET Core projects, the SDK will often be <code>Microsoft.NET.Sdk</code> or <code>Microsoft.NET.Sdk.Web</code>.</p>
+<p>Referencing these SDKs simplifies project files a lot. Many details about how our project should be built are abstracted away in the SDK. In “classic” projects, all files in a project would be listed separately. <strong>In an SDK-style project, files are included by convention</strong>, and only files that deviate from default rules have to be specified in full.</p>
+<p>SDK-style projects also <strong>make multi-targeting easier</strong>. Adding a target framework to the <code>TargetFrameworks</code> property in a project file is sufficient for many projects to support multiple .NET targets.&nbsp; Of course, there will still be conditional dependencies, and we’ll have to use preprocessor directives to conditionally include other portions of code in many places. But overall, the project structure will become simpler, even when multiple target frameworks are involved.</p>
+<p>Right now, we have already converted several projects to the new SDK-style project format, but it takes time to validate and verify. So while we’re nowhere near completing this migration, we do expect it to <strong>simplify our build toolchain and development process</strong> when we finish.</p>
+<p>Migrating to using SDK-style projects is technically not required, yet it will help us compile Rider against .NET Core, while we can keep ReSharper on .NET Framework. And thanks to less complex project files, we also expect to have <strong>fewer conflicts while merging branches in our codebase</strong>!</p>
+<h2>Memory Usage with Large Solutions</h2>
+<p>As you may know, <strong>Rider shares a lot of its codebase with ReSharper</strong>. This is great, as functionality can be shared easily! For example, when we write a new code inspection, it will be available in both Rider and ReSharper. Of course, changes in the project and build infrastructure in one product, also impact the other.</p>
+<p>The ReSharper solution consists of <strong>close to 700 projects</strong>, with many code files in each of them. For cross-project refactorings and changes, we have to work with that 700-project solution.</p>
+<p>Our developers don’t have to open all&nbsp;projects in our monorepo all of the time, though. <strong>We generate smaller solution files that contain just the necessary projects to work on one product.</strong> For example, the generated Rider backend solution contains 162 projects (250 if we add unit test projects). For ReSharper, the generated solution has 294 projects:</p>
+<p><img src="https://d3nmt5vlzunoa1.cloudfront.net/dotnet/files/2020/04/resharper-solution.png" alt="ReSharper solution has 294 projcts" width="607" height="19"></p>
+<p><i>Tip: This can <a href="https://github.com/mfilippov/MmgSlnGen">generate a solution</a> with 300 projects, each containing 200 classes, if you want something that compares in size.</i></p>
+<p>Our ReSharper and Rider teams work in their IDE of choice. We ran into an issue with the ReSharper code base when opening it in Visual Studio, after converting some shared projects to using the SDK-style project format. <strong>Visual Studio would be unresponsive for longer periods of time, or crash completely. Memory usage with the newer project format was also consistently higher.</strong></p>
+<p>Investigating the issue further, we found that this was caused by excessive allocations in the Common Project System (CPS). After taking a closer look, we found <strong>the issue was also present with the “old .csproj”</strong>, albeit slightly better – which probably explains why we did not notice it before. We reported this to Microsoft, who are looking into this based on a repro we provided.</p>
+<p>After opening the 162-project Rider solution in vanilla Visual Studio (without ReSharper installed), the process uses ~2 GB of memory, with 1.12 GB reserved for .NET. <strong>Much of the memory usage goes to string duplicates and C# syntax trees</strong>, as we can see in <a href="https://www.jetbrains.com/dotmemory/">dotMemory</a>:</p>
+<p><img src="https://d3nmt5vlzunoa1.cloudfront.net/dotnet/files/2020/04/string-duplicates.png" alt="String duplicates, shown in dotMemory" width="800" height="343"></p>
+<p><i>Tip: In dotMemory, either attach to the running “devenv.exe” process and capture a snapshot, or <a href="https://blog.jetbrains.com/dotnet/2017/08/29/importing-raw-memory-dumps-dotmemory-2017-2/">load a memory dump file (.dmp)</a> for further analysis.</i></p>
+<p>Keep in mind that this is an IDE, where <strong>we want coding assistance and all kinds of analyzers that help us write better code, faster</strong>. That means there is a solution model that keeps track of a project tree, and that for each project all of the source code (strings) has to be parsed into syntax trees to be able to do something useful. These objects will typically be long-lived, ending up on higher memory generations. <strong>As such, the memory usage is not entirely unexpected</strong>.</p>
+<p>Things get more interesting when we realize <strong>all this is in a 32-bit process</strong>, where memory is not unlimited. There’s a lot of memory pressure, and a lot of garbage collection going on as a result.</p>
+<h2>Reducing Memory Usage with Large Solutions</h2>
+<p>We’re working on <a href="https://blog.jetbrains.com/dotnet/2020/02/24/update-running-resharper-process/">moving ReSharper out of process</a> to <strong>overcome part of the memory pressure problem</strong> we saw above, to make sure we’re not adding extra memory pressure. But we’re not there yet.</p>
+<p>Our own teams are using ReSharper (and Rider) to develop ReSharper (and Rider), which means that they don’t use some of the default features in Visual Studio at design-time. <strong>ReSharper overrides them anyway, so why load them in memory?</strong></p>
+<p>We found a solution, or rather a workaround, to reduce the overall memory footprint of Visual Studio, by <strong>disabling some defaults</strong>:</p>
+<ul>
+<li>Code analysis, and related quick-fixes and refactorings</li>
+<li>Code completion</li>
+<li>Navigation</li>
+</ul>
+<p>While this cannot be done directly, we can do this by <strong>overriding how <a href="https://github.com/dotnet/project-system/blob/master/docs/design-time-builds.md">design-time builds</a> “see” our project</strong>. By removing all items that are marked as “compile”, and instead including them as embedded resources during a design-time build, we are essentially preventing these files being included in Visual Studio’s code analysis and IntelliSense.</p>
+<p>In MSBuild format:</p><!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+		<div id="crayon-5eba3b2f5c722464907147" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p><p>23</p><p>24</p><p>25</p><p>26</p><p>27</p><p>28</p><p>29</p><p>30</p><p>31</p><p>32</p><p>33</p><p>34</p><p>35</p><p>36</p><p>37</p><p>38</p><p>39</p><p>40</p><p>41</p><p>42</p><p>43</p><p>44</p><p>45</p><p>46</p><p>47</p><p>48</p><p>49</p><p>50</p><p>51</p><p>52</p><p>53</p><p>54</p><p>55</p><p>56</p><p>57</p><p>58</p><p>59</p></div>
+				</td>
+						<td><div><p><span>&lt;!--</span></p><p><span>&nbsp;&nbsp;Disables Roslyn language service in Visual Studio in favor of ReSharper one.</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;IT’S PROBABLY NOT A GOOD IDEA TO COMMIT THIS SNIPPET TO SOURCE CONTROL,</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;UNLESS IT IS INTENDED TO ENABLE THIS TECHNIQUE FOR EVERYONE ON THE TEAM.</span></p><p><span>&nbsp;&nbsp;Keep in mind that using this technique, code completion, code analysis,</span></p><p><span>&nbsp;&nbsp;quick-fixes and refactorings are provided only by ReSharper. Custom Roslyn code</span></p><p><span>&nbsp;&nbsp;analyzers will also not be available, as this technique effectively hides code</span></p><p><span>&nbsp;&nbsp;from Visual Studio. Another side effect is that Code Lens will not be</span></p><p><span>&nbsp;&nbsp;available.</span></p><p><span>&nbsp;&nbsp;This file is compatible with ReSharper 2020.1 and newer.</span></p><p><span>&nbsp;&nbsp;If you are using ReSharper 2019.2 or 2019.3, you should modify this file:</span></p><p><span>&nbsp;&nbsp;replace: '$(JetBrainsDesignTimeBuild)' != 'true'</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; to: ('$(DevEnvDir)' != '*Undefined*' OR '$(DesignTimeSilentResolution)' != 'False')</span></p><p><span>&nbsp;&nbsp;How to use:</span></p><p><span>&nbsp;&nbsp;One way is to name this file Directory.Build.targets and put near solution (or in parent folder).</span></p><p><span>&nbsp;&nbsp;Another is to put this file in %LOCALAPPDATA%\Microsoft\MSBuild\Current\Microsoft.Common.targets\ImportAfter</span></p><p><span>&nbsp;&nbsp;https://docs.microsoft.com/en-us/visualstudio/msbuild/customize-your-build</span></p><p><span>--&gt;</span></p><p><span>&lt;Project&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;PropertyGroup&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;DisableRoslynDesignTime </span><span>Condition</span><span>=</span><span>"'$(JetBrainsDesignTimeBuild)' != 'true' AND '$(DesignTimeBuild)' == 'true' AND '$(IsCodeSharingProject)' != 'true'"</span><span>&gt;</span><span>true</span><span>&lt;/DisableRoslynDesignTime&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;/PropertyGroup&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;ItemGroup </span><span>Condition</span><span>=</span><span>"'$(DisableRoslynDesignTime)' == 'true'"</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;None </span><span>Include</span><span>=</span><span>"**/*$(DefaultLanguageSourceExtension)"</span><span> </span><span>Exclude</span><span>=</span><span>"$(DefaultItemExcludes);$(DefaultExcludesInProjectFolder)"</span><span> </span><span>Condition</span><span>=</span><span>" '$(EnableDefaultCompileItems)' == 'true' "</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;None </span><span>Include</span><span>=</span><span>"**/*.cs;**/*.vb"</span><span> </span><span>Condition</span><span>=</span><span>" '$(EnableDefaultCompileItems)' != 'true' "</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;!-- If you have custom exclude patterns in csproj or included files, then you have to include</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;these patterns here as well (to hide files from solution explorer).</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;For example:</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;None Remove="ASD\*" Condition=" '$(MSBuildProjectName)' == 'MyApplication' " /&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;For a full list of well-known propertes, see</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;https://docs.microsoft.com/en-us/visualstudio/msbuild/msbuild-reserved-and-well-known-properties</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;--&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;UpToDateCheckInput </span><span>Include</span><span>=</span><span>"@(Compile)"</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;!-- You can write just Remove="@(Compile)" here, but it gives huge</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;performance penalty. This glob is used to avoid N^2 in RemoveOperation</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;https://github.com/Microsoft/msbuild/issues/2314 --&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;Compile </span><span>Remove</span><span>=</span><span>"**/*.cs;**/*.vb"</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;Compile </span><span>Remove</span><span>=</span><span>"@(Compile)"</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;/ItemGroup&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;Target </span><span>Name</span><span>=</span><span>"DisableRoslynTarget"</span><span> </span><span>BeforeTargets</span><span>=</span><span>"CoreCompile"</span><span> &gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;PropertyGroup&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;DisableRoslynDesignTime </span><span>Condition</span><span>=</span><span>"'$(DisableRoslynDesignTime)' == 'true' OR ('$(JetBrainsDesignTimeBuild)' != 'true' AND '$(BuildingProject)' != 'true' AND '$(IsCodeSharingProject)' != 'true') "</span><span>&gt;</span><span>true</span><span>&lt;/DisableRoslynDesignTime&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;/PropertyGroup&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;ItemGroup </span><span>Condition</span><span>=</span><span>"'$(DisableRoslynDesignTime)' == 'true'"</span><span>&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;None </span><span>Include</span><span>=</span><span>"@(Compile)"</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;Compile </span><span>Remove</span><span>=</span><span>"@(Compile)"</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;/ItemGroup&gt;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>&lt;Warning </span><span>Condition</span><span>=</span><span>"'$(DisableRoslynDesignTime)' == 'true'"</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Text</span><span>=</span><span>"Roslyn language services are disabled. Remove or edit $(MSBuildThisFileFullPath) file to enable it back."</span><span> /&gt;</span></p><p><span>&nbsp;&nbsp;</span><span>&lt;/Target&gt;</span></p><p><span>&lt;/Project&gt;</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0029 seconds] -->
+<p>(The full and recent file can be <a href="https://gist.github.com/maartenba/8c6e23aa0adf562aecd8bdcba4226c34">downloaded here</a>.)</p>
+<p>When <strong>this snippet is added into a <a href="https://docs.microsoft.com/en-us/visualstudio/msbuild/customize-your-build?view=vs-2019"><code>Directory.Build.Targets</code></a> file next to our solution file</strong>, this will apply to all project files in our solution. This works for SDK-style projects, and for “old .csproj” projects (MSBuild 15 or newer).</p>
+<p><em>Note: It’s probably not a good idea to commit this snippet to source control, unless it is intended to enable this technique for everyone on the team.</em></p>
+<p>We also recommend enabling <b>Color Identifiers</b> in the ReSharper options (under <b>Code Inspection | Settings</b>), as otherwise some highlighting may be missing.</p>
+<h2>The Results</h2>
+<p>In vanilla Visual Studio, this technique reduces memory usage by 169 MB on a 300-project sample solution <a href="https://github.com/mfilippov/MmgSlnGen">we generated</a>. The .NET <strong>memory footprint was reduced by 18%</strong>, from 909 MB to 740 MB. Using this technique in vanilla Visual Studio is obviously not the best idea, as many IDE features will stop working.</p>
+<p>With ReSharper enabled, we’ll still have code completion, code analysis, quick-fixes, and refactorings. On a similar solution, Visual Studio with ReSharper was using 1293 MB of memory. Using this <code>Directory.Build.Targets</code> technique, <strong>we saw a reduction of 213 MB, or 16%</strong>, dropping memory usage to 1080 MB.</p>
+<p><img src="https://d3nmt5vlzunoa1.cloudfront.net/dotnet/files/2020/04/dmu-comparison.png" alt="Memory usage - comparing before and after" width="800" height="435"></p>
+<p>Another solution we tried this with was the <a href="https://github.com/dotnet/roslyn">Roslyn compiler solution</a>. It has 66 projects, but lots of code and references. Without using our <code>Directory.Build.Targets</code> file, managed memory usage is ~1.11 GB:</p>
+<p><img src="https://d3nmt5vlzunoa1.cloudfront.net/dotnet/files/2020/04/roslyn-without.png" alt="Roslyn solution - without Directory.Build.Targets file" width="750" height="302"></p>
+<p>Adding the <code>Directory.Build.Targets</code> file, we see a significant drop in managed memory usage! From ~1.11 GB, down to ~687 MB. <strong>That’s a 37% reduction!</strong></p>
+<p><img src="https://d3nmt5vlzunoa1.cloudfront.net/dotnet/files/2020/04/roslyn-with.png" alt="Roslyn solution - with Directory.Build.Targets file" width="750" height="302"></p>
+<h2>Conclusion</h2>
+<p>Keep in mind that when using this technique, code completion, code analysis, quick-fixes, and refactorings are provided only by ReSharper. Custom Roslyn code analyzers will also not be available, as this technique effectively hides code from Visual Studio. Another side effect is that Code Lens will not be available.</p>
+<p>Should you be using this in your solutions? As always, it depends. If you are using Visual Studio and ReSharper for a solution with many projects, <strong>it never hurts to try, as long as you and your team are okay with the above constraints</strong>.</p>
+<p>If you do use our <code>Directory.Build.Targets</code> file, keep us informed about how it goes! And if you encounter any issues with it, <a href="https://youtrack.jetbrains.com/issue/RSRP-479204">let us know here</a>.</p>
+                    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

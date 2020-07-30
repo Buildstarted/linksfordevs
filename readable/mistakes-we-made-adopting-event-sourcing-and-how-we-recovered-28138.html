@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Mistaeks I Hav Made: Mistakes we made adopting event sourcing (and how we recovered) - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Mistaeks I Hav Made: Mistakes we made adopting event sourcing (and how we recovered) - linksfor.dev(s)"/>
+    <meta property="og:description" content="Over the last year or so we have been building a new system that has an event-sourced architecture. Event-sourcing is a good fit for our needs because the organisation wants to preserve an accurate history of information managed by the system and analyse it for (among other things) fraud detection. When we started, however, none of us had built a system with an event-sourced architecture before. Despite reading plenty of advice on what to do and what to avoid, and experience reports from other projects, we made some significant mistakes in our design. This article describes where we went wrong, in the hope that others can learn from our failures."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://natpryce.com/articles/000819.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Mistaeks I Hav Made: Mistakes we made adopting event sourcing (and how we recovered)</title>
+<div class="readable">
+        <h1>Mistaeks I Hav Made: Mistakes we made adopting event sourcing (and how we recovered)</h1>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 02 Jul 2019</div>
+        <p><a href="http://natpryce.com/articles/000819.html">http://natpryce.com/articles/000819.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="article">
+        
+        <p>Over the last year or so we have been building a new system that has an <a href="https://martinfowler.com/eaaDev/EventSourcing.html">event-sourced</a> architecture. Event-sourcing is a good fit for our needs because the organisation wants to preserve an accurate history of information managed by the system and analyse it for (among other things) fraud detection. When we started, however, none of us had built a system with an event-sourced architecture before. Despite reading plenty of advice on what to do and what to avoid, and experience reports from other projects, we made some significant mistakes in our design. This article describes where we went wrong, in the hope that others can learn from our failures.</p>
+        <p>But it’s not all bad news. We were able to recover from our mistakes with an ease that surprised us. I’ll also describe the factors that allowed us to easily change our architecture, in the hope that others can learn from our successes too.</p>
+        <section id="mistakes">
+<h2>Mistakes</h2>
+<section id="not-separating-persisting-the-event-history-and-persisting-a-view-of-the-current-state">
+<h3>Not separating persisting the event history and persisting a view of the current state</h3>
+<p>The app maintained a relational model of the current state of its entities alongside the event history. That in itself wouldn’t be a bad thing, if it had been implemented as a “projection” of the events. However, we implemented the current state by making the command handlers both record events and update the relational model. This meant that (a) there was nothing to ensure that entity state could be rebuilt from the recorded events, and (b) managing the migrations of the relational model was a significant overhead while the app was in rapid flux.</p>
+<p>Surely this was missing the entire point of adopting event-sourcing?</p>
+<p>Well… yes. People came to the project with different backgrounds and technical preferences. There was a creative tension that led to an initial design the team was comfortable with, rather than one that was “by the book” for any specific book. Some of us did notice the architecture diverging from what the event-sourcing literature described, but didn’t react immediately. We wanted the team (ourselves included) to build an intuition for the advantages, disadvantages and trade-offs inherent in an event-sourced architecture, rather than apply patterns cookie-cutter style. And we didn’t know how this hybrid architecture would work out – it could have been very successful for all we knew – so we didn’t want to dismiss the idea based only on a theoretical understanding gleaned from technical articles &amp; conference sessions. Therefore we continued down this road until the difficulties outlined above were clearly outweighing the benefits. Then we had a technical retrospective in which we examined the differences between canonical event-sourcing and our architecture. The outcome was that we all understood why canonical event-sourcing would work better than our application’s current design, and agreed to change its architecture to match.</p>
+</section>
+<section id="confusion-between-event-driven-and-event-sourced-architecture">
+<h3>Confusion between event-driven and event-sourced architecture</h3>
+<p>In an event-driven architecture, components perform activity in response to receiving events and emit events to trigger activities in other components. In an event-sourced architecture, components record a history of events that occurred to the entities they manage, and calculate the state of an entity from the sequence of events that relate to it.</p>
+<p>We got confused between the two, and had events recorded in the history by one component triggering activity in others.</p>
+<p>We realised we’d made a mistake when we had to make entities distinguish between reading an event in order to react to it, and reading an event in order to know what happened in the past.</p>
+<p>This also led to us…</p>
+</section>
+<section id="using-the-event-store-as-a-message-bus">
+<h3>Using the event store as a message bus</h3>
+<p>We added notifications to our event store so services could subscribe to updates and keep their projection up to date. Bad idea! Our event store started being used as an event bus for transient communication between components, and our history included technical events that had no clear relationship to the business process. We noticed that we had to filter technical events out of the history displayed to users. For example, we had events in the history about technical things like “attempt to send email failed with an IOException”, which users didn’t care about. They wanted to see the history of the business process, not technical jibber-jabber.</p>
+<p>The literature describes event-sourced and event-driven architectures as orthogonal, and that tripped us up. We came to realise that clearly distinguishing between commands that trigger activity and events that represent what happened in the past is even more important than Command/Query Responsibility Segregation, especially at the modest scale and strict consistency requirements of our system. The word “event” is such an overused term we had many discussions about how to name different kinds of event to distinguish between those that are part of the event-sourcing history, those that are emitted by our active application monitoring, those that are notifications that should trigger activity, and so on. In our new applications we use the term <em>Business Process Event</em> for events recorded in our event-sourcing history.</p>
+</section>
+<section id="seduced-by-eventual-consistency">
+<h3>Seduced by eventual consistency</h3>
+<p>Initially we gave the event store an HTTP interface and application components used it to read and store events. However, that meant that clients couldn’t process events in ACID transactions and we found ourselves building mechanisms in the application to maintain consistency.</p>
+</section>
+</section>
+        <section id="noticing-our-mistakes">
+<h2>Noticing our mistakes</h2>
+<p>Luckily we caught these mistakes early during a regular architecture “<a href="https://www.hp-lexicon.org/thing/wizengamot/">wizengamot</a>” before our design decisions had affected the event history of our live system.</p>
+<p>We decided to replace our use of HTTP between command processors and the event store with direct database connections and serialisable transactions. We kept the HTTP service for traversing the event history, but only for peripheral services that maintain read-optimised views that can be eventually consistent (daily reports, business metrics, that kind of thing).</p>
+<p>We decided to stop using notifications from the event store to trigger activity and went back to REST (particularly <a href="https://en.m.wikipedia.org/wiki/HATEOAS">HATEOAS</a>) for passing data and control between components.</p>
+<p>We decided to not update the record of the current state of the entities in command handlers. Instead the application computes the current state from the event history when the entity is loaded from the database. The application still maintains a “projection” of the current entity states, but treats the projection as a read-through cache, used to optimise loading entities, so that it doesn’t have to load all of an entity’s events on every transaction, and to select subsets of the currently active entities, so that it doesn’t have to load all events of all entities. Entries are expired from the cache by events: each projection is a set of tables and function is passed each event and creates, updates and deletes rows in its tables in response.</p>
+<p>Logic to execute commands now looks like:</p>
+<ol type="1">
+<li>Load the recent state of the entity into an in-memory model</li>
+<li>In a write transaction
+<ol type="1">
+<li>load events that occurred to the entity since the recent projection into the in-memory model</li>
+<li>perform business logic</li>
+<li>record events resulting from executing the command</li>
+</ol></li>
+<li>Save the in memory state as the most recent projection if it was created from more recent events than that the projection that is currently persisted (the persisted state may have been updated by a concurrent command)</li>
+</ol>
+<p>Read transactions don’t record events and can therefore run in parallel with each other and write transactions.</p>
+<p>We decided to replace the relational model, which required so much effort to migrate as the app evolved, with JSON blobs serialised from the domain model that can be automatically discarded and rebuilt when the persisted state becomes incompatible with the latest version of the application. Thanks to Postgres’ <a href="https://www.postgresql.org/docs/9.5/datatype-json.html">JSONB</a> columns, we can still index properties of entity state and select entities in bulk without adding columns of denormalised data for filtering.</p>
+<p>The application also maintains projections for other uses, which have less stringent consistency requirements. For example, we update projections for reporting in the background on a regular schedule.</p>
+</section>
+        <section id="re-engineering-the-system-architecture">
+<h2>Re-engineering the system architecture</h2>
+<p>We were concerned that such significant changes to the systems architecture would deliver a blow to our delivery schedule. But it turned out to be very straightforward. The reasons why are orthogonal to event-sourcing.</p>
+<p>As well as using event-sourcing, the application has a Ports-and-Adapters (aka “hexagonal”) architecture. Loading the current state of an entity was hidden from the application logic behind a Port interface that was implemented by an Adapter class. My colleague, <a href="https://www.linkedin.com/in/s4nchez/">Ivan Sanchez</a>, was able to switch the app over to calculating an entity’s current state from its event history and treating persistent entity state as a read through cache (as described above) in about <em>one hour</em>. The team then replaced the relational model, which required so much effort to migrate as the app evolved, with JSON blobs serialised from the domain model that could be automatically discarded and rebuilt when the persisted state became incompatible with the latest version of the application. The change was live by the end of the day.</p>
+<p>We also have extensive functional tests that run in our continuous deployment pipelines. These were <a href="https://www.youtube.com/watch?v=Fk4rCn4YLLU">written to take advantage of the Ports-and-Adapters architecture</a>, a style we call “Domain-Driven Tests”. They capture the functional behaviour of the application in terms of users needs and concepts from the problem domain, without referring to details of the technical infrastructure of the application. They can be run against the domain model, in memory, against the HTTP interfaces of the application services, or through the browser, against an instance running on a developer workstation or one deployed into our cloud environment.</p>
+<p>The functional tests serve two purposes that paid off handsomely when we had to make significant changes to the application’s architecture.</p>
+<p>Firstly, they force us to follow the Ports-and-Adapters architecture. Our tests cannot refer to details of the application’s technical underpinnings (HTTP, database, user interface controls, HTML, JSON, etc). We get early warning if we violate the architectural constraints by, say, writing business logic in the HTTP adapter layer, because it becomes impossible to write a test that can run against the domain model alone.</p>
+<p>As a result, changes to the technical architecture of the application were strictly segregated from the definition and implementation of its functional behaviour, neither of which needed to be changed when we changed the architecture. This allowed them to fulfil their second purpose: to rapidly verify that the application still performs the same user visible behaviour as we made large changes to its architecture.</p>
+</section>
+        <section id="conclusions">
+<h2>Conclusions</h2>
+<p>It’s inevitable that you’re going to make mistakes when implementing a system, especially when adopting a new architectural style with which the team are not familiar. A system’s architecture has to address how you recover from those mistakes.</p>
+<p>In our case, using the Ports and Adapters style, with which the team had a lot of experience, and considering test and deployment infrastructure as an essential part of the system architecture allowed us to adopt Event Sourcing, with which we were entirely unfamiliar, and recover from our misunderstandings as the system evolved.</p>
+</section>
+        <section id="acknowledgements">
+<h2>Acknowledgements</h2>
+<p>Thanks to <a href="http://oneeyedmen.com/">Duncan McGregor</a>, <a href="https://dannorth.net/">Dan North</a>, <a href="https://medium.com/exortech">Owen Rogers</a> &amp; <a href="https://blog.danielwellman.com/">Daniel Wellman</a> for their detailed and valuable feedback.</p>
+</section>
+      </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

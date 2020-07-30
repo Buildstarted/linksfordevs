@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Autofac, WebApplicationFactory and integration tests - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Autofac, WebApplicationFactory and integration tests - linksfor.dev(s)"/>
+    <meta property="og:description" content="This is one of those occasions where I&#x27;m not writing up my own work so much as my discovery after in depth googling.  Integration tests with..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.johnnyreilly.com/2020/05/autofac-webapplicationfactory-and.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Autofac, WebApplicationFactory and integration tests</title>
+<div class="readable">
+        <h1>Autofac, WebApplicationFactory and integration tests</h1>
+            <div>Reading time: 7-9 minutes</div>
+        <div>Posted here: 22 May 2020</div>
+        <p><a href="https://blog.johnnyreilly.com/2020/05/autofac-webapplicationfactory-and.html">https://blog.johnnyreilly.com/2020/05/autofac-webapplicationfactory-and.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="post-body-3900810916190078063" itemprop="description articleBody">
+<p>This is one of those occasions where I'm not writing up my own work so much as my discovery after in depth googling.</p>
+<p>Integration tests with ASP.NET Core are the best. They spin up an in memory version of your application and let you fire requests at it. They've gone through a number of iterations since ASP.NET Core has been around. You may also be familiar with the <code>TestServer</code> approach of earlier versions. For some time, the advised approach has been using <code><a href="https://docs.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-3.1#basic-tests-with-the-default-webapplicationfactory">WebApplicationFactory</a></code>.</p>
+<p>What makes this approach particularly useful / powerful is that you can swap out dependencies of your running app with fakes / stubs etc. Just like unit tests! But potentially more useful because they run your whole app and hence give you a greater degree of confidence. What does this mean? Well, imagine you changed a piece of middleware in your application; this could potentially break functionality. Unit tests would probably not reveal this. Integration tests would.</p>
+<p>There is a fly in the ointment. A hair in the gazpacho. ASP.NET Core ships with dependency injection in the box. It has its own Inversion of Control container which is perfectly fine. However, many people are accustomed to using other IOC containers such as <a href="https://autofac.org/">Autofac</a>.</p>
+<p>What's the problem? Well, swapping out dependencies registered using ASP.NET Core's IOC requires using a hook called <a href="https://docs.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-3.1#inject-mock-services"><code>ConfigureTestServices</code></a>. There's an equivalent hook for swapping out services registered using a custom IOC container: <a href="https://docs.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.testhost.webhostbuilderextensions.configuretestcontainer?view=aspnetcore-3.0"><code>ConfigureTestContainer</code></a>. Unfortunately, there is a bug in ASP.NET Core as of version 3.0: <a href="https://github.com/dotnet/aspnetcore/issues/14907">When using GenericHost, in tests <code>ConfigureTestContainer</code> is not executed</a></p>
+<p>This means you cannot swap out dependencies that have been registered with Autofac and the like. According to the tremendous <a href="https://www.twitter.com/davidfowl">David Fowler</a> of the ASP.NET team, <a href="https://github.com/dotnet/aspnetcore/issues/14907#issuecomment-592102145">this will hopefully be resolved</a>.</p>
+<p>In the meantime, <a href="https://github.com/dotnet/aspnetcore/issues/14907#issuecomment-620750841">there's a workaround thanks to various commenters on the thread</a>.  Instead of using <code>WebApplicationFactory</code> directly, subclass it and create a custom <code>AutofacWebApplicationFactory</code> (the name is not important).  This custom class overrides the behavior of <code>ConfigureServices</code> and <code>CreateHost</code> with a <code>CustomServiceProviderFactory</code>:</p>
+<pre><code><span>namespace </span><span>My</span><span>.</span><span>Web</span><span>.</span><span>Tests</span><span>.</span><span>Helpers</span><span> </span><span>{</span><span>
+    </span><span>/// &lt;summary&gt;</span><span>
+    </span><span>/// Based upon <a href="https://github.com/dotnet/AspNetCore.Docs/tree/master/aspnetcore/test/integration-tests/samples/3.x/IntegrationTestsSample" rel="nofollow"><span>https</span><span>://</span><span>github</span><span>.</span><span>com</span><span>/</span><span>dotnet</span><span>/</span><span>AspNetCore</span><span>.</span><span>Docs</span><span>/</span><span>tree</span><span>/</span><span>master</span><span>/</span><span>aspnetcore</span><span>/</span><span>test</span><span>/</span><span>integration</span><span>-</span><span>tests</span><span>/</span><span>samples</span><span>/</span><span>3</span><span>.</span><span>x</span><span>/</span><span>IntegrationTestsSample</span></a></span><span>
+    </span><span>/// &lt;/summary&gt;</span><span>
+    </span><span>/// &lt;typeparam name="TStartup"&gt;&lt;/typeparam&gt;</span><span>
+    </span><span>public</span><span> </span><span>class</span><span> </span><span>AutofacWebApplicationFactory</span><span>&lt;</span><span>TStartup</span><span>&gt;</span><span> </span><span>:</span><span> </span><span>WebApplicationFactory</span><span>&lt;</span><span>TStartup</span><span>&gt;</span><span> </span><span>where</span><span> </span><span>TStartup</span><span> </span><span>:</span><span> </span><span>class</span><span> </span><span>{</span><span>
+        </span><span>protected</span><span> </span><span>override</span><span> </span><span>void</span><span> </span><span>ConfigureWebHost</span><span>(</span><span>IWebHostBuilder</span><span> builder</span><span>)</span><span> </span><span>{</span><span>
+            builder</span><span>.</span><span>ConfigureServices</span><span>(</span><span>services </span><span>=&gt;</span><span> </span><span>{</span><span>
+                    services</span><span>.</span><span>AddSingleton</span><span>&lt;</span><span>IAuthorizationHandler</span><span>&gt;(</span><span>new</span><span> </span><span>PassThroughPermissionedRolesHandler</span><span>());</span><span>
+                </span><span>})</span><span>
+                </span><span>.</span><span>ConfigureTestServices</span><span>(</span><span>services </span><span>=&gt;</span><span> </span><span>{</span><span>
+                </span><span>}).</span><span>ConfigureTestContainer</span><span>&lt;</span><span>Autofac</span><span>.</span><span>ContainerBuilder</span><span>&gt;(</span><span>builder </span><span>=&gt;</span><span> </span><span>{</span><span>
+                    </span><span>// called after Startup.ConfigureContainer</span><span>
+                </span><span>});</span><span>
+        </span><span>}</span><span>
+
+        </span><span>protected</span><span> </span><span>override</span><span> </span><span>IHost</span><span> </span><span>CreateHost</span><span>(</span><span>IHostBuilder</span><span> builder</span><span>)</span><span> </span><span>{</span><span>
+            builder</span><span>.</span><span>UseServiceProviderFactory</span><span>(</span><span>new</span><span> </span><span>CustomServiceProviderFactory</span><span>());</span><span>
+            </span><span>return</span><span> </span><span>base</span><span>.</span><span>CreateHost</span><span>(</span><span>builder</span><span>);</span><span>
+        </span><span>}</span><span>
+    </span><span>}</span><span>
+
+    </span><span>/// &lt;summary&gt;</span><span>
+    </span><span>/// Based upon <a href="https://github.com/dotnet/aspnetcore/issues/14907#issuecomment-620750841" rel="nofollow"><span>https</span><span>://</span><span>github</span><span>.</span><span>com</span><span>/</span><span>dotnet</span><span>/</span><span>aspnetcore</span><span>/</span><span>issues</span><span>/</span><span>14907</span><span>#</span><span>issuecomment</span><span>-</span><span>620750841</span></a> - only necessary because of an issue in ASP.NET Core</span><span>
+    </span><span>/// &lt;/summary&gt;</span><span>
+    </span><span>public</span><span> </span><span>class</span><span> </span><span>CustomServiceProviderFactory</span><span> </span><span>:</span><span> </span><span>IServiceProviderFactory</span><span>&lt;</span><span>CustomContainerBuilder</span><span>&gt;</span><span> </span><span>{</span><span>
+        </span><span>public</span><span> </span><span>CustomContainerBuilder</span><span> </span><span>CreateBuilder</span><span>(</span><span>IServiceCollection</span><span> services</span><span>)</span><span> </span><span>=&gt;</span><span> </span><span>new</span><span> </span><span>CustomContainerBuilder</span><span>(</span><span>services</span><span>);</span><span>
+
+        </span><span>public</span><span> </span><span>IServiceProvider</span><span> </span><span>CreateServiceProvider</span><span>(</span><span>CustomContainerBuilder</span><span> containerBuilder</span><span>)</span><span> </span><span>=&gt;</span><span>
+        </span><span>new</span><span> </span><span>AutofacServiceProvider</span><span>(</span><span>containerBuilder</span><span>.</span><span>CustomBuild</span><span>());</span><span>
+    </span><span>}</span><span>
+
+    </span><span>public</span><span> </span><span>class</span><span> </span><span>CustomContainerBuilder</span><span> </span><span>:</span><span> </span><span>Autofac</span><span>.</span><span>ContainerBuilder</span><span> </span><span>{</span><span>
+        </span><span>private</span><span> </span><span>readonly</span><span> </span><span>IServiceCollection</span><span> services</span><span>;</span><span>
+
+        </span><span>public</span><span> </span><span>CustomContainerBuilder</span><span>(</span><span>IServiceCollection</span><span> services</span><span>)</span><span> </span><span>{</span><span>
+            </span><span>this</span><span>.</span><span>services </span><span>=</span><span> services</span><span>;</span><span>
+            </span><span>this</span><span>.</span><span>Populate</span><span>(</span><span>services</span><span>);</span><span>
+        </span><span>}</span><span>
+
+        </span><span>public</span><span> </span><span>Autofac</span><span>.</span><span>IContainer</span><span> </span><span>CustomBuild</span><span>()</span><span> </span><span>{</span><span>
+            </span><span>var</span><span> sp </span><span>=</span><span> </span><span>this</span><span>.</span><span>services</span><span>.</span><span>BuildServiceProvider</span><span>();</span><span>
+</span><span>#pragma</span><span> warning disable CS0612 </span><span>// Type or member is obsolete</span><span>
+            </span><span>var</span><span> filters </span><span>=</span><span> sp</span><span>.</span><span>GetRequiredService</span><span>&lt;</span><span>IEnumerable</span><span>&lt;</span><span>IStartupConfigureContainerFilter</span><span>&lt;</span><span>Autofac</span><span>.</span><span>ContainerBuilder</span><span>&gt;&gt;&gt;();</span><span>
+</span><span>#pragma</span><span> warning restore CS0612 </span><span>// Type or member is obsolete</span><span>
+
+            </span><span>foreach</span><span> </span><span>(</span><span>var</span><span> filter </span><span>in</span><span> filters</span><span>)</span><span> </span><span>{</span><span>
+                filter</span><span>.</span><span>ConfigureContainer</span><span>(</span><span>b </span><span>=&gt;</span><span> </span><span>{</span><span> </span><span>})</span><span> </span><span>(</span><span>this</span><span>);</span><span>
+            </span><span>}</span><span>
+
+            </span><span>return</span><span> </span><span>this</span><span>.</span><span>Build</span><span>();</span><span>
+        </span><span>}</span><span>
+    </span><span>}</span><span>
+</span><span>}</span></code></pre>
+<p>I'm going to level with you; I don't understand all of this code.  I'm not au fait with the inner workings of ASP.NET Core or Autofac but I can tell you what this allows.  With this custom <code>WebApplicationFactory</code> in play you get <code>ConfigureTestContainer</code> back in the mix!  You get to write code like this:</p>
+<pre><code><span>using </span><span>System</span><span>;</span><span>
+using </span><span>System</span><span>.</span><span>Net</span><span>;</span><span>
+using </span><span>System</span><span>.</span><span>Net</span><span>.</span><span>Http</span><span>.</span><span>Headers</span><span>;</span><span>
+using </span><span>System</span><span>.</span><span>Threading</span><span>.</span><span>Tasks</span><span>;</span><span>
+using </span><span>FakeItEasy</span><span>;</span><span>
+using </span><span>FluentAssertions</span><span>;</span><span>
+using </span><span>Microsoft</span><span>.</span><span>AspNetCore</span><span>.</span><span>TestHost</span><span>;</span><span>
+using </span><span>Microsoft</span><span>.</span><span>Extensions</span><span>.</span><span>DependencyInjection</span><span>;</span><span>
+using </span><span>Xunit</span><span>;</span><span>
+using </span><span>Microsoft</span><span>.</span><span>Extensions</span><span>.</span><span>Options</span><span>;</span><span>
+using </span><span>Autofac</span><span>;</span><span>
+using </span><span>System</span><span>.</span><span>Net</span><span>.</span><span>Http</span><span>;</span><span>
+using </span><span>Newtonsoft</span><span>.</span><span>Json</span><span>;</span><span>
+
+namespace </span><span>My</span><span>.</span><span>Web</span><span>.</span><span>Tests</span><span>.</span><span>Controllers</span><span>
+</span><span>{</span><span>
+    </span><span>public</span><span> </span><span>class</span><span> </span><span>MyControllerTests</span><span> </span><span>:</span><span> </span><span>IClassFixture</span><span>&lt;</span><span>AutofacWebApplicationFactory</span><span>&lt;</span><span>My</span><span>.</span><span>Web</span><span>.</span><span>Startup</span><span>&gt;&gt;</span><span> </span><span>{</span><span>
+        </span><span>private</span><span> </span><span>readonly</span><span> </span><span>AutofacWebApplicationFactory</span><span>&lt;</span><span>My</span><span>.</span><span>Web</span><span>.</span><span>Startup</span><span>&gt;</span><span> _factory</span><span>;</span><span>
+
+        </span><span>public</span><span> </span><span>MyControllerTests</span><span>(</span><span>
+            </span><span>AutofacWebApplicationFactory</span><span>&lt;</span><span>My</span><span>.</span><span>Web</span><span>.</span><span>Startup</span><span>&gt;</span><span> factory
+        </span><span>)</span><span> </span><span>{</span><span>
+            _factory </span><span>=</span><span> factory</span><span>;</span><span>
+        </span><span>}</span><span>
+
+        </span><span>[</span><span>Fact</span><span>]</span><span>
+        </span><span>public</span><span> </span><span>async</span><span> </span><span>Task</span><span> </span><span>My</span><span>()</span><span> </span><span>{</span><span>
+            </span><span>var</span><span> fakeSomethingService </span><span>=</span><span> A</span><span>.</span><span>Fake</span><span>&lt;</span><span>IMySomethingService</span><span>&gt;();</span><span>
+            </span><span>var</span><span> fakeConfig </span><span>=</span><span> </span><span>Options</span><span>.</span><span>Create</span><span>(</span><span>new</span><span> </span><span>MyConfiguration</span><span> </span><span>{</span><span>
+                </span><span>SomeConfig</span><span> </span><span>=</span><span> </span><span>"Important thing"</span><span>,</span><span>
+                </span><span>OtherConfigMaybeAnEmailAddress</span><span> </span><span>=</span><span> </span><span>"</span><span>johnny_reilly@hotmail.com</span><span>"</span><span>
+            </span><span>});</span><span>
+
+            A</span><span>.</span><span>CallTo</span><span>(()</span><span> </span><span>=&gt;</span><span> fakeSomethingService</span><span>.</span><span>DoSomething</span><span>(</span><span>A</span><span>&lt;string&gt;</span><span>.</span><span>Ignored</span><span>))</span><span>
+                </span><span>.</span><span>Returns</span><span>(</span><span>Task</span><span>.</span><span>FromResult</span><span>(</span><span>true</span><span>));</span><span>
+
+            </span><span>void</span><span> </span><span>ConfigureTestServices</span><span>(</span><span>IServiceCollection</span><span> services</span><span>)</span><span> </span><span>{</span><span>
+                services</span><span>.</span><span>AddSingleton</span><span>(</span><span>fakeConfig</span><span>);</span><span>
+            </span><span>}</span><span>
+
+            </span><span>void</span><span> </span><span>ConfigureTestContainer</span><span>(</span><span>ContainerBuilder</span><span> builder</span><span>)</span><span> </span><span>{</span><span>
+                builder</span><span>.</span><span>RegisterInstance</span><span>(</span><span>fakeSomethingService</span><span>);</span><span>
+            </span><span>}</span><span>
+
+            </span><span>var</span><span> client </span><span>=</span><span> _factory
+                </span><span>.</span><span>WithWebHostBuilder</span><span>(</span><span>builder </span><span>=&gt;</span><span> </span><span>{</span><span>
+                    builder</span><span>.</span><span>ConfigureTestServices</span><span>(</span><span>ConfigureTestServices</span><span>);</span><span>
+                    builder</span><span>.</span><span>ConfigureTestContainer</span><span>&lt;</span><span>Autofac</span><span>.</span><span>ContainerBuilder</span><span>&gt;(</span><span>ConfigureTestContainer</span><span>);</span><span>
+                </span><span>})</span><span>
+                </span><span>.</span><span>CreateClient</span><span>();</span><span>
+
+            </span><span>// Act</span><span>
+            </span><span>var</span><span> request </span><span>=</span><span> </span><span>StringContent</span><span>(</span><span>"{"sommat":"to see"}"</span><span>);</span><span>
+            request</span><span>.</span><span>Headers</span><span>.</span><span>ContentType</span><span> </span><span>=</span><span> </span><span>MediaTypeHeaderValue</span><span>.</span><span>Parse</span><span>(</span><span>"application/json"</span><span>);</span><span>
+            </span><span>var</span><span> response </span><span>=</span><span> </span><span>await</span><span> client</span><span>.</span><span>PostAsync</span><span>(</span><span>"/something/submit"</span><span>,</span><span> request</span><span>);</span><span>
+
+            </span><span>// Assert</span><span>
+            response</span><span>.</span><span>StatusCode</span><span>.</span><span>Should</span><span>().</span><span>Be</span><span>(</span><span>HttpStatusCode</span><span>.</span><span>OK</span><span>);</span><span>
+
+            A</span><span>.</span><span>CallTo</span><span>(()</span><span> </span><span>=&gt;</span><span> fakeSomethingService</span><span>.</span><span>DoSomething</span><span>(</span><span>A</span><span>&lt;string&gt;</span><span>.</span><span>Ignored</span><span>))</span><span>
+                </span><span>.</span><span>MustHaveHappened</span><span>();</span><span>
+        </span><span>}</span><span>
+
+    </span><span>}</span><span>
+</span><span>}</span><span>
+</span></code></pre>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

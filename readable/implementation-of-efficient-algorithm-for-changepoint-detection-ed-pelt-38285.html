@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Implementation of efficient algorithm for changepoint detection: ED-PELT - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Implementation of efficient algorithm for changepoint detection: ED-PELT - linksfor.dev(s)"/>
+    <meta property="article:author" content="Andrey Akinshin"/>
+    <meta property="og:description" content="Implementation of efficient algorithm for changepoint detection: ED-PELT"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://aakinshin.net/posts/edpelt/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Implementation of efficient algorithm for changepoint detection: ED-PELT</title>
+<div class="readable">
+        <h1>Implementation of efficient algorithm for changepoint detection: ED-PELT</h1>
+            <div>by Andrey Akinshin</div>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 07 Oct 2019</div>
+        <p><a href="https://aakinshin.net/posts/edpelt/">https://aakinshin.net/posts/edpelt/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+      <div>
+<div>
+
+
+<p><span>
+  <b>Date:</b> October 07, 2019.
+  <b>Tags:</b>
+        <a href="https://aakinshin.net/tags/dotnet"><span>.NET</span></a>
+        <a href="https://aakinshin.net/tags/csharp"><span>C#</span></a>
+        <a href="https://aakinshin.net/tags/ed-pelt"><span>ED-PELT</span></a>
+        <a href="https://aakinshin.net/tags/statistics"><span>Statistics</span></a>
+        <a href="https://aakinshin.net/tags/changepoints"><span>ChangePoints</span></a>
+</span></p><p><a href="https://en.wikipedia.org/wiki/Change_detection">Changepoint detection</a> is an important task that has a lot of applications.
+For example, I use it to detect changes in the <a href="https://www.jetbrains.com/rider/">Rider</a> performance test suite.
+It's very important to detect not only performance degradations, but any kinds of performance changes
+(e.g., the variance may increase, or a unimodal distribution may be split to several modes).
+You can see examples of such changes on the following picture (we change the color when a changepoint is detected):</p>
+<div>
+<a href="https://aakinshin.net/img/posts/edpelt/edpelt-light.png" target="_blank">
+<picture>
+<source theme="dark" srcset="/img/posts/edpelt/edpelt-dark.png" media="none">
+<source theme="light" srcset="/img/posts/edpelt/edpelt-light.png" media="all">
+<img width="600" src="https://aakinshin.net/img/posts/edpelt/edpelt-light.png">
+</picture>
+</a>
+</div>
+<p>Unfortunately, it's pretty hard to write a reliable and fast algorithm for changepoint detection.
+Recently, I found a cool paper (<a href="https://link.springer.com/article/10.1007/s11222-016-9687-5">Haynes, K., Fearnhead, P. &amp; Eckley, I.A. "A computationally efficient nonparametric approach for changepoint detection," Stat Comput (2017) 27: 1293</a>) that describes the ED-PELT algorithm.
+It has <code>O(N*log(N))</code> complexity and pretty good detection accuracy.
+The reference implementation can be used via the <a href="https://cran.r-project.org/web/packages/changepoint.np/index.html">changepoint.np</a> R package.
+However, I can't use <a href="https://www.r-project.org/">R</a> on our build server, so I decided to write my own C# implementation.</p>
+<!--more-->
+<p>This implementation resolves the following problems:</p>
+<ul>
+<li><strong>Portability</strong><br>
+Below you can find a C# class which you can just copy-paste to your solution and play with it
+(you don't have to install any NuGet packages and add other kinds of dependencies).
+If you are using another programming language, it should be pretty easy to port this code
+(let me know if you write another implementation, I will add it to this blog post).
+I tried to comment all the important steps, so you can understand what's going on under the hood
+(it's highly recommended to read the original paper first)
+and customize the algorithm for your own needs.</li>
+<li><strong>Performance</strong><br>
+Performance is one of the most important features of this algorithm.
+I tried to make it as efficient as possible (keeping the code readability).
+With the help of some simple optimizations, I got a C# implementation that works much faster than the original R package
+(even though the ED-PELT core implementation in this package was written in C).</li>
+<li><strong>Better default parameters</strong><br>
+The algorithm has a parameter called <code>nquantiles</code>.
+The paper recommends to use <code>4 * log(n)</code> as the default value, but the <code>changepoint.np</code> always use <code>nquantiles = 10</code>.
+It leads to unreliable results for huge and small n values.
+When <code>n &lt; 10</code>, <code>changepoint.np</code> works incorrectly,
+a PR with a bug fix can be found <a href="https://github.com/AndrewC1998/changepoint-new/pull/1">here</a>.
+When <code>n &gt;&gt; 100</code>, <code>nquantiles = 10</code> may be not enough to detect changes in multimodal distributions.
+All the examples in the <a href="https://cran.r-project.org/web/packages/changepoint.np/changepoint.np.pdf">official documentation</a>
+override the default value with <code>4 * log(n)</code>, but it's not very convenient to do it each time.</li>
+</ul>
+<p>The ED-PELT algorithm will be available out of the box in the next version of <a href="https://github.com/dotnet/BenchmarkDotNet">BenchmarkDotNet</a>,
+but you can check it right now using the below implementation.
+I'm still not happy with the detection quality in some corner cases, so I'm going to improve it in the future.
+If you also have some problems with the presented implementation, let me know (my contacts can be found <a href="https://aakinshin.net/about/">here</a>).</p>
+<h3 id="ed-pelt-implementation"><a aria-label="Anchor" data-anchorjs-icon="§" href="#ed-pelt-implementation"></a>ED-PELT implementation</h3>
+<p>The actual version of the algorithm is available in <a href="https://gist.github.com/AndreyAkinshin/17c2211a8f0eee090670b80221f11761">this gist</a>.</p>
+<pre><code>
+
+<span>using</span> System;
+<span>using</span> System.Collections.Generic;
+<span>using</span> System.Linq;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<span>public</span> <span>class</span> <span>EdPeltChangePointDetector</span>
+{
+    <span>public</span> <span>static</span> <span>readonly</span> EdPeltChangePointDetector Instance = <span>new</span> EdPeltChangePointDetector();
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    <span><span>public</span> <span>int</span>[] <span>GetChangePointIndexes</span>(<span><span>double</span>[] data, <span>int</span> minDistance = <span>1</span></span>)</span>
+    {
+        
+        <span>int</span> n = data.Length;
+
+        
+        <span>if</span> (n &lt;= <span>2</span>)
+            <span>return</span> <span>new</span> <span>int</span>[<span>0</span>];
+        <span>if</span> (minDistance &lt; <span>1</span> || minDistance &gt; n)
+            <span>throw</span> <span>new</span> ArgumentOutOfRangeException(
+                <span>nameof</span>(minDistance),<span>$"<span>{minDistance}</span> should be in range from 1 to data.Length"</span>);
+
+        
+        
+        <span>double</span> penalty = <span>3</span> * Math.Log(n);
+
+        
+        
+        
+        <span>int</span> k = Math.Min(n, (<span>int</span>) Math.Ceiling(<span>4</span> * Math.Log(n)));
+
+        
+        <span>var</span> partialSums = GetPartialSums(data, k);
+
+        
+        
+        
+        <span><span>double</span> <span>Cost</span>(<span><span>int</span> tau1, <span>int</span> tau2</span>)</span> =&gt; GetSegmentCost(partialSums, tau1, tau2, k, n);
+
+        
+        
+        
+        <span>var</span> bestCost = <span>new</span> <span>double</span>[n + <span>1</span>];
+        bestCost[<span>0</span>] = -penalty;
+        <span>for</span> (<span>int</span> currentTau = minDistance; currentTau &lt; <span>2</span> * minDistance; currentTau++)
+            bestCost[currentTau] = Cost(<span>0</span>, currentTau);
+
+        
+        
+        
+        <span>var</span> previousChangePointIndex = <span>new</span> <span>int</span>[n + <span>1</span>];
+
+        
+        
+        
+        
+        <span>var</span> previousTaus = <span>new</span> List&lt;<span>int</span>&gt;(n + <span>1</span>) { <span>0</span>, minDistance };
+        <span>var</span> costForPreviousTau = <span>new</span> List&lt;<span>double</span>&gt;(n + <span>1</span>);
+
+        
+        
+        <span>for</span> (<span>int</span> currentTau = <span>2</span> * minDistance; currentTau &lt; n + <span>1</span>; currentTau++)
+        {
+            
+            
+            
+            costForPreviousTau.Clear();
+            <span>foreach</span> (<span>int</span> previousTau <span>in</span> previousTaus)
+                costForPreviousTau.Add(bestCost[previousTau] + Cost(previousTau, currentTau) + penalty);
+
+            
+            <span>int</span> bestPreviousTauIndex = WhichMin(costForPreviousTau);
+            bestCost[currentTau] = costForPreviousTau[bestPreviousTauIndex];
+            previousChangePointIndex[currentTau] = previousTaus[bestPreviousTauIndex];
+
+            
+            <span>double</span> currentBestCost = bestCost[currentTau];
+            <span>int</span> newPreviousTausSize = <span>0</span>;
+            <span>for</span> (<span>int</span> i = <span>0</span>; i &lt; previousTaus.Count; i++)
+                <span>if</span> (costForPreviousTau[i] &lt; currentBestCost + penalty)
+                    previousTaus[newPreviousTausSize++] = previousTaus[i];
+            previousTaus.RemoveRange(newPreviousTausSize, previousTaus.Count - newPreviousTausSize);
+
+            
+            previousTaus.Add(currentTau - (minDistance - <span>1</span>));
+        }
+
+        
+        <span>var</span> changePointIndexes = <span>new</span> List&lt;<span>int</span>&gt;();
+        <span>int</span> currentIndex = previousChangePointIndex[n]; 
+        <span>while</span> (currentIndex != <span>0</span>)
+        {
+            changePointIndexes.Add(currentIndex - <span>1</span>); 
+            currentIndex = previousChangePointIndex[currentIndex];
+        }
+        changePointIndexes.Reverse(); 
+        <span>return</span> changePointIndexes.ToArray();
+    }
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    <span>private</span> <span>static</span> <span>int</span>[,] GetPartialSums(<span>double</span>[] data, <span>int</span> k)
+    {
+        <span>int</span> n = data.Length;
+        <span>var</span> partialSums = <span>new</span> <span>int</span>[k, n + <span>1</span>];
+        <span>var</span> sortedData = data.OrderBy(it =&gt; it).ToArray();
+
+        <span>for</span> (<span>int</span> i = <span>0</span>; i &lt; k; i++)
+        {
+            <span>double</span> z = <span>-1</span> + (<span>2</span> * i + <span>1.0</span>) / k; 
+            <span>double</span> p = <span>1.0</span> / (<span>1</span> + Math.Pow(<span>2</span> * n - <span>1</span>, -z)); 
+            <span>double</span> t = sortedData[(<span>int</span>) Math.Truncate((n - <span>1</span>) * p)]; 
+
+            <span>for</span> (<span>int</span> tau = <span>1</span>; tau &lt;= n; tau++)
+            {
+                partialSums[i, tau] = partialSums[i, tau - <span>1</span>];
+                <span>if</span> (data[tau - <span>1</span>] &lt; t)
+                    partialSums[i, tau] += <span>2</span>; 
+                <span>if</span> (data[tau - <span>1</span>] == t)
+                    partialSums[i, tau] += <span>1</span>; 
+            }
+        }
+        <span>return</span> partialSums;
+    }
+
+    
+    
+    
+    <span><span>private</span> <span>static</span> <span>double</span> <span>GetSegmentCost</span>(<span><span>int</span>[,] partialSums, <span>int</span> tau1, <span>int</span> tau2, <span>int</span> k, <span>int</span> n</span>)</span>
+    {
+        <span>double</span> sum = <span>0</span>;
+        <span>for</span> (<span>int</span> i = <span>0</span>; i &lt; k; i++)
+        {
+            
+            <span>int</span> actualSum = partialSums[i, tau2] - partialSums[i, tau1];
+
+            
+            <span>if</span> (actualSum != <span>0</span> &amp;&amp; actualSum != (tau2 - tau1) * <span>2</span>)
+            {
+                
+                <span>double</span> fit = actualSum * <span>0.5</span> / (tau2 - tau1);
+                
+                <span>double</span> lnp = (tau2 - tau1) * (fit * Math.Log(fit) + (<span>1</span> - fit) * Math.Log(<span>1</span> - fit));
+                sum += lnp;
+            }
+        }
+        <span>double</span> c = -Math.Log(<span>2</span> * n - <span>1</span>); 
+        <span>return</span> <span>2.0</span> * c / k * sum; 
+    }
+
+    
+    
+    
+    
+    <span><span>private</span> <span>static</span> <span>int</span> <span>WhichMin</span>(<span>IList&lt;<span>double</span>&gt; values</span>)</span>
+    {
+        <span>if</span> (values.Count == <span>0</span>)
+            <span>throw</span> <span>new</span> InvalidOperationException(<span>"Array should contain elements"</span>);
+
+        <span>double</span> minValue = values[<span>0</span>];
+        <span>int</span> minIndex = <span>0</span>;
+        <span>for</span> (<span>int</span> i = <span>1</span>; i &lt; values.Count; i++)
+            <span>if</span> (values[i] &lt; minValue)
+            {
+                minValue = values[i];
+                minIndex = i;
+            }
+
+        <span>return</span> minIndex;
+    }
+}
+</code></pre>
+
+<!-- Share --><p>
+
+Share:
+<a href="https://twitter.com/intent/tweet?text=Implementation%20of%20efficient%20algorithm%20for%20changepoint%20detection:%20ED-PELT&amp;url=http://aakinshin.net/posts/edpelt/&amp;via=andrey_akinshin&amp;related=andrey_akinshin" rel="nofollow" target="_blank" title="Share on Twitter"><i title="Twitter"></i></a>
+<a href="https://www.reddit.com/submit?url=http://aakinshin.net/posts/edpelt/" target="_blank" title="Share on Reddit"><i></i></a>
+<a href="https://news.ycombinator.com/submitlink?u=http://aakinshin.net/posts/edpelt/" target="_blank" title="Share on HackerNews"><i></i></a>
+<a href="https://facebook.com/sharer.php?u=http://aakinshin.net/posts/edpelt/" rel="nofollow" target="_blank" title="Share on Facebook"><i></i></a>
+<a href="https://plus.google.com/share?url=http://aakinshin.net/posts/edpelt/" rel="nofollow" target="_blank" title="Share on Google+"><i></i></a>
+<a href="http://vk.com/share.php?url=http://aakinshin.net/posts/edpelt/" target="_blank" title="Share on VKontakte"><i></i></a>
+<a href="https://getpocket.com/save?url=http://aakinshin.net/posts/edpelt/&amp;title=Implementation%20of%20efficient%20algorithm%20for%20changepoint%20detection:%20ED-PELT" target="_blank" title="Add to Pocket"><i></i></a></p><hr>
+
+<!-- GitHub -->
+
+
+</div>
+</div>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

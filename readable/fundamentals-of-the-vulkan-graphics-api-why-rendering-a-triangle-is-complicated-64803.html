@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Fundamentals of the Vulkan Graphics API: Why Rendering a Triangle is Complicated - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Fundamentals of the Vulkan Graphics API: Why Rendering a Triangle is Complicated - linksfor.dev(s)"/>
+    <meta property="article:author" content="Liam Hinzman"/>
+    <meta property="og:description" content="Last week, my dad was asking me why I was proud of this triangle on my laptop."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://liamhinzman.com/blog/vulkan-fundamentals"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Fundamentals of the Vulkan Graphics API: Why Rendering a Triangle is Complicated</title>
+<div class="readable">
+        <h1>Fundamentals of the Vulkan Graphics API: Why Rendering a Triangle is Complicated</h1>
+            <div>by Liam Hinzman</div>
+            <div>Reading time: 13-17 minutes</div>
+        <div>Posted here: 26 Jul 2020</div>
+        <p><a href="https://liamhinzman.com/blog/vulkan-fundamentals">https://liamhinzman.com/blog/vulkan-fundamentals</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+        <div>
+
+<p>Last week, my dad was asking me why I was proud of this triangle on my laptop.</p>
+<p><img src="https://liamhinzman.com/img/vkTriangle.jpg"></p>
+<p>I told him that rendering a triangle is complicated: it took me 3 days, and 1000+ lines of code to create the above image. This just made him more confused.</p>
+<p>So I wrote this article explaining what the Vulkan graphics API is, how it works, and everything that goes into rendering a triangle with your GPU.</p>
+<h2 id="what-vulkan-is">What Vulkan Is</h2>
+<p>Vulkan is a graphics API that is designed to provide an accurate abstraction of how modern graphics processing units (GPUs) work. Unlike OpenGL, Vulkan is very verbose. Every detail related to the graphics API needs to be set up from scratch. The upsides to this are that you only use what you choose to, and you can better understand what’s going on in your application and in doing so achieve much higher performance.</p>
+<p>This article is intended to be a concise overview of the fundamentals of Vulkan. It was written for somebody who knew Vulkan but has forgotten many of the details (i.e.&nbsp;future me). Most of the information here comes from the <a href="https://www.khronos.org/registry/vulkan/specs/1.2/html/vkspec.html">Vulkan 1.2 Spec</a>.</p>
+<p>Note: This article uses the <a href="https://github.com/KhronosGroup/Vulkan-Hpp/Vulkan">C++ bindings</a> for Vulkan</p>
+<h2 id="vulkan-in-a-nutshell">Vulkan in a Nutshell</h2>
+<p><em>From a bird’s eye view, here’s how a Vulkan application works:</em></p>
+<p>Vulkan can access <strong>devices</strong>, which let you control one or more <strong>queues</strong>. Queues are how you send a list of commands to the GPU, and they can be members of one or more <strong>queue families</strong>, each of which can do different things (e.g.&nbsp;draw the vertices of a 3D model).</p>
+<p><strong>Command buffers</strong> are how you submit commands to a queue. Device commands are ‘recorded’ to a command buffer through Vulkan API calls, and can then be submitted once or many times (e.g.&nbsp;once every frame) to a queue to be executed.</p>
+<p>That’s the TL;DR - now it’s time to dive into the details!</p>
+<h2 id="genesis">Genesis</h2>
+<p><strong><em>Instances and Devices</em></strong></p>
+<p><em>In the beginning there was the Vulkan API. And the API was made flesh through <code>vk::Instance</code>, and from it sprung all per-application state.</em></p>
+<p>You initialize Vulkan by creating an instance, which contains application state - information like what version of the Vulkan API you’re using, your application’s name, and which extensions and layers you want to enable. Extensions and layers provide behavior that isn’t included by default in Vulkan, like extended error checking and call logging.</p>
+<p>With an instance you can examine the <strong>physical devices</strong> (usually GPUs) that are available. A machine might have multiple physical devices, and each of their properties (such as being a dedicated graphics card) can be inspected.</p>
+<p>A common pattern for physical device selection is to:</p>
+<ul>
+<li>List all of the physical devices</li>
+<li>Score each physical device on desired properties</li>
+<li>Give physical devices without required properties a score of 0</li>
+<li>Pick the physical device with the highest score</li>
+</ul>
+<details>
+<summary><b> Example code for physical device selection
+</b><p><b>(Tip: Read the comments so you don’t get overwhelmed by code) </b></p></summary>
+<div id="cb1"><pre><code><span id="cb1-1"><a href="#cb1-1"></a><span><span><span>void</span></span></span><span> <span>pickPhysicalDevice</span><span>()</span> </span>{</span>
+<span id="cb1-2"><a href="#cb1-2"></a>  <span></span></span>
+<span id="cb1-3"><a href="#cb1-3"></a>  <span><span>auto</span></span> physicalDevices = instance.enumeratePhysicalDevices();</span>
+<span id="cb1-4"><a href="#cb1-4"></a></span>
+<span id="cb1-5"><a href="#cb1-5"></a>  <span><span>if</span></span> (physicalDevices.size() == <span><span>0</span></span>) {</span>
+<span id="cb1-6"><a href="#cb1-6"></a>    <span><span>throw</span></span> <span><span>std</span>::</span>runtime_error(<span><span>"No GPUs with Vulkan support found!"</span></span>);</span>
+<span id="cb1-7"><a href="#cb1-7"></a>  }</span>
+<span id="cb1-8"><a href="#cb1-8"></a></span>
+<span id="cb1-9"><a href="#cb1-9"></a>  <span></span></span>
+<span id="cb1-10"><a href="#cb1-10"></a>  <span><span>std</span>::</span><span>multimap</span>&lt;<span><span>int</span></span>, vk::PhysicalDevice&gt; candidates;</span>
+<span id="cb1-11"><a href="#cb1-11"></a></span>
+<span id="cb1-12"><a href="#cb1-12"></a>  <span><span>for</span></span> (<span><span>const</span></span> <span><span>auto</span></span>&amp; physicalDevice : physicalDevices) {</span>
+<span id="cb1-13"><a href="#cb1-13"></a>    <span><span>int</span></span> score = rateDeviceSuitability(physicalDevice);</span>
+<span id="cb1-14"><a href="#cb1-14"></a>    candidates.insert(<span><span>std</span>::</span><span>make_pair</span>(score, physicalDevice));</span>
+<span id="cb1-15"><a href="#cb1-15"></a>  }</span>
+<span id="cb1-16"><a href="#cb1-16"></a></span>
+<span id="cb1-17"><a href="#cb1-17"></a>  <span></span></span>
+<span id="cb1-18"><a href="#cb1-18"></a>  <span><span>if</span></span> (candidates.rbegin()-&gt;first &gt; <span><span>0</span></span>) {</span>
+<span id="cb1-19"><a href="#cb1-19"></a>    physicalDevice = candidates.rbegin()-&gt;second;</span>
+<span id="cb1-20"><a href="#cb1-20"></a>  } <span><span>else</span></span> {</span>
+<span id="cb1-21"><a href="#cb1-21"></a>    <span><span>throw</span></span> <span><span>std</span>::</span>runtime_error(<span><span>"failed to find a suitable GPU!"</span></span>);</span>
+<span id="cb1-22"><a href="#cb1-22"></a>  }</span>
+<span id="cb1-23"><a href="#cb1-23"></a>}</span>
+<span id="cb1-24"><a href="#cb1-24"></a></span>
+<span id="cb1-25"><a href="#cb1-25"></a><span><span><span>int</span></span></span><span> <span>rateDeviceSuitability</span><span>(vk::PhysicalDevice physicalDevice)</span> </span>{</span>
+<span id="cb1-26"><a href="#cb1-26"></a>  <span></span></span>
+<span id="cb1-27"><a href="#cb1-27"></a>  vk::PhysicalDeviceFeatures deviceFeatures</span>
+<span id="cb1-28"><a href="#cb1-28"></a>    = physicalDevice.getFeatures();</span>
+<span id="cb1-29"><a href="#cb1-29"></a></span>
+<span id="cb1-30"><a href="#cb1-30"></a>  vk::PhysicalDeviceProperties deviceProperties</span>
+<span id="cb1-31"><a href="#cb1-31"></a>    = physicalDevice.getProperties();</span>
+<span id="cb1-32"><a href="#cb1-32"></a></span>
+<span id="cb1-33"><a href="#cb1-33"></a>  <span><span>int</span></span> score = <span><span>0</span></span>;</span>
+<span id="cb1-34"><a href="#cb1-34"></a></span>
+<span id="cb1-35"><a href="#cb1-35"></a>  <span><span>if</span></span> (   deviceProperties.deviceType</span>
+<span id="cb1-36"><a href="#cb1-36"></a>      == vk::PhysicalDeviceType::eDiscreteGpu)</span>
+<span id="cb1-37"><a href="#cb1-37"></a>  {</span>
+<span id="cb1-38"><a href="#cb1-38"></a>    score += <span><span>1000</span></span>;  <span></span></span>
+<span id="cb1-39"><a href="#cb1-39"></a>  }</span>
+<span id="cb1-40"><a href="#cb1-40"></a></span>
+<span id="cb1-41"><a href="#cb1-41"></a>  <span><span>if</span></span> (!deviceFeatures.geometryShader) {</span>
+<span id="cb1-42"><a href="#cb1-42"></a>    <span><span>return</span></span> <span><span>0</span></span>;       <span></span></span>
+<span id="cb1-43"><a href="#cb1-43"></a>  }</span>
+<span id="cb1-44"><a href="#cb1-44"></a></span>
+<span id="cb1-45"><a href="#cb1-45"></a>}</span></code></pre></div>
+</details>
+<p>With a physical device you can create a <strong>logical device</strong>.</p>
+<p>Physical devices represent the GPU, and logical devices are what you use to create resources and access <strong>queues</strong>.</p>
+<p>Keeping the logical device separate from the physical device is also useful because it allows you to have multiple logical devices, each with their state and resources, for a single physical device. One example of where this would be useful is if you had a Vulkan rendering application that also used a UI Toolkit (also running on Vulkan) that was completely separate. They’d each need their own logical devices to operate, but they’re both using the same physical device.</p>
+<p>Logical device creation is also where you create queues.</p>
+<h2 id="making-stuff-happen">Making Stuff Happen</h2>
+<p><strong><em>Queues, Command Buffers, and Render Passes</em></strong></p>
+<p>A queue is a list of commands that the GPU executes.</p>
+<p>Each queue can only have certain types of commands (some can have multiple types, others just one), and this is specified when a queue is created.</p>
+<p>The four types of queue operations are:</p>
+<ul>
+<li><strong>Graphics</strong> —&gt; Drawing the vertices of a model</li>
+<li><strong>Compute</strong> —&gt; Ray tracing, cloth simulation</li>
+<li><strong>Transfer</strong> —&gt; Loading textures and buffers</li>
+<li><strong>Sparse</strong> —&gt; Loading part of a ‘mega-texture’</li>
+</ul>
+<p>A physical device will give you access to several queues of different <strong>queue families</strong>, and when you create a queue it will be an index to a queue of a matching queue family on the device. Queue families are queues that have the same properties as one another (e.g.&nbsp;perform both graphics and compute operations).</p>
+<p>Commands are submitted to queues by first recording a series of commands into a command buffer and then submitting the entire command buffer to a queue with <code>vk::Queue::submit()</code>.</p>
+<p>Note: Ideally you should reuse command buffers, but generally you can re-record them every frame without a large performance hit, and it makes some things easier (e.g.&nbsp;sending uniform buffers to shaders).</p>
+<p>Also, you can submit multiple command buffers to a single queue. One reason why this is useful is that it <em>can</em> allow you to ensure that one set of commands from a command buffer completes execution before another command buffer in the queue starts (more on this later).</p>
+<p>Finally, commands recorded in command buffers can perform:</p>
+<ul>
+<li><strong>Actions</strong> —&gt; draw, dispatch, clear, copy, query operations etc</li>
+<li><strong>State setting</strong> —&gt; bind pipelines / buffers, push constants etc</li>
+<li><strong>Synchronization</strong> —&gt; set / wait events, pipeline barriers etc</li>
+</ul>
+<p>Some commands perform just one of these tasks, while others do several. A <strong>render pass</strong> is needed to execute certain commands, including drawing.</p>
+<h3 id="render-passes">Render Passes</h3>
+<p>A render pass consists of one or more <strong>subpasses</strong>, along with several <strong>framebuffers</strong>. Framebuffers represent a series of memory attachments (e.g.&nbsp;color, depth etc) that each subpass can read from and write to.</p>
+<p>A command in a subpass might write to a color buffer, which will allow for later subpasses / render passes to read from it. This allows for techniques like deferred rendering.</p>
+<figure>
+<img src="https://learnopengl.com/img/advanced-lighting/deferred_g_buffer.png" alt=""><figcaption>Color attachments after initial render pass in deferred rendering (LearnOpenGL)</figcaption>
+</figure>
+<p>Deferred rendering is a story for another day, but the gist of it is that you can store most of the geometry information in an initial render pass, and <em>defer</em> expensive rendering operations like lighting for later.</p>
+<details>
+<summary><b> Example code for recording to a command buffer and render pass </b></summary>
+<div id="cb2"><pre><code><span id="cb2-1"><a href="#cb2-1"></a><span></span></span>
+<span id="cb2-2"><a href="#cb2-2"></a>vk::CommandBuffer cmd;</span>
+<span id="cb2-3"><a href="#cb2-3"></a></span>
+<span id="cb2-4"><a href="#cb2-4"></a><span></span></span>
+<span id="cb2-5"><a href="#cb2-5"></a>cmd.begin(vk::CommandBufferBeginInfo());</span>
+<span id="cb2-6"><a href="#cb2-6"></a>cmd.beginRenderPass(vk::RenderPassBeginInfo();</span>
+<span id="cb2-7"><a href="#cb2-7"></a></span>
+<span id="cb2-8"><a href="#cb2-8"></a><span></span></span>
+<span id="cb2-9"><a href="#cb2-9"></a>cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);</span>
+<span id="cb2-10"><a href="#cb2-10"></a></span>
+<span id="cb2-11"><a href="#cb2-11"></a><span></span></span>
+<span id="cb2-12"><a href="#cb2-12"></a>cmd.bindVertexBuffers(<span><span>0</span></span>, <span><span>1</span></span>, vertexBuffers, offsets);</span>
+<span id="cb2-13"><a href="#cb2-13"></a></span>
+<span id="cb2-14"><a href="#cb2-14"></a><span></span></span>
+<span id="cb2-15"><a href="#cb2-15"></a>cmd.draw(vertices.size(), <span><span>1</span></span>, <span><span>0</span></span>, <span><span>0</span></span>);</span>
+<span id="cb2-16"><a href="#cb2-16"></a></span>
+<span id="cb2-17"><a href="#cb2-17"></a><span></span></span>
+<span id="cb2-18"><a href="#cb2-18"></a>cmd.beginRenderPass(vk::RenderPassBeginInfo();</span>
+<span id="cb2-19"><a href="#cb2-19"></a>cmd.end();</span></code></pre></div>
+</details>
+<p>Last thing! Some commands that perform actions (e.g.&nbsp;draw vertices) do so based on the current state (e.g.&nbsp;the currently bound array of vertices) set by commands since the start of the command buffer. This means that in the above code example, <code>cmd.draw()</code> will operate on the current state set by <code>cmd.bindVertex()</code> in the previous line. This “synchronization guarantee”, that one command will finish executing before the next one starts, is usually not true.</p>
+<h2 id="synchronization">Synchronization</h2>
+<p>GPUs are optimized for operation throughput, and because of this (with a few exceptions) <strong><em>commands are not executed in the order they were recorded in.</em></strong> The first command that performs an action in a command buffer isn’t guaranteed to finish executing before the last action command in that buffer. The first command buffer submitted to a queue won’t necessarily finish any commands before a later command buffer starts. The same thing applies to command buffers submitted on different queues and multiple subpasses.</p>
+<p>At places the Vulkan spec is confusing on this topic, but the TL;DR is that this is true unless a <strong>synchronization object</strong> is used (or with state setting commands within a single command buffer).</p>
+<p>There are a few different types of synchronization objects:</p>
+<ul>
+<li><p><strong>Fences</strong> (GPU to CPU sync) —&gt; EX: ensure there are only two rendered frames at a time in the swap chain (i.e.&nbsp;double buffering)</p></li>
+<li><p><strong>Semaphores</strong> (GPU to GPU sync across queues) —&gt; EX: wait for frame to finish rendering before presenting it</p></li>
+<li><p><strong>Barriers</strong> (Synch within a command buffer / pipeline) –&gt; EX: start compute shader execution as soon as the vertex shader is finished</p></li>
+<li><p><strong>Subpass Dependencies</strong> (Synch between subpasses) –&gt; EX: wait for the normal and albedo attachments to complete before starting the lighting rendering subpass.</p></li>
+</ul>
+<p>Synchronization is closely tied to the <strong>graphics pipeline.</strong></p>
+<h2 id="the-graphics-pipeline">The Graphics Pipeline</h2>
+<p>The graphics pipeline is what takes the meshes and textures of 3D models (along with other information) and turns them into pixels on your 2D screen. Each stage of the graphics pipeline operates on the output of the previous stage.</p>
+<p>There are two types of stages in the graphics pipeline: fixed-functions and shaders.</p>
+<p><strong>Fixed-functions</strong> complete operations that can be tweaked with parameters, but the way they work is predefined. Anything in the graphics pipeline that isn’t a shader is a fixed function.</p>
+<p><strong>Shaders</strong> are user-created programs that execute in the graphics pipeline. They can read from input variables (e.g.&nbsp;position of vertex / fragment / light) and run on GPUs, which are great at parallel computing tasks such as applying the same lighting rule for every one of the 2 million pixels on your screen or rotating a 3D model with thousands of vertices.</p>
+<figure>
+<img src="https://www.researchgate.net/profile/Rodrigo_Toledo/publication/262317607/figure/fig1/AS:296710707400714@1447752753953/Results-from-different-shader-examples-In-the-first-line-there-are-some-basic-examples.png" alt=""><figcaption>A single 3D model with different shaders applied to it can look very different (Rodrigo Toledo)</figcaption>
+</figure>
+<p>A simplified overview of the graphics pipeline consists of 7 stages:</p>
+<ol type="1">
+<li><p><strong>Input Assembler:</strong> Collects the raw vertex data from specified buffers. Optionally, an index buffer can be used to repeat certain elements without duplicating vertex data.</p></li>
+<li><p><strong>Vertex Shader:</strong> Runs on every vertex and passes per-vertex data down the graphics pipeline. Usually applies transformations to vertices, and converts from model space to screen space.</p></li>
+<li><p><strong>Tessellation Shader:</strong> Optional. Runs on arrays of vertices (“patches”) and subdivides them into smaller primitives.</p></li>
+<li><p><strong>Geometry Shader:</strong> Optional. Runs on every primitive (triangle, line, point) and can discard or output more primitives. This stage is often not used because its performance isn’t great on most graphics cards.</p></li>
+<li><p><strong>Rasterization:</strong> Discretizes the primitives into fragments (the data necessary to generate a pixel). Fragments that fall outside the screen and fragments that are behind other primitives are discarded.</p></li>
+<li><p><strong>Fragment Shader:</strong> Runs on every fragment and determines its color, depth value, and which framebuffer the fragment is written to. Often uses interpolated data from the vertex shader such as surface normals to apply lighting.</p></li>
+<li><p><strong>Color Blending:</strong> Applies operations to mix different fragments that map to the same pixel in the framebuffer. Fragments can overwrite each other, or be mixed based on transparency.</p></li>
+</ol>
+<h3 id="shader-modules">Shader Modules</h3>
+<p>Unlike OpenGL, shader code in Vulkan has to be in a bytecode format called SPIR-V, as opposed to human-readable syntax like GLSL.</p>
+<p>The advantage of using a bytecode format is that the compilers to turn shader code into native GPU code are significantly less complex. This leads to SPIR-V shader code being more reliable across GPU vendors.</p>
+<p>However, shaders are still commonly written in GLSL, and later compiled to SPIR-V using a tool called <code>glslc</code> (included in the Vulkan SDK). SPIR-V can be passed to the graphics pipeline by reading the bytecode, and then wrapping it in a <code>vk::ShaderModule</code> object, which specifies the entry point function in the shader, and assigning it to a specific stage of the graphics.</p>
+<h2 id="presentation-time">Presentation Time</h2>
+<p><strong><em>Swap Chains and Window Surfaces</em></strong></p>
+<p>We’ve done all of this work to render an image, now we need to present that image to a <strong>window surface</strong> from the <strong>swap chain</strong>.</p>
+<p>A window surface allows you to interact with platform specific display systems.</p>
+<p>A swap chain is an array of at least two presentable images. The first image is the screenbuffer, which is the image presented to the screen, and later images are backbuffers. If you don’t use a backbuffer and directly send new images to the screenbuffer, image tearing (where the top portion of the screen contains the old image and the bottom portion contains the old image) will occur while the monitor is refreshing.</p>
+<figure>
+<img src="https://www.syncfusion.com/books/Direct2D_Succinctly/Images/12.png" alt=""><figcaption>Image tearing caused by directly sending images to the screenbuffer (Direct2D Succinctly)</figcaption>
+</figure>
+<p>Using a screenbuffer and a single backbuffer is known as a <em>double buffer</em>. This technique prevents image tearing.</p>
+<h2 id="rendering-a-triangle">Rendering a Triangle</h2>
+<p>To bring it all together, in a Vulkan application:</p>
+<ul>
+<li><p>We start by creating an instance, a physical device, and a logical device.</p></li>
+<li><p>Commands are recorded in command buffers and render passes, which are submitted to queues. The GPU goes through the queues and executes the commands in them</p></li>
+<li><p>To guarantee that certain commands occur after other commands finish executing, synchronization objects have to be used.</p></li>
+<li><p>Some commands are involved with stages in the graphics pipeline, which can either be shaders or fixed functions, and turns 3D data into a 2D image</p></li>
+<li><p>Finally, the window surface presents images from a swap chain to the screen</p></li>
+</ul>
+<!-- TODO Create flow chart that mirrors the above recap. [Images in Mermaid][003] -->
+<p>That’s why rendering a triangle is complicated.</p>
+<hr>
+<p>Feel free to contact me on <a href="https://twitter.com/LiamHinzman">Twitter</a>. Feedback and comments are appreciated :)</p>
+        </div>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

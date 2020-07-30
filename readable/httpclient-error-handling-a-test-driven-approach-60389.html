@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+HttpClient - Error handling, a test driven approach - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="HttpClient - Error handling, a test driven approach - linksfor.dev(s)"/>
+    <meta property="og:description" content="Shows how to handle a bunch of different tricky scenarios when dealing with HttpClient.  Error handling, deserialization, timeouts...I&#x27;ve got you covered."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://josef.codes/httpclient-error-handling-a-test-driven-approach/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - HttpClient - Error handling, a test driven approach</title>
+<div class="readable">
+        <h1>HttpClient - Error handling, a test driven approach</h1>
+            <div>Reading time: 31-40 minutes</div>
+        <div>Posted here: 04 Apr 2020</div>
+        <p><a href="https://josef.codes/httpclient-error-handling-a-test-driven-approach/">https://josef.codes/httpclient-error-handling-a-test-driven-approach/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article>
+
+<section>
+<div>
+<h2 id="intro">Intro</h2>
+<p>When I wrote my last blog post about HttpClient (<a href="https://josef.codes/you-are-probably-still-using-httpclient-wrong-and-it-is-destabilizing-your-software/">You're (probably still) using HttpClient wrong and it is destabilizing your software</a>) I promised to do a post about error handling since I intentionally left that out.</p>
+<p>This post will be somewhat of a journey, we will start with some happy path code where error handling is non existent and (hopefully) end up in a much better place.</p>
+<p>One note before we start, the code in this post will use a class called <strong>Result</strong>. Think about it as something like a <a href="https://en.wikipedia.org/wiki/Monad_(functional_programming)">monad</a>, <a href="https://enterprisecraftsmanship.com/posts/functional-c-handling-failures-input-errors/">Vladimir Khorikov has a great post on this topic.</a><br>
+I've used a modified version of this Result class <strong>for years</strong> with great success in a lot of different projects. It has a few benefits in my opinion:</p>
+<ol>
+<li>You don't need to rely on exceptions.</li>
+<li>You are forced to think about (and handle) failures.</li>
+<li>It makes the code a lot easier to read.</li>
+</ol>
+<p>Simple example:</p>
+<pre><code><span>var</span> result <span>=</span> <span>await</span> _something<span>.</span><span>GetData</span><span>(</span><span>)</span><span>;</span>
+
+<span>if</span> <span>(</span>result<span>.</span>Success<span>)</span>
+<span>{</span>
+    <span>return</span> result<span>.</span>Data<span>;</span>
+<span>}</span>
+<span>else</span> <span>if</span><span>(</span>result<span>.</span>Retryable<span>)</span>
+<span>{</span>
+   
+<span>}</span>
+<span>else</span>
+<span>{</span>
+   
+   _logger<span>.</span><span>LogError</span><span>(</span>result<span>.</span>Message<span>,</span> result<span>.</span>Errors<span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h2 id="anoteaboutpolly">A note about <a href="https://github.com/App-vNext/Polly">Polly</a></h2>
+<p>Polly is a great tool that will help you dealing with timeouts, exceptions, retries and so on when using HttpClient. I've choosen <strong>NOT</strong> to use Polly in this post, simply because I believe that it's important to understand what happens behind the scenes of such a library before using it. I will do a follow up on this post where I use Polly, don't worry. :)</p>
+<h2 id="theproblem">The problem</h2>
+<p>We want to fetch some information about a GitHub repository from some (imaginary) API. The API is really unstable and we need to handle all of the different errors.<br>
+This is the code we have to work with, let's call it...</p>
+<h3 id="thehappypath">...The Happy Path.</h3>
+<pre><code><span>public</span> <span>class</span> <span>GithubHttpClient</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>HttpClient</span> _httpClient<span>;</span>
+
+    <span>public</span> <span>GithubHttpClient</span><span>(</span><span>HttpClient</span> httpClient<span>)</span>
+    <span>{</span>
+        _httpClient <span>=</span> httpClient <span>??</span> <span>throw</span> <span>new</span> <span>ArgumentNullException</span><span>(</span><span>nameof</span><span>(</span>httpClient<span>)</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>)</span>
+    <span>{</span>
+        <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+        <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>)</span><span>)</span>
+        <span>{</span>
+            <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+            <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Nice, we've some code. It will send a GET request to the API, read the JSON from the response, deserialize it and return the result, GREAT.<br>
+Let's write a test and verify that everything works as it should.</p>
+<h4 id="test">Test</h4>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenSuccessfulResponseFromGitHub_WhenGetRepository_ThenReturnsOkResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> responseBody <span>=</span> <span>new</span> <span>GitHubRepositoryDto</span>
+    <span>{</span>
+        Id <span>=</span> <span>1</span><span>,</span>
+        Name <span>=</span> <span>"jos.httpclient"</span><span>,</span>
+        Stars <span>=</span> <span>999999</span><span>,</span>
+        Url <span>=</span> <span>"<a href="https://github.com/joseftw/jos.httpclient">https://github.com/joseftw/jos.httpclient</a>"</span>
+    <span>}</span><span>;</span>
+    <span>var</span> apiResponse <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>OK<span>)</span>
+    <span>{</span>
+        Content <span>=</span> <span>new</span> <span>StringContent</span><span>(</span>JsonConvert<span>.</span><span>SerializeObject</span><span>(</span>responseBody<span>)</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>apiResponse<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeTrue</span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test SUCCEEDED.</p>
+<p>So, what are we doing here?<br>
+We are creating a <code>HttpResponseMessage</code> with status code 200 OK and a body that contains a successful response from the API. We then create a new <code>HttpClient</code> with the overload that takes a <code>HttpMessageHandler</code>. The <code>MockedHttpMessageHandler</code> looks like this:</p>
+<p><strong>MockedHttpMessageHandler</strong></p>
+<pre><code><span>public</span> <span>class</span> <span>MockedHttpMessageHandler</span> <span>:</span> <span>HttpMessageHandler</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> Func<span>&lt;</span>Task<span>&lt;</span>HttpResponseMessage<span>&gt;&gt;</span> _responseFactory<span>;</span>
+    <span>private</span> <span>readonly</span> <span>HttpResponseMessage</span> _httpResponseMessage<span>;</span>
+
+    <span>public</span> <span>MockedHttpMessageHandler</span><span>(</span><span>HttpResponseMessage</span> httpResponseMessage<span>)</span>
+    <span>{</span>
+        _httpResponseMessage <span>=</span> httpResponseMessage<span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>MockedHttpMessageHandler</span><span>(</span>Func<span>&lt;</span>Task<span>&lt;</span>HttpResponseMessage<span>&gt;&gt;</span> responseFactory<span>)</span>
+    <span>{</span>
+        _responseFactory <span>=</span> responseFactory <span>??</span> <span>throw</span> <span>new</span> <span>ArgumentNullException</span><span>(</span><span>nameof</span><span>(</span>responseFactory<span>)</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>protected</span> <span>override</span> <span>async</span> Task<span>&lt;</span>HttpResponseMessage<span>&gt;</span> <span>SendAsync</span><span>(</span><span>HttpRequestMessage</span> request<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span>
+    <span>{</span>
+        cancellationToken<span>.</span><span>ThrowIfCancellationRequested</span><span>(</span><span>)</span><span>;</span>
+        <span>if</span> <span>(</span>_responseFactory <span>!=</span> <span>null</span><span>)</span>
+        <span>{</span>
+            <span>return</span> <span>await</span> _responseFactory<span>.</span><span>Invoke</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span>
+
+        <span>return</span> _httpResponseMessage<span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>This allows us to control what the HttpClient methods returns.</p>
+<p>Let's add another test that verifies that the the deserialization of the data works as well.</p>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenSuccessfulResponseFromGitHub_WhenGetRepository_ThenReturnsSaidRepository</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> responseBody <span>=</span> <span>new</span> <span>GitHubRepositoryDto</span>
+    <span>{</span>
+        Id <span>=</span> <span>1</span><span>,</span>
+        Name <span>=</span> <span>"jos.httpclient"</span><span>,</span>
+        Stars <span>=</span> <span>999999</span><span>,</span>
+        Url <span>=</span> <span>"<a href="https://github.com/joseftw/jos.httpclient">https://github.com/joseftw/jos.httpclient</a>"</span>
+    <span>}</span><span>;</span>
+    <span>var</span> apiResponse <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>OK<span>)</span>
+    <span>{</span>
+        Content <span>=</span> <span>new</span> <span>StringContent</span><span>(</span>JsonConvert<span>.</span><span>SerializeObject</span><span>(</span>responseBody<span>)</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>apiResponse<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Data<span>.</span>Id<span>.</span><span>ShouldBe</span><span>(</span><span>1</span><span>)</span><span>;</span>
+    result<span>.</span>Data<span>.</span>Name<span>.</span><span>ShouldBe</span><span>(</span><span>"jos.httpclient"</span><span>)</span><span>;</span>
+    result<span>.</span>Data<span>.</span>Url<span>.</span><span>ShouldBe</span><span>(</span><span>"<a href="https://github.com/joseftw/jos.httpclient">https://github.com/joseftw/jos.httpclient</a>"</span><span>)</span><span>;</span>
+    result<span>.</span>Data<span>.</span>Stars<span>.</span><span>ShouldBe</span><span>(</span><span>999999</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h3 id="letsfocusonerrors">Let's focus on errors.</h3>
+<h4 id="nullresponsecontent">Null response content</h4>
+<p>What happens if the response content is null?</p>
+<h5 id="test">Test</h5>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenNullResponseContent_WhenGetRepository_ThenReturnsFailResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> response <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>OK<span>)</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>response<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Response from SendAsync was null"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test FAILED.<br>
+The test failed because of a <code>NullReferenceException</code>.<br>
+We are calling <code>ReadAsStringAsync</code> on the response content which is null, not good.</p>
+<h5 id="fix">Fix</h5>
+<p><strong>GitHubClient</strong></p>
+<pre><code><span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>)</span><span>)</span>
+    <span>{</span>
+        <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+        <span>{</span>
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+        <span>}</span>
+
+        <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+        <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>We've added a check, if response.Content is null, we return a Fail result.</p>
+<h4 id="emptyresponsebody">Empty response body</h4>
+<p>What happens if the response content is empty?</p>
+<h5 id="test">Test</h5>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenEmptyResponseContent_WhenGetRepository_ThenReturnsFailResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> response <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>OK<span>)</span>
+    <span>{</span>
+        Content <span>=</span> <span>new</span> <span>StringContent</span><span>(</span><span>string</span><span>.</span>Empty<span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>response<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test FAILED.<br>
+The test fails because...success is TRUE. (??)<br>
+Here's why:</p>
+<pre><code><span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+</code></pre>
+<p>We are passing an empty string to the DeserializeObject method, it will return null. We will come back to how to handle deserialization errors later, for now, let's just fix our code.</p>
+<h5 id="fix">Fix</h5>
+<pre><code><span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>)</span><span>)</span>
+    <span>{</span>
+        <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+        <span>{</span>
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+        <span>}</span>
+
+        <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+        <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+        <span>if</span> <span>(</span>repository <span>==</span> <span>null</span><span>)</span>
+        <span>{</span>
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+        <span>}</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>We've now added a null check, if repository is null, we return a Fail result.</p>
+<h4 id="exceptions">Exceptions</h4>
+<p>What happens if we encounter some exceptions when calling the API?</p>
+<h5 id="test">Test</h5>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenExceptionWhenCallingTheApi_WhenGetRepository_ThenReturnsRetryResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span><span>(</span><span>)</span> <span>=&gt;</span> <span>throw</span> <span>new</span> <span>HttpRequestException</span><span>(</span><span>"Boom from test"</span><span>)</span><span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeTrue</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Exception when calling the API"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test FAILED.<br>
+Turns out we are not handling exceptions at all, what a shocker.</p>
+<h5 id="fix">Fix</h5>
+<pre><code><span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>try</span>
+    <span>{</span>
+        <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>)</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+            <span>{</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+            <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+            <span>if</span> <span>(</span>repository <span>==</span> <span>null</span><span>)</span>
+            <span>{</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+            <span>}</span>
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>HttpRequestException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>Exception</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+        
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+     <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Here I've choosen to wrap everything in a try/catch. If an <code>HttpRequestException</code> happens, we choose to return a <code>Retry</code> Result.</p>
+<p>If it's not an <code>HttpRequestException</code>, we choose to return a <code>Fail</code> Result. Here it's really up to you as a developer to make a choice, either you choose to return some kind of result (fail/retry) or you just log and throw it, it's up to you.</p>
+<p>I've also added a test for exceptions != <code>HttpRequestException</code>:</p>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenExceptionWhenCallingTheApi_WhenGetRepository_ThenReturnsRetryResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span><span>(</span><span>)</span> <span>=&gt;</span> <span>throw</span> <span>new</span> <span>Exception</span><span>(</span><span>"Boom from test"</span><span>)</span><span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>Great, we are now handling all kinds of exceptions, <strong>surely we must be done now?</strong>.<br>
+Nope, let's move on to...</p>
+<h4 id="statuscodes">...Status codes</h4>
+<p>If a project doesn't exists, the API will return a 404 with a different JSON body.<br>
+The body will look like this:</p>
+<pre><code><span>{</span>
+    <span>"error"</span><span>:</span> <span>"The repository was not found"</span>
+<span>}</span>
+</code></pre>
+<p>Do we handle that already?</p>
+<h4 id="test">Test</h4>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenNotFoundResponseFromTheApi_WhenGetRepository_ThenReturnsFailResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> response <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>NotFound<span>)</span>
+    <span>{</span>
+        Content <span>=</span> <span>new</span> <span>StringContent</span><span>(</span><span>"{"error": "The repository was not found"}"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>response<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"The repository was not found"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test FAILED because <code>Success</code> is...true?!</p>
+<p>Turns out, our extremely naive deserialization strikes again. The deserialized repository is not null now, it's infact an instance of <code>GitHubRepositoryDto</code> where all properties have their default value.<br>
+That's bad.<br>
+We are still going to cover deserialization later, so let's just fix the code for now.</p>
+<h5 id="fix">Fix</h5>
+<p>We only want to deserialize to a <code>GitHubRepositoryDto</code> if the response status code is <code>200 OK</code>. If not, we will return a fail result.</p>
+<pre><code><span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>try</span>
+    <span>{</span>
+        <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>)</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>OK<span>)</span>
+            <span>{</span>
+                <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+                <span>}</span>
+
+                <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+                <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+                <span>if</span> <span>(</span>repository <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+                <span>}</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+            <span>}</span>
+
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>NotFound
+                <span>?</span> <span>"The repository was not found"</span>
+                <span>:</span> <span>"Did not receive 200 OK status code"</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>HttpRequestException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>Exception</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+        
+         <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>I've added a check, if status code == 200 OK, then we deserialize. If not, we return a fail result. This is really naive and will be improved later in this post.</p>
+<h4 id="retryablestatuscodes">Retryable status codes</h4>
+<p>Right now, if we receive a status code that is not 200 OK, we return a Result.Fail result. But what if we receive a 500? 503? 408 and so on? If we recieve a status code that is worth retrying later on, I want to handle that by returning a Result.Retry.</p>
+<h5 id="test">Test</h5>
+<pre><code><span>[</span><span>Theory</span><span>]</span>
+<span>[</span><span>InlineData</span><span>(</span>HttpStatusCode<span>.</span>InternalServerError<span>)</span><span>]</span>
+<span>[</span><span>InlineData</span><span>(</span>HttpStatusCode<span>.</span>GatewayTimeout<span>)</span><span>]</span>
+<span>[</span><span>InlineData</span><span>(</span>HttpStatusCode<span>.</span>RequestTimeout<span>)</span><span>]</span>
+<span>[</span><span>InlineData</span><span>(</span>HttpStatusCode<span>.</span>BadGateway<span>)</span><span>]</span>
+<span>[</span><span>InlineData</span><span>(</span>HttpStatusCode<span>.</span>TooManyRequests<span>)</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenRetryableStatusCode_WhenGetRepository_ThenReturnsRetryResult</span><span>(</span><span>HttpStatusCode</span> statusCode<span>)</span>
+<span>{</span>
+    <span>var</span> response <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>statusCode<span>)</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>response<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeTrue</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span>$<span>"Received retryable status code '{statusCode}'"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test FAILED because <code>Retryable</code> == false.</p>
+<h5 id="fix">Fix</h5>
+<pre><code><span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>try</span>
+    <span>{</span>
+        <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>)</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>OK<span>)</span>
+            <span>{</span>
+                <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+                <span>}</span>
+
+                <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+                <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+                <span>if</span> <span>(</span>repository <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+                <span>}</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>if</span> <span>(</span>RetryableStatusCodes<span>.</span><span>Contains</span><span>(</span>response<span>.</span>StatusCode<span>)</span><span>)</span>
+            <span>{</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span>$<span>"Received retryable status code '{response.StatusCode}'"</span><span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>NotFound
+                <span>?</span> <span>"The repository was not found"</span>
+                <span>:</span> <span>"Did not receive 200 OK status code"</span><span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span>
+        <span>catch</span> <span>(</span><span>HttpRequestException</span> exception<span>)</span>
+        <span>{</span>
+            _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+        <span>}</span>
+        <span>catch</span> <span>(</span><span>Exception</span> exception<span>)</span>
+        <span>{</span>
+            _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+            
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+        <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Here I've introduced a <code>HashSet&lt;HttpStatusCode&gt;</code> and added a few status codes. If the set contains the response status code, I return Result.Retry.</p>
+<h4 id="timeouts">Timeouts</h4>
+<p>What about timeouts? What happens if we can't get a response in reasonable time?<br>
+The default timeout for HttpClient is 100 seconds. In our case, that is NOT reasonable (quite frankly, I don't think it's ever reasonable...).<br>
+A more reasonable timeout would be something like 2-3 seconds in our case.</p>
+<p>When a timeout occours, HttpClient throws a <code>TimeoutException</code>, so we will mimic the behaviour by throwing the exception from our <code>MockedHttpMessageHandler</code>.</p>
+<h5 id="test">Test</h5>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenTimeoutFromHttpClient_WhenGetRepository_ThenReturnsRetryResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span><span>(</span><span>)</span> <span>=&gt;</span> <span>throw</span> <span>new</span> <span>TimeoutException</span><span>(</span><span>"Timeout from test"</span><span>)</span><span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span><span>,</span>
+        Timeout <span>=</span> TimeSpan<span>.</span><span>FromMilliseconds</span><span>(</span><span>100</span><span>)</span> 
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeTrue</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"TimeoutException during call to API"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test FAILED because <code>Retryable</code> == false.</p>
+<h5 id="fix">Fix</h5>
+<pre><code><span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>try</span>
+    <span>{</span>
+        <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>)</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>OK<span>)</span>
+            <span>{</span>
+                <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+                <span>}</span>
+
+                <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+                <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+                <span>if</span> <span>(</span>repository <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+                <span>}</span>
+
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>if</span> <span>(</span>RetryableStatusCodes<span>.</span><span>Contains</span><span>(</span>response<span>.</span>StatusCode<span>)</span><span>)</span>
+            <span>{</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span>$<span>"Received retryable status code '{response.StatusCode}'"</span><span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>NotFound
+                    <span>?</span> <span>"The repository was not found"</span>
+                    <span>:</span> <span>"Did not receive 200 OK status code"</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>HttpRequestException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>TimeoutException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"TimeoutException during call to API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"TimeoutException during call to API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>Exception</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+        
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Now we are catching <code>TimeoutException</code> and return a <code>Retry</code> result.</p>
+<h4 id="cancellationtokentimeouts">CancellationToken "timeouts"</h4>
+<p>Since we are working with async code we <strong>SHOULD</strong> be using <code>CancellationTokens</code> so let's add that.<br>
+Our <code>GetRepository</code>method will now look like this:</p>
+<p><code>public async Task&lt;Result&lt;GitHubRepositoryDto&gt;&gt; GetRepository(int id, CancellationToken cancellationToken)</code></p>
+<p>We are also passing the <code>CancellationToken</code> to the HttpClient <code>SendAsync</code> method.</p>
+<h5 id="test">Test</h5>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenCanceledCancellationToken_WhenGetRepository_ThenReturnsRetryResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> response <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>OK<span>)</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>response<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> cancelledCancellationToken <span>=</span> <span>new</span> <span>CancellationToken</span><span>(</span><span>true</span><span>)</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>,</span> cancelledCancellationToken<span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeTrue</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Task was canceled during call to API"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<pre><code><span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenTaskCanceledException_WhenGetRepository_ThenReturnsRetryResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span><span>(</span><span>)</span> <span>=&gt;</span> <span>throw</span> <span>new</span> <span>TaskCanceledException</span><span>(</span><span>"canceled from test"</span><span>)</span><span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GithubHttpClient</span><span>(</span>httpClient<span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>,</span> CancellationToken<span>.</span>None<span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeTrue</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Task was canceled during call to API"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Tests FAILED.</p>
+<p>The tests failed because <code>Retryable</code> == false.<br>
+Note that we added 2 tests here, one that passes in a canceled <code>CancellationToken</code> and one that throws a <code>TaskCanceledException</code>. The reason for doing this is that our <code>MockedHttpMessageHandler</code> (and the standard one used by HttpClient afaik) uses this code:</p>
+<p><code>cancellationToken.ThrowIfCancellationRequested() </code></p>
+<p>That code throws a <code>OperationCanceledException</code>. But there is also a posibility that some code throws a <code>TaskCanceledException</code> instead, so we want to handle both cases.</p>
+<h5 id="fix">Fix</h5>
+<pre><code><span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>try</span>
+    <span>{</span>
+        <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>,</span> cancellationToken<span>)</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>OK<span>)</span>
+            <span>{</span>
+                <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+                <span>}</span>
+
+                <span>var</span> responseJson <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+                <span>var</span> repository <span>=</span> JsonConvert<span>.</span><span><span>DeserializeObject</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseJson<span>)</span><span>;</span>
+                <span>if</span> <span>(</span>repository <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+                <span>}</span>
+
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>repository<span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>if</span> <span>(</span>RetryableStatusCodes<span>.</span><span>Contains</span><span>(</span>response<span>.</span>StatusCode<span>)</span><span>)</span>
+            <span>{</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span>$<span>"Received retryable status code '{response.StatusCode}'"</span><span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>NotFound
+                    <span>?</span> <span>"The repository was not found"</span>
+                    <span>:</span> <span>"Did not receive 200 OK status code"</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>HttpRequestException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>TimeoutException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"TimeoutException during call to API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"TimeoutException during call to API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>OperationCanceledException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Task was canceled during call to API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"Task was canceled during call to API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>Exception</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+        
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Now we are catching <code>OperationCanceledException</code> and return a <code>Retry</code> result. <code>TaskCanceledException</code> inherits from <code>OperationCanceledException</code>.</p>
+<h4 id="deserialization">Deserialization</h4>
+<p>Some might have noticed that we are deserializing the http response to a string. That is not best practices and goes against my previous post <a href="https://josef.codes/you-are-probably-still-using-httpclient-wrong-and-it-is-destabilizing-your-software/">You're (probably still) using HttpClient wrong and it is destabilizing your software</a>. I choosed to do that because I wanted to keep the examples simple. But now the time has come to tackle deserialization in a better way. I will create a deserializer (based on Newtonsoft) and inject it instead of using the static api. Here's what it will look like:</p>
+<p><strong>IJsonSerializer</strong></p>
+<pre><code><span>public</span> <span>interface</span> <span>IJsonSerializer</span>
+<span>{</span>
+    Task<span>&lt;</span>Result<span>&lt;</span>T<span>&gt;&gt;</span> <span><span>TryDeserializeAsync</span><span>&lt;</span><span>T</span><span>&gt;</span></span><span>(</span><span>Stream</span> streamContent<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span><span>;</span>
+    Task<span>&lt;</span>T<span>&gt;</span> <span><span>DeserializeAsync</span><span>&lt;</span><span>T</span><span>&gt;</span></span><span>(</span><span>Stream</span> stream<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p><strong>MyJsonSerializer</strong></p>
+<pre><code><span>public</span> <span>class</span> <span>MyJsonSerializer</span> <span>:</span> <span>IJsonSerializer</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>JsonSerializer</span> _jsonSerializer<span>;</span>
+    <span>public</span> <span>MyJsonSerializer</span><span>(</span><span>)</span>
+    <span>{</span>
+        _jsonSerializer <span>=</span> <span>new</span> <span>JsonSerializer</span> <span>{</span> ContractResolver <span>=</span> JsonSerializerSettings<span>.</span>ContractResolver <span>}</span><span>;</span>
+    <span>}</span>
+    <span>public</span> <span>static</span> <span>readonly</span> <span>JsonSerializerSettings</span> JsonSerializerSettings <span>=</span> <span>new</span> <span>JsonSerializerSettings</span>
+    <span>{</span>
+        ContractResolver <span>=</span> <span>new</span> <span>CamelCasePropertyNamesContractResolver</span><span>(</span><span>)</span>
+    <span>}</span><span>;</span>
+
+    <span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>T<span>&gt;&gt;</span> <span><span>TryDeserializeAsync</span><span>&lt;</span><span>T</span><span>&gt;</span></span><span>(</span><span>Stream</span> streamContent<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span> <span>where</span> T <span>:</span> <span>class</span>
+    <span>{</span>
+        <span>try</span>
+        <span>{</span>
+            <span>var</span> result <span>=</span> <span>await</span> <span><span>DeserializeAsync</span><span>&lt;</span><span>T</span><span>&gt;</span></span><span>(</span>streamContent<span>,</span> cancellationToken<span>)</span><span>;</span>
+            <span>return</span> Result<span>&lt;</span>T<span>&gt;</span><span>.</span><span>Ok</span><span>(</span>result<span>)</span><span>;</span>
+        <span>}</span>
+        <span>catch</span> <span>(</span><span>Exception</span> e<span>)</span>
+        <span>{</span>
+            <span>return</span> Result<span>&lt;</span>T<span>&gt;</span><span>.</span><span>Fail</span><span>(</span>e<span>.</span>Message<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    <span>public</span> <span>async</span> Task<span>&lt;</span>T<span>&gt;</span> <span><span>DeserializeAsync</span><span>&lt;</span><span>T</span><span>&gt;</span></span><span>(</span><span>Stream</span> stream<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span>
+    <span>{</span>
+        <span>using</span> <span>(</span><span>var</span> streamReader <span>=</span> <span>new</span> <span>StreamReader</span><span>(</span>stream<span>)</span><span>)</span>
+        <span>using</span> <span>(</span><span>var</span> jsonReader <span>=</span> <span>new</span> <span>JsonTextReader</span><span>(</span>streamReader<span>)</span><span>)</span>
+        <span>{</span>
+            <span>var</span> loaded <span>=</span> <span>await</span> JToken<span>.</span><span>LoadAsync</span><span>(</span>jsonReader<span>,</span> cancellationToken<span>)</span><span>;</span>
+            <span>return</span> loaded<span>.</span><span><span>ToObject</span><span>&lt;</span><span>T</span><span>&gt;</span></span><span>(</span>_jsonSerializer<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<h5 id="test">Test</h5>
+<pre><code>
+<span>[</span><span>Fact</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenDeserializationError_WhenGetRepository_ThenReturnsFailResult</span><span>(</span><span>)</span>
+<span>{</span>
+    <span>var</span> response <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>OK<span>)</span>
+    <span>{</span>
+        Content <span>=</span> <span>new</span> <span>StringContent</span><span>(</span><span>"invalid json"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>response<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GitHubHttpClient</span><span>(</span>httpClient<span>,</span> faultyDeserializer<span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>,</span> CancellationToken<span>.</span>None<span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>Test FAILED.<br>
+This test obviously failed because we are not using the <code>MyJsonSerializer</code> yet.</p>
+<h5 id="fix">Fix</h5>
+<pre><code>
+<span>public</span> <span>async</span> Task<span>&lt;</span>Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;&gt;</span> <span>GetRepository</span><span>(</span><span>int</span> id<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span>
+<span>{</span>
+    <span>var</span> request <span>=</span> <span>new</span> <span>HttpRequestMessage</span><span>(</span>HttpMethod<span>.</span>Get<span>,</span> $<span>"api/v1/repositories/{id}"</span><span>)</span><span>;</span>
+    <span>try</span>
+    <span>{</span>
+        <span>using</span> <span>(</span><span>var</span> response <span>=</span> <span>await</span> _httpClient<span>.</span><span>SendAsync</span><span>(</span>request<span>,</span> cancellationToken<span>)</span><span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>OK<span>)</span>
+            <span>{</span>
+                <span>if</span> <span>(</span>response<span>.</span>Content <span>==</span> <span>null</span><span>)</span>
+                <span>{</span>
+                    <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Response content was null"</span><span>)</span><span>;</span>
+                <span>}</span>
+
+                <span>var</span> responseStream <span>=</span> <span>await</span> response<span>.</span>Content<span>.</span><span>ReadAsStreamAsync</span><span>(</span><span>)</span><span>;</span>
+                <span>var</span> deserializationResult <span>=</span> <span>await</span> _jsonDeserializer<span>.</span><span><span>TryDeserializeAsync</span><span>&lt;</span><span>GitHubRepositoryDto</span><span>&gt;</span></span><span>(</span>responseStream<span>,</span> cancellationToken<span>)</span><span>;</span>
+
+                <span>return</span> deserializationResult<span>.</span>Success
+                        <span>?</span> deserializationResult
+                        <span>:</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span>$<span>"Failed to deserialize stream to {nameof(GitHubRepositoryDto)}"</span><span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>if</span> <span>(</span>RetryableStatusCodes<span>.</span><span>Contains</span><span>(</span>response<span>.</span>StatusCode<span>)</span><span>)</span>
+            <span>{</span>
+                <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span>$<span>"Received retryable status code '{response.StatusCode}'"</span><span>)</span><span>;</span>
+            <span>}</span>
+
+            <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span>response<span>.</span>StatusCode <span>==</span> HttpStatusCode<span>.</span>NotFound
+                    <span>?</span> <span>"The repository was not found"</span>
+                    <span>:</span> <span>"Did not receive 200 OK status code"</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>HttpRequestException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"HttpRequestException when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>TimeoutException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"TimeoutException during call to API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"TimeoutException during call to API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>OperationCanceledException</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Task was canceled during call to API"</span><span>)</span><span>;</span>
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Retry</span><span>(</span><span>"Task was canceled during call to API"</span><span>)</span><span>;</span>
+    <span>}</span>
+    <span>catch</span> <span>(</span><span>Exception</span> exception<span>)</span>
+    <span>{</span>
+        _logger<span>.</span><span>LogError</span><span>(</span>exception<span>,</span> <span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+        
+        <span>return</span> Result<span>&lt;</span>GitHubRepositoryDto<span>&gt;</span><span>.</span><span>Fail</span><span>(</span><span>"Unhandled exception when calling the API"</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>We've now replaced the static deserialization call with my new deserializer. Note that we're able to directly return the deserialization result since the <code>TryDeserializeAsync</code> has the same signature as the <code>GetRepository</code> method.</p>
+<p>Great, we're now asynchronously deserializing the response...</p>
+<p>...but how do we handle the following responses?</p>
+<pre><code><span>{</span><span>}</span>
+</code></pre>
+<p>or just an empty response like in our example earlier?</p>
+<pre><code><span>[</span><span>Theory</span><span>]</span>
+<span>[</span><span>InlineData</span><span>(</span><span>""</span><span>)</span><span>]</span>
+<span>[</span><span>InlineData</span><span>(</span><span>"{}"</span><span>)</span><span>]</span>
+<span>public</span> <span>async</span> <span>Task</span> <span>GivenInvalidJsonResponse_WhenGetRepository_ThenReturnsFailResult</span><span>(</span><span>string</span> responseJson<span>)</span>
+<span>{</span>
+    <span>var</span> response <span>=</span> <span>new</span> <span>HttpResponseMessage</span><span>(</span>HttpStatusCode<span>.</span>OK<span>)</span>
+    <span>{</span>
+        Content <span>=</span> <span>new</span> <span>StringContent</span><span>(</span>responseJson<span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> httpClient <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span><span>new</span> <span>MockedHttpMessageHandler</span><span>(</span>response<span>)</span><span>)</span>
+    <span>{</span>
+        BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"<a href="http://localhost/">http://localhost</a>"</span><span>)</span>
+    <span>}</span><span>;</span>
+    <span>var</span> sut <span>=</span> <span>new</span> <span>GitHubHttpClient</span><span>(</span>httpClient<span>,</span> <span>new</span> <span>MyJsonDeserializer</span><span>(</span><span>)</span><span>,</span> _fakeLogger<span>)</span><span>;</span>
+
+    <span>var</span> result <span>=</span> <span>await</span> sut<span>.</span><span>GetRepository</span><span>(</span><span>1</span><span>,</span> CancellationToken<span>.</span>None<span>)</span><span>;</span>
+
+    result<span>.</span>Success<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Retryable<span>.</span><span>ShouldBeFalse</span><span>(</span><span>)</span><span>;</span>
+    result<span>.</span>Message<span>.</span><span>ShouldBe</span><span>(</span><span>"Failed to deserialize response"</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<h5 id="outcome">Outcome</h5>
+<p>The test that passes an empty string succeeds, but the test passing <code>{}</code> fails.</p>
+<p>The deserialization still does not think that the empty object is a problem and will happily<br>
+create a new <code>GitHubRepositoryDto</code>instance.</p>
+<h5 id="fix">Fix</h5>
+<pre><code><span>public</span> <span>class</span> <span>GitHubRepositoryDto</span>
+<span>{</span>
+    <span>public</span> <span>GitHubRepositoryDto</span><span>(</span><span>int</span><span>?</span> id<span>,</span> <span>string</span> name<span>,</span> <span>string</span> url<span>,</span> <span>int</span><span>?</span> stars<span>)</span>
+    <span>{</span>
+        Id <span>=</span> id <span>??</span> <span>throw</span> <span>new</span> <span>ArgumentNullException</span><span>(</span><span>nameof</span><span>(</span>id<span>)</span><span>)</span><span>;</span>
+        Name <span>=</span> name <span>??</span> <span>throw</span> <span>new</span> <span>ArgumentNullException</span><span>(</span><span>nameof</span><span>(</span>name<span>)</span><span>)</span><span>;</span>
+        Url <span>=</span> url <span>??</span> <span>throw</span> <span>new</span> <span>ArgumentNullException</span><span>(</span><span>nameof</span><span>(</span>url<span>)</span><span>)</span><span>;</span>
+        Stars <span>=</span> stars <span>??</span> <span>throw</span> <span>new</span> <span>ArgumentNullException</span><span>(</span><span>nameof</span><span>(</span>stars<span>)</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>int</span> Id <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> Name <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> Url <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>int</span> Stars <span>{</span> <span>get</span><span>;</span> <span>}</span>
+<span>}</span>
+</code></pre>
+<p>By removing the setters and adding a constructor to the <code>GitHubRepositoryDto</code> we can add some simple "validation" to the dto. This is also why I'm still using Newtonsoft instead of <code>System.Text.Json</code>, as far as I know, <code>System.Text.Json</code> does not currently support this.</p>
+<p>If we now run the test again, both passes.</p>
+<h2 id="finalthoughts">Final thoughts</h2>
+<p>Some of you might think "DAMN that's <strong>a lot</strong> of code for just handling some simple http calls". Well, as you've seen, there's <strong>a lot</strong> of different things that can (and will) go wrong when dealing with http.</p>
+<p>Also if you look at the code in <code>GitHubHttpClient</code>, it's really easy to make it generic and move it to some kind of <code>BaseHttpClient</code> and reuse it (just replace <code>GitHubRepositoryDto</code> with T). Usually I create a <code>BaseHttpClient</code> with different virtual methods so I can choose to override specific behaviour for different integrations, since no integration ever looks the same... :)</p>
+<p>I'm NOT using <code>HttpCompletionOption.ResponseHeadersRead</code> in this post simply because I came across the <a href="https://github.com/dotnet/runtime/issues/31259">following bug report</a>. It boils down to that the <code>ReadAsStringAsync</code>, <code>ReadAsStreamAsync</code> and <code>ReadAsByteArrayAsync</code> does not provide <code>CancellationToken</code> support and can deadlock in combination with <code>ResponseHeadersRead</code>. It will be fixed in .NET 5.</p>
+<p>Thank you for reading!</p>
+
+</div>
+</section>
+
+
+</article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

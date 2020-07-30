@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Duracellko.NET - Hosting both Blazor Server and WebAssembly in single website - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Duracellko.NET - Hosting both Blazor Server and WebAssembly in single website - linksfor.dev(s)"/>
+    <meta property="og:description" content="Welcome to Duracellko.NET"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://www.duracellko.net/posts/2020/06/hosting-both-blazor-server-and-webassembly"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Duracellko.NET - Hosting both Blazor Server and WebAssembly in single website</title>
+<div class="readable">
+        <h1>Duracellko.NET - Hosting both Blazor Server and WebAssembly in single website</h1>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 01 Jul 2020</div>
+        <p><a href="http://www.duracellko.net/posts/2020/06/hosting-both-blazor-server-and-webassembly">http://www.duracellko.net/posts/2020/06/hosting-both-blazor-server-and-webassembly</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+                        <div>
+                                <div id="content">
+                                        
+
+<p><a href="https://blazor.net/">Blazor</a> framework supports 2 types of hosting and running of Blazor application. Blazor Server runs application on server inside ASP.NET Core application and only exchanges HTML fragments and events with client. And Blazor WebAssembly runs application completely inside web browser and in some cases does not need server at all. What if you want to use both models in the same application and run different type based on client device type.</p>
+<p>After using <a href="https://github.com/duracellko/planningpoker4azure">Planning Poker</a> application I noticed that application startup time on (especially low-end) mobile is much longer than on PC. For example opening the page on my notebook is less than half second, but loading on my Nokia 6.1 takes about 4-5 seconds. After startup the application runs smoothly, but startup is slow unfortunately.</p>
+<p>Let's discuss what are advantages and disadvantages of each hosting model.</p>
+<p><strong>Blazor WebAssembly</strong> advantages:</p>
+<ul>
+<li>Application does not consume server resources.</li>
+<li>Application is still responsive, when connection to server is lost.</li>
+<li>Application responses faster to user input, because it does not require server round-trip.</li>
+</ul>
+<p><strong>Blazor Server</strong> advantages:</p>
+<ul>
+<li>Application does not need to be loaded to client, and thus startup time can be much faster.</li>
+<li>Application can run on browsers without WebAssembly support.</li>
+</ul>
+<p>So I asked myself: Would it be possible to take advantages of WebAssembly on PC and serve Blazor Server on mobile for faster startup? Yes, it would.</p>
+
+<p><a href="https://docs.microsoft.com/en-us/aspnet/core/blazor/templates?view=aspnetcore-3.1">Blazor WebAssembly template</a> is much better starting point, because it already splits implementation into 3 projects: server, client, and shared. However, the template must be used with hosting parameter to create server application too.</p>
+<pre><code>dotnet <span>new</span> blazorwasm -ho -o BlazorApp1
+</code></pre>
+<p>The Planning Poker application implements multiple services like <code>MessageBoxService</code> (displays a message to user) or <code>PlanningPokerClient</code> (access web services on server using HttpClient). These services should be registered in Dependency Injection container. This should be done in a public static method, because registration must be done on client and on server.</p>
+<pre><code><span>public</span> <span>static</span> <span>class</span> <span>Startup</span>
+{
+    <span><span>public</span> <span>static</span> <span>void</span> <span>ConfigureServices</span>(<span>IServiceCollection services, <span>bool</span> serverSide = <span>false</span></span>)
+    </span>{
+        
+        <span>if</span> (!serverSide)
+        {
+            services.AddScoped&lt;IPlanningPokerUriProvider, PlanningPokerUriProvider&gt;();
+        }
+
+        services.AddScoped&lt;IPlanningPokerClient, PlanningPokerClient&gt;();
+
+        services.AddScoped&lt;MessageBoxService&gt;();
+        services.AddScoped&lt;IMessageBoxService&gt;(p =&gt; p.GetRequiredService&lt;MessageBoxService&gt;());
+    }
+}
+</code></pre>
+<p>No service can be registered as singleton. In Blazor WebAssembly there is no difference between <code>AddScoped</code> and <code>AddSingleton</code>, but in Blazor Server singleton object would be shared by all clients connected to server.</p>
+<p>And then it is possible to call <code>ConfigureServices</code> from <code>Main</code> function.</p>
+<pre><code><span>public</span> <span>class</span> <span>Program</span>
+{
+    <span><span>public</span> <span>static</span> <span>async</span> Task <span>Main</span>(<span><span>string</span>[] args</span>)
+    </span>{
+        <span>var</span> builder = WebAssemblyHostBuilder.CreateDefault(args);
+        builder.RootComponents.Add&lt;App&gt;(<span>"app"</span>);
+
+        builder.Services.AddTransient(sp =&gt; <span>new</span> HttpClient { BaseAddress = <span>new</span> Uri(builder.HostEnvironment.BaseAddress) });
+        Startup.ConfigureServices(builder.Services, <span>false</span>);
+
+        <span>await</span> builder.Build().RunAsync();
+    }
+}
+</code></pre>
+
+<h2 id="index-razor-page">Index Razor Page</h2>
+<p>First step is to make index page dynamic. Blazor WebAssembly template generates static <code>index.html</code> page that loads Blazor application. However, the index page must be dynamic, because it is different for mobile and PC. Therefore <code>Home.cshtml</code> Razor Page must be created in server project and can look like this.</p>
+<pre><code>@page
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+@model Duracellko.PlanningPoker.Web.Model.HomeModel
+@{
+    Layout = <span>null</span>;
+}
+
+&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+    &lt;meta charset=<span>"utf-8"</span> /&gt;
+    &lt;meta name=<span>"viewport"</span> content=<span>"width=device-width, initial-scale=1"</span>&gt;
+    &lt;title&gt;Scrum Planning Poker&lt;/title&gt;
+    &lt;<span>base</span> href=<span>"/"</span> /&gt;
+    &lt;!-- Link CSS here --&gt;
+    &lt;link href=<span>"Content/Site.css"</span> rel=<span>"stylesheet"</span> /&gt;
+&lt;/head&gt;
+&lt;body&gt;
+    &lt;app&gt;
+        @<span>if</span> (Model.UseServerSide)
+        {
+            @(<span>await</span> Html.RenderComponentAsync&lt;Duracellko.PlanningPoker.Client.App&gt;(RenderMode.Server))
+        }
+        <span>else</span>
+        {
+            &lt;span <span>class</span>=<span>"oi oi-loop-circular"</span>&gt;&lt;/span&gt; &lt;span&gt;Loading...&lt;/span&gt;
+        }
+    &lt;/app&gt;
+
+    &lt;div id=<span>"blazor-error-ui"</span> <span>class</span>=<span>"alert alert-warning alert-dismissible"</span> role=<span>"alert"</span>&gt;
+        &lt;p&gt;
+            &lt;environment include=<span>"Staging,Production"</span>&gt;
+                An error has occurred. This application may no longer respond until reloaded.
+            &lt;/environment&gt;
+            &lt;environment include=<span>"Development"</span>&gt;
+                An unhandled exception has occurred. See browser dev tools <span>for</span> details.
+            &lt;/environment&gt;
+        &lt;/p&gt;
+        &lt;button type=<span>"button"</span> <span>class</span>=<span>"reload btn btn-warning"</span>&gt;Reload&lt;/button&gt;
+        &lt;button type=<span>"button"</span> <span>class</span>=<span>"dismiss close"</span> aria-label=<span>"Dismiss"</span>&gt;
+            &lt;span aria-hidden=<span>"true"</span>&gt;&amp;times;&lt;/span&gt;
+        &lt;/button&gt;
+    &lt;/div&gt;
+
+    &lt;!-- Load required JavaScript here --&gt;
+    &lt;script src=<span>"Scripts/PlanningPoker.js"</span>&gt;&lt;/script&gt;
+    @<span>if</span> (Model.UseServerSide)
+    {
+        &lt;script src=<span>"_framework/blazor.server.js"</span>&gt;&lt;/script&gt;
+    }
+    <span>else</span>
+    {
+        &lt;script src=<span>"_framework/blazor.webassembly.js"</span>&gt;&lt;/script&gt;
+    }
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre>
+<p>The page is very similar to <code>index.html</code>. And based on value <code>HomeModel.UseServerSide</code> it renders HTML to use Blazor Server or WebAssembly.</p>
+<p><code>index.html</code> should be deleted now.</p>
+<p>And <code>HomeModel</code> class can look like this.</p>
+<pre><code><span>public</span> <span>class</span> <span>HomeModel</span> : <span>PageModel</span>
+{
+    
+    
+    <span>private</span> <span>const</span> <span>string</span> MobileUserAgentPattern = <span>@"(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino"</span>;
+
+    <span>public</span> <span>bool</span> UseServerSide =&gt; IsMobileBrowser;
+
+    <span>private</span> <span>bool</span> IsMobileBrowser
+    {
+        <span>get</span>
+        {
+            <span>var</span> userAgent = Request.Headers[HeaderNames.UserAgent].ToString();
+            <span>if</span> (<span>string</span>.IsNullOrEmpty(userAgent))
+            {
+                <span>return</span> <span>false</span>;
+            }
+
+            <span>try</span>
+            {
+                <span>var</span> timeout = TimeSpan.FromMilliseconds(<span>200</span>);
+                <span>return</span> Regex.IsMatch(userAgent, MobileUserAgentPattern, RegexOptions.IgnoreCase | RegexOptions.Multiline, timeout);
+            }
+            <span>catch</span> (TimeoutException)
+            {
+                
+                <span>return</span> <span>false</span>;
+            }
+        }
+    }
+}
+</code></pre>
+<p>The class parses User Agent string and tries to detect if client is mobile device or not. The code is based on web site <a href="http://detectmobilebrowsers.com/">detectmobilebrowsers.com</a>. Then the application uses Blazor Server, when client device is mobile.</p>
+<h2 id="configure-asp.net-core-server">Configure ASP.NET Core Server</h2>
+<p>Next step is to configure ASP.NET Core application to serve both:</p>
+<ul>
+<li>Blazor Server Hub</li>
+<li>Blazor WebAssembly static files</li>
+</ul>
+<p>This is configured in <code>Startup</code> class:</p>
+<pre><code><span>public</span> <span>class</span> <span>Startup</span>
+{
+    <span><span>public</span> <span>Startup</span>(<span>IConfiguration configuration</span>)
+    </span>{
+        Configuration = configuration;
+    }
+
+    <span>public</span> IConfiguration Configuration { <span>get</span>; }
+
+    <span><span>public</span> <span>void</span> <span>ConfigureServices</span>(<span>IServiceCollection services</span>)
+    </span>{
+        services.AddMvc()
+            .AddNewtonsoftJson();
+
+        
+
+        services.AddServerSideBlazor();
+        services.AddSingleton&lt;HttpClient&gt;();
+        services.AddSingleton&lt;PlanningPokerServerUriProvider&gt;();
+        services.AddSingleton&lt;Client.Service.IPlanningPokerUriProvider&gt;(sp =&gt; sp.GetRequiredService&lt;PlanningPokerServerUriProvider&gt;());
+        services.AddSingleton&lt;IHostedService, HttpClientSetupService&gt;();
+
+        
+        Client.Startup.ConfigureServices(services, <span>true</span>);
+    }
+
+    <span><span>public</span> <span>void</span> <span>Configure</span>(<span>IApplicationBuilder app, IWebHostEnvironment env</span>)
+    </span>{
+        <span>if</span> (env.IsDevelopment())
+        {
+            app.UseDeveloperExceptionPage();
+            app.UseWebAssemblyDebugging();
+        }
+
+        app.UseStaticFiles();
+        app.UseBlazorFrameworkFiles();
+
+        app.UseRouting();
+
+        app.UseEndpoints(endpoints =&gt;
+        {
+            endpoints.MapControllers();
+            endpoints.MapBlazorHub();
+            endpoints.MapFallbackToPage(<span>"/Home"</span>);
+        });
+    }
+}
+</code></pre>
+<p><code>Startup</code> class registers following services:</p>
+<ul>
+<li><code>AddMvc</code> to serve Web API used by the application and especially <strong>Home</strong> Razor page.</li>
+<li><code>AddServerSideBlazor</code> to run Blazor Server infrastructure.</li>
+<li><code>HttpClient</code> and other services, which are used by the the application. This will be explained in next section.</li>
+</ul>
+<p>And following middlewares:</p>
+<ol>
+<li><code>UseStaticFiles</code> to serve static files like *.css or *.js files.</li>
+<li><code>UseBlazorFrameworkFiles</code> to serve Blazor static files like <code>blazor.server.js</code> or <code>blazor.webassembly.js</code> and application assemblies loaded in WebAssembly.</li>
+<li><code>MapControllers</code> in endpoints to serve Web API used by the application.</li>
+<li><code>MapBlazorHub</code> endpoint to serve Blazor Server endpoint.</li>
+<li><code>MapFallbackToPage("/Home")</code> to serve home page, when URL is not found. This is in case, when URL should be handled by Blazor page component, but browser needs to start Blazor infrastructure by loading Home page first.</li>
+</ol>
+<h2 id="configuring-httpclient">Configuring HttpClient</h2>
+<p>The application uses <code>HttpClient</code> to call server Web API. In Blazor WebAssembly the HttpClient is configured directly in <code>Main</code> method.</p>
+<pre><code>builder.Services.AddTransient(sp =&gt; <span>new</span> HttpClient { BaseAddress = <span>new</span> Uri(builder.HostEnvironment.BaseAddress) });
+</code></pre>
+<p>So the base address of the HttpClient is setup to URL of home page. Blazor framework initializes it from browser <code>window.location</code> or something similar.</p>
+<p>However, it is not that simple in server. Blazor Server application should call Web API on itself. However, when registering HttpClient in Startup class, the application is not started yet and the URL is not known. Especially when it is configured to listen on random available TCP port.</p>
+<p>At first it is necessary to register <code>HttpClient</code> as service. Notice it is registered as singleton. This is general recommendation in <a href="https://aspnetmonsters.com/2016/08/2016-08-27-httpclientwrong/">You're using HttpClient wrong</a>. Actually newer recommendation is to use <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/http-requests?view=aspnetcore-3.1">IHttpClientFactory</a> to handle DNS changes. However, the application is connecting to itself using "localhost" and there is no DNS involved. So singleton HttpClient is good enough.</p>
+<pre><code>services.AddSingleton&lt;HttpClient&gt;();
+services.AddSingleton&lt;IHostedService, HttpClientSetupService&gt;();
+</code></pre>
+<p>Next registered service is <code>HttpClientSetupService</code>. <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services?view=aspnetcore-3.1">IHostedService</a> can implement a background task in ASP.NET Core application. HttpClientSetupService is very simple service that waits until web server is started, then finds first URL of the server and configures <code>HttpClient.BaseAddress</code>.</p>
+<pre><code><span>public</span> <span>class</span> <span>HttpClientSetupService</span> : <span>BackgroundService</span>
+{
+    <span>private</span> <span>readonly</span> HttpClient _httpClient;
+    <span>private</span> <span>readonly</span> IServer _server;
+    <span>private</span> <span>readonly</span> IHostApplicationLifetime _applicationLifetime;
+
+    <span><span>public</span> <span>HttpClientSetupService</span>(<span>
+        HttpClient httpClient,
+        IServer server,
+        IHostApplicationLifetime applicationLifetime</span>)
+    </span>{
+        _httpClient = httpClient ?? <span>throw</span> <span>new</span> ArgumentNullException(<span>nameof</span>(httpClient));
+        _server = server ?? <span>throw</span> <span>new</span> ArgumentNullException(<span>nameof</span>(server));
+        _applicationLifetime = applicationLifetime ?? <span>throw</span> <span>new</span> ArgumentNullException(<span>nameof</span>(applicationLifetime));
+    }
+
+    <span><span>protected</span> <span>override</span> Task <span>ExecuteAsync</span>(<span>CancellationToken stoppingToken</span>)
+    </span>{
+        <span>var</span> applicationStartedToken = _applicationLifetime.ApplicationStarted;
+        <span>if</span> (applicationStartedToken.IsCancellationRequested)
+        {
+            ConfigureHttpClient();
+        }
+        <span>else</span>
+        {
+            applicationStartedToken.Register(ConfigureHttpClient);
+        }
+
+        <span>return</span> Task.CompletedTask;
+    }
+
+    <span><span>private</span> <span>void</span> <span>ConfigureHttpClient</span>(<span></span>)
+    </span>{
+        <span>var</span> serverAddresses = _server.Features.Get&lt;IServerAddressesFeature&gt;();
+        <span>var</span> address = serverAddresses.Addresses.FirstOrDefault();
+        <span>if</span> (address == <span>null</span>)
+        {
+            
+            address = <span>"http://localhost:5000"</span>;
+        }
+        <span>else</span>
+        {
+            address = address.Replace(<span>"*"</span>, <span>"localhost"</span>, StringComparison.Ordinal);
+            address = address.Replace(<span>"+"</span>, <span>"localhost"</span>, StringComparison.Ordinal);
+            address = address.Replace(<span>"[::]"</span>, <span>"localhost"</span>, StringComparison.Ordinal);
+        }
+
+        <span>var</span> baseUri = <span>new</span> Uri(address);
+        _httpClient.BaseAddress = baseUri;
+    }
+}
+</code></pre>
+
+<p>Now it is possible to test the behavior. Start the application and open it in browser. Open browser Developer tools and open <strong>Network</strong> tab. There should be <code>blazor.webassembly.js</code> in list of loaded files. This indicates running Blazor WebAssembly.</p>
+<p><img src="http://www.duracellko.net/images/posts/2020/06/BlazorWebAssembly.png" alt="Blazor WebAssembly in browser"></p>
+<p>Now click button to switch to mobile mode and reload the application. There should be <code>blazor.server.js</code> in list of loaded files. This indicates running Blazor Server.</p>
+<p><img src="http://www.duracellko.net/images/posts/2020/06/BlazorWebServer.png" alt="Blazor Server in browser"></p>
+
+
+
+                                </div>
+                        </div>
+                </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Understanding F# applicatives and custom operators - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Understanding F# applicatives and custom operators - linksfor.dev(s)"/>
+    <meta property="og:description" content="After discussing something with Ian Russell he suggested I take some time to read through another fine blog post he has written and understand F# applicatives and custom operators.  I found myself in familiar territory when reading F# blog posts and it&#x2019;s something similar to the five stages of grief. Nod, Nod, I understand what&#x2019;s going on, Umm, WTF is going on.  As Ian did in his Intro to F# series he sets out a simple domain problem and goes about how to address it.  We want to return a ValidatedUser from a function but if the user fails validation we return a list of validation errors.&#xA;&#xA;The code in the blog post was pretty self explanatory until, it wasn&#x2019;t, which I have pasted below:"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.jonathanchannon.com/2020-07-17-understanding-fsharp-applicatives-custom-operators/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Understanding F# applicatives and custom operators</title>
+<div class="readable">
+        <h1>Understanding F# applicatives and custom operators</h1>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 18 Jul 2020</div>
+        <p><a href="https://blog.jonathanchannon.com/2020-07-17-understanding-fsharp-applicatives-custom-operators/">https://blog.jonathanchannon.com/2020-07-17-understanding-fsharp-applicatives-custom-operators/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+        <p>After discussing something with Ian Russell he suggested I take some time to read through another fine <a href="https://www.softwarepark.cc/blog/2019/12/8/functional-validation-in-f-using-applicatives" hidefocus="true">blog post</a> he has written and understand F# applicatives and custom operators.  I found myself in familiar territory when reading F# blog posts and it’s something similar to the five stages of grief. Nod, Nod, I understand what’s going on, Umm, WTF is going on.  As Ian did in his <a href="https://www.softwarepark.cc/blog/2019/9/12/introduction-to-functional-programming-in-f" hidefocus="true">Intro to F#</a> series he sets out a simple domain problem and goes about how to address it.  We want to return a <code>ValidatedUser</code> from a function but if the user fails validation we return a list of validation errors.</p>
+
+<p>The code in the blog post was pretty self explanatory until, it wasn’t, which I have pasted below:</p>
+
+<pre><code><span>type </span><span>UnvalidatedUser</span><span> </span><span>=</span><span> </span><span>{</span><span>
+    </span><span>Name</span><span> </span><span>:</span><span> </span><span>string</span><span>
+    </span><span>Email</span><span> </span><span>:</span><span> </span><span>string</span><span>
+    </span><span>DateOfBirth</span><span> </span><span>:</span><span> </span><span>string</span><span>
+</span><span>}</span><span>
+
+type </span><span>ValidatedUser</span><span> </span><span>=</span><span> </span><span>{</span><span>   
+    </span><span>Name</span><span> </span><span>:</span><span> </span><span>string</span><span>
+    </span><span>Email</span><span> </span><span>:</span><span> </span><span>string</span><span>
+    </span><span>DateOfBirth</span><span> </span><span>:</span><span> </span><span>DateTime</span><span>
+</span><span>}</span><span>
+
+type </span><span>ValidationFailure</span><span> </span><span>=</span><span>
+    </span><span>|</span><span> </span><span>NameIsInvalidFailure</span><span>
+    </span><span>|</span><span> </span><span>EmailIsInvalidFailure</span><span>
+    </span><span>|</span><span> </span><span>DateOfBirthIsInvalidFailure</span><span>
+
+</span><span>let</span><span> </span><span>(|</span><span>ParseRegex</span><span>|</span><span>_</span><span>|)</span><span> regex str </span><span>=</span><span>
+   </span><span>let</span><span> m </span><span>=</span><span> </span><span>Regex</span><span>(</span><span>regex</span><span>).</span><span>Match</span><span>(</span><span>str</span><span>)</span><span>
+   </span><span>if</span><span> m</span><span>.</span><span>Success</span><span> </span><span>then</span><span> </span><span>Some</span><span> </span><span>(</span><span>List</span><span>.</span><span>tail </span><span>[</span><span> </span><span>for</span><span> x </span><span>in</span><span> m</span><span>.</span><span>Groups</span><span> </span><span>-&gt;</span><span> x</span><span>.</span><span>Value</span><span> </span><span>])</span><span>
+   </span><span>else</span><span> </span><span>None</span><span>
+
+</span><span>let</span><span> </span><span>(|</span><span>IsValidName</span><span>|</span><span>_</span><span>|)</span><span> input </span><span>=</span><span>
+    </span><span>if</span><span> input </span><span>&lt;&gt;</span><span> </span><span>String</span><span>.</span><span>Empty</span><span> </span><span>then</span><span> </span><span>Some</span><span> </span><span>()</span><span> </span><span>else</span><span> </span><span>None</span><span>
+
+</span><span>let</span><span> </span><span>(|</span><span>IsValidEmail</span><span>|</span><span>_</span><span>|)</span><span> input </span><span>=</span><span>
+    match input </span><span>with</span><span>
+    </span><span>|</span><span> </span><span>ParseRegex</span><span> </span><span>".*?@(.*)"</span><span> </span><span>[</span><span> _ </span><span>]</span><span> </span><span>-&gt;</span><span> </span><span>Some</span><span> input
+    </span><span>|</span><span> _ </span><span>-&gt;</span><span> </span><span>None</span><span>
+
+</span><span>let</span><span> </span><span>(|</span><span>IsValidDate</span><span>|</span><span>_</span><span>|)</span><span> </span><span>(</span><span>input</span><span>:</span><span>string</span><span>)</span><span> </span><span>=</span><span>
+    </span><span>let</span><span> </span><span>(</span><span>success</span><span>,</span><span> </span><span>value</span><span>)</span><span> </span><span>=</span><span> </span><span>DateTime</span><span>.</span><span>TryParse</span><span>(</span><span>input</span><span>)</span><span>
+    </span><span>if</span><span> success </span><span>then</span><span> </span><span>Some</span><span> </span><span>value</span><span> </span><span>else</span><span> </span><span>None</span><span>
+
+</span><span>let</span><span> validateName input </span><span>=</span><span> </span><span>// string -&gt; Result&lt;string, ValidationFailure list&gt;</span><span>
+    match input </span><span>with</span><span>
+    </span><span>|</span><span> </span><span>IsValidName</span><span> </span><span>-&gt;</span><span> </span><span>Ok</span><span> input
+    </span><span>|</span><span> _ </span><span>-&gt;</span><span> </span><span>Error</span><span> </span><span>[</span><span> </span><span>NameIsInvalidFailure</span><span> </span><span>]</span><span>
+
+</span><span>let</span><span> validateEmail input </span><span>=</span><span> </span><span>// string -&gt; Result&lt;string, ValidationFailure list&gt;</span><span>
+    match input </span><span>with</span><span>
+    </span><span>|</span><span> </span><span>IsValidEmail</span><span> email </span><span>-&gt;</span><span> </span><span>Ok</span><span> email
+    </span><span>|</span><span> _ </span><span>-&gt;</span><span> </span><span>Error</span><span> </span><span>[</span><span> </span><span>EmailIsInvalidFailure</span><span> </span><span>]</span><span>
+
+</span><span>let</span><span> validateDateOfBirth input </span><span>=</span><span> </span><span>// string -&gt; Result&lt;DateTime, ValidationFailure list&gt;</span><span>
+    match input </span><span>with</span><span>
+    </span><span>|</span><span> </span><span>IsValidDate</span><span> dob </span><span>-&gt;</span><span> </span><span>Ok</span><span> dob </span><span>//Add logic for DOB</span><span>
+    </span><span>|</span><span> _ </span><span>-&gt;</span><span> </span><span>Error</span><span> </span><span>[</span><span> </span><span>DateOfBirthIsInvalidFailure</span><span> </span><span>]</span><span>
+
+</span><span>let</span><span> apply fResult xResult </span><span>=</span><span> </span><span>// Result&lt;('a -&gt; 'b), 'c list&gt; -&gt; Result&lt;'a,'c list&gt; -&gt; Result&lt;'b,'c list&gt;</span><span>
+    match fResult</span><span>,</span><span>xResult </span><span>with</span><span>
+    </span><span>|</span><span> </span><span>Ok</span><span> f</span><span>,</span><span> </span><span>Ok</span><span> x </span><span>-&gt;</span><span> </span><span>Ok</span><span> </span><span>(</span><span>f x</span><span>)</span><span>
+    </span><span>|</span><span> </span><span>Error</span><span> ex</span><span>,</span><span> </span><span>Ok</span><span> _ </span><span>-&gt;</span><span> </span><span>Error</span><span> ex
+    </span><span>|</span><span> </span><span>Ok</span><span> _</span><span>,</span><span> </span><span>Error</span><span> ex </span><span>-&gt;</span><span> </span><span>Error</span><span> ex
+    </span><span>|</span><span> </span><span>Error</span><span> ex1</span><span>,</span><span> </span><span>Error</span><span> ex2 </span><span>-&gt;</span><span> </span><span>Error</span><span> </span><span>(</span><span>List</span><span>.</span><span>concat </span><span>[</span><span>ex1</span><span>;</span><span> ex2</span><span>])</span><span>
+
+</span><span>let</span><span> </span><span>(&lt;!&gt;)</span><span> </span><span>=</span><span> </span><span>Result</span><span>.</span><span>map
+</span><span>let</span><span> </span><span>(&lt;*&gt;)</span><span> </span><span>=</span><span> apply
+
+</span><span>let</span><span> create name email dateOfBirth </span><span>=</span><span>
+    </span><span>{</span><span> </span><span>Name</span><span> </span><span>=</span><span> name</span><span>;</span><span> </span><span>Email</span><span> </span><span>=</span><span> email</span><span>;</span><span> </span><span>DateOfBirth</span><span> </span><span>=</span><span> dateOfBirth </span><span>}</span><span>
+
+</span><span>let</span><span> validate </span><span>(</span><span>input</span><span>:</span><span>UnvalidatedUser</span><span>)</span><span> </span><span>:</span><span> </span><span>Result</span><span>&lt;</span><span>ValidatedUser</span><span>,</span><span>ValidationFailure</span><span> list</span><span>&gt;</span><span> </span><span>=</span><span>
+    </span><span>let</span><span> validatedName </span><span>=</span><span> input</span><span>.</span><span>Name</span><span> </span><span>|&gt;</span><span> validateName
+    </span><span>let</span><span> validatedEmail </span><span>=</span><span> input</span><span>.</span><span>Email</span><span> </span><span>|&gt;</span><span> validateEmail
+    </span><span>let</span><span> validatedDateOfBirth </span><span>=</span><span> input</span><span>.</span><span>DateOfBirth</span><span> </span><span>|&gt;</span><span> validateDateOfBirth
+    </span><span>// create validatedName validatedEmail validatedDateOfBirth</span></code></pre>
+
+<p>As you can see, there is commented out code on the last line because he has lined up the 3 arguments that are required to call the <code>create</code> function but calling it as-is won’t work because the function takes in <code>string,string,DateTime</code> and we have <code>Result&lt;string, ValidationFailure list&gt;, Result&lt;string, ValidationFailure list&gt;,Result&lt;DateTime, ValidationFailure list&gt;</code>.  As we know from my <a href="https://blog.jonathanchannon.com/2020-06-28-understanding-fsharp-map-and-bind/" hidefocus="true">previous blog post</a> we can use the <code>Result.map</code> function to do this sort of thing.</p>
+
+<p>I will skip to the solution to this and work backwards because this is where I started to scratch my head a lot! Luckily the F# Software Foundation slack channel helped a lot in particular <a href="https://twitter.com/pblasucci" hidefocus="true">Paul Blasucci</a></p>
+
+<pre><code><span>create
+    </span><span>|&gt;</span><span> </span><span>Result</span><span>.</span><span>map </span><span>&lt;|</span><span> validatedName
+    </span><span>|&gt;</span><span> apply </span><span>&lt;|</span><span> validatedEmail
+    </span><span>|&gt;</span><span> apply </span><span>&lt;|</span><span> validatedDateOfBirth</span></code></pre>
+
+<p>From the <a href="https://blog.jonathanchannon.com/2020-07-17-understanding-fsharp-applicatives-custom-operators/(https://blog.jonathanchannon.com/2020-06-28-understanding-fsharp-map-and-bind/)" hidefocus="true">last blog post</a> I showed how to call functions in a chain of functions where <code>Result</code> types needed to be unwrapped and their values passed to the next function.  So my first thought looking at this was <code>validatedName</code> is a value not a function so how is <code>Result.map</code> working? I also didn’t quite understand the precedence of <code>|&gt;</code> and <code>|&lt;</code> how that worked.  As part of my investigation, or some may say my learning and understanding, I was told Don Syme regretted making the back pipe and that using forward and back pipes together can make code unreadable.  The take away there is to be careful about it’s usage.  The good thing here is that we only have one usage of it but it still didn’t make sense to me.  So I tried to split it up:</p>
+
+<pre><code><span>let</span><span> foo </span><span>=</span><span> create </span><span>|&gt;</span><span> </span><span>Result</span><span>.</span><span>map </span><span>&lt;|</span><span> validatedName</span></code></pre>
+
+<p>I still didn’t quite get it, <code>foo</code> is a type of <code>Result&lt;(string -&gt; DateTime -&gt; ValidatedUser), ValidationFailure list&gt;</code> which means it’s taken the name argument and now wants the email and date of birth passed to it.  I understood partial application but still it didn’t click.  I went back to the <a href="https://blog.jonathanchannon.com/2020-07-17-understanding-fsharp-applicatives-custom-operators/(https://blog.jonathanchannon.com/2020-06-28-understanding-fsharp-map-and-bind/)" hidefocus="true">previous blog post</a> and looked at what the function signature of <code>Result.map</code> is.  It takes in a function and a <code>Result&lt;'a,'b&gt;</code>.  If the <code>Result</code> is <code>OK</code> it calls the passed in function with the unwrapped <code>Result</code> of <code>'a</code> and returns a <code>Result</code> type of <code>Ok(fn a)</code> otherwise it returns <code>Error e</code> Here’s the code for it:</p>
+
+<pre><code><span>let</span><span> map mapping result </span><span>=</span><span> match result </span><span>with</span><span> </span><span>Error</span><span> e </span><span>-&gt;</span><span> </span><span>Error</span><span> e </span><span>|</span><span> </span><span>Ok</span><span> x </span><span>-&gt;</span><span> </span><span>Ok</span><span> </span><span>(</span><span>mapping x</span><span>)</span></code></pre>
+
+<p>I then went back to the line of code after being informed that <code>|&lt;</code> will always get called after <code>|&gt;</code>.  So what we have is <code>create</code> is passed in as the function to call in <code>Result.map</code> and the <code>Result</code> type is the <code>validatedName</code> variable. PARTIAL APPLICATION!!! Ok I get it now!</p>
+
+<p>So once I could see what was happening it was time to understand what the <code>apply</code> function was doing.  The first argument is a <code>Result</code> type whose generic args were a function and a list of validation failures, the second argument was a <code>Result</code> type whose generic args were a value and a list of validation failures. What <code>apply</code> does is match the two Result types together to check for <code>(Ok, Ok)</code> or <code>(Ok, Error)</code> etc and on success call the unwrapped function of the first arg with the unwrapped value of the second arg.</p>
+
+<p>What confused me here was F# compiler magic.  Now I knew about partial application but what I didn’t understand was that when you assign a variable by calling a function using partial application the resulting type is not the result of the function being called. It’s just a type of the function with one less argument to call, the compiler knows when to call the actual function once all arguments have been passed to it.  What the function is doing is chaining argument calls to a partial application function.  So we can see:</p>
+
+<pre><code><span>let</span><span> foo </span><span>=</span><span> create </span><span>|&gt;</span><span> </span><span>Result</span><span>.</span><span>map </span><span>&lt;|</span><span> validatedName </span><span>// Result.map create validatedName</span><span>
+</span><span>let</span><span> bar </span><span>=</span><span> foo </span><span>|&gt;</span><span> apply </span><span>&lt;|</span><span> validatedEmail </span><span>// apply foo validatedEmail</span><span>
+</span><span>let</span><span> baz </span><span>=</span><span> bar </span><span>|&gt;</span><span> apply </span><span>&lt;|</span><span> validatedDateOfBirth </span><span>// apply bar validatedDateOfBirth</span></code></pre>
+
+<p><code>baz</code> now is the final result of a call to execute the <code>create</code> function.</p>
+
+<p>We can then remove the <code>let</code>s above and get to the final solution I mentioned previously:</p>
+
+<pre><code><span>create
+    </span><span>|&gt;</span><span> </span><span>Result</span><span>.</span><span>map </span><span>&lt;|</span><span> validatedName
+    </span><span>|&gt;</span><span> apply </span><span>&lt;|</span><span> validatedEmail
+    </span><span>|&gt;</span><span> apply </span><span>&lt;|</span><span> validatedDateOfBirth</span></code></pre>
+
+<p>As mentioned above it’s advised not to use back pipes and so what we could end up with is :</p>
+
+<pre><code><span>create </span><span>&lt;!&gt;</span><span> validatedName </span><span>&lt;*&gt;</span><span> validatedEmail </span><span>&lt;*&gt;</span><span> validatedDateOfBirth</span></code></pre>
+
+<p>If like me you were totally confused by this then please see Ian’s <a href="https://www.softwarepark.cc/blog/2019/12/8/functional-validation-in-f-using-applicatives" hidefocus="true">blog post</a> for a full explanation but here’s my take away.</p>
+
+<p>As we saw above the apply function takes an <a href="https://fsharpforfunandprofit.com/posts/elevated-world" hidefocus="true">“elevated”</a> function and <a href="https://fsharpforfunandprofit.com/posts/elevated-world" hidefocus="true">“elevated”</a> value and then calls the function with the value and returns an elevated result. So we know in long hand version we have:</p>
+
+<pre><code><span>apply </span><span>(</span><span>apply </span><span>(</span><span>Result</span><span>.</span><span>map create validatedName</span><span>)</span><span> validatedEmail</span><span>)</span><span> validatedDateOfBirth</span></code></pre>
+
+<p>We can also use operators to replace function names to tidy things up so we end up with:</p>
+
+<pre><code><span>let</span><span> </span><span>(&lt;!&gt;)</span><span> </span><span>=</span><span> </span><span>Result</span><span>.</span><span>map
+</span><span>let</span><span> </span><span>(&lt;*&gt;)</span><span> </span><span>=</span><span> apply</span></code></pre>
+
+<p>And we can make the above look like:</p>
+
+<pre><code><span>(&lt;*&gt;)</span><span> </span><span>((&lt;*&gt;)</span><span> </span><span>((&lt;!&gt;)</span><span> create validatedName</span><span>)</span><span> validatedEmail</span><span>)</span><span> validatedDateOfBirth</span></code></pre>
+
+<p>This hopefully all makes sense, but now a slight lesson in math notation which blew my mind.  We know the signature <code>1 + 1 = 2</code>. However, <code>+</code> is actually a function that takes two numbers, so in that regard what you have known since you were aged three should look like <code>+ 1 1</code> if we were to apply common programming signatures.  Interestingly, you could also call the <code>+</code> function like <code>1 1 +</code>.  Where the <code>+</code> sits in the signature is called notation.  Typically programming languages will use “prefix notation” <code>function arg1 arg2</code> and some may use “postfix notation” <code>arg1 arg2 function</code> and arithmetic generally uses “infix notation” <code>arg1 function arg2</code>.  However, in F# you can use “infix notation” which looks like the typical <code>1 + 1</code> signature which is <code>let add x y = x + y</code>. If we replace <code>x + y</code> knowing that the <code>+</code> is the function we can go from “prefix notation” <code>(&lt;!&gt;) create validatedName</code> to “infix notation” <code>create &lt;!&gt; validatedName</code> and apply it to our functions above.  As we apply the calls to our infixed functions what we end up with is:</p>
+
+<pre><code><span>create </span><span>&lt;!&gt;</span><span> validatedName </span><span>&lt;*&gt;</span><span> validatedEmail </span><span>&lt;*&gt;</span><span> validatedDateOfBirth</span></code></pre>
+
+<p>This looks much neater than <code>apply (apply (Result.map create validatedName) validatedEmail) validatedDateOfBirth</code> but it does take a bit of learning and re-thinking to work out how the final solution <code>create &lt;!&gt; validatedName &lt;*&gt; validatedEmail &lt;*&gt; validatedDateOfBirth</code> actually works.  I know this has been quite a learning curve for me but thankfully there are resources, people in the F# community and colleagues (thanks Ian!) that are keen to help and I thank them very much for this!</p>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

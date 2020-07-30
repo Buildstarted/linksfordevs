@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+InnoDB Internals - Consistent Reads - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="InnoDB Internals - Consistent Reads - linksfor.dev(s)"/>
+    <meta property="article:author" content="Yi Zhang"/>
+    <meta property="og:description" content="Overview I&#x2019;ve been doing some research in this area trying to understand how this works in databases (for my upcoming project), so I thought I&#x2019;d share some of my learnings here. InnoDB internally uses ReadView to establish snapshots for consistent reads - basically giving you the point-in-time view of the database at the time when the snapshot it is created. In InnoDB, all changes are immediately made on the latest version of Database regardless whether it has been committed or not, so if you don&#x2019;t have MVCC, everybody will see the latest version of rows and it&#x2019;ll be a disaster for consistency. Not to mention you&#x2019;ll need to be able to rollback the changes. In order to achieve this, InnoDB maintains a undo log to track a link list of changes made by other transactions, so reading in the past with a snapshot means going from the latest record in the BufferPool, and walk backwards to find the first visible change. Rollback is similar. This also means the undo log can&#x2019;t be purged if the snapshot is still active, and undo log will get longer and longer, which slows down the reads more and more. This is the infamous long running transaction issue. The fundamental issue is that you need to be able to determine visibility of changes. This is done with two things: InnoDB tracks the trx_id_t of each rows and in the undo log InnoDB internally use a data structure called ReadView to determine if a transaction is visible in the snapshot. So the algorithm becomes as simple as walking the list backwards and find the first visible record."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://yizhang82.dev/innodb-internals-consistent-reads"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - InnoDB Internals - Consistent Reads</title>
+<div class="readable">
+        <h1>InnoDB Internals - Consistent Reads</h1>
+            <div>by Yi Zhang</div>
+            <div>Reading time: 11-13 minutes</div>
+        <div>Posted here: 22 Jun 2020</div>
+        <p><a href="https://yizhang82.dev/innodb-internals-consistent-reads">https://yizhang82.dev/innodb-internals-consistent-reads</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article id="post-innodb-internals-consistent-reads" class="page" role="article"><header><p> <time datetime="2020-06-18T00:00:00+00:00">18 Jun 2020</time> in <a href="https://yizhang82.dev/category/database/">Database</a> / <span>Innodb</span> / <span>Mvcc</span> / <span>Undo</span> / <span>Mysql</span></p></header><h2 id="overview">Overview <a href="#overview"> <span>Permalink</span> <span></span> </a> </h2><p>I’ve been doing some research in this area trying to understand how this works in databases (for my upcoming project), so I thought I’d share some of my learnings here.</p><p>InnoDB internally uses ReadView to establish snapshots for consistent reads - basically giving you the point-in-time view of the database at the time when the snapshot it is created.</p><p>In InnoDB, all changes are immediately made on the latest version of Database regardless whether it has been committed or not, so if you don’t have MVCC, everybody will see the latest version of rows and it’ll be a disaster for consistency. Not to mention you’ll need to be able to rollback the changes. In order to achieve this, InnoDB maintains a undo log to track a link list of changes made by other transactions, so reading in the past with a snapshot means going from the latest record in the BufferPool, and walk backwards to find the first visible change. Rollback is similar.</p><blockquote><p>This also means the undo log can’t be purged if the snapshot is still active, and undo log will get longer and longer, which slows down the reads more and more. This is the infamous long running transaction issue.</p></blockquote><p>The fundamental issue is that you need to be able to determine visibility of changes. This is done with two things:</p><ol><li>InnoDB tracks the trx_id_t of each rows and in the undo log</li><li>InnoDB internally use a data structure called <code>ReadView</code> to determine if a transaction is visible in the snapshot.</li></ol><p>So the algorithm becomes as simple as walking the list backwards and find the first visible record. <!--more--></p><p>For example - assuming current transaction is <code>6941</code>, and the latest record is made by transaction <code>6999</code>, and the undo log looks as follows:</p><div><div><pre><code>6940 -&gt; 6943 -&gt; 6945 -&gt; 6999
+</code></pre></div></div><p>This link means the row has been modified by <code>6940</code>, <code>6944</code>, <code>6958</code>, <code>6999</code> in order.</p><p>In order to determine visibility, <code>ReadView</code> tracks a upper bound, lower bound and list of active transactions.</p><p>Assuming the system has the following transactions on-going with following trx_id_t: <code>(6943, 6945)</code>, and <code>trx_sys-&gt;max_trx_id=6959</code>:</p><p>ReadView is going to establish the following view for snapshot:</p><table><thead><tr><th>Lowest</th><th>On-going</th><th>Future</th></tr></thead><tbody><tr><td>&lt; 6943</td><td>6943, 6945</td><td>&gt;= 6959 (max_trx_id)</td></tr></tbody></table><p>This implies:</p><ul><li>Any transactions &lt; <code>6943</code> are definitely visible, because they are not active when the snapshot is established, and they have already been committed.</li><li>Any transactions &gt;= <code>6959</code> (inclusive) are future changes that will not been seen by this snapshot.</li><li>Any transactions falling within this range have two possibilities:<ul><li>At the time the snapshot is created, the on-going transactions are <code>6943</code> and <code>6945</code>. These transactions are old transactions and any updates by them are not visible, since they haven’t committed yet</li><li>Otherwise, they have already been committed and should be visible</li></ul></li></ul><p>BTW, in case if you are wondering: the reason <code>6959</code> is inclusive is because max_trx_id is reserved for the next transaction, just as the comment in InnoDB code suggests:</p><div><div><pre><code>  <span>volatile</span> <span>trx_id_t</span> <span>max_trx_id</span><span>;</span> <span>/*!&lt; The smallest number not yet
+                                assigned as a transaction id or
+                                transaction number. This is declared
+                                volatile because it can be accessed
+                                without holding any mutex during
+                                AC-NL-RO view creation. */</span>
+</code></pre></div></div><p>So, looking back at the link list:</p><div><div><pre><code>6940 -&gt; 6943 -&gt; 6945 -&gt; 6999
+</code></pre></div></div><p>We can determine:</p><ul><li>6999 is invisible because it is &gt;= 6959 so belongs to the future (either committed or not committed, doesn’t matter)</li><li>6945 and 6943 are part of on-going transaction at time of snapshot, which means they are old transactions that are not yet committed at the time of snapshot creation (but they did commit later when we read now), so they are also invisible</li><li>6940 is visible because it is less than 6943, so it has already committed in the past and is by definition visible.</li></ul><p>So we should return the record with trx_id_t = <code>6940</code>.</p><p>Let’s look into this process with a bit more detail.</p><h2 id="creating-the-readview">Creating the ReadView <a href="#creating-the-readview"> <span>Permalink</span> <span></span> </a> </h2><p>Whenever you try to read any row in InnoDB with consistent read (as opposed to locking reads, which is another topic that is worth discussing in another article), a ReadView is going to be assigned to the active transaction:</p><div><div><pre><code>  <span>}</span> <span>else</span> <span>if</span> <span>(</span><span>prebuilt</span><span>-&gt;</span><span>select_lock_type</span> <span>==</span> <span>LOCK_NONE</span><span>)</span> <span>{</span>
+    <span>/* This is a consistent read */</span>
+    <span>/* Assign a read view for the query */</span>
+
+    <span>if</span> <span>(</span><span>!</span><span>srv_read_only_mode</span><span>)</span> <span>{</span>
+      <span>trx_assign_read_view</span><span>(</span><span>trx</span><span>);</span>
+    <span>}</span>
+</code></pre></div></div><p>The assignment is rather straight-forward - it it either opens a view from free list or use the existing view if there is one already:</p><div><div><pre><code><span>/** Assigns a read view for a consistent read query. All the consistent reads
+ within the same transaction will get the same read view, which is created
+ when this function is first called for a new started transaction.
+ @return consistent read view */</span>
+<span>ReadView</span> <span>*</span><span>trx_assign_read_view</span><span>(</span><span>trx_t</span> <span>*</span><span>trx</span><span>)</span> <span>/*!&lt; in/out: active transaction */</span>
+<span>{</span>
+  <span>ut_ad</span><span>(</span><span>trx</span><span>-&gt;</span><span>state</span> <span>==</span> <span>TRX_STATE_ACTIVE</span><span>);</span>
+
+  <span>if</span> <span>(</span><span>srv_read_only_mode</span><span>)</span> <span>{</span>
+    <span>ut_ad</span><span>(</span><span>trx</span><span>-&gt;</span><span>read_view</span> <span>==</span> <span>NULL</span><span>);</span>
+    <span>return</span> <span>(</span><span>NULL</span><span>);</span>
+
+  <span>}</span> <span>else</span> <span>if</span> <span>(</span><span>!</span><span>MVCC</span><span>::</span><span>is_view_active</span><span>(</span><span>trx</span><span>-&gt;</span><span>read_view</span><span>))</span> <span>{</span>
+    <span>trx_sys</span><span>-&gt;</span><span>mvcc</span><span>-&gt;</span><span>view_open</span><span>(</span><span>trx</span><span>-&gt;</span><span>read_view</span><span>,</span> <span>trx</span><span>);</span>
+  <span>}</span>
+
+  <span>return</span> <span>(</span><span>trx</span><span>-&gt;</span><span>read_view</span><span>);</span>
+<span>}</span>
+</code></pre></div></div><p>Assuming first time within this transaction, within <code>mvcc::view_open</code>, it calls into <code>ReadView::prepare</code> to setup the boundaries as discussed earlier:</p><div><div><pre><code><span>void</span> <span>ReadView</span><span>::</span><span>prepare</span><span>(</span><span>trx_id_t</span> <span>id</span><span>)</span> <span>{</span>
+  <span>ut_ad</span><span>(</span><span>mutex_own</span><span>(</span><span>&amp;</span><span>trx_sys</span><span>-&gt;</span><span>mutex</span><span>));</span>
+
+  <span>m_creator_trx_id</span> <span>=</span> <span>id</span><span>;</span>
+
+  <span>m_low_limit_no</span> <span>=</span> <span>m_low_limit_id</span> <span>=</span> <span>m_up_limit_id</span> <span>=</span> <span>trx_sys</span><span>-&gt;</span><span>max_trx_id</span><span>;</span>
+
+  <span>if</span> <span>(</span><span>!</span><span>trx_sys</span><span>-&gt;</span><span>rw_trx_ids</span><span>.</span><span>empty</span><span>())</span> <span>{</span>
+    <span>copy_trx_ids</span><span>(</span><span>trx_sys</span><span>-&gt;</span><span>rw_trx_ids</span><span>);</span>
+  <span>}</span> <span>else</span> <span>{</span>
+    <span>m_ids</span><span>.</span><span>clear</span><span>();</span>
+  <span>}</span>
+</code></pre></div></div><p>During <code>copy_trx_ids</code>, <code>m_up_limit_id</code> is assigned to the smallest:</p><div><div><pre><code>  <span>m_up_limit_id</span> <span>=</span> <span>m_ids</span><span>.</span><span>front</span><span>();</span>
+</code></pre></div></div><p>It is perhaps a bit counter-intuitive as they are sort of reversed:</p><ul><li>m_up_limit_id is the lower bound of visible trx_id_t (of transactions)</li><li>m_low_limit_id is the upper bound (exclusive) of visible trx_id_t (of transactions)</li></ul><p>And m_ids is the list of on-going trx_id_t (that are invisible).</p><p>With these knowledge, now we are ready to read the rows for real.</p><h2 id="reading-the-rows">Reading the rows <a href="#reading-the-rows"> <span>Permalink</span> <span></span> </a> </h2><p>Assuming this transaction is trying to read some rows:</p><div><div><pre><code><span>SELECT</span> <span>*</span> <span>from</span> <span>t1</span> <span>where</span> <span>pk</span><span>=</span><span>6</span><span>;</span>
+</code></pre></div></div><p>When reading rows, eventually we’ll get here:</p><div><div><pre><code>      <span>if</span> <span>(</span><span>srv_force_recovery</span> <span>&lt;</span> <span>5</span> <span>&amp;&amp;</span>
+          <span>!</span><span>lock_clust_rec_cons_read_sees</span><span>(</span><span>rec</span><span>,</span> <span>index</span><span>,</span> <span>offsets</span><span>,</span>
+                                         <span>trx_get_read_view</span><span>(</span><span>trx</span><span>)))</span> <span>{</span>
+        <span>rec_t</span> <span>*</span><span>old_vers</span><span>;</span>
+        <span>/* The following call returns 'offsets' associated with 'old_vers' */</span>
+        <span>err</span> <span>=</span> <span>row_sel_build_prev_vers_for_mysql</span><span>(</span>
+            <span>trx</span><span>-&gt;</span><span>read_view</span><span>,</span> <span>clust_index</span><span>,</span> <span>prebuilt</span><span>,</span> <span>rec</span><span>,</span> <span>&amp;</span><span>offsets</span><span>,</span> <span>&amp;</span><span>heap</span><span>,</span>
+            <span>&amp;</span><span>old_vers</span><span>,</span> <span>need_vrow</span> <span>?</span> <span>&amp;</span><span>vrow</span> <span>:</span> <span>NULL</span><span>,</span> <span>&amp;</span><span>mtr</span><span>,</span>
+            <span>prebuilt</span><span>-&gt;</span><span>get_lob_undo</span><span>());</span>
+</code></pre></div></div><p><code>lock_clust_rec_cons_read_sees</code> is mostly just check if the record is visible:</p><div><div><pre><code>  <span>trx_id_t</span> <span>trx_id</span> <span>=</span> <span>row_get_rec_trx_id</span><span>(</span><span>rec</span><span>,</span> <span>index</span><span>,</span> <span>offsets</span><span>);</span>
+
+  <span>return</span> <span>(</span><span>view</span><span>-&gt;</span><span>changes_visible</span><span>(</span><span>trx_id</span><span>,</span> <span>index</span><span>-&gt;</span><span>table</span><span>-&gt;</span><span>name</span><span>));</span>
+</code></pre></div></div><p>We check to see if the record in question can be observed by checking the trx_id_t field of the record and see if it is visible in the view.</p><p>As already discussed, <code>changes_visible</code> uses <code>(m_up_limit_id, m_low_limit_id)</code> as a fast path:</p><ul><li>If id &lt; <code>m_up_limit_id</code>, it happens in the past and definitely visible</li><li>If id &gt;= <code>m_low_limit_id</code>, it happens in the future and definitely not visible</li></ul><p>Then it does a binary search over list of transactions to see if it is in the list of active transactions at the time of the <code>ReadView</code> is established. If it is in the list, then it is definitely not visible.</p><div><div><pre><code>  <span>/** Check whether the changes by id are visible.
+  @param[in]	id	transaction id to check against the view
+  @param[in]	name	table name
+  @return whether the view sees the modifications of id. */</span>
+  <span>bool</span> <span>changes_visible</span><span>(</span><span>trx_id_t</span> <span>id</span><span>,</span> <span>const</span> <span>table_name_t</span> <span>&amp;</span><span>name</span><span>)</span> <span>const</span>
+      <span>MY_ATTRIBUTE</span><span>((</span><span>warn_unused_result</span><span>))</span> <span>{</span>
+    <span>ut_ad</span><span>(</span><span>id</span> <span>&gt;</span> <span>0</span><span>);</span>
+
+    <span>if</span> <span>(</span><span>id</span> <span>&lt;</span> <span>m_up_limit_id</span> <span>||</span> <span>id</span> <span>==</span> <span>m_creator_trx_id</span><span>)</span> <span>{</span>
+      <span>return</span> <span>(</span><span>true</span><span>);</span>
+    <span>}</span>
+
+    <span>check_trx_id_sanity</span><span>(</span><span>id</span><span>,</span> <span>name</span><span>);</span>
+
+    <span>if</span> <span>(</span><span>id</span> <span>&gt;=</span> <span>m_low_limit_id</span><span>)</span> <span>{</span>
+      <span>return</span> <span>(</span><span>false</span><span>);</span>
+
+    <span>}</span> <span>else</span> <span>if</span> <span>(</span><span>m_ids</span><span>.</span><span>empty</span><span>())</span> <span>{</span>
+      <span>return</span> <span>(</span><span>true</span><span>);</span>
+    <span>}</span>
+
+    <span>const</span> <span>ids_t</span><span>::</span><span>value_type</span> <span>*</span><span>p</span> <span>=</span> <span>m_ids</span><span>.</span><span>data</span><span>();</span>
+
+    <span>return</span> <span>(</span><span>!</span><span>std</span><span>::</span><span>binary_search</span><span>(</span><span>p</span><span>,</span> <span>p</span> <span>+</span> <span>m_ids</span><span>.</span><span>size</span><span>(),</span> <span>id</span><span>));</span>
+  <span>}</span>
+</code></pre></div></div><p>Once we establish that the current record isn’t visible to current <code>ReadView</code>, we’d go down the rabbit hole of checking the undo log:</p><div><div><pre><code>      <span>if</span> <span>(</span><span>srv_force_recovery</span> <span>&lt;</span> <span>5</span> <span>&amp;&amp;</span>
+          <span>!</span><span>lock_clust_rec_cons_read_sees</span><span>(</span><span>rec</span><span>,</span> <span>index</span><span>,</span> <span>offsets</span><span>,</span>
+                                         <span>trx_get_read_view</span><span>(</span><span>trx</span><span>)))</span> <span>{</span>
+        <span>rec_t</span> <span>*</span><span>old_vers</span><span>;</span>
+        <span>/* The following call returns 'offsets' associated with 'old_vers' */</span>
+        <span>err</span> <span>=</span> <span>row_sel_build_prev_vers_for_mysql</span><span>(</span>
+            <span>trx</span><span>-&gt;</span><span>read_view</span><span>,</span> <span>clust_index</span><span>,</span> <span>prebuilt</span><span>,</span> <span>rec</span><span>,</span> <span>&amp;</span><span>offsets</span><span>,</span> <span>&amp;</span><span>heap</span><span>,</span>
+            <span>&amp;</span><span>old_vers</span><span>,</span> <span>need_vrow</span> <span>?</span> <span>&amp;</span><span>vrow</span> <span>:</span> <span>NULL</span><span>,</span> <span>&amp;</span><span>mtr</span><span>,</span>
+            <span>prebuilt</span><span>-&gt;</span><span>get_lob_undo</span><span>());</span>
+</code></pre></div></div><p>It simply calls to <code>row_vers_build_for_consistent_read</code> and it does a loop to scan the undo log backwards from the record:</p><div><div><pre><code><span>dberr_t</span> <span>row_vers_build_for_consistent_read</span><span>(</span>
+    <span>const</span> <span>rec_t</span> <span>*</span><span>rec</span><span>,</span> <span>mtr_t</span> <span>*</span><span>mtr</span><span>,</span> <span>dict_index_t</span> <span>*</span><span>index</span><span>,</span> <span>ulint</span> <span>**</span><span>offsets</span><span>,</span>
+    <span>ReadView</span> <span>*</span><span>view</span><span>,</span> <span>mem_heap_t</span> <span>**</span><span>offset_heap</span><span>,</span> <span>mem_heap_t</span> <span>*</span><span>in_heap</span><span>,</span>
+    <span>rec_t</span> <span>**</span><span>old_vers</span><span>,</span> <span>const</span> <span>dtuple_t</span> <span>**</span><span>vrow</span><span>,</span> <span>lob</span><span>::</span><span>undo_vers_t</span> <span>*</span><span>lob_undo</span><span>)</span> <span>{</span>
+  <span>trx_id</span> <span>=</span> <span>row_get_rec_trx_id</span><span>(</span><span>rec</span><span>,</span> <span>index</span><span>,</span> <span>*</span><span>offsets</span><span>);</span>
+
+  <span>version</span> <span>=</span> <span>rec</span><span>;</span>
+
+  <span>for</span> <span>(;;)</span> <span>{</span>
+    <span>/* If purge can't see the record then we can't rely on
+    the UNDO log record. */</span>
+
+    <span>trx_undo_prev_version_build</span><span>(</span><span>rec</span><span>,</span> <span>mtr</span><span>,</span> <span>version</span><span>,</span> <span>index</span><span>,</span> <span>*</span><span>offsets</span><span>,</span> <span>heap</span><span>,</span>
+                                <span>&amp;</span><span>prev_version</span><span>,</span> <span>NULL</span><span>,</span> <span>vrow</span><span>,</span> <span>0</span><span>,</span> <span>lob_undo</span><span>);</span>
+
+    <span>if</span> <span>(</span><span>prev_version</span> <span>==</span> <span>NULL</span><span>)</span> <span>{</span>
+      <span>/* It was a freshly inserted version */</span>
+      <span>*</span><span>old_vers</span> <span>=</span> <span>NULL</span><span>;</span>
+      <span>break</span><span>;</span>
+    <span>}</span>
+
+    <span>*</span><span>offsets</span> <span>=</span> <span>rec_get_offsets</span><span>(</span><span>prev_version</span><span>,</span> <span>index</span><span>,</span> <span>*</span><span>offsets</span><span>,</span> <span>ULINT_UNDEFINED</span><span>,</span>
+                               <span>offset_heap</span><span>);</span>
+
+    <span>trx_id</span> <span>=</span> <span>row_get_rec_trx_id</span><span>(</span><span>prev_version</span><span>,</span> <span>index</span><span>,</span> <span>*</span><span>offsets</span><span>);</span>
+
+    <span>if</span> <span>(</span><span>view</span><span>-&gt;</span><span>changes_visible</span><span>(</span><span>trx_id</span><span>,</span> <span>index</span><span>-&gt;</span><span>table</span><span>-&gt;</span><span>name</span><span>))</span> <span>{</span>
+      <span>/* The view already sees this version: we can copy
+      it to in_heap and return */</span>
+
+      <span>buf</span> <span>=</span>
+          <span>static_cast</span><span>&lt;</span><span>byte</span> <span>*&gt;</span><span>(</span><span>mem_heap_alloc</span><span>(</span><span>in_heap</span><span>,</span> <span>rec_offs_size</span><span>(</span><span>*</span><span>offsets</span><span>)));</span>
+
+      <span>*</span><span>old_vers</span> <span>=</span> <span>rec_copy</span><span>(</span><span>buf</span><span>,</span> <span>prev_version</span><span>,</span> <span>*</span><span>offsets</span><span>);</span>
+      <span>break</span><span>;</span>
+    <span>}</span>
+
+    <span>version</span> <span>=</span> <span>prev_version</span><span>;</span>
+  <span>}</span>
+
+  <span>return</span> <span>err</span><span>;</span>
+<span>}</span>
+</code></pre></div></div><p>The code is simplified to make it more readable:</p><ul><li><code>trx_undo_prev_version_build</code> reads the previous undo log record into prev_version<ul><li>If it we reached the end, just exit the loop. By definition this would be a INSERTed row after this transaction, otherwise there would be at least one visible record in the undo log chain containing the original value.</li></ul></li><li>retrieve the trx_id of prev_version</li><li>See if the trx_id is visible in the view<ul><li>If yes, copy it and assign to <code>old_vers</code></li><li>Otherwise keep looping</li></ul></li></ul><h2 id="whats-next">What’s next <a href="#whats-next"> <span>Permalink</span> <span></span> </a> </h2><p>I’m planning to write more about MySQL / RocksDB / MyRocks / InnoDB and have a bunch of notes taken in my backlog. I was thinking about making it into a series but I end up realizing I’ll never have time to write a cohesive series about any of them given the scope of things. So I’ll just write about whatever I’m researching and get it out, and forget about the whole series thing. Hopefully this way I’ll actually get more done.</p></article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

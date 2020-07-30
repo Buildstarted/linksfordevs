@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Do It Yourself (OpenJDK) Garbage Collector - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Do It Yourself (OpenJDK) Garbage Collector - linksfor.dev(s)"/>
+    <meta property="article:author" content="Adding garbage collection to our non-garbage collector: wait, what?"/>
+    <meta property="og:description" content="As it might be too daunting to read the entire implementation, this section tries to introduce it piece by piece."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://shipilev.net/jvm/diy-gc/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Do It Yourself (OpenJDK) Garbage Collector</title>
+<div class="readable">
+        <h1>Do It Yourself (OpenJDK) Garbage Collector</h1>
+            <div>by Adding garbage collection to our non-garbage collector: wait, what?</div>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 26 Aug 2019</div>
+        <p><a href="https://shipilev.net/jvm/diy-gc/">https://shipilev.net/jvm/diy-gc/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>As it might be too daunting to read <a href="https://shipilev.net/jvm/diy-gc/webrev.03/">the entire implementation</a>, this section tries to introduce it piece by piece.</p>
+<div>
+<h3 id="_prologue"><a href="#_prologue"></a>3.1. Prologue</h3>
+<p>GC usually needs to do a few things in preparation for GC. Read the comments, they should be self-explanatory:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>{</span><span>
+  </span><span>GCTraceTime</span><span>(</span><span>Info</span><span>,</span><span> gc</span><span>)</span><span> time</span><span>(</span><span>"Step 0: Prologue"</span><span>,</span><span> NULL</span><span>);</span><span>
+
+  </span><span>// Commit marking bitmap memory. There are several upsides of doing this</span><span>
+  </span><span>// before the cycle: no memory is taken if GC is not happening, the memory</span><span>
+  </span><span>// is "cleared" on first touch, and untouched parts of bitmap are mapped</span><span>
+  </span><span>// to zero page, boosting performance on sparse heaps.</span><span>
+  </span><span>if</span><span> </span><span>(!</span><span>os</span><span>::</span><span>commit_memory</span><span>((</span><span>char</span><span>*)</span><span>_bitmap_region</span><span>.</span><span>start</span><span>(),</span><span> _bitmap_region</span><span>.</span><span>byte_size</span><span>(),</span><span> </span><span>false</span><span>))</span><span> </span><span>{</span><span>
+    log_warning</span><span>(</span><span>gc</span><span>)(</span><span>"Could not commit native memory for marking bitmap, GC failed"</span><span>);</span><span>
+    </span><span>return</span><span>;</span><span>
+  </span><span>}</span><span>
+
+  </span><span>// We do not need parsable heap for this algorithm to work, but we want</span><span>
+  </span><span>// threads to give up their TLABs.</span><span>
+  ensure_parsability</span><span>(</span><span>true</span><span>);</span><span>
+
+  </span><span>// Tell various parts of runtime we are doing GC.</span><span>
+  </span><span>CodeCache</span><span>::</span><span>gc_prologue</span><span>();</span><span>
+  </span><span>BiasedLocking</span><span>::</span><span>preserve_marks</span><span>();</span><span>
+
+  </span><span>// Derived pointers would be re-discovered during the mark.</span><span>
+  </span><span>// Clear and activate the table for them.</span><span>
+  </span><span>DerivedPointerTable</span><span>::</span><span>clear</span><span>();</span><span>
+</span><span>}</span></code></pre>
+</div>
+</div>
+<p>Since we are going to use a marking bitmap to track what objects are reachable, we need to clean it up before using it. Or, in this case, as we pursue the goal of never taking resources until the GC cycle hits, we need to <a href="https://www.codeproject.com/Articles/1255908/Allocating-Memory-on-Linux-and-Windows">commit the bitmap to memory</a> first. This comes with a few interesting advantages, at least on Linux, where most of the bitmap would be mapped to zero page, especially for sparse heap.</p>
+<p>Threads need to give up their TLABs and ask GC for new ones after GC finishes. <sup>[<a id="_footnoteref_2" href="#_footnote_2" title="View footnote.">2</a>]</sup></p>
+<p>Some parts of runtime, especially those parts that deal with references to Java heap, get broken by GC, so we need to notify them that GC is about to act. This would let those subsystems to prepare/save parts of their state before impending GC moves.</p>
+</div>
+<div>
+<h3 id="_marking"><a href="#_marking"></a>3.2. Marking</h3>
+<p>Stop-the-world marking is quite simple once we have all the pieces ready to go. Marking is pretty generic, and it would normally be the first step in many GC implementations.</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>{</span><span>
+  </span><span>GCTraceTime</span><span>(</span><span>Info</span><span>,</span><span> gc</span><span>)</span><span> time</span><span>(</span><span>"Step 1: Mark"</span><span>,</span><span> NULL</span><span>);</span><span>
+
+  </span><span>// Marking stack and the closure that does most of the work. The closure</span><span>
+  </span><span>// would scan the outgoing references, mark them, and push newly-marked</span><span>
+  </span><span>// objects to stack for further processing.</span><span>
+  </span><span>EpsilonMarkStack</span><span> stack</span><span>;</span><span>
+  </span><span>EpsilonScanOopClosure</span><span> cl</span><span>(&amp;</span><span>stack</span><span>,</span><span> </span><span>&amp;</span><span>_bitmap</span><span>);</span><span>
+
+  </span><span>// Seed the marking with roots.</span><span>
+  process_roots</span><span>(&amp;</span><span>cl</span><span>);</span><span>
+  stat_reachable_roots </span><span>=</span><span> stack</span><span>.</span><span>size</span><span>();</span><span>
+
+  </span><span>// Scan the rest of the heap until we run out of objects. Termination is</span><span>
+  </span><span>// guaranteed, because all reachable objects would be marked eventually.</span><span>
+  </span><span>while</span><span> </span><span>(!</span><span>stack</span><span>.</span><span>is_empty</span><span>())</span><span> </span><span>{</span><span>
+    oop obj </span><span>=</span><span> stack</span><span>.</span><span>pop</span><span>();</span><span>
+    obj</span><span>-&gt;</span><span>oop_iterate</span><span>(&amp;</span><span>cl</span><span>);</span><span>
+    stat_reachable_heap</span><span>++;</span><span>
+  </span><span>}</span><span>
+
+  </span><span>// No more derived pointers discovered after marking is done.</span><span>
+  </span><span>DerivedPointerTable</span><span>::</span><span>set_active</span><span>(</span><span>false</span><span>);</span><span>
+</span><span>}</span></code></pre>
+</div>
+</div>
+<p>It is like every other graph walking problem: you start from the initial set of reachable vertices, walk all outbound edges, recording which vertices you visited, and do this until you run out of unvisited verticies. In GC, "vertexes" are the objects, and "edges" are the references between them.</p>
+<p>Technically, we could have just used recursion to walk the object graph, but it is a bad idea for arbitrary graphs, which can have very large diameters. Think about walking the linked list with 1 billion nodes in it. So, to limit the recursion depth, we use marking stack that records objects discovered.</p>
+<p>The initial set of reachable objects comes from GC roots. Don’t dwell on what <code>process_roots</code> does for now, we will visit it later. So far, assume it walks all references reachable from the VM side.</p>
+<p>The marking bitmap serves both as the thing that tracks the <em>marking wavefront</em> (the set of already visited objects), and in the end gives us the desired output: the set of all reachable objects. The actual work in done in the <code>EpsilonScanOopClosure</code>,<sup>[<a id="_footnoteref_3" href="#_footnote_3" title="View footnote.">3</a>]</sup> that would be applied to all interesting objects, and which iterates all references in a given object, and here it is:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>class</span><span> </span><span>EpsilonScanOopClosure</span><span> </span><span>:</span><span> </span><span>public</span><span> </span><span>BasicOopIterateClosure</span><span> </span><span>{</span><span>
+</span><span>private</span><span>:</span><span>
+  </span><span>EpsilonMarkStack</span><span>*</span><span> </span><span>const</span><span> _stack</span><span>;</span><span>
+  </span><span>MarkBitMap</span><span>*</span><span> </span><span>const</span><span> _bitmap</span><span>;</span><span>
+
+  </span><span>template</span><span> </span><span>&lt;</span><span>class</span><span> T</span><span>&gt;</span><span>
+  </span><span>void</span><span> do_oop_work</span><span>(</span><span>T</span><span>*</span><span> p</span><span>)</span><span> </span><span>{</span><span>
+    </span><span>// p is the pointer to memory location where oop is, load the value</span><span>
+    </span><span>// from it, unpack the compressed reference, if needed:</span><span>
+    T o </span><span>=</span><span> </span><span>RawAccess</span><span>&lt;&gt;::</span><span>oop_load</span><span>(</span><span>p</span><span>);</span><span>
+    </span><span>if</span><span> </span><span>(!</span><span>CompressedOops</span><span>::</span><span>is_null</span><span>(</span><span>o</span><span>))</span><span> </span><span>{</span><span>
+      oop obj </span><span>=</span><span> </span><span>CompressedOops</span><span>::</span><span>decode_not_null</span><span>(</span><span>o</span><span>);</span><span>
+
+      </span><span>// Object is discovered. See if it is marked already. If not,</span><span>
+      </span><span>// mark and push it on mark stack for further traversal. Non-atomic</span><span>
+      </span><span>// check and set would do, as this closure is called by single thread.</span><span>
+      </span><span>if</span><span> </span><span>(!</span><span>_bitmap</span><span>-&gt;</span><span>is_marked</span><span>(</span><span>obj</span><span>))</span><span> </span><span>{</span><span>
+        _bitmap</span><span>-&gt;</span><span>mark</span><span>((</span><span>HeapWord</span><span>*)</span><span>obj</span><span>);</span><span>
+        _stack</span><span>-&gt;</span><span>push</span><span>(</span><span>obj</span><span>);</span><span>
+      </span><span>}</span><span>
+    </span><span>}</span><span>
+  </span><span>}</span><span>
+</span><span>};</span></code></pre>
+</div>
+</div>
+<p>After this step is done, <code>_bitmap</code> contains the bits set at the locations where alive objects are. This gives us the opportunity to walk all live objects, like this:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>// Walk the marking bitmap and call object closure on every marked object.</span><span>
+</span><span>// This is much faster that walking a (very sparse) parsable heap, but it</span><span>
+</span><span>// takes up to 1/64-th of heap size for the bitmap.</span><span>
+</span><span>void</span><span> </span><span>EpsilonHeap</span><span>::</span><span>walk_bitmap</span><span>(</span><span>ObjectClosure</span><span>*</span><span> cl</span><span>)</span><span> </span><span>{</span><span>
+   </span><span>HeapWord</span><span>*</span><span> limit </span><span>=</span><span> _space</span><span>-&gt;</span><span>top</span><span>();</span><span>
+   </span><span>HeapWord</span><span>*</span><span> addr </span><span>=</span><span> _bitmap</span><span>.</span><span>get_next_marked_addr</span><span>(</span><span>_space</span><span>-&gt;</span><span>bottom</span><span>(),</span><span> limit</span><span>);</span><span>
+   </span><span>while</span><span> </span><span>(</span><span>addr </span><span>&lt;</span><span> limit</span><span>)</span><span> </span><span>{</span><span>
+     oop obj </span><span>=</span><span> oop</span><span>(</span><span>addr</span><span>);</span><span>
+     </span><span>assert</span><span>(</span><span>_bitmap</span><span>.</span><span>is_marked</span><span>(</span><span>obj</span><span>),</span><span> </span><span>"sanity"</span><span>);</span><span>
+     cl</span><span>-&gt;</span><span>do_object</span><span>(</span><span>obj</span><span>);</span><span>
+     addr </span><span>+=</span><span> </span><span>1</span><span>;</span><span>
+     </span><span>if</span><span> </span><span>(</span><span>addr </span><span>&lt;</span><span> limit</span><span>)</span><span> </span><span>{</span><span>
+       addr </span><span>=</span><span> _bitmap</span><span>.</span><span>get_next_marked_addr</span><span>(</span><span>addr</span><span>,</span><span> limit</span><span>);</span><span>
+     </span><span>}</span><span>
+   </span><span>}</span><span>
+</span><span>}</span></code></pre>
+</div>
+</div>
+</div>
+<div>
+<h3 id="_calculating_new_locations"><a href="#_calculating_new_locations"></a>3.3. Calculating New Locations</h3>
+<p>This part is also quite simple, and it implements what the algorithm says.</p>
+<p><span><img src="https://shipilev.net/jvm/diy-gc/calc-new.jpg" alt="calc new"></span></p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>// We are going to store forwarding information (where the new copy resides)</span><span>
+</span><span>// in mark words. Some of those mark words need to be carefully preserved.</span><span>
+</span><span>// This is an utility that maintains the list of those special mark words.</span><span>
+</span><span>PreservedMarks</span><span> preserved_marks</span><span>;</span><span>
+
+</span><span>// New top of the allocated space.</span><span>
+</span><span>HeapWord</span><span>*</span><span> new_top</span><span>;</span><span>
+
+</span><span>{</span><span>
+  </span><span>GCTraceTime</span><span>(</span><span>Info</span><span>,</span><span> gc</span><span>)</span><span> time</span><span>(</span><span>"Step 2: Calculate new locations"</span><span>,</span><span> NULL</span><span>);</span><span>
+
+  </span><span>// Walk all alive objects, compute their new addresses and store those</span><span>
+  </span><span>// addresses in mark words. Optionally preserve some marks.</span><span>
+  </span><span>EpsilonCalcNewLocationObjectClosure</span><span> cl</span><span>(</span><span>_space</span><span>-&gt;</span><span>bottom</span><span>(),</span><span> </span><span>&amp;</span><span>preserved_marks</span><span>);</span><span>
+  walk_bitmap</span><span>(&amp;</span><span>cl</span><span>);</span><span>
+
+  </span><span>// After addresses are calculated, we know the new top for the allocated</span><span>
+  </span><span>// space. We cannot set it just yet, because some asserts check that objects</span><span>
+  </span><span>// are "in heap" based on current "top".</span><span>
+  new_top </span><span>=</span><span> cl</span><span>.</span><span>compact_point</span><span>();</span><span>
+
+  stat_preserved_marks </span><span>=</span><span> preserved_marks</span><span>.</span><span>size</span><span>();</span><span>
+</span><span>}</span></code></pre>
+</div>
+</div>
+<p>The only wrinkle here is that we store the new addresses in the mark words of the Java objects, and these mark words could be busy with something else, for example, locking information. Luckily, those non-trivial mark words are rare, and we can just store them separately if needed: that is what <code>PreservedMarks</code> would do for us.</p>
+<p>The actual <code>EpsilonCalcNewLocationObjectClosure</code> does what the algorithm step wants:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>class</span><span> </span><span>EpsilonCalcNewLocationObjectClosure</span><span> </span><span>:</span><span> </span><span>public</span><span> </span><span>ObjectClosure</span><span> </span><span>{</span><span>
+</span><span>private</span><span>:</span><span>
+  </span><span>HeapWord</span><span>*</span><span> _compact_point</span><span>;</span><span>
+  </span><span>PreservedMarks</span><span>*</span><span> </span><span>const</span><span> _preserved_marks</span><span>;</span><span>
+
+</span><span>public</span><span>:</span><span>
+  </span><span>EpsilonCalcNewLocationObjectClosure</span><span>(</span><span>HeapWord</span><span>*</span><span> start</span><span>,</span><span> </span><span>PreservedMarks</span><span>*</span><span> pm</span><span>)</span><span> </span><span>:</span><span>
+                                      _compact_point</span><span>(</span><span>start</span><span>),</span><span>
+                                      _preserved_marks</span><span>(</span><span>pm</span><span>)</span><span> </span><span>{}</span><span>
+
+  </span><span>void</span><span> do_object</span><span>(</span><span>oop obj</span><span>)</span><span> </span><span>{</span><span>
+    </span><span>// Record the new location of the object: it is current compaction point.</span><span>
+    </span><span>// If object stays at the same location (which is true for objects in</span><span>
+    </span><span>// dense prefix, that we would normally get), do not bother recording the</span><span>
+    </span><span>// move, letting downstream code ignore it.</span><span>
+    </span><span>if</span><span> </span><span>((</span><span>HeapWord</span><span>*)</span><span>obj </span><span>!=</span><span> _compact_point</span><span>)</span><span> </span><span>{</span><span>
+      markOop mark </span><span>=</span><span> obj</span><span>-&gt;</span><span>mark_raw</span><span>();</span><span>
+      </span><span>if</span><span> </span><span>(</span><span>mark</span><span>-&gt;</span><span>must_be_preserved</span><span>(</span><span>obj</span><span>))</span><span> </span><span>{</span><span>
+        _preserved_marks</span><span>-&gt;</span><span>push</span><span>(</span><span>obj</span><span>,</span><span> mark</span><span>);</span><span>
+      </span><span>}</span><span>
+      obj</span><span>-&gt;</span><span>forward_to</span><span>(</span><span>oop</span><span>(</span><span>_compact_point</span><span>));</span><span>
+    </span><span>}</span><span>
+    _compact_point </span><span>+=</span><span> obj</span><span>-&gt;</span><span>size</span><span>();</span><span>
+  </span><span>}</span><span>
+
+  </span><span>HeapWord</span><span>*</span><span> compact_point</span><span>()</span><span> </span><span>{</span><span>
+    </span><span>return</span><span> _compact_point</span><span>;</span><span>
+  </span><span>}</span><span>
+</span><span>};</span></code></pre>
+</div>
+</div>
+<p><code>forward_to</code> is the critical part here: it stores the "forwarding address" in the object’s mark word. We are going to need it in the later steps.</p>
+</div>
+<div>
+<h3 id="_adjusting_the_pointers"><a href="#_adjusting_the_pointers"></a>3.4. Adjusting The Pointers</h3>
+<p>Walk the heap again and rewrite all references to their new locations, as per algorithm:</p>
+<p><span><img src="https://shipilev.net/jvm/diy-gc/adjust-refs.jpg" alt="adjust refs"></span></p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>{</span><span>
+  </span><span>GCTraceTime</span><span>(</span><span>Info</span><span>,</span><span> gc</span><span>)</span><span> time</span><span>(</span><span>"Step 3: Adjust pointers"</span><span>,</span><span> NULL</span><span>);</span><span>
+
+  </span><span>// Walk all alive objects _and their reference fields_, and put "new</span><span>
+  </span><span>// addresses" there. We know the new addresses from the forwarding data</span><span>
+  </span><span>// in mark words. Take care of the heap objects first.</span><span>
+  </span><span>EpsilonAdjustPointersObjectClosure</span><span> cl</span><span>;</span><span>
+  walk_bitmap</span><span>(&amp;</span><span>cl</span><span>);</span><span>
+
+  </span><span>// Now do the same, but for all VM roots, which reference the objects on</span><span>
+  </span><span>// their own: their references should also be updated.</span><span>
+  </span><span>EpsilonAdjustPointersOopClosure</span><span> cli</span><span>;</span><span>
+  process_roots</span><span>(&amp;</span><span>cli</span><span>);</span><span>
+
+  </span><span>// Finally, make sure preserved marks know the objects are about to move.</span><span>
+  preserved_marks</span><span>.</span><span>adjust_during_full_gc</span><span>();</span><span>
+</span><span>}</span></code></pre>
+</div>
+</div>
+<p>There are two sets of references to our moved objects; from other objects in the heap itself and from the GC roots. We need to update both. Some preserved marks have recorded the object references too, so we need to ask them to update themselves. <code>PreservedMarks</code> knows what to do, because it expects "forwarding data" in the same location we have recorded it at, in object mark word.</p>
+<p>The closures are now coming in two types: one that accepts the objects and walks its contents, and the other one that updates the locations. Here is a little performance optimization: if an object is not forwarded, it does not move, so we can spare quite a few heap writes:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>class</span><span> </span><span>EpsilonAdjustPointersOopClosure</span><span> </span><span>:</span><span> </span><span>public</span><span> </span><span>BasicOopIterateClosure</span><span> </span><span>{</span><span>
+</span><span>private</span><span>:</span><span>
+  </span><span>template</span><span> </span><span>&lt;</span><span>class</span><span> T</span><span>&gt;</span><span>
+  </span><span>void</span><span> do_oop_work</span><span>(</span><span>T</span><span>*</span><span> p</span><span>)</span><span> </span><span>{</span><span>
+    </span><span>// p is the pointer to memory location where oop is, load the value</span><span>
+    </span><span>// from it, unpack the compressed reference, if needed:</span><span>
+    T o </span><span>=</span><span> </span><span>RawAccess</span><span>&lt;&gt;::</span><span>oop_load</span><span>(</span><span>p</span><span>);</span><span>
+    </span><span>if</span><span> </span><span>(!</span><span>CompressedOops</span><span>::</span><span>is_null</span><span>(</span><span>o</span><span>))</span><span> </span><span>{</span><span>
+      oop obj </span><span>=</span><span> </span><span>CompressedOops</span><span>::</span><span>decode_not_null</span><span>(</span><span>o</span><span>);</span><span>
+
+      </span><span>// Rewrite the current pointer to the object with its forwardee.</span><span>
+      </span><span>// Skip the write if update is not needed.</span><span>
+      </span><span>if</span><span> </span><span>(</span><span>obj</span><span>-&gt;</span><span>is_forwarded</span><span>())</span><span> </span><span>{</span><span>
+        oop fwd </span><span>=</span><span> obj</span><span>-&gt;</span><span>forwardee</span><span>();</span><span>
+        </span><span>assert</span><span>(</span><span>fwd </span><span>!=</span><span> NULL</span><span>,</span><span> </span><span>"just checking"</span><span>);</span><span>
+        </span><span>RawAccess</span><span>&lt;&gt;::</span><span>oop_store</span><span>(</span><span>p</span><span>,</span><span> fwd</span><span>);</span><span>
+      </span><span>}</span><span>
+    </span><span>}</span><span>
+  </span><span>}</span><span>
+</span><span>};</span><span>
+
+</span><span>class</span><span> </span><span>EpsilonAdjustPointersObjectClosure</span><span> </span><span>:</span><span> </span><span>public</span><span> </span><span>ObjectClosure</span><span> </span><span>{</span><span>
+</span><span>private</span><span>:</span><span>
+  </span><span>EpsilonAdjustPointersOopClosure</span><span> _cl</span><span>;</span><span>
+</span><span>public</span><span>:</span><span>
+  </span><span>void</span><span> do_object</span><span>(</span><span>oop obj</span><span>)</span><span> </span><span>{</span><span>
+    </span><span>// Apply the updates to all references reachable from current object:</span><span>
+    obj</span><span>-&gt;</span><span>oop_iterate</span><span>(&amp;</span><span>_cl</span><span>);</span><span>
+  </span><span>}</span><span>
+</span><span>};</span></code></pre>
+</div>
+</div>
+<p>After this step is done, the heap is basically corrupted: references point to "wrong" locations, where objects have not been moved yet. Let’s rectify that!</p>
+</div>
+<div>
+<h3 id="_moving_the_objects"><a href="#_moving_the_objects"></a>3.5. Moving The Objects</h3>
+<p>Time to move the objects into their new locations, as per algorithm step:</p>
+<p><span><img src="https://shipilev.net/jvm/diy-gc/move-objects.jpg" alt="move objects"></span></p>
+<p>Walk the heap again and apply the <code>EpsilonMoveObjectsObjectClosure</code> closure to all live objects:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>{</span><span>
+  </span><span>GCTraceTime</span><span>(</span><span>Info</span><span>,</span><span> gc</span><span>)</span><span> time</span><span>(</span><span>"Step 4: Move objects"</span><span>,</span><span> NULL</span><span>);</span><span>
+
+  </span><span>// Move all alive objects to their new locations. All the references are</span><span>
+  </span><span>// already adjusted at previous step.</span><span>
+  </span><span>EpsilonMoveObjectsObjectClosure</span><span> cl</span><span>;</span><span>
+  walk_bitmap</span><span>(&amp;</span><span>cl</span><span>);</span><span>
+  stat_moved </span><span>=</span><span> cl</span><span>.</span><span>moved</span><span>();</span><span>
+
+  </span><span>// Now we moved all objects to their relevant locations, we can retract</span><span>
+  </span><span>// the "top" of the allocation space to the end of the compacted prefix.</span><span>
+  _space</span><span>-&gt;</span><span>set_top</span><span>(</span><span>new_top</span><span>);</span><span>
+</span><span>}</span></code></pre>
+</div>
+</div>
+<p>After this is done, we can retract the allocated space to the compaction point, letting the allocation path allocate from there after GC cycle is over.</p>
+<p>Note that sliding GC means we can <em>overwrite</em> the contents of existing objects, but since we are scanning in one direction, that means the object we are overwriting is already copied out to its proper location. <sup>[<a id="_footnoteref_4" href="#_footnote_4" title="View footnote.">4</a>]</sup> So, the closure itself just moves the forwarded objects to their new locations:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>class</span><span> </span><span>EpsilonMoveObjectsObjectClosure</span><span> </span><span>:</span><span> </span><span>public</span><span> </span><span>ObjectClosure</span><span> </span><span>{</span><span>
+</span><span>public</span><span>:</span><span>
+  </span><span>void</span><span> do_object</span><span>(</span><span>oop obj</span><span>)</span><span> </span><span>{</span><span>
+    </span><span>// Copy the object to its new location, if needed. This is final step,</span><span>
+    </span><span>// so we have to re-initialize its new mark word, dropping the forwardee</span><span>
+    </span><span>// data from it.</span><span>
+    </span><span>if</span><span> </span><span>(</span><span>obj</span><span>-&gt;</span><span>is_forwarded</span><span>())</span><span> </span><span>{</span><span>
+      oop fwd </span><span>=</span><span> obj</span><span>-&gt;</span><span>forwardee</span><span>();</span><span>
+      </span><span>assert</span><span>(</span><span>fwd </span><span>!=</span><span> NULL</span><span>,</span><span> </span><span>"just checking"</span><span>);</span><span>
+      </span><span>Copy</span><span>::</span><span>aligned_conjoint_words</span><span>((</span><span>HeapWord</span><span>*)</span><span>obj</span><span>,</span><span> </span><span>(</span><span>HeapWord</span><span>*)</span><span>fwd</span><span>,</span><span> obj</span><span>-&gt;</span><span>size</span><span>());</span><span>
+      fwd</span><span>-&gt;</span><span>init_mark_raw</span><span>();</span><span>
+    </span><span>}</span><span>
+  </span><span>}</span><span>
+</span><span>};</span></code></pre>
+</div>
+</div>
+</div>
+<div>
+<h3 id="_epilogue"><a href="#_epilogue"></a>3.6. Epilogue</h3>
+<p>GC is over, the heap is now almost consistent again, we just need a few finishing touches:</p>
+<div>
+<div>
+<pre><code data-lang="c++"><span>{</span><span>
+  </span><span>GCTraceTime</span><span>(</span><span>Info</span><span>,</span><span> gc</span><span>)</span><span> time</span><span>(</span><span>"Step 5: Epilogue"</span><span>,</span><span> NULL</span><span>);</span><span>
+
+  </span><span>// Restore all special mark words.</span><span>
+  preserved_marks</span><span>.</span><span>restore</span><span>();</span><span>
+
+  </span><span>// Tell the rest of runtime we have finished the GC.</span><span>
+  </span><span>DerivedPointerTable</span><span>::</span><span>update_pointers</span><span>();</span><span>
+  </span><span>BiasedLocking</span><span>::</span><span>restore_marks</span><span>();</span><span>
+  </span><span>CodeCache</span><span>::</span><span>gc_epilogue</span><span>();</span><span>
+  </span><span>JvmtiExport</span><span>::</span><span>gc_epilogue</span><span>();</span><span>
+
+  </span><span>// Marking bitmap is not needed anymore</span><span>
+  </span><span>if</span><span> </span><span>(!</span><span>os</span><span>::</span><span>uncommit_memory</span><span>((</span><span>char</span><span>*)</span><span>_bitmap_region</span><span>.</span><span>start</span><span>(),</span><span> _bitmap_region</span><span>.</span><span>byte_size</span><span>()))</span><span> </span><span>{</span><span>
+    log_warning</span><span>(</span><span>gc</span><span>)(</span><span>"Could not uncommit native memory for marking bitmap"</span><span>);</span><span>
+  </span><span>}</span><span>
+
+  </span><span>// Return all memory back if so requested. On large heaps, this would</span><span>
+  </span><span>// take a while.</span><span>
+  </span><span>if</span><span> </span><span>(</span><span>EpsilonUncommit</span><span>)</span><span> </span><span>{</span><span>
+    _virtual_space</span><span>.</span><span>shrink_by</span><span>((</span><span>_space</span><span>-&gt;</span><span>end</span><span>()</span><span> </span><span>-</span><span> new_top</span><span>)</span><span> </span><span>*</span><span> </span><span>HeapWordSize</span><span>);</span><span>
+    _space</span><span>-&gt;</span><span>set_end</span><span>((</span><span>HeapWord</span><span>*)</span><span>_virtual_space</span><span>.</span><span>high</span><span>());</span><span>
+  </span><span>}</span><span>
+</span><span>}</span></code></pre>
+</div>
+</div>
+<p>Notify other parts of runtime to make their post-GC cleanups/fixups. Restore the special mark words we saved before. Kiss the marking bitmap bye-bye, we do not need it anymore.</p>
+<p>And, if we are so inclined, we can retract the committed space to the new allocation point, thus returning memory to the OS!</p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

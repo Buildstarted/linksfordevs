@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Cryptographic Signatures, Surprising Pitfalls, and LetsEncrypt - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Cryptographic Signatures, Surprising Pitfalls, and LetsEncrypt - linksfor.dev(s)"/>
+    <meta property="article:author" content="david wong"/>
+    <meta property="og:description" content="The Let&#x27;s Encrypt Accident&#xA;On August 11th, 2015, Andrew Ayer posted the following email to the IETF mailing list:&#xA;&#xA;I recently reviewed draft-barnes-acme-04 and found vulnerabilities in&#xA;the DNS, DVSNI, and Simple HTTP challenges that would allow an attacker&#xA;to fraudulently complete these challenges.&#xA;&#xA;(The author has since then written a more complete explanation of the attack.)&#xA;The draft-barnes-acm ..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.cryptologie.net/article/495/cryptographic-signatures-surprising-pitfalls-and-letsencrypt/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Cryptographic Signatures, Surprising Pitfalls, and LetsEncrypt</title>
+<div class="readable">
+        <h1>Cryptographic Signatures, Surprising Pitfalls, and LetsEncrypt</h1>
+            <div>by david wong</div>
+            <div>Reading time: 9-12 minutes</div>
+        <div>Posted here: 08 Mar 2020</div>
+        <p><a href="https://www.cryptologie.net/article/495/cryptographic-signatures-surprising-pitfalls-and-letsencrypt/">https://www.cryptologie.net/article/495/cryptographic-signatures-surprising-pitfalls-and-letsencrypt/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article>
+
+<h2>The Let's Encrypt Accident</h2>
+<p>On August 11th, 2015, Andrew Ayer posted <a href="https://mailarchive.ietf.org/arch/msg/acme/F71iz6qq1o_QPVhJCV4dqWf-4Yc/">the following email</a> to the IETF mailing list:</p>
+<blockquote>
+<p>I recently reviewed draft-barnes-acme-04 and found vulnerabilities in
+the DNS, DVSNI, and Simple HTTP challenges that would allow an attacker
+to fraudulently complete these challenges.</p>
+</blockquote>
+<p>(The author has since then written <a href="https://www.agwa.name/blog/post/duplicate_signature_key_selection_attack_in_lets_encrypt">a more complete explanation of the attack</a>.)</p>
+<p>The <em>draft-barnes-acme-04</em> mentioned by Andrew Ayer is a document specifying <strong>ACME</strong>, one of the protocols behind the <a href="https://letsencrypt.org/">Let's Encrypt</a> Certificate Authority. The thing that your browser trust and that signs the public keys of websites you visit.</p>
+<p>The attack was found merely 6 weeks before major browsers were supposed to ship with Let's Encrypt's public keys in their trust store. The draft has since become <a href="https://tools.ietf.org/html/rfc8555">RFC 8555: Automatic Certificate Management Environment (ACME)</a>, mitigating the issues. Since then no cryptographic attacks are known on the protocol.</p>
+<p>But how did we get there? What's the deal with signature schemes these days? and are all of our protocols doomed? This is what this blog post will answer.</p>
+<h2>Let's Encrypt Use Of Signatures</h2>
+<p>Let's Encrypt is a pretty big deal. Created in 2014, it is a certificate authority ran as a non-profit, and currently providing trust to ~200 million of websites.
+(You can read my article <a href="https://www.cryptologie.net/article/274/lets-encrypt-overview/">Let's Encrypt Overview</a> to learn more about it.)</p>
+<p>The key to Let's Encrypt's success are two folds:</p>
+<ul>
+<li>It is <strong>free</strong>. Before Let's Encrypt most certificate authorities charged fees from webmasters who wanted to obtain certificates.</li>
+<li>It is <strong>automated</strong>. If you follow their standardized protocol, you can request, renew and even revoke certificates via an API. Contrast that to other certificate authorities who did most processing manually, and took time to issue certificates. </li>
+</ul>
+<p>If a webmaster wants her website <em>example.com</em> to provide a secure connection to her users (via HTTPS), she can request <a href="https://www.cryptologie.net/article/262/what-are-x509-certificates-rfc-asn1-der/">a certificate</a> from Let's Encrypt, and after proving that she owns the domain <em>example.com</em> and getting her certificate issued, she will be able to use it to negotiate a secure connection with any browser trusting Let's Encrypt.</p>
+<p>That's the theory.</p>
+<p>In practice the flow is the following:</p>
+<ol>
+<li>Alice registers on Let's Encrypt with an RSA public key.</li>
+<li>Alice asks Let's Encrypt for a certificate for example.com.</li>
+<li>Let's Encrypt asks Alice to prove that she owns example.com, for this she has to sign some data and upload it to example.com/.well-known/acme-challenge/some_file.</li>
+<li>Once Alice has signed and uploaded the signature, she asks Let's Encrypt to go check it.</li>
+<li>Let's Encrypt checks if it can access the file on example.com, if it successfuly downloaded the signature and the signature is valid then Let's Encrypt issues a certificate to Alice.</li>
+</ol>
+<p>I recapitulate some of this flow in the following figure:</p>
+<p><img alt="let's encrypt flow" src="https://www.cryptologie.net/upload/Screen_Shot_2020-03-08_at_1.33_.55_PM_.png"></p>
+<p>Now, you might be wondering, what if Alice does not own example.com and manage to man-in-the-middle Let's Encrypt in step 5? That's a real issue that's been bothering me ever since Let's Encrypt launched, and turns out a team of researcher at Princeton demonstrated exactly this in <a href="https://www.princeton.edu/~pmittal/publications/bgp-tls-usenix18.pdf">Bamboozling Certificate Authorities with BGP</a>:</p>
+<blockquote>
+<p>We perform the first real-world demonstration of BGP attacks to obtain bogus certificates from top CAs in an ethical manner. To assess the vulnerability of the PKI, we collect a dataset of 1.8 million certificates and find that an adversary would be capable of gaining a bogus certificate for the vast majority of domains</p>
+</blockquote>
+<p><img alt="Bamboozling Certificate Authorities with BGP" src="https://www.cryptologie.net/upload/Screen_Shot_2020-03-08_at_1.03_.48_PM_.png"></p>
+<p>The paper continues and proposes two solutions to sort of remediate, or at least reduce the risk of these attacks:</p>
+<blockquote>
+<p>Finally, we propose and evaluate two countermeasures to secure the PKI: 1) CAs verifying domains from multiple vantage points to make it harder to launch a successful attack, and 2) a BGP monitoring system for CAs to detect suspicious BGP routes and delay certificate issuance to give network operators time to react to BGP attacks.</p>
+</blockquote>
+<p>Recently Let's Encrypt implemented the first solution <a href="https://letsencrypt.org/2020/02/19/multi-perspective-validation.html">multi-perspective domain validation</a>, which changes the way step 5 of the above flow is performed: now Let's Encrypt downloads the proof from example.com from multiple places.</p>
+<h2>How Did The Let's Encrypt Attack Worked</h2>
+<p>But let's get back to what I was talking about, the attack that Andrew Ayer found in 2015.</p>
+<p>In it, Andrew proposes a way to gain control of a Let's Encrypt account that has already validated a domain (let's say example.com)</p>
+<p>The attack goes like this:</p>
+<ol>
+<li>Alice registers and goes through the process of verifying her domain example.com by uploading some signature over some data on example.com/.well-known/acme-challenge/some_file. She then successfully manages to obtain a certificate from Let's Encrypt.</li>
+<li>Later, Eve signs up to Let's Encrypt with a new account and new RSA public key, and request to recover the example.com domain</li>
+<li>Let's Encrypt asks Eve to sign some new data, and upload it to example.com/.well-known/acme-challenge/some_file (note that the file is still lingering there from Alice's previous domain validation)</li>
+<li>Eve crafts a new malicious keypair, and updates her public key on Let's Encrypt. She then asks Let's Encrypt to check the signature</li>
+<li>Let's Encrypt obtains the signature file from example.com, the signature match.</li>
+</ol>
+<p>I recapitulate the attack in the following figure:</p>
+<p><img alt="attack let's encrypt" src="https://www.cryptologie.net/upload/Screen_Shot_2020-03-08_at_2.12_.59_PM_.png"></p>
+<p>Wait what?</p>
+<p>What happened there?</p>
+<h2>Key Substitution Attack With RSA</h2>
+<p>In the above attack Eve managed to create a valid public key that validates a given signature and message.</p>
+<p>This is because, as Andrew Ayer wrote:</p>
+<blockquote>
+<p>A digital signature does not uniquely identify a key or a message</p>
+</blockquote>
+<p>If you remember <a href="https://www.cryptologie.net/article/182/airbus-crypto-challenge-write-up/">how RSA works</a>, this is actually not too hard to understand.</p>
+<p><img alt="RSA" src="https://www.cryptologie.net/upload/Screen_Shot_2016-09-04_at_2.01_.40_PM_.png"></p>
+<p>For a fixed signature and (PKCS#1 v1.5 padded) message, a public key (e, N) must satisfy the following equation to validate the signature:</p>
+<p><span id="MathJax-Element-1-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mtext>signature</mtext><mo>=</mo><msup><mtext>message</mtext><mi>e</mi></msup><mspace width=&quot;0.444em&quot; /><mo stretchy=&quot;false&quot;>(</mo><mi>mod</mi><mspace width=&quot;0.333em&quot; /><mi>N</mi><mo stretchy=&quot;false&quot;>)</mo></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mtext>signature</mtext><mo>=</mo><msup><mtext>message</mtext><mi>e</mi></msup><mspace width="0.444em"></mspace><mo stretchy="false">(</mo><mi>mod</mi><mspace width="0.333em"></mspace><mi>N</mi><mo stretchy="false">)</mo></math></span></span></p>
+<p>One can easily craft a public key that will (most of the time) satisfy the equation:</p>
+<ul>
+<li><span id="MathJax-Element-2-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>e</mi><mo>=</mo><mn>1</mn></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>e</mi><mo>=</mo><mn>1</mn></math></span></span></li>
+<li><span id="MathJax-Element-3-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot;><mi>N</mi><mo>=</mo><mtext>signature</mtext><mo>&amp;#x2212;</mo><mtext>message</mtext></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>N</mi><mo>=</mo><mtext>signature</mtext><mo>−</mo><mtext>message</mtext></math></span></span></li>
+</ul>
+<p>You can easily verify that the validation works:</p>
+<p><span><span id="MathJax-Element-4-Frame" tabindex="0" data-mathml="<math xmlns=&quot;http://www.w3.org/1998/Math/MathML&quot; display=&quot;block&quot;><mtable columnalign=&quot;right left right left right left right left right left right left&quot; rowspacing=&quot;3pt&quot; columnspacing=&quot;0em 2em 0em 2em 0em 2em 0em 2em 0em 2em 0em&quot; displaystyle=&quot;true&quot;><mtr><mtd /><mtd><mtext>signature</mtext><mo>=</mo><msup><mtext>message</mtext><mi>e</mi></msup><mspace width=&quot;1em&quot; /><mo stretchy=&quot;false&quot;>(</mo><mi>mod</mi><mspace width=&quot;0.333em&quot; /><mi>N</mi><mo stretchy=&quot;false&quot;>)</mo></mtd></mtr><mtr><mtd><mspace width=&quot;thickmathspace&quot; /><mo stretchy=&quot;false&quot;>&amp;#x27FA;</mo><mspace width=&quot;thickmathspace&quot; /></mtd><mtd><mtext>signature</mtext><mo>=</mo><mtext>message</mtext><mspace width=&quot;1em&quot; /><mo stretchy=&quot;false&quot;>(</mo><mi>mod</mi><mspace width=&quot;0.333em&quot; /><mtext>signature</mtext><mo>&amp;#x2212;</mo><mtext>message</mtext><mo stretchy=&quot;false&quot;>)</mo></mtd></mtr><mtr><mtd><mspace width=&quot;thickmathspace&quot; /><mo stretchy=&quot;false&quot;>&amp;#x27FA;</mo><mspace width=&quot;thickmathspace&quot; /></mtd><mtd><mtext>signature</mtext><mo>&amp;#x2212;</mo><mtext>message</mtext><mo>=</mo><mn>0</mn><mspace width=&quot;1em&quot; /><mo stretchy=&quot;false&quot;>(</mo><mi>mod</mi><mspace width=&quot;0.333em&quot; /><mtext>signature</mtext><mo>&amp;#x2212;</mo><mtext>message</mtext><mo stretchy=&quot;false&quot;>)</mo></mtd></mtr></mtable></math>" role="presentation"><span role="presentation"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mtable columnalign="right left right left right left right left right left right left" rowspacing="3pt" columnspacing="0em 2em 0em 2em 0em 2em 0em 2em 0em 2em 0em" displaystyle="true"><mtr><mtd></mtd><mtd><mtext>signature</mtext><mo>=</mo><msup><mtext>message</mtext><mi>e</mi></msup><mspace width="1em"></mspace><mo stretchy="false">(</mo><mi>mod</mi><mspace width="0.333em"></mspace><mi>N</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><mspace width="thickmathspace"></mspace><mo stretchy="false">⟺</mo><mspace width="thickmathspace"></mspace></mtd><mtd><mtext>signature</mtext><mo>=</mo><mtext>message</mtext><mspace width="1em"></mspace><mo stretchy="false">(</mo><mi>mod</mi><mspace width="0.333em"></mspace><mtext>signature</mtext><mo>−</mo><mtext>message</mtext><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><mspace width="thickmathspace"></mspace><mo stretchy="false">⟺</mo><mspace width="thickmathspace"></mspace></mtd><mtd><mtext>signature</mtext><mo>−</mo><mtext>message</mtext><mo>=</mo><mn>0</mn><mspace width="1em"></mspace><mo stretchy="false">(</mo><mi>mod</mi><mspace width="0.333em"></mspace><mtext>signature</mtext><mo>−</mo><mtext>message</mtext><mo stretchy="false">)</mo></mtd></mtr></mtable></math></span></span></span></p>
+<p>By definition the last line is true.</p>
+<h2>Security of Cryptographic Signatures</h2>
+<p>Is this issue surprising?</p>
+<p>It should be.</p>
+<p>And if so why?</p>
+<p>This is because of the gap that exists between the theoretical world and the applied world, between the security proofs and the implemented protocol.</p>
+<p>Signatures in cryptography are usually analyzed with the <a href="https://blog.cryptographyengineering.com/euf-cma-and-suf-cma/">EUF-CMA model</a>, which stands for <strong>Existential Unforgeability under Adaptive Chosen Message Attack</strong>.</p>
+<p>In this model YOU generated a key pair, and then I request YOU to sign a number of arbitrary messages. While I observe the signatures you produce, I win if I can at some point in time produce a valid signature over a message I hadn't requested.</p>
+<p>Unfortunately, eventhough our modern signature schemes seem to pass the EUF-CMA test fine, they seem to exhibit some <strong>surprising properties</strong>.</p>
+<h2>Sublte Behaviors of Signature Schemes</h2>
+<p>The excellent paper <a href="https://eprint.iacr.org/2019/779">Seems Legit: Automated Analysis of Subtle Attacks on Protocols that Use Signatures</a> by Dennis Jackson, Cas Cremers, Katriel Cohn-Gordon, and Ralf Sasse attempts to list these surprising properties and the signature schemes affected by them.</p>
+<p><img alt="Seems Legit: Automated Analysis of Subtle Attacks on Protocols that Use Signatures" src="https://www.cryptologie.net/upload/Screen_Shot_2020-03-08_at_12.39_.11_PM_.png"></p>
+<p>Let me briefly describe each properties:</p>
+<p><strong>Conservative Exclusive Ownership (CEO)/Destructive Exclusive Ownership (DEO)</strong>. This refers to what Koblitz and Menezes used to call <a href="https://eprint.iacr.org/2011/343.pdf">Duplicate Signature Key Selection (DSKS)</a>. In total honesty, I don't think any of these terms are self-explanatory. I find these attacks easier to remember if thought of as the following two variants:</p>
+<ol>
+<li><strong>key substitution</strong> attacks (CEO), where a different keypair or public key is used to validate a given signature over a given message.</li>
+<li><strong>message key substitution</strong> attacks (DEO), where a different keypair or public key is used to validate given signature over a new message.</li>
+</ol>
+<p>To recap: the first attack fixes both the message and the signature, the second one only fixes the signature.</p>
+<p><strong>Malleability</strong>. Most signature schemes are malleable, meaning that if you give me a valid signature I can tamper with it so that it becomes a different but still valid signature. Note that if I'm the signer I can usually create different signatures for the same message, but here malleability refers to the fact that someone who has zero knowledge of the private key can also create a new valid signature for the same signed message. It is not clear if this has any impact on any real world protocol, eventhough the bitcoin MtGox exchange blamed their loss of funds on this one. From the paper <a href="https://arxiv.org/abs/1403.6676">Bitcoin Transaction Malleability and MtGox</a>:</p>
+<blockquote>
+<p>In February 2014 MtGox, once the largest Bitcoin exchange, closed and filed for bankruptcy claiming that attackers used malleability attacks to drain its accounts. </p>
+</blockquote>
+<p>Note that a newer security model called <a href="https://blog.cryptographyengineering.com/euf-cma-and-suf-cma/">SUF-CMA</a> (for strong EUF-CMA) attempts to include this behavior in the security definition of signature schemes.</p>
+<p><strong>Re-signability</strong>. This one is simple to explain. To validate a signature over message you often don't need the message itself but its digest. This would allow anyone to re-sign the message with their own keys without knowing the message itself. How is this impactful in real world protocols? Not sure, but we never know.</p>
+<p><strong>Collidability</strong>. This is another not-so-clear if it'll bite you one day: some schemes allow you to craft signatures that will validate under several messages. Worse, Ed25519 as designed allows one to craft a public key and a signature that would validate any message with high probability. (This has been fixed in some implementations like libsodium.)</p>
+<p>What to do with this?</p>
+<p>If you're designing cryptographic protocols, or if you're implementing something that's more complicated than the every day use of cryptography you might want to keep these in the back of your mind.</p>
+<blockquote>
+<p><img alt="book" src="https://realworldcryptography.com/images/building4.png">
+Did you like this content? This is part of a book about how to apply modern cryptography in real world applications. <a href="https://www.manning.com/books/real-world-cryptography?a_aid=Realworldcrypto">Check it out</a>!</p>
+</blockquote>
+</article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

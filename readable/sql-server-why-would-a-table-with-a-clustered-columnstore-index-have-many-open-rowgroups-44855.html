@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Why would a table with a Clustered Columnstore Index have many open rowgroups? - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Why would a table with a Clustered Columnstore Index have many open rowgroups? - linksfor.dev(s)"/>
+    <meta property="article:author" content="Taryn&#x2666;Taryn&#xA;        &#xA;            8,99133 gold badges3838 silver badges7070 bronze badges"/>
+    <meta property="og:description" content="I was experiencing some performance issues with a query yesterday and upon further investigation, I noticed what I believe is odd behavior with a clustered columnstore index that I&#x27;m trying to get ..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://dba.stackexchange.com/questions/255985/why-would-a-table-with-a-clustered-columnstore-index-have-many-open-rowgroups"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Why would a table with a Clustered Columnstore Index have many open rowgroups?</title>
+<div class="readable">
+        <h1>Why would a table with a Clustered Columnstore Index have many open rowgroups?</h1>
+            <div>by Taryn&#x2666;Taryn&#xA;        &#xA;            8,99133 gold badges3838 silver badges7070 bronze badges</div>
+            <div>Reading time: 4-5 minutes</div>
+        <div>Posted here: 19 Dec 2019</div>
+        <p><a href="https://dba.stackexchange.com/questions/255985/why-would-a-table-with-a-clustered-columnstore-index-have-many-open-rowgroups">https://dba.stackexchange.com/questions/255985/why-would-a-table-with-a-clustered-columnstore-index-have-many-open-rowgroups</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="text">
+
+<p>I was experiencing some performance issues with a query yesterday and upon further investigation, I noticed what I believe is odd behavior with a clustered columnstore index that I'm trying to get to the bottom of. </p>
+
+<p>The table is </p>
+
+<pre><code><span>CREATE</span><span> </span><span>TABLE</span><span> </span><span>[</span><span>dbo</span><span>].[</span><span>NetworkVisits</span><span>](</span><span>
+    </span><span>[</span><span>SiteId</span><span>]</span><span> </span><span>[</span><span>int</span><span>]</span><span> </span><span>NOT</span><span> </span><span>NULL</span><span>,</span><span>
+    </span><span>[</span><span>AccountId</span><span>]</span><span> </span><span>[</span><span>int</span><span>]</span><span> </span><span>NOT</span><span> </span><span>NULL</span><span>,</span><span>
+    </span><span>[</span><span>CreationDate</span><span>]</span><span> </span><span>[</span><span>date</span><span>]</span><span> </span><span>NOT</span><span> </span><span>NULL</span><span>,</span><span>
+    </span><span>[</span><span>UserHistoryId</span><span>]</span><span> </span><span>[</span><span>int</span><span>]</span><span> </span><span>NOT</span><span> </span><span>NULL</span><span>
+</span><span>)</span></code></pre>
+
+<p>with the index:</p>
+
+<pre><code><span>CREATE</span><span> </span><span>CLUSTERED</span><span> COLUMNSTORE </span><span>INDEX</span><span> </span><span>[</span><span>CCI_NetworkVisits</span><span>]</span><span> 
+   </span><span>ON</span><span> </span><span>[</span><span>dbo</span><span>].[</span><span>NetworkVisits</span><span>]</span><span> </span><span>WITH</span><span> </span><span>(</span><span>DROP_EXISTING </span><span>=</span><span> </span><span>OFF</span><span>,</span><span> COMPRESSION_DELAY </span><span>=</span><span> </span><span>0</span><span>)</span><span> </span><span>ON</span><span> </span><span>[</span><span>PRIMARY</span><span>]</span></code></pre>
+
+<p>The table currently has 1.3 Billion rows in it and we are constantly inserting new rows to it. When I say constantly, I mean all the time. It's a steady stream of inserting one row at a time to the table. </p>
+
+<pre><code><span>Insert</span><span> </span><span>Into</span><span> NetworkVisits </span><span>(</span><span>SiteId</span><span>,</span><span> AccountId</span><span>,</span><span> CreationDate</span><span>,</span><span> UserHistoryId</span><span>)</span><span>
+</span><span>Values</span><span> </span><span>(@</span><span>SiteId</span><span>,</span><span> </span><span>@</span><span>AccountId</span><span>,</span><span> </span><span>@</span><span>CreationDate</span><span>,</span><span> </span><span>@</span><span>UserHistoryId</span><span>)</span></code></pre>
+
+<p>Execution plan <a href="https://www.brentozar.com/pastetheplan/?id=HJCeiEt0H" rel="noreferrer">here</a></p>
+
+<p>I also have a scheduled job that runs every 4 hours to delete duplicate rows from the table. The query is:</p>
+
+<pre><code><span>With</span><span> NetworkVisitsRows
+  </span><span>As</span><span> </span><span>(</span><span>Select</span><span> SiteId</span><span>,</span><span> UserHistoryId</span><span>,</span><span> Row_Number</span><span>()</span><span> </span><span>Over</span><span> </span><span>(</span><span>Partition</span><span> </span><span>By</span><span> SiteId</span><span>,</span><span> UserHistoryId
+                                    </span><span>Order</span><span> </span><span>By</span><span> CreationDate </span><span>Asc</span><span>)</span><span> RowNum
+        </span><span>From</span><span> NetworkVisits
+       </span><span>Where</span><span> CreationDate </span><span>&gt;</span><span> GETUTCDATE</span><span>()</span><span> </span><span>-</span><span> </span><span>30</span><span>)</span><span>
+</span><span>DELETE</span><span>
+</span><span>FROM</span><span> NetworkVisitsRows
+</span><span>WHERE</span><span> RowNum </span><span>&gt;</span><span> </span><span>1</span><span>
+</span><span>Option</span><span> </span><span>(</span><span>MaxDop </span><span>48</span><span>)</span></code></pre>
+
+<p>The execution plan has been pasted <a href="https://www.brentozar.com/pastetheplan/?id=BkVWc4YRH" rel="noreferrer">here</a>.</p>
+
+<p>While digging into the issue, I noticed that the <code>NetworkVisits</code> table had roughly 2000 rowgroups in it, with about 800 of them being in an open state and no where near the max allowed (1048576). Here is a small sample of what I was seeing:</p>
+
+<p><a href="https://i.stack.imgur.com/KNG0O.jpg" rel="noreferrer"><img src="https://i.stack.imgur.com/KNG0O.jpg" alt="enter image description here"></a></p>
+
+<p>I ran a reorganize on the index, which compressed all but 1 rowgroup, but this morning I checked again and we again have multiple open rowgroups - the one that was created yesterday after the reorganize, then 3 others each created roughly around the time the deletion job ran:</p>
+
+<pre><code><span>TableName       IndexName           type_desc               state_desc  total_rows  deleted_rows    created_time
+NetworkVisits   CCI_NetworkVisits   </span><span>CLUSTERED</span><span> COLUMNSTORE   </span><span>OPEN</span><span>        </span><span>36754</span><span>       </span><span>0</span><span>               </span><span>2019-12-18</span><span> </span><span>18</span><span>:</span><span>30</span><span>:</span><span>54.217</span><span>
+NetworkVisits   CCI_NetworkVisits   </span><span>CLUSTERED</span><span> COLUMNSTORE   </span><span>OPEN</span><span>        </span><span>172103</span><span>      </span><span>0</span><span>               </span><span>2019-12-18</span><span> </span><span>20</span><span>:</span><span>02</span><span>:</span><span>06.547</span><span>
+NetworkVisits   CCI_NetworkVisits   </span><span>CLUSTERED</span><span> COLUMNSTORE   </span><span>OPEN</span><span>        </span><span>132628</span><span>      </span><span>0</span><span>               </span><span>2019-12-19</span><span> </span><span>04</span><span>:</span><span>03</span><span>:</span><span>10.713</span><span>
+NetworkVisits   CCI_NetworkVisits   </span><span>CLUSTERED</span><span> COLUMNSTORE   </span><span>OPEN</span><span>        </span><span>397718</span><span>      </span><span>0</span><span>               </span><span>2019-12-19</span><span> </span><span>08</span><span>:</span><span>02</span><span>:</span><span>13.063</span></code></pre>
+
+<p>I'm trying to determine what possibly could be causing this to create new rowgroups instead of using the existing one. </p>
+
+<p>Is it possibly memory pressure or contention between the insert and the delete? Is this behavior documented anywhere?</p>
+
+<p>We're running SQL Server 2017 CU 16 Enterprise Edition on this server. </p>
+
+<p>The <code>INSERT</code> is MAXDOP 0, the <code>DELETE</code> is MAXDOP 48. The only closed rowgroups are the ones from the initial <code>BULKLOAD</code> and then the <code>REORG_FORCED</code> that I did yesterday, so the trim reasons in <code>sys.dm_db_column_store_row_group_physical_stats</code> are <code>REORG</code> and <code>NO_TRIM</code> respectively. There are no closed rowgroups beyond those. There are no updates being run against this table. We average about 520 executions per minute on the insert statement. There is no partitioning on the table.</p>
+
+<p>I am aware of trickle inserts. We do the same thing elsewhere and are not experiencing the same issue with multiple open row groups. Our suspicion is it has to do with the delete. Each newly created row group is around the time of the scheduled deletion job. There are only two delta stores showing deleted rows. We don't actually delete a lot of data from this table, for example during one execution yesterday it deleted 266 rows.</p>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

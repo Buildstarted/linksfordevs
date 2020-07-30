@@ -1,0 +1,1473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+&#x201C;Stubs&#x201D; in the .NET Runtime - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="&#x201C;Stubs&#x201D; in the .NET Runtime - linksfor.dev(s)"/>
+    <meta property="article:author" content="Matt Warren"/>
+    <meta property="og:description" content="As the saying goes: &#x201C;All problems in computer science can be solved by another level of indirection&#x201D;- David Wheeler"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://mattwarren.org/2019/09/26/Stubs-in-the-.NET-Runtime/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - &#x201C;Stubs&#x201D; in the .NET Runtime</title>
+<div class="readable">
+        <h1>&#x201C;Stubs&#x201D; in the .NET Runtime</h1>
+            <div>by Matt Warren</div>
+            <div>Reading time: 69-87 minutes</div>
+        <div>Posted here: 21 Apr 2020</div>
+        <p><a href="https://mattwarren.org/2019/09/26/Stubs-in-the-.NET-Runtime/">https://mattwarren.org/2019/09/26/Stubs-in-the-.NET-Runtime/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+  
+  <p><span>26 Sep 2019 - 12019 words</span></p><p>As the saying goes:</p>
+
+<blockquote>
+  <p>“All problems in computer science can be solved by another level of indirection”</p>
+
+  <p>- <a href="https://www2.dmst.aueb.gr/dds/pubs/inbook/beautiful_code/html/Spi07g.html#another_level_of_indirection">David Wheeler</a></p>
+</blockquote>
+
+<p>and it certainly seems like the ‘.NET Runtime’ Engineers took this advice to heart!</p>
+
+<p><a href="https://en.wikipedia.org/wiki/Method_stub">‘Stubs’</a>, as they’re known in the runtime (sometimes <a href="https://en.wikipedia.org/wiki/Thunk">‘Thunks’</a>), provide a level of indirection throughout the source code, there’s almost <a href="https://github.com/dotnet/coreclr/search?q=stub+OR+thunk&amp;unscoped_q=stub+OR+thunk">500 mentions of them</a>!</p>
+
+<p>This post will explore <strong>what</strong> they are, <strong>how</strong> they work and <strong>why</strong> they’re needed.</p>
+
+<hr>
+
+<p><strong>Table of Contents</strong></p>
+
+<ul>
+  <li><a href="#what-are-stubs">What are stubs?</a>
+    <ul>
+      <li><a href="#why-are-stubs-needed">Why are stubs needed?</a></li>
+      <li><a href="#clr-application-binary-interface-abi">CLR ‘Application Binary Interface’ (ABI)</a></li>
+      <li><a href="#stub-management">Stub Management</a></li>
+    </ul>
+  </li>
+  <li><a href="#types-of-stubs">Types of stubs</a>
+    <ul>
+      <li><a href="#precode">Precode</a>
+        <ul>
+          <li><a href="#just-in-time-jit-and-tiered-compilation">‘Just-in-time’ (JIT) and ‘Tiered’ Compilation</a></li>
+        </ul>
+      </li>
+      <li><a href="#stubs-as-il">Stubs-as-IL</a></li>
+      <li><a href="#pinvoke-reverse-pinvoke-and-calli">P/Invoke, Reverse P/Invoke and ‘calli’</a>
+        <ul>
+          <li><a href="#marshalling">Marshalling</a></li>
+        </ul>
+      </li>
+      <li><a href="#generics">Generics</a></li>
+      <li><a href="#delegates">Delegates</a>
+        <ul>
+          <li><a href="#singlecast-delegates">Singlecast Delegates</a></li>
+          <li><a href="#shuffle-thunks">Shuffle Thunks</a></li>
+        </ul>
+      </li>
+      <li><a href="#unboxing">Unboxing</a></li>
+      <li><a href="#arrays">Arrays</a></li>
+      <li><a href="#tail-calls">Tail Calls</a></li>
+      <li><a href="#virtual-stub-dispatch-vsd">Virtual Stub Dispatch (VSD)</a></li>
+    </ul>
+  </li>
+  <li><a href="#other-types-of-stubs">Other Types of Stubs</a></li>
+  <li><a href="#stubs-in-the-mono-runtime">Stubs in the Mono Runtime</a></li>
+  <li><a href="#conclusion">Conclusion</a></li>
+</ul>
+
+<hr>
+
+<h2 id="what-are-stubs">What are stubs?</h2>
+
+<p>In the context of the .NET Runtime, ‘stubs’ look something like this:</p>
+
+<div><div><pre><code>   Call-site                                         Callee
++--------------+           +---------+           +-------------+
+|              |           |         |           |             |
+|              +----------&gt;+  Stub   + - - - - -&gt;+             |
+|              |           |         |           |             |
++--------------+           +---------+           +-------------+
+</code></pre></div></div>
+
+<p>So they sit between a method ‘<em>call-site</em>’ (i.e. code such as <code>var result = Foo(..);</code>) and the ‘<em>callee</em>’ (where the method itself is implemented, the native/assembly code) and I like to think of them as doing <strong>tidy-up</strong> or <strong>fix-up</strong> work. Note that moving from the ‘stub’ to the ‘callee’ isn’t another full method call (hence the dotted line), it’s often just a single <code>jmp</code> or <code>call</code> assembly instruction, so the 2nd transition doesn’t involve all the same work that was initially done at the call-site (pushing/popping arguments into registers, increasing the stack space, etc).</p>
+
+<p>The stubs themselves can be as simple as just a few assembly instructions or something more complicated, we’ll look at individual examples <a href="#types-of-stubs">later on in this post</a>.</p>
+
+<p>Now, to be clear, not <em>all</em> method calls require a stub, if you’re doing a regular call to an <em>static</em> or <em>instance</em> method that just goes directly from the ‘call-site’ to the ‘callee’. But once you involve <a href="#virtual-stub-dispatch-vsd">virtual methods</a>, <a href="#delegates">delegates</a> or <a href="#generics">generics</a> things get a bit more complicated.</p>
+
+<h3 id="why-are-stubs-needed">Why are stubs needed?</h3>
+
+<p>There are several reasons that stubs need to be created by the runtime:</p>
+
+<ul>
+  <li><strong>Required Functionality</strong>
+    <ul>
+      <li>For instance <a href="#delegates">Delegates</a> and <a href="#arrays">Arrays</a> <em>must</em> be provided but the runtime, their method bodies are not generated by the C#/F#/VB.NET compiler and neither do they exist in the <a href="https://github.com/dotnet/corefx">Base-Class Libraries</a>. This requirement is outlined in the <a href="https://mattwarren.org/2018/04/06/Taking-a-look-at-the-ECMA-335-Standard-for-.NET/">ECMA 355 Spec</a>, for instance ‘Partition I’ in section ‘8.9.1 Array types’ says:
+        <blockquote>
+          <p>Exact array types are <strong>created automatically by the VES when they are required</strong>. Hence, the operations on an array type are defined by the CTS. These generally are: allocating the array based on size and lower-bound information, indexing the array to read and write a value, computing the address of an element of the array (a managed pointer), and querying for the rank, bounds, and the total number of values stored in the array.</p>
+        </blockquote>
+
+        <p>Likewise for delegates, which are covered in ‘I.8.9.3 Delegates’:</p>
+        <blockquote>
+          <p>While, for the most part, delegates appear to be simply another kind of user-defined class, they are tightly controlled. <strong>The implementations of the methods are provided by the VES, not user code</strong>. The only additional members that can be defined on delegate types are static or instance methods.</p>
+        </blockquote>
+      </li>
+    </ul>
+  </li>
+  <li><strong>Performance</strong>
+    <ul>
+      <li>Other types of ‘stubs’, such as <a href="#virtual-stub-dispatch-vsd">Virtual Stub Dispatch</a> and <a href="#generics">Generic Instantiation Stubs</a> are there to make those operations perform well or to have an positive impact on the entire runtime, such as reducing the memory footprint (in the case of <a href="https://yizhang82.dev/dotnet-generics-sharing">‘shared generic code’</a>).</li>
+    </ul>
+  </li>
+  <li><strong>Consistent method calls</strong>
+    <ul>
+      <li>A final factor is that having ‘stubs’ makes the work of the JIT compiler easier. As we will see in the rest of the post, stubs deal with a variety of different types of method calls. This means the the JIT can generate more straightforward code for any given ‘call site’, because it (mostly) doesn’t care whats happening in the ‘callee’. If stubs didn’t exist, for a given method call the JIT would have to generate different code depending on whether generics where involved or not, if it was a virtual or non-virtual call, if it was going via a delegate, etc. Stubs abstact a lot of this behaviour away from the JIT, allowing it to deal with a more simple ‘Application Binary Interface’ (ABI).</li>
+    </ul>
+  </li>
+</ul>
+
+<h3 id="clr-application-binary-interface-abi">CLR ‘Application Binary Interface’ (ABI)</h3>
+
+<p>Therefore, another way to think about ‘stubs’ is that they are part of what makes the CLR-specific <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/clr-abi.md">‘Application Binary Interface’ (ABI)</a> work.</p>
+
+<p>All code needs to work with the ABI or ‘calling convention’ of the CPU/OS that it’s running on, for instance by following the <a href="https://en.wikipedia.org/wiki/X86_calling_conventions">x86 calling convention</a>, <a href="https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=vs-2019">x64 calling convention</a> or <a href="https://wiki.osdev.org/System_V_ABI">System V ABI</a>. This applies across runtimes, for more on this see:</p>
+
+<ul>
+  <li><a href="https://science.raphael.poss.name/go-calling-convention-x86-64.html">The Go low-level calling convention on x86-64</a></li>
+  <li><a href="https://stackoverflow.com/questions/41693637/whats-the-calling-convention-for-the-java-code-in-linux-platform">What’s the calling convention for the Java code in Linux platform?</a></li>
+  <li><a href="https://doc.rust-lang.org/nomicon/ffi.html">Rust docs - Foreign Function Interface</a></li>
+  <li><a href="https://doc.rust-lang.org/unstable-book/language-features/abi-thiscall.html">Rust docs - abi_thiscall</a></li>
+  <li><a href="https://blog.filippo.io/rustgo/">rustgo: calling Rust from Go with near-zero overhead</a></li>
+</ul>
+
+<p>As an aside, if you want more information about ‘calling conventions’ here’s some links that I found useful:</p>
+
+<ul>
+  <li><a href="https://www.codeproject.com/articles/1388/calling-conventions-demystified">Calling Conventions Demystified</a></li>
+  <li><a href="https://wiki.osdev.org/Calling_Conventions">OS Dev - Calling Conventions</a></li>
+  <li><a href="https://www.gamasutra.com/view/news/171088/x64_ABI_Intro_to_the_Windows_x64_calling_convention.php">x64 ABI: Intro to the Windows x64 calling convention</a></li>
+  <li><a href="https://blogs.msdn.microsoft.com/freik/2006/03/06/x64-abi-vs-x86-abi-aka-calling-conventions-for-amd64-em64t/">x64 ABI vs. x86 ABI (aka Calling Conventions for AMD64 &amp; EM64T)</a></li>
+</ul>
+
+<p>However, on-top of what the CLR <em>has</em> to support due to the CPU/OS conventions, it also has it’s own <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/clr-abi.md">extended ABI</a> for <em>.NET-specific</em> use cases, including:</p>
+
+<ul>
+  <li><a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/clr-abi.md#the-this-pointer">“this” pointer</a>:
+    <blockquote>
+      <p><strong>The managed “this” pointer is treated like a new kind of argument not covered by the native ABI</strong>, so we chose to always pass it as the first argument in (AMD64) <code>RCX</code> or (ARM, ARM64) <code>R0</code>.
+AMD64-only: Up to .NET Framework 4.5, the managed “this” pointer was treated just like the native “this” pointer (meaning it was the second argument when the call used a return buffer and was passed in <code>RDX</code> instead of <code>RCX</code>). Starting with .NET Framework 4.5, it is always the first argument.</p>
+    </blockquote>
+  </li>
+  <li><a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/clr-abi.md#generics">Generics</a> or more specifically to handle ‘Shared generics’:
+    <blockquote>
+      <p><strong>In cases where the code address does not uniquely identify a generic instantiation of a method, then a ‘generic instantiation parameter’ is required</strong>. Often the “this” pointer can serve dual-purpose as the instantiation parameter. When the “this” pointer is not the generic parameter, <strong>the generic parameter is passed as an additional argument</strong>..</p>
+    </blockquote>
+  </li>
+  <li><a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/clr-abi.md#hidden-parameters">Hidden Parameters</a>, covering ‘Stub dispatch’, ‘Fast Pinvoke’, ‘Calli Pinvoke’ and ‘Normal PInvoke’. For instance, here’s why ‘PInvoke’ has a hidden parameter:
+    <blockquote>
+      <p><em>Normal PInvoke</em> - The VM <strong>shares IL stubs based on signatures</strong>, but wants the <strong>right method to show up in call stack and exceptions</strong>, so the MethodDesc for the exact PInvoke is passed in the (x86) <code>EAX</code> / (AMD64) <code>R10</code> / (ARM, ARM64) <code>R12</code> (in the JIT: <code>REG_SECRET_STUB_PARAM</code>). Then in the IL stub, when the JIT gets <code>CORJIT_FLG_PUBLISH_SECRET_PARAM</code>, it must move the register into a compiler temp.</p>
+    </blockquote>
+  </li>
+</ul>
+
+<p>Not all of these scenarios need a stub, for instance the ‘this’ pointer is handled directly by the JIT, but many do as we’ll see in the rest of the post.</p>
+
+<h3 id="stub-management">Stub Management</h3>
+
+<p>So we’ve seen why stubs are needed and what type of functionality they can provide. But before we look at all the specific examples that exist in the <a href="https://github.com/dotnet/coreclr/tree/master/src">CoreCLR source</a>, I just wanted to take some time to understand the common or shared concerns that apply to all stubs.</p>
+
+<p>Stubs in the CLR are snippets of assembly code, but they have to be stored in memory and have their life-time managed. Also, they have to play nice with the debugger, from <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/coding-guidelines/clr-code-guide.md">What Every CLR Developer Must Know Before Writing Code</a>:</p>
+
+<blockquote>
+  <p><strong>2.8 Is your code compatible with managed debugging?</strong></p>
+
+  <ul>
+    <li>..</li>
+    <li>If you add a new stub (or way to call managed code), make sure that you can <strong>source-level step-in (F11) it under the debugger</strong>. The debugger is not psychic. A source-level step-in needs to be able to go <strong>from the source-line before a call to the source-line after the call</strong>, or managed code developers will be very confused. If you make that call transition be a giant 500 line stub, you must cooperate with the debugger for it to know how to step-through it. (<strong>This is what StubManagers are all about. See <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/stubmgr.h">src\vm\stubmgr.h</a></strong>). Try doing a step-in through your new codepath under the debugger.</li>
+  </ul>
+</blockquote>
+
+<p>So every type of stub has a <code>StubManager</code> which deals with the allocation, storage and lookup of the stubs. The lookup is significant, as it provides the mapping from an arbitrary memory address to the type of stub (if any) that created the code. As an example, here’s what the <code>CheckIsStub_Internal(..)</code> method <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L2107-L2122">here</a> and <code>DoTraceStub(..)</code> method <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L2124-L2140">here</a> look like for the <code>DelegateInvokeStubManager</code>:</p>
+
+<pre><code>BOOL DelegateInvokeStubManager::CheckIsStub_Internal(PCODE stubStartAddress)
+{
+    LIMITED_METHOD_DAC_CONTRACT;
+
+    bool fIsStub = false;
+
+#ifndef DACCESS_COMPILE
+#ifndef _TARGET_X86_
+    fIsStub = fIsStub || (stubStartAddress == GetEEFuncEntryPoint(SinglecastDelegateInvokeStub));
+#endif
+#endif // !DACCESS_COMPILE
+
+    fIsStub = fIsStub || GetRangeList()-&gt;IsInRange(stubStartAddress);
+
+    return fIsStub;
+}
+
+BOOL DelegateInvokeStubManager::DoTraceStub(PCODE stubStartAddress, TraceDestination *trace)
+{
+    LIMITED_METHOD_CONTRACT;
+
+    LOG((LF_CORDB, LL_EVERYTHING, "DelegateInvokeStubManager::DoTraceStub called\n"));
+
+    _ASSERTE(CheckIsStub_Internal(stubStartAddress));
+
+    // If it's a MC delegate, then we want to set a BP &amp; do a context-ful
+    // manager push, so that we can figure out if this call will be to a
+    // single multicast delegate or a multi multicast delegate
+    trace-&gt;InitForManagerPush(stubStartAddress, this);
+
+    LOG_TRACE_DESTINATION(trace, stubStartAddress, "DelegateInvokeStubManager::DoTraceStub");
+
+    return TRUE;
+}
+</code></pre>
+
+<p>The code to initialise the various stub managers is <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/appdomain.cpp#L1668-L1679">here</a> in <code>SystemDomain::Attach()</code> and by working through the list we can get a sense of what each category of stub does (plus the informative comments in the code help!)</p>
+
+<ul>
+  <li><code>PrecodeStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L972-L1123">here</a>
+    <ul>
+      <li>‘<em>Stub manager functions &amp; globals</em>’</li>
+    </ul>
+  </li>
+  <li><code>DelegateInvokeStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L2061-L2343">here</a>
+    <ul>
+      <li>‘<em>Since we don’t generate delegate invoke stubs at runtime on IA64, we can’t use the StubLinkStubManager for these stubs.  Instead, we create an additional DelegateInvokeStubManager instead.</em>’</li>
+    </ul>
+  </li>
+  <li><code>JumpStubStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L1334-L1381">here</a>
+    <ul>
+      <li>‘<em>Stub manager for jump stubs created by ExecutionManager::jumpStub() These are currently used only on the 64-bit targets IA64 and AMD64</em>’</li>
+    </ul>
+  </li>
+  <li><code>RangeSectionStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L1383-L1591">here</a>
+    <ul>
+      <li>‘<em>Stub manager for code sections. It forwards the query to the more appropriate stub manager, or handles the query itself.</em>’</li>
+    </ul>
+  </li>
+  <li><code>ILStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L1593-L1893">here</a>
+    <ul>
+      <li>‘<em>This is the stub manager for IL stubs</em>’</li>
+    </ul>
+  </li>
+  <li><code>InteropDispatchStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L1897-L2058">here</a>
+    <ul>
+      <li>‘<em>This is used to recognize GenericComPlusCallStub, VarargPInvokeStub, and GenericPInvokeCalliHelper.</em>’</li>
+    </ul>
+  </li>
+  <li><code>StubLinkStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L1126-L1282">here</a></li>
+  <li><code>ThunkHeapStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L1286-L13321">here</a>
+    <ul>
+      <li>‘<em>Note, the only reason we have this stub manager is so that we can recgonize UMEntryThunks for IsTransitionStub. ..</em>’</li>
+    </ul>
+  </li>
+  <li><code>TailCallStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L2350-L2488">here</a>
+    <ul>
+      <li>‘<em>This is the stub manager to help the managed debugger step into a tail call. It helps the debugger trace through JIT_TailCall().</em>’ (from stubmgr.h)</li>
+    </ul>
+  </li>
+  <li><code>ThePreStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1993-L2032">here</a> (in prestub.cpp)
+    <ul>
+      <li>‘<em>The following code manages the PreStub. All method stubs initially use the prestub.</em>’</li>
+    </ul>
+  </li>
+  <li><code>VirtualCallStubManager</code> implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/virtualcallstub.cpp">here</a> (in virtualcallstub.cpp)
+    <ul>
+      <li>‘<em>VirtualCallStubManager is the heart of the stub dispatch logic. See the book of the runtime entry</em>’ (<a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/virtual-stub-dispatch.md">BOTR - Virtual Stub Dispatch</a>)</li>
+    </ul>
+  </li>
+</ul>
+
+<p>Finally, we can also see the ‘StubManagers’ in action if we use the <code>eeheap</code> <a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension#commands">SOS command</a> to inspect the ‘heap dump’ of a .NET Process, as it helps report the size of the different ‘stub heaps’:</p>
+
+<div><div><pre><code>&gt; !eeheap -loader
+
+Loader Heap:
+--------------------------------------
+System Domain: 704fd058
+LowFrequencyHeap: Size: 0x0(0)bytes.
+HighFrequencyHeap: 002e2000(8000:1000) Size: 0x1000(4096)bytes.
+StubHeap: 002ea000(2000:1000) Size: 0x1000(4096)bytes.
+Virtual Call Stub Heap:
+- IndcellHeap: Size: 0x0(0)bytes.
+- LookupHeap: Size: 0x0(0)bytes.
+- ResolveHeap: Size: 0x0(0)bytes.
+- DispatchHeap: Size: 0x0(0)bytes.
+- CacheEntryHeap: Size: 0x0(0)bytes.
+Total size: 0x2000(8192)bytes
+--------------------------------------
+</code></pre></div></div>
+
+<p>(output taken from <a href="https://blogs.msdn.microsoft.com/carlos/2009/11/09/net-generics-and-code-bloat-or-its-lack-thereof/">.NET Generics and Code Bloat (or its lack thereof)</a>)</p>
+
+<p>You can see that in this case the entire ‘stub heap’ is taking up 4096 bytes and in addition there are more in-depth statistics covering the heaps used by <a href="#virtual-stub-dispatch-vsd">virtual call dispatch</a>.</p>
+
+<hr>
+
+<h2 id="types-of-stubs">Types of stubs</h2>
+
+<p>The different stubs used by the runtime fall into 3 main categories:</p>
+
+<ul>
+  <li><strong>Hand-written assembly code</strong> e.g. <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/amd64/PInvokeStubs.asm">/vm/amd64/PInvokeStubs.asm
+</a></li>
+  <li><strong>Dynamically emitted assembly code</strong>, implemented in C++, e.g. <code>StubLinkerCPU::EmitShuffleThunk(..)</code> in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/stubs.cpp#L1760-L1802">/vm/arm64/stubs.cpp</a></li>
+  <li>‘<strong>Stubs-as-IL</strong>’ which we discuss <a href="#stubs-as-il">later on in this post</a>, for example <code>COMDelegate::GetMulticastInvoke(..)</code> in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L2324-L2444">/vm/comdelegate.cpp</a></li>
+</ul>
+
+<p>Most stubs are wired up in <code>MethodDesc::DoPrestub(..)</code>, in this <a href="https://github.com/dotnet/coreclr/blob/964461ca69639003914fd4fedaf08baf1f388f7e/src/vm/prestub.cpp#L1891-L1941">section of code</a> or <a href="https://github.com/dotnet/coreclr/blob/964461ca69639003914fd4fedaf08baf1f388f7e/src/vm/prestub.cpp#L1801-LL1816">this section</a> for COM Interop. The stubs generated include the following (definitions taken from <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/method-descriptor.md#kinds-of-methoddescs">BOTR - ‘Kinds of MethodDescs’</a>, also see <code>enum MethodClassification</code> <a href="https://github.com/dotnet/coreclr/blob/855491b895b187bdc396c491884a370b11d999e9/src/vm/method.hpp#L100-L125">here</a>):</p>
+
+<ul>
+  <li><strong>Instantiating</strong> in (<code>FEATURE_SHARE_GENERIC_CODE</code>, on by default) in <code>MakeInstantiatingStubWorker(..)</code> <a href="https://github.com/dotnet/coreclr/blob/964461ca69639003914fd4fedaf08baf1f388f7e/src/vm/prestub.cpp#L1505-L1552">here</a>
+    <ul>
+      <li><em>Used for less common IL methods that have generic instantiation or that do not have preallocated slot in method table.</em></li>
+    </ul>
+  </li>
+  <li><strong>P/Invoke</strong> (a.k.a <strong>NDirect</strong>) in <code>GetStubForInteropMethod(..)</code> <a href="https://github.com/dotnet/coreclr/blob/2832f54a6602cd4c0dff4fa65163345ab3ad953c/src/vm/dllimport.cpp#L5757-L5824">here</a>
+    <ul>
+      <li><em>P/Invoke methods. These are methods marked with DllImport attribute.</em></li>
+    </ul>
+  </li>
+  <li><strong>FCall</strong> methods in <code>ECall::GetFCallImpl(..)</code> <a href="https://github.com/dotnet/coreclr/blob/1f3f474a13bdde1c5fecdf8cd9ce525dbe5df000/src/vm/ecall.cpp#L355-L522">here</a>
+    <ul>
+      <li><em>Internal methods implemented in unmanaged code. These are methods marked with <code>MethodImplAttribute(MethodImplOptions.InternalCall)</code> attribute, delegate constructors and tlbimp constructors.</em></li>
+    </ul>
+  </li>
+  <li><strong>Array</strong> methods in <code>GenerateArrayOpStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/cab949098dcdab9d458f102eb59e81311bac45c4/src/vm/array.cpp#L1023-L1068">here</a>
+    <ul>
+      <li><em>Array methods whose implementation is provided by the runtime (Get, Set, Address)</em></li>
+    </ul>
+  </li>
+  <li><strong>EEImpl</strong> in <code>PCODE COMDelegate::GetInvokeMethodStub(EEImplMethodDesc* pMD)</code> <a href="https://github.com/dotnet/coreclr/blob/d3e39bc2f81e3dbf9e4b96347f62b49d8700336c/src/vm/comdelegate.cpp#L2075-L2118">here</a>
+    <ul>
+      <li><em>Delegate methods, implementation provided by the runtime</em></li>
+    </ul>
+  </li>
+  <li><strong>COM Interop</strong> (<code>FEATURE_COMINTEROP</code>, on by default) in <code>GetStubForInteropMethod(..)</code> <a href="https://github.com/dotnet/coreclr/blob/2832f54a6602cd4c0dff4fa65163345ab3ad953c/src/vm/dllimport.cpp#L5757-L5824">here</a>
+    <ul>
+      <li><em>COM interface methods. Since the non-generic interfaces can be used for COM interop by default, this kind is usually used for all interface methods.</em></li>
+    </ul>
+  </li>
+  <li><strong>Unboxing</strong> in <code>Stub * MakeUnboxingStubWorker(MethodDesc *pMD)</code> <a href="https://github.com/dotnet/coreclr/blob/964461ca69639003914fd4fedaf08baf1f388f7e/src/vm/prestub.cpp#L1470-L1502">here</a></li>
+</ul>
+
+<p>Right, now lets look at the individual stub in more detail.</p>
+
+<h3 id="precode">Precode</h3>
+
+<p>First up, we’ll take a look at ‘precode’ stubs, because they are used by all other types of stubs, as explained in the BotR page on <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/method-descriptor.md#precode">Method Descriptors</a>:</p>
+
+<blockquote>
+  <p>The precode is a small fragment of code used to implement temporary entry points and an <strong>efficient wrapper for stubs</strong>. Precode is a niche code-generator for these two cases, generating the most efficient code possible. In an ideal world, all native code dynamically generated by the runtime would be produced by the JIT. That’s not feasible in this case, given the specific requirements of these two scenarios. The basic precode on x86 may look like this:</p>
+
+  <div><div><pre><code>mov eax,pMethodDesc // Load MethodDesc into scratch register
+jmp target          // Jump to a target
+</code></pre></div>  </div>
+
+  <p><strong>Efficient Stub wrappers:</strong> The implementation of certain methods (e.g. P/Invoke, delegate invocation, multi dimensional array setters and getters) is provided by the runtime, typically as hand-written assembly stubs. Precode provides a <strong>space-efficient wrapper over stubs, to multiplex them for multiple callers</strong>.</p>
+
+  <p>The worker code of the stub is wrapped by a precode fragment that can be mapped to the MethodDesc and that jumps to the worker code of the stub. The worker code of the stub can be shared between multiple methods this way. It is an important optimization used to implement P/Invoke marshalling stubs.</p>
+</blockquote>
+
+<p>By providing a ‘pointer’ to the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/method.hpp#L178-L2041">MethodDesc class</a>, the precode allows any subsequent stub to have access to <em>a lot</em> of information about a method call and it’s containing <code>Type</code> via the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/methodtable.h#L601-L4175">MethodTable</a> (‘hot’) and <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/class.h#L797-L2050">EEClass</a> (‘cold’) data structures. The MethodDesc data-structure is one of the most fundamental types in the runtime, hence why it has it’s own <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/method-descriptor.md">BotR page</a>.</p>
+
+<p>Each ‘precode’ is created in <code>MethodDesc::GetOrCreatePrecode()</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/method.cpp#L4712-L4776">here</a> and there are several different types as we can see in this <code>enum</code> from <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/precode.h#L19-L31">/vm/precode.h</a>:</p>
+
+<pre><code>enum PrecodeType {
+    PRECODE_INVALID         = InvalidPrecode::Type,
+    PRECODE_STUB            = StubPrecode::Type,
+#ifdef HAS_NDIRECT_IMPORT_PRECODE
+    PRECODE_NDIRECT_IMPORT  = NDirectImportPrecode::Type,
+#endif // HAS_NDIRECT_IMPORT_PRECODE
+#ifdef HAS_FIXUP_PRECODE
+    PRECODE_FIXUP           = FixupPrecode::Type,
+#endif // HAS_FIXUP_PRECODE
+#ifdef HAS_THISPTR_RETBUF_PRECODE
+    PRECODE_THISPTR_RETBUF  = ThisPtrRetBufPrecode::Type,
+#endif // HAS_THISPTR_RETBUF_PRECODE
+};
+</code></pre>
+
+<p>As always, the <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/method-descriptor.md#types-of-precode">BotR page</a> describes the different types in great detail, but in summary:</p>
+
+<ul>
+  <li><strong>StubPrecode</strong> - <em>.. is the basic precode type. It loads MethodDesc into a scratch register and then jumps. It must be implemented for precodes to work. It is used as fallback when no other specialized precode type is available.</em></li>
+  <li><strong>FixupPrecode</strong> - <em>.. is used when the final target does not require MethodDesc in scratch register. The FixupPrecode saves a few cycles by avoiding loading MethodDesc into the scratch register. The most common usage of FixupPrecode is for method fixups in NGen images.</em></li>
+  <li><strong>ThisPtrRetBufPrecode</strong> - <em>.. is used to switch a return buffer and the this pointer for open instance delegates returning valuetypes. It is used to convert the calling convention of <code>MyValueType Bar(Foo x)</code> to the calling convention of <code>MyValueType Foo::Bar()</code>.</em></li>
+  <li><strong>NDirectImportPrecode</strong> (a.k.a P/Invoke) - <em>.. is used for lazy binding of unmanaged P/Invoke targets. This precode is for convenience and to reduce amount of platform specific plumbing.</em></li>
+</ul>
+
+<p>Finally, to give you an idea of some real-world scenarios for ‘precode’ stubs, take a look at <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/cgenamd64.cpp#L732-L736">this comment</a> from the <code>DoesSlotCallPrestub(..)</code> method (AMD64):</p>
+
+<div><div><pre><code>// AMD64 has the following possible sequences for prestub logic:
+// 1. slot -&gt; temporary entrypoint -&gt; prestub
+// 2. slot -&gt; precode -&gt; prestub
+// 3. slot -&gt; precode -&gt; jumprel64 (jump stub) -&gt; prestub
+// 4. slot -&gt; precode -&gt; jumprel64 (NGEN case) -&gt; prestub
+</code></pre></div></div>
+
+<h4 id="just-in-time-jit-and-tiered-compilation">‘Just-in-time’ (JIT) and ‘Tiered’ Compilation</h4>
+
+<p>However, another piece of functionality that ‘precodes’ provide is related to ‘just-in-time’ (JIT) compilation, again from the <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/method-descriptor.md#precode">BotR page</a>:</p>
+
+<blockquote>
+  <p><strong>Temporary entry points</strong>: Methods must provide entry points before they are jitted so that jitted code has an address to call them. These temporary entry points are provided by precode. They are a specific form of stub wrappers.</p>
+
+  <p><strong>This technique is a lazy approach to jitting</strong>, which provides a performance optimization in both space and time. Otherwise, the transitive closure of a method would need to be jitted before it was executed. This would be a waste, since only the dependencies of taken code branches (e.g. if statement) require jitting.</p>
+
+  <p>Each temporary entry point is much smaller than a typical method body. They need to be small since there are a lot of them, even at the cost of performance. The temporary entry points are executed just once before the actual code for the method is generated.</p>
+</blockquote>
+
+<p>So these ‘temporary entry points’ provide something concrete that can be referenced before a method has been JITted. They then trigger the JIT-compilation which does the job of generating the native code for a method. The entire process looks like this (dotted lines represent a pointer indirection, solid lines are a ‘control transfer’ e.g. a jmp/call assembly instruction):</p>
+
+<p><strong>Before JITing</strong></p>
+
+<p><img src="https://mattwarren.org/images/2019/09/01%20-%20Before%20JITing.svg" alt="Before JITing"></p>
+
+<p>Here we see the ‘temporary entry point’ pointing to the ‘fixup precode’, which ultimately calls into the <code>PrestubWorker()</code> function <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1555-L1668">here</a>.</p>
+
+<p><strong>After JIting</strong></p>
+
+<p><img src="https://mattwarren.org/images/2019/09/02%20-%20After%20JITing%20-%20Normal.svg" alt="After JIting - Normal"></p>
+
+<p>Once the method has been JITted, we can see that the <code>PrestubWorker</code> is now out of the picture and instead we have the native code for the function. In addition, there is now a ‘stable entry point’ that can be used by any other code that wants to execute the function. Also, we can see that the ‘fixup precode’ has been ‘backpatched’ to also point at the ‘native code’. For an idea of how this ‘back-patching’ works, see the <code>StubPrecode ::SetTargetInterlocked(..)</code> method <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/cgencpu.h#L551-L610">here</a> (ARM64).</p>
+
+<p><strong>After JIting - Tiered Compilation</strong></p>
+
+<p><img src="https://mattwarren.org/images/2019/09/03%20-%20After%20JITing%20-%20Tiered%20Compilation.svg" alt="After JIting - Tiered Compilation"></p>
+
+<p>However, there is also another ‘after’ scenario, now that .NET Core has <a href="https://devblogs.microsoft.com/dotnet/tiered-compilation-preview-in-net-core-2-1/">‘Tiered Compilation’</a>. Here we see that the ‘stable entry point’ still goes via the ‘fixup precode’, it doesn’t directly call into the ‘native code’. This is because ‘tiered compilation’ counts how many times a method is called and once it decides the method is ‘<em>hot</em>’, it re-compiles a more optimised version that will give better performance. This ‘call counting’ takes place in <a href="https://github.com/dotnet/coreclr/blob/d8d6d8a5/src/vm/prestub.cpp#L1986">this code</a> in <code>MethodDesc::DoPrestub(..)</code> which calls into <code>CodeVersionManager::PublishNonJumpStampVersionableCodeIfNecessary(..)</code> <a href="https://github.com/dotnet/coreclr/blob/d8d6d8a5/src/vm/codeversion.cpp#L2295-L2474">here</a> and then if <code>shouldCountCalls</code> is true, it ends up calling <code>CallCounter::OnMethodCodeVersionCalledSubsequently(..)</code> <a href="https://github.com/dotnet/coreclr/blob/d8d6d8a5/src/vm/callcounter.cpp#L83-L109">here</a>.</p>
+
+<p>What’s been interesting to watch during the development of ‘tiered compilation’ is that (not surprisingly) there has been a significant amount of work to ensure that the extra level of indirection doesn’t make the entire process slower, for instance see <a href="https://github.com/dotnet/coreclr/pull/21292">Patch vtable slots and similar when tiering is enabled #21292</a>.</p>
+
+<p>Like all the other stubs, ‘precodes’ have different versions for different CPU architectures. As a reference, the list below contains links to all of them:</p>
+
+<ol>
+  <li><code>Precodes</code> (a.k.a ‘Precode Fixup Thunk’):
+    <ul>
+      <li>x86 in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/asmhelpers.S#L538-L556">/vm/i386/asmhelpers.S</a></li>
+      <li>x64 in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/AsmHelpers.asm#L251-L264">/vm/amd64/AsmHelpers.asm</a></li>
+      <li>ARM in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/asmhelpers.S#L468-L490">/vm/arm/asmhelpers.S</a></li>
+      <li>ARM64 in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/asmhelpers.asm#L209-L230">/vm/arm64/asmhelpers.asm</a></li>
+    </ul>
+  </li>
+  <li><code>ThePreStub</code>:
+    <ul>
+      <li>x86 in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/asmhelpers.S#L897-L933">/vm/i386/asmhelpers.S</a></li>
+      <li>x64 in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/ThePreStubAMD64.asm#L11-L32">/vm/amd64/ThePreStubAMD64.asm</a></li>
+      <li>ARM in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/asmhelpers.S#L401-L442">/vm/arm/asmhelpers.S</a></li>
+      <li>ARM64 in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/asmhelpers.asm#L230-L257">/vm/arm64/asmhelpers.asm</a></li>
+    </ul>
+  </li>
+  <li><code>PreStubWorker(..)</code> in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1555-L1668">/vm/prestub.cpp</a></li>
+  <li><code>MethodDesc::DoPrestub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1706-L1989">here</a></li>
+  <li><code>MethodDesc::DoBackpatch(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L77-L257">here</a></li>
+</ol>
+
+<p>Finally, for even more information on the JITing process, see:</p>
+
+<ul>
+  <li><a href="https://blogs.msdn.microsoft.com/abhinaba/2014/09/29/net-just-in-time-compilation-and-warming-up-your-system/">.NET Just in Time Compilation and Warming up Your System</a></li>
+  <li><a href="https://xoofx.com/blog/2018/04/12/writing-managed-jit-in-csharp-with-coreclr/">Writing a Managed JIT in C# with CoreCLR</a></li>
+  <li><a href="https://ntcore.com/files/netint_native.htm">.NET Internals and Native Compiling</a></li>
+  <li><a href="https://www.codeproject.com/Articles/26060/NET-Internals-and-Code-Injection">.NET Internals and Code Injection</a></li>
+  <li><a href="https://habr.com/ru/post/307088/">Intercepting .NET / CLR Functions</a> (in Russian, <a href="https://translate.google.com/translate?hl=&amp;sl=auto&amp;tl=en&amp;u=https%3A%2F%2Fhabr.com%2Fru%2Fpost%2F307088%2F&amp;sandbox=1">Google Translate version</a>)</li>
+</ul>
+
+<h3 id="stubs-as-il">Stubs-as-IL</h3>
+
+<p>‘Stubs as IL’ actually describes several types of individual stubs, but what they all have in common is they’re generated from <a href="https://www.techopedia.com/definition/24290/intermediate-language-il-net">‘Intermediate Language’</a> (IL) which is then compiled by the JIT, in exactly the same way it handles the code we write (after it’s first been compiled from C#/F#/VB.NET into IL by another compiler).</p>
+
+<p>This makes sense, it’s far easier to write the IL once and then have the JIT worry about compiling it for different CPU architectures, rather than having to write raw assembly each time (for x86/x64/arm/etc). However all stubs were hand-written assembly in <a href="https://github.com/dotnet/coreclr/pull/18476#issuecomment-400810704">.NET Framework 1.0</a>:</p>
+
+<blockquote>
+  <p>What you have described is how it actually works. The only difference is that the shuffle thunk is hand-emitted in assembly and not generated by the JIT for historic reasons. All stubs (including all interop stubs) were hand-emitted like this in .NET Framework 1.0. <strong>Starting with .NET Framework 2.0, we have been converting the stubs to be generated by the JIT (the runtime generates IL for the stub, and then the JIT compiles the IL as regular method)</strong>. The shuffle thunk is one of the few remaining ones not converted yet. Also, we have the IL path on some platforms but not others - <code>FEATURE_STUBS_AS_IL</code> is related to it.</p>
+</blockquote>
+
+<p>In the CoreCLR source code, ‘stubs as IL’ are controlled by the feature flag <code>FEATURE_STUBS_AS_IL</code>, with the following additional flags for each specific type:</p>
+<ul>
+  <li><code>StubsAsIL</code></li>
+  <li><code>ArrayStubAsIL</code></li>
+  <li><code>MulticastStubAsIL</code></li>
+</ul>
+
+<p>On <code>Windows</code> only some features are implemented with IL stubs, see <a href="https://github.com/dotnet/coreclr/blob/7df151664237b539de91f1394e97f145460d05b6/clr.featuredefines.props#L26-L28">this code</a>, e.g. ‘ArrayStubAsIL’ is disabled on ‘x86’, but enabled elsewhere.</p>
+
+<div><div><pre><code><span>&lt;PropertyGroup</span> <span>Condition=</span><span>"'$(TargetsWindows)' == 'true'"</span><span>&gt;</span>
+   <span>&lt;FeatureArrayStubAsIL</span> <span>Condition=</span><span>"'$(Platform)' != 'x86'"</span><span>&gt;</span>true<span>&lt;/FeatureArrayStubAsIL&gt;</span>
+   <span>&lt;FeatureMulticastStubAsIL</span> <span>Condition=</span><span>"'$(Platform)' != 'x86'"</span><span>&gt;</span>true<span>&lt;/FeatureMulticastStubAsIL&gt;</span>
+   <span>&lt;FeatureStubsAsIL</span> <span>Condition=</span><span>"'$(Platform)' == 'arm64'"</span><span>&gt;</span>true<span>&lt;/FeatureStubsAsIL&gt;</span>
+    ...
+<span>&lt;/PropertyGroup&gt;</span>
+</code></pre></div></div>
+
+<p>On <code>Unix</code> they are all done in IL, regardless of CPU Arch, as <a href="https://github.com/dotnet/coreclr/blob/7df151664237b539de91f1394e97f145460d05b6/clr.featuredefines.props#L20-L22">this code</a> shows:</p>
+
+<div><div><pre><code><span>&lt;PropertyGroup</span> <span>Condition=</span><span>"'$(TargetsUnix)' == 'true'"</span><span>&gt;</span>
+   ...
+   <span>&lt;FeatureArrayStubAsIL&gt;</span>true<span>&lt;/FeatureArrayStubAsIL&gt;</span>
+   <span>&lt;FeatureMulticastStubAsIL&gt;</span>true<span>&lt;/FeatureMulticastStubAsIL&gt;</span>
+   <span>&lt;FeatureStubsAsIL&gt;</span>true<span>&lt;/FeatureStubsAsIL&gt;</span>
+<span>&lt;/PropertyGroup&gt;</span>
+</code></pre></div></div>
+
+<p>Finally, here’s the complete list of stubs that can be implemented in IL from <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/ilstubresolver.h#L73-L93">/vm/ilstubresolver.h</a>:</p>
+
+<pre><code> enum ILStubType
+ {
+     Unassigned = 0,
+     CLRToNativeInteropStub,
+     CLRToCOMInteropStub,
+     CLRToWinRTInteropStub,
+     NativeToCLRInteropStub,
+     COMToCLRInteropStub,
+     WinRTToCLRInteropStub,
+#ifdef FEATURE_ARRAYSTUB_AS_IL 
+     ArrayOpStub,
+#endif
+#ifdef FEATURE_MULTICASTSTUB_AS_IL
+     MulticastDelegateStub,
+#endif
+#ifdef FEATURE_STUBS_AS_IL
+     SecureDelegateStub,
+     UnboxingILStub,
+     InstantiatingStub,
+#endif
+ };
+</code></pre>
+
+<p>But the usage of IL stubs has grown over time and it seems that they are the preferred mechanism where possible as they’re easier to write and debug. See <a href="https://github.com/dotnet/coreclr/pull/9752">[x86/Linux] Enable FEATURE_ARRAYSTUB_AS_IL</a>, <a href="https://github.com/dotnet/coreclr/pull/11624">Switch multicast delegate stub on Windows x64 to use stubs-as-il</a> and <a href="https://github.com/dotnet/coreclr/pull/26169#issuecomment-521518184">Fix GenerateShuffleArray to support cyclic shuffles #26169 (comment)</a> for more information.</p>
+
+<h3 id="pinvoke-reverse-pinvoke-and-calli">P/Invoke, Reverse P/Invoke and ‘calli’</h3>
+
+<p>All these stubs have one thing in common, they allow a transition between ‘managed’ and ‘un-managed’ (or native) code. To make this safe and to preserve the guarantees that the .NET runtime provides, stubs are used every time the transition is made.</p>
+
+<p>This entire process is outlined in great detail in the BotR page <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/clr-abi.md#per-call-site-pinvoke-work">CLR ABI - PInvokes</a>, from the ‘Per-call-site PInvoke work’ section:</p>
+
+<blockquote>
+  <ol>
+    <li>For direct calls, the JITed code sets <code>InlinedCallFrame-&gt;m_pDatum</code> to the MethodDesc of the call target.
+      <ul>
+        <li>For JIT64, indirect calls within <strong>IL stubs</strong> sets it to the secret parameter (this seems redundant, but it might have changed since the per-frame initialization?).</li>
+        <li>For JIT32 (ARM) indirect calls, it sets this member to the size of the pushed arguments, according to the comments. The implementation however always passed 0.</li>
+      </ul>
+    </li>
+    <li>For JIT64/AMD64 only: Next for <strong>non-IL stubs</strong>, the InlinedCallFrame is ‘pushed’ by setting <code>Thread-&gt;m_pFrame</code> to point to the InlinedCallFrame (recall that the per-frame initialization already set <code>InlinedCallFrame-&gt;m_pNext</code> to point to the previous top). For <strong>IL stubs</strong> this step is accomplished in the per-frame initialization.</li>
+    <li>The Frame is made active by setting <code>InlinedCallFrame-&gt;m_pCallerReturnAddress</code>.</li>
+    <li>The code then toggles the GC mode by setting <code>Thread-&gt;m_fPreemptiveGCDisabled = 0</code>.</li>
+    <li>Starting now, no GC pointers may be live in registers. RyuJit LSRA meets this requirement by adding special refPositon <code>RefTypeKillGCRefs</code> before unmanaged calls and special helpers.</li>
+    <li><strong>Then comes the actual call/PInvoke.</strong></li>
+    <li>The GC mode is set back by setting <code>Thread-&gt;m_fPreemptiveGCDisabled = 1</code>.</li>
+    <li>Then we check to see if <code>g_TrapReturningThreads</code> is set (non-zero). If it is, we call <code>CORINFO_HELP_STOP_FOR_GC</code>.
+      <ul>
+        <li>For ARM, this helper call preserves the return register(s): <code>R0</code>, <code>R1</code>, <code>S0</code>, and <code>D0</code>.</li>
+        <li>For AMD64, the generated code must manually preserve the return value of the PInvoke by moving it to a non-volatile register or a stack location.</li>
+      </ul>
+    </li>
+    <li>Starting now, GC pointers may once again be live in registers.</li>
+    <li>Clear the <code>InlinedCallFrame-&gt;m_pCallerReturnAddress</code> back to 0.</li>
+    <li>For JIT64/AMD64 only: For <strong>non-IL stubs</strong> ‘pop’ the Frame chain by resetting <code>Thread-&gt;m_pFrame</code> back to <code>InlinedCallFrame.m_pNext</code>.</li>
+  </ol>
+
+  <p>Saving/restoring all the non-volatile registers helps by preventing any registers that are unused in the current frame from accidentally having a live GC pointer value from a parent frame. The argument and return registers are ‘safe’ because they cannot be GC refs. Any refs should have been pinned elsewhere and instead passed as native pointers.</p>
+
+  <p>For <strong>IL stubs</strong>, the Frame chain isn’t popped at the call site, so instead it must be popped right before the epilog and right before any jmp calls. It looks like we do not support tail calls from PInvoke <strong>IL stubs</strong>?</p>
+</blockquote>
+
+<p>As you can see, quite a bit of the work is to keep the Garbage Collector (GC) happy. This makes sense because once execution moves into un-managed/native code the .NET runtime has no control over what’s happening, so it needs to ensure that the GC doesn’t clean up or move around objects that are being used in the native code. It achives this by constraining what the GC can do (on the current thread) from the time execution moves into un-managed code and keeps that in place until it returns back to the mamanged side.</p>
+
+<p>On top of that, there needs to be support for allowing <a href="https://mattwarren.org/2019/01/21/Stackwalking-in-the-.NET-Runtime/">‘stack walking’ or ‘unwinding</a>, to allowing debugging and produce meaningful stack traces. This is done by setting up <em>frames</em> that are put in place when control transitions from managed -&gt; un-managed, before being removed (‘popped’) when transitioning back. Here’s a list of the different scenarios that are covered, from <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/frames.h#L147-L193">/vm/frames.h</a>:</p>
+
+<div><div><pre><code>This is the list of Interop stubs &amp; transition helpers with information
+regarding what (if any) Frame they used and where they were set up:
+
+P/Invoke:
+ JIT inlined: The code to call the method is inlined into the caller by the JIT.
+    InlinedCallFrame is erected by the JITted code.
+ Requires marshaling: The stub does not erect any frames explicitly but contains
+    an unmanaged CALLI which turns it into the JIT inlined case.
+
+Delegate over a native function pointer:
+ The same as P/Invoke but the raw JIT inlined case is not present (the call always
+ goes through an IL stub).
+
+Calli:
+ The same as P/Invoke.
+ PInvokeCalliFrame is erected in stub generated by GenerateGetStubForPInvokeCalli
+ before calling to GetILStubForCalli which generates the IL stub. This happens only
+ the first time a call via the corresponding VASigCookie is made.
+
+ClrToCom:
+ Late-bound or eventing: The stub is generated by GenerateGenericComplusWorker
+    (x86) or exists statically as GenericComPlusCallStub[RetBuffArg] (64-bit),
+    and it erects a ComPlusMethodFrame frame.
+ Early-bound: The stub does not erect any frames explicitly but contains an
+    unmanaged CALLI which turns it into the JIT inlined case.
+
+ComToClr:
+ Normal stub:
+ Interpreted: The stub is generated by ComCall::CreateGenericComCallStub
+    (in ComToClrCall.cpp) and it erects a ComMethodFrame frame.
+ Prestub:
+  The prestub is ComCallPreStub (in ComCallableWrapper.cpp) and it erects a ComPrestubMethodFrame frame.
+
+Reverse P/Invoke (used for C++ exports &amp; fixups as well as delegates
+obtained from function pointers):
+ Normal stub:
+  x86: The stub is generated by UMEntryThunk::CompileUMThunkWorker
+    (in DllImportCallback.cpp) and it is frameless. It calls directly
+    the managed target or to IL stub if marshaling is required.
+  non-x86: The stub exists statically as UMThunkStub and calls to IL stub.
+ Prestub:
+  The prestub is generated by GenerateUMThunkPrestub (x86) or exists statically
+  as TheUMEntryPrestub (64-bit), and it erects an UMThkCallFrame frame.
+
+Reverse P/Invoke AppDomain selector stub:
+ The asm helper is IJWNOADThunkJumpTarget (in asmhelpers.asm) and it is frameless.
+</code></pre></div></div>
+
+<p>The P/Invoke <strong>IL stubs</strong> are <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1895-L1899">wired up</a> in the <code>MethodDesc::DoPrestub(..)</code> method (note that P/Invoke is also known as <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/method-descriptor.md#kinds-of-methoddescs">‘NDirect’</a>), in addition they are also created <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1787-L1800">here</a> when being used for ‘COM Interop’. That code then calls into <code>GetStubForInteropMethod(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/dllimport.cpp#L5757-L5824">in /vm/dllimport.cpp</a>, before branching off to handle each case:</p>
+
+<ul>
+  <li>P/Invoke calls into <code>NDirect::GetStubForILStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/dllimport.cpp#L5607-L5664">here</a></li>
+  <li>Reverse P/Invoke calls into another overload of <code>NDirect::GetStubForILStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/dllimport.cpp#L5584-L5605">here</a></li>
+  <li>COM Interop goes to <code>ComPlusCall::GetStubForILStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/clrtocomcall.cpp#L394-L471">here in /vm/clrtocomcall.cpp</a></li>
+  <li>EE implemented methods end up in <code>COMDelegate::GetStubForILStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L1502-L1518">here</a> (for more info on <code>EEImpl</code> methods see <a href="https://github.com/dotnet/coreclr/blob/masterDocumentation/botr/method-descriptor.md#kinds-of-methoddescs">‘Kinds of MethodDescs’</a>)</li>
+</ul>
+
+<p>There are also hand-written assembly stubs for the differents scenarios, such as <code>JIT_PInvokeBegin</code>, <code>JIT_PInvokeEnd</code> and <code>VarargPInvokeStub</code>, these can be seen in the files below:</p>
+
+<ul>
+  <li>x64 in <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/amd64/PInvokeStubs.asm">/vm/amd64/PInvokeStubs.asm</a></li>
+  <li>x86 in <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/i386/PInvokeStubs.asm">/vm/i386/PInvokeStubs.asm</a></li>
+  <li>ARM in <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/arm/PInvokeStubs.asm">/vm/arm/PInvokeStubs.asm</a></li>
+  <li>ARM64 in <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/arm64/PInvokeStubs.asm">/vm/arm64/PInvokeStubs.asm</a></li>
+</ul>
+
+<p>As an example, <code>calli</code> method calls (see <a href="https://docs.microsoft.com/en-us/dotnet/api/system.reflection.emit.opcodes.calli?view=netframework-4.8">OpCodes.Calli</a>) end up in <code>GenericPInvokeCalliHelper</code>, which has a nice bit of ASCII art in the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/asmhelpers.S#L636-L725">i386 version</a>:</p>
+
+<pre><code>// stack layout at this point:
+//
+// |         ...          |
+// |   stack arguments    | ESP + 16
+// +----------------------+
+// |     VASigCookie*     | ESP + 12
+// +----------------------+
+// |    return address    | ESP + 8
+// +----------------------+
+// | CALLI target address | ESP + 4
+// +----------------------+
+// |   stub entry point   | ESP + 0
+// ------------------------
+</code></pre>
+
+<p>However, all these stubs can have an adverse impact on start-up time, see <a href="https://github.com/dotnet/coreclr/issues/22212">Large numbers of Pinvoke stubs created on startup</a> for example. This impact has been mitigated by compiling the stubs ‘Ahead-of-Time’ (AOT) and storing them in the <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/readytorun-overview.md">‘Ready-to-Run’ images</a> (replacement format for <a href="https://docs.microsoft.com/en-us/dotnet/framework/tools/ngen-exe-native-image-generator">NGEN (Native Image Generator)</a>). From <a href="https://github.com/dotnet/coreclr/pull/24823">R2R ilstubs</a>:</p>
+
+<blockquote>
+  <p>IL stub generation for interop takes measurable time at startup, and it is possible to generate some of them in an ahead of time</p>
+
+  <p>This change introduces ahead of time R2R compilation of IL stubs</p>
+</blockquote>
+
+<p>Related work was done in <a href="https://github.com/dotnet/coreclr/pull/22560">Enable R2R compilation/inlining of PInvoke stubs where no marshalling is required</a> and <a href="https://github.com/dotnet/coreclr/pull/24834">PInvoke stubs for Unix platforms</a> (‘Enables inlining of PInvoke stubs for Unix platforms’).</p>
+
+<p>Finally, for even more information on the issues involved, see:</p>
+
+<ul>
+  <li><a href="https://github.com/dotnet/coreclr/issues/15465">Better diagnostic for collected delegate #15465</a></li>
+  <li><a href="https://github.com/dotnet/coreclr/pull/12731">Fill freed loader heap chunk with non-zero value #12731</a></li>
+  <li><a href="https://github.com/dotnet/coreclr/pull/13125">[Arm64] Implement Poison() #13125</a></li>
+  <li><a href="https://github.com/dotnet/coreclr/pull/15809">Collected delegate diagnostic #15809</a></li>
+  <li><a href="https://github.com/Firwood-Software/AdvancedDLSupport">AdvancedDLSupport</a>:
+    <ul>
+      <li>Delegate-based C# P/Invoke alternative - compatible with all platforms and runtimes.</li>
+      <li>Also see <a href="https://github.com/Firwood-Software/AdvancedDLSupport/blob/master/docs/developer_docs.md">‘The Developer Documentation’</a> for the project.</li>
+    </ul>
+  </li>
+</ul>
+
+<h4 id="marshalling">Marshalling</h4>
+
+<p>However, dealing with the ‘managed’ to ‘un-managed’ transition is only one part of the story. The other is that there are also stubs created to deal with the ‘marshalling’ of arguments between the 2 sides. This process of ‘Interop Marshalling’ is explained nicely in the <a href="https://docs.microsoft.com/en-us/dotnet/framework/interop/interop-marshaling">Microsoft docs</a>:</p>
+
+<blockquote>
+  <p>Interop marshaling governs how data is passed in method arguments and return values between managed and unmanaged memory during calls. Interop marshaling is a run-time activity performed by the common language runtime’s marshaling service.</p>
+
+  <p>Most data types have common representations in both managed and unmanaged memory. The interop marshaler handles these types for you. Other types can be ambiguous or not represented at all in managed memory.</p>
+</blockquote>
+
+<p>Like many stubs in the CLR, the marshalling stubs have evolved over time. As we can read in the excellent post <a href="https://devblogs.microsoft.com/dotnet/improvements-to-interop-marshaling-in-v4-il-stubs-everywhere/">Improvements to Interop Marshaling in V4: IL Stubs Everywhere</a>:</p>
+
+<blockquote>
+  <p><strong>History</strong>
+The 1.0 and 1.1 versions of the CLR had several different techniques for creating and executing these stubs that were each designed for marshaling different types of signatures. These techniques ranged from <strong>directly generated x86 assembly instructions</strong> for simple signatures to <strong>generating specialized ML (an internal marshaling language)</strong> and running them through an <strong>internal interpreter</strong> for the most complicated signatures. This system worked well enough – although not without difficulties – in 1.0 and 1.1 but presented us with a serious maintenance problem when 2.0, and its support for multiple processor architectures, came around.</p>
+</blockquote>
+
+<p>That’s right, there was an internal interpreter built into early version of the .NET CLR that had the job of running the ‘marshalling language’ (ML) code!</p>
+
+<p>However, it then goes on to explain why this process wasn’t sustainable:</p>
+
+<blockquote>
+  <p>We realized early in the process of adding 64 bit support to 2.0 that this approach was not sustainable across multiple architectures. <strong>Had we continued with the same strategy we would have had to create parallel marshaling infrastructures for each new architecture we supported (remember in 2.0 we introduced support for both x64 and IA64) which would, in addition to the initial cost, at least triple the cost of every new marshaling feature or bug fix</strong>. We needed one marshaling stub technology that would work on multiple processor architectures and could be efficiently executed on each one: enter IL stubs.</p>
+</blockquote>
+
+<p>The solution was to implement all stubs using ‘Intermediate Language’ (IL) that is CPU-agnostic. Then the JIT-compiler is used to convert the IL into machine code for each CPU architecture, which makes sense because it’s exactly what the JIT is good at. Also worth noting is that this work still continues today, for instance see <a href="https://github.com/dotnet/coreclr/pull/26340">Implement struct marshalling via IL Stubs instead of via FieldMarshalers #26340</a>.</p>
+
+<p>Finally, there is a really nice investigation into the whole process in <a href="http://devops.lol/pinvoke-beyond-the-magic/">PInvoke: beyond the magic</a> (also <a href="http://devops.lol/compile-time-marshalling/">Compile time marshalling</a>). What’s also nice is that you can use PerfView to <a href="https://twitter.com/matthewwarren/status/1124268756413374465">see the stubs that the runtime generates</a>.</p>
+
+<h3 id="generics">Generics</h3>
+
+<p>It is reasonably well known that generics in .NET use ‘code sharing’ to save space. That is, given a generic method such as <code>public void Insert&lt;T&gt;(..)</code>, <strong>one method body</strong> of ‘native code’ will be created and shared by the <em>instantiated</em> types of <code>Insert&lt;Foo&gt;(..)</code> and <code>Insert&lt;Bar&gt;(..)</code> (assumning that <code>Foo</code> and <code>Bar</code> are <em>references</em> types), but <strong>different</strong> versions will be created for <code>Insert&lt;int&gt;(..)</code> and <code>Insert&lt;double&gt;(..)</code> (as <code>int</code>/<code>double</code> are <em>value</em> types). This is possible, for the <a href="https://stackoverflow.com/a/598738">reasons outlined by Jon Skeet</a> in a StackOverflow question:</p>
+
+<blockquote>
+  <p>.. consider what the CLR needs to know about a type. It includes:</p>
+
+  <ul>
+    <li>The size of a value of that type (i.e. if you have a variable of some type, how much space will that memory need?)</li>
+    <li>How to treat the value in terms of garbage collection: is it a reference to an object, or a value which may in turn contain other references?</li>
+  </ul>
+
+  <p>For all reference types, the answers to these questions are the same. The size is just the size of a pointer, and the value is always just a reference (so if the variable is considered a root, the GC needs to recursively descend into it).</p>
+
+  <p>For value types, the answers can vary significantly.</p>
+</blockquote>
+
+<p>But, this poses a problem. What about if the ‘shared’ method needs to do something specific for each type, like call <code>typeof(T)</code>?</p>
+
+<p>This whole issue is explained in these 2 great posts, which I really recommend you take the time to read:</p>
+
+<ul>
+  <li><a href="https://yizhang82.dev/dotnet-generics-sharing">Sharing .NET generic code under the hood</a></li>
+  <li><a href="https://yizhang82.dev/dotnet-generics-typeof-t">typeof(TSecret) - the secret magic behind .NET generics</a></li>
+</ul>
+
+<p>I’m not going to repeat what they cover here, except to say that (not surprisingly) ‘stubs’ are used to solve this issue, in conjunction with a ‘hidden’ parameter. These stubs are known as ‘instantiating’ stubs and we can find out more about them in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/method.hpp#L811-L817">this comment</a>:</p>
+
+<blockquote>
+  <p>Instantiating Stubs - Return TRUE if this is this a special stub used to implement an <strong>instantiated generic method or per-instantiation static method</strong>. The action of an instantiating stub is - pass on a <code>MethodTable</code> or <code>InstantiatedMethodDesc</code> extra argument to shared code</p>
+</blockquote>
+
+<p>The different scenarios are handled in <code>MakeInstantiatingStubWorker(..)</code> in  <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1510-L1534">/vm/prestub.cpp</a>, you can see the check for <code>HasMethodInstantiation</code> and the fall-back to a ‘per-instantiation static method’:</p>
+
+<pre><code>    // It's an instantiated generic method
+    // Fetch the shared code associated with this instantiation
+    pSharedMD = pMD-&gt;GetWrappedMethodDesc();
+    _ASSERTE(pSharedMD != NULL &amp;&amp; pSharedMD != pMD);
+
+    if (pMD-&gt;HasMethodInstantiation())
+    {
+        extraArg = pMD;
+    }
+    else
+    {
+        // It's a per-instantiation static method
+        extraArg = pMD-&gt;GetMethodTable();
+    }
+    Stub *pstub = NULL;
+
+#ifdef FEATURE_STUBS_AS_IL
+    pstub = CreateInstantiatingILStub(pSharedMD, extraArg);
+#else
+    CPUSTUBLINKER sl;
+    _ASSERTE(pSharedMD != NULL &amp;&amp; pSharedMD != pMD);
+    sl.EmitInstantiatingMethodStub(pSharedMD, extraArg);
+
+    pstub = sl.Link(pMD-&gt;GetLoaderAllocator()-&gt;GetStubHeap());
+#endif
+</code></pre>
+
+<p>As a reminder, <code>FEATURE_STUBS_AS_IL</code> is defined for <em>all</em> Unix versions of the CoreCLR, but on Windows it’s only used with ARM64.</p>
+
+<ul>
+  <li>When <code>FEATURE_STUBS_AS_IL</code> is defined, the code calls into <code>CreateInstantiatingILStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1353-L1452">here</a>. To get an overview of what it’s doing, we can take a look at the steps called-out in the code comments:
+    <ul>
+      <li><code>// 1. Build the new signature</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1394">here</a></li>
+      <li><code>// 2. Emit the method body</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1398">here</a></li>
+      <li><code>// 2.2 Push the rest of the arguments for x86</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1406">here</a></li>
+      <li><code>// 2.3 Push the hidden context param</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1413">here</a></li>
+      <li><code>// 2.4 Push the rest of the arguments for not x86</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1418">here</a></li>
+      <li><code>// 2.5 Push the target address</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1425">here</a></li>
+      <li><code>// 2.6 Do the calli</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1428">here</a></li>
+    </ul>
+  </li>
+  <li>When <code>FEATURE_STUBS_AS_IL</code> is <strong>note</strong> defined, per CPU/OS versions of <code>EmitInstantiatingMethodStub(..)</code> are used, they exist for:
+    <ul>
+      <li>i386 in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L3197-L3394">/vm/i386/stublinkerx86.cpp</a></li>
+      <li>ARM in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L2121-L2142">/vm/arm/stubs.cpp</a></li>
+    </ul>
+  </li>
+</ul>
+
+<p>In the last case, (<code>EmitInstantiatingMethodStub(..)</code> on ARM), the stub shares code with the instantiating version of the <em>unboxing</em> stub, so the heavy-lifting is done in <code>StubLinkerCPU::ThumbEmitCallWithGenericInstantiationParameter(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L1677-L2118">here</a>. This method is over 400 lines for fairly complex code, althrough there is also a nice piece of <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L1917-L1951">ASCII art</a> (for info on why this ‘complex’ case is needed see <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L1687-L1701">this comment</a>):</p>
+
+<pre><code>// Complex case where we need to emit a new stack frame and copy the arguments.
+
+// Calculate the size of the new stack frame:
+//
+//            +------------+
+//      SP -&gt; |            | &lt;-- Space for helper arg, if isRelative is true
+//            +------------+
+//            |            | &lt;-+
+//            :            :   | Outgoing arguments
+//            |            | &lt;-+
+//            +------------+
+//            | Padding    | &lt;-- Optional, maybe required so that SP is 64-bit aligned
+//            +------------+
+//            | GS Cookie  |
+//            +------------+
+//        +-&gt; | vtable ptr |
+//        |   +------------+
+//        |   | m_Next     |
+//        |   +------------+
+//        |   | R4         | &lt;-+
+//   Stub |   +------------+   |
+// Helper |   :            :   |
+//  Frame |   +------------+   | Callee saved registers
+//        |   | R11        |   |
+//        |   +------------+   |
+//        |   | LR/RetAddr | &lt;-+
+//        |   +------------+
+//        |   | R0         | &lt;-+
+//        |   +------------+   |
+//        |   :            :   | Argument registers
+//        |   +------------+   |
+//        +-&gt; | R3         | &lt;-+
+//            +------------+
+//  Old SP -&gt; |            |
+//
+</code></pre>
+
+<h3 id="delegates">Delegates</h3>
+
+<p>Delegates in .NET provide a nice abstraction over the top of a function call, from <a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/delegates/">Delegates (C# Programming Guide)</a>:</p>
+
+<blockquote>
+  <p>A delegate is a type that represents references to methods with a particular parameter list and return type. When you instantiate a delegate, you can associate its instance with any method with a compatible signature and return type. You can invoke (or call) the method through the delegate instance.</p>
+</blockquote>
+
+<p>But under the hood there is quite a bit going on, for the full story take a look at <a href="https://mattwarren.org/2017/01/25/How-do-.NET-delegates-work/">How do .NET delegates work?</a>, but in summary, there are several different types of delegates, as shown in this table from <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L3145-L3175">/vm/comdelegate.cpp</a>:</p>
+
+<div><div><pre><code><span>// DELEGATE KINDS TABLE</span>
+<span>//</span>
+<span>//                                  _target         _methodPtr              _methodPtrAux       _invocationList     _invocationCount</span>
+<span>//</span>
+<span>// 1- Instance closed               'this' ptr      target method           null                null                0</span>
+<span>// 2- Instance open non-virt        delegate        shuffle thunk           target method       null                0</span>
+<span>// 3- Instance open virtual         delegate        Virtual-stub dispatch   method id           null                0</span>
+<span>// 4- Static closed                 first arg       target method           null                null                0</span>
+<span>// 5- Static closed (special sig)   delegate        specialSig thunk        target method       first arg           0</span>
+<span>// 6- Static opened                 delegate        shuffle thunk           target method       null                0</span>
+<span>// 7- Secure                        delegate        call thunk              MethodDesc (frame)  target delegate     creator assembly </span>
+<span>//</span>
+<span>// Delegate invoke arg count == target method arg count - 2, 3, 6</span>
+<span>// Delegate invoke arg count == 1 + target method arg count - 1, 4, 5</span>
+<span>//</span>
+<span>// 1, 4     - MulticastDelegate.ctor1 (simply assign _target and _methodPtr)</span>
+<span>// 5        - MulticastDelegate.ctor2 (see table, takes 3 args)</span>
+<span>// 2, 6     - MulticastDelegate.ctor3 (take shuffle thunk)</span>
+<span>// 3        - MulticastDelegate.ctor4 (take shuffle thunk, retrieve MethodDesc) ???</span>
+<span>//</span>
+<span>// 7 - Needs special handling</span>
+</code></pre></div></div>
+
+<p>The difference between <a href="https://blog.slaks.net/2011/06/open-delegates-vs-closed-delegates.html">Open Delegates vs. Closed Delegates</a> is nicely illustrated in this code sample from the linked post:</p>
+
+<pre><code>Func&lt;string&gt; closed = new Func&lt;string&gt;("a".ToUpperInvariant);
+Func&lt;string, string&gt; open = (Func&lt;string, string&gt;)
+    Delegate.CreateDelegate(
+        typeof(Func&lt;string, string&gt;),
+        typeof(string).GetMethod("ToUpperInvariant")
+    );
+
+closed();     //Returns "A"
+open("abc");  //Returns "ABC"
+</code></pre>
+
+<p>Stubs are used in several scenarios, including the intruiging named ‘shuffle thunk’ whose job it is to literally shuffle arguments around! In the simplest case, this process looks a bit like the following:</p>
+
+<div><div><pre><code>Delegate Call: [delegateThisPtr, arg1, arg2, ...]
+
+Method Call:   [targetThisPtr, arg1, arg2, ...]
+</code></pre></div></div>
+
+<p>So when you invoke a delegate, the <code>Invoke(..)</code> method (generated by CLR), expects a ‘this’ pointer of the delegate object itself. However when the target method is called (i.e. the method the delagate ‘wraps’), the ‘this’ pointer needs to be the one for the type/class that the target method exists in, hence all the swapping/shuffling.</p>
+
+<p>Of couse things get more complicated when you deal with static methods (no ‘this’ pointer) and different CPU calling conventions, as this answer to the question <a href="https://github.com/dotnet/coreclr/pull/18476#issuecomment-400805569">‘<em>What in the world is a shuffle thunk cache?</em>’</a> explains:</p>
+
+<blockquote>
+  <p>When you use a delegate to call a method, <strong>the JIT doesn’t know at the time it generates the code what the delegate points to</strong>. It can e.g. be a member method or a static method. So the JIT generates arguments to registers and stack based on the signature of the delegate and the call then doesn’t call the target method directly, <strong>but a shuffle thunk instead</strong>. This thunk is generated based on the caller side signature and the real target method signature and shuffles the arguments in registers and on stack to correspond to the target calling convention. <strong>So if it needs to add “this” pointer into the first argument register, it needs to move the first argument register to the second, the second to the third and the last to the stack (obviously in the right order so that nothing gets overwritten)</strong>. And e.g. Unix amd64 calling convention makes it even more interesting when there are arguments that are structs that can be passed in multiple registers.</p>
+</blockquote>
+
+<h4 id="singlecast-delegates">Singlecast Delegates</h4>
+
+<p>‘Singlecast’ delegates (as opposed to the <a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/delegates/how-to-combine-delegates-multicast-delegates">‘multicast’ variants</a>) are the most common scenario and so they’re written as optimised ‘stubs’, starting in:</p>
+<ul>
+  <li><code>MethodDesc::DoPrestub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1706-L1989">here</a>, specifically when <code>IsEEImpl()</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1916-L1921">is true</a> which calls into</li>
+  <li><code>COMDelegate::GetInvokeMethodStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L2075-L2118">here</a>, that then calls</li>
+  <li><code>COMDelegate::TheDelegateInvokeStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L2043-L2073">here</a>
+    <ul>
+      <li>If <code>FEATURE_STUBS_AS_IL</code> is <strong>not</strong> defined, it calls into <code>EmitDelegateInvoke()</code> in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L4185-L4218">/vm/i386/stublinkerx86.cpp</a> (for x86)</li>
+      <li>If <code>FEATURE_STUBS_AS_IL</code> is defined, a per-CPU/OS version of <code>SinglecastDelegateInvokeStub</code> is wired up:
+        <ul>
+          <li><strong>Windows</strong>
+            <ul>
+              <li>AMD64 <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/AsmHelpers.asm#L746-L761">/vm/amd64/AsmHelpers.asm</a></li>
+              <li>ARM <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/asmhelpers.asm#L334-L348">/vm/arm/asmhelpers.asm</a></li>
+              <li>ARM64 <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/asmhelpers.asm#L615-L629">/vm/arm64/asmhelpers.asm</a></li>
+            </ul>
+          </li>
+          <li><strong>Unix</strong>
+            <ul>
+              <li>i386 <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/asmhelpers.S#L1055-L1069">/vm/i386/asmhelpers.S</a></li>
+              <li>AMD64 <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/unixasmhelpers.S#L216-L231">/vm/amd64/unixasmhelpers.S</a></li>
+              <li>ARM <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/asmhelpers.S#L269-L283">/vm/arm/asmhelpers.S</a></li>
+              <li>ARM64 <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/asmhelpers.S#L558-L572">/vm/arm64/asmhelpers.S</a></li>
+            </ul>
+          </li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<p>For example, this is the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/AsmHelpers.asm#L746-L761">AMD64 (Windows) version</a> of <code>SinglecastDelegateInvokeStub</code>:</p>
+
+<pre><code>LEAF_ENTRY SinglecastDelegateInvokeStub, _TEXT
+
+        test    rcx, rcx
+        jz      NullObject
+
+        mov     rax, [rcx + OFFSETOF__DelegateObject___methodPtr]
+        mov     rcx, [rcx + OFFSETOF__DelegateObject___target]  ; replace "this" pointer
+
+        jmp     rax
+
+NullObject:
+        mov     rcx, CORINFO_NullReferenceException_ASM
+        jmp     JIT_InternalThrow
+
+LEAF_END SinglecastDelegateInvokeStub, _TEXT
+</code></pre>
+
+<p>As you can see, it reaches into the internals of the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/object.h#L2223-L2266">DelegateObject</a>, pulls out the values in the <code>methodPtr</code> and <code>target</code> fields and puts them into the the <code>rax</code> and <code>rcx</code> registers.</p>
+
+<h4 id="shuffle-thunks">Shuffle Thunks</h4>
+
+<p>Finally, let’s look at ‘shuffle thunks’ in more detail (cases 2, 3, 6 from the table above).</p>
+
+<ul>
+  <li>There are created in several places in the CoreCLR source, which all call into <code>COMDelegate::SetupShuffleThunk(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L580-L636">here</a>
+    <ol>
+      <li><code>COMDelegate::BindToMethod(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L864-L1037">here</a></li>
+      <li><code>COMDelegate::DelegateConstruct(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L1680-L1889">here</a></li>
+      <li><code>COMDelegate::GetDelegateCtor(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L3049-L3256">here</a></li>
+    </ol>
+  </li>
+  <li><code>COMDelegate::SetupShuffleThunk(..)</code> then calls <code>GenerateShuffleArray(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L243-L508">here</a></li>
+  <li>Followed by a call to <code>StubCacheBase::Canonicalize(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubcache.cpp#L70-L165">here</a>, that ends up in <code>ShuffleThunkCache::CompileStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.h#L234-L244">here</a></li>
+  <li>This ends up calls the CPU-specific method <code>EmitShuffleThunk(..)</code>:
+    <ul>
+      <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L3815-L4096">src/vm/i386</a> (also does AMD64 and UNIX_AMD64_ABI)</li>
+      <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L1422-L1604">src/vm/arm</a></li>
+      <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/stubs.cpp#L1760-L1802">src/vm/arm64</a></li>
+    </ul>
+  </li>
+</ul>
+
+<p>Note how the stubs are cached in the <code>ShuffleThunkCache</code> where possible. This is because the thunks don’t have to be unique <em>per method</em> they can be shared across multiple methods as long as the signatures are compatible.</p>
+
+<p>However, these stubs are not straight-forward and sometimes they go wrong, for instance <a href="https://github.com/dotnet/coreclr/issues/26054">Infinite loop in GenerateShuffleArray on unix64 #26054</a>, fixed in <a href="https://github.com/dotnet/coreclr/pull/26169">PR #26169</a>. Also see <a href="https://github.com/dotnet/coreclr/issues/16833">Corrupted struct passed to delegate constructed via reflection #16833</a> and
+<a href="https://github.com/dotnet/coreclr/pull/16904">Fix shuffling thunk for Unix AMD64 #16904</a> for more examples.</p>
+
+<p>To give a flavour of what they need to do, here’s the code of the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/stubs.cpp#L1760-L1802">ARM64 version</a>, which is by far the simplest one!! If you want to understand the full complexities, take a look at the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L1422-L1604">ARM version</a> which is 182 LOC or the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L3815-L4096">x86 one</a> at 281 LOC!!</p>
+
+<pre><code>// Emits code to adjust arguments for static delegate target.
+VOID StubLinkerCPU::EmitShuffleThunk(ShuffleEntry *pShuffleEntryArray)
+{
+    // On entry x0 holds the delegate instance. Look up the real target address stored in the MethodPtrAux
+    // field and save it in x16(ip). Tailcall to the target method after re-arranging the arguments
+    // ldr x16, [x0, #offsetof(DelegateObject, _methodPtrAux)]
+    EmitLoadStoreRegImm(eLOAD, IntReg(16), IntReg(0), DelegateObject::GetOffsetOfMethodPtrAux());
+    //add x11, x0, DelegateObject::GetOffsetOfMethodPtrAux() - load the indirection cell into x11 used by ResolveWorkerAsmStub
+    EmitAddImm(IntReg(11), IntReg(0), DelegateObject::GetOffsetOfMethodPtrAux());
+
+    for (ShuffleEntry* pEntry = pShuffleEntryArray; pEntry-&gt;srcofs != ShuffleEntry::SENTINEL; pEntry++)
+    {
+        if (pEntry-&gt;srcofs &amp; ShuffleEntry::REGMASK)
+        {
+            // If source is present in register then destination must also be a register
+            _ASSERTE(pEntry-&gt;dstofs &amp; ShuffleEntry::REGMASK);
+
+            EmitMovReg(IntReg(pEntry-&gt;dstofs &amp; ShuffleEntry::OFSMASK), IntReg(pEntry-&gt;srcofs &amp; ShuffleEntry::OFSMASK));
+        }
+        else if (pEntry-&gt;dstofs &amp; ShuffleEntry::REGMASK)
+        {
+            // source must be on the stack
+            _ASSERTE(!(pEntry-&gt;srcofs &amp; ShuffleEntry::REGMASK));
+
+            EmitLoadStoreRegImm(eLOAD, IntReg(pEntry-&gt;dstofs &amp; ShuffleEntry::OFSMASK), RegSp, pEntry-&gt;srcofs * sizeof(void*));
+        }
+        else
+        {
+            // source must be on the stack
+            _ASSERTE(!(pEntry-&gt;srcofs &amp; ShuffleEntry::REGMASK));
+
+            // dest must be on the stack
+            _ASSERTE(!(pEntry-&gt;dstofs &amp; ShuffleEntry::REGMASK));
+
+            EmitLoadStoreRegImm(eLOAD, IntReg(9), RegSp, pEntry-&gt;srcofs * sizeof(void*));
+            EmitLoadStoreRegImm(eSTORE, IntReg(9), RegSp, pEntry-&gt;dstofs * sizeof(void*));
+        }
+    }
+
+    // Tailcall to target
+    // br x16
+    EmitJumpRegister(IntReg(16));
+}
+</code></pre>
+
+<h3 id="unboxing">Unboxing</h3>
+
+<p>I’ve written about this type of ‘stub’ before in <a href="https://mattwarren.org/2017/08/02/A-look-at-the-internals-of-boxing-in-the-CLR/#unboxing-stub-creation">A look at the internals of ‘boxing’ in the CLR</a>, but in summary the unboxing stub needs to handle steps 2) and 3) from the diagram below:</p>
+
+<div><div><pre><code>1. MyStruct:         [0x05 0x00 0x00 0x00]
+
+                     |   Object Header   |   MethodTable  |   MyStruct    |
+2. MyStruct (Boxed): [0x40 0x5b 0x6f 0x6f 0xfe 0x7 0x0 0x0 0x5 0x0 0x0 0x0]
+                                          ^
+                    object 'this' pointer | 
+
+                     |   Object Header   |   MethodTable  |   MyStruct    |
+3. MyStruct (Boxed): [0x40 0x5b 0x6f 0x6f 0xfe 0x7 0x0 0x0 0x5 0x0 0x0 0x0]
+                                                           ^
+                                   adjusted 'this' pointer | 
+</code></pre></div></div>
+
+<p><strong>Key to the diagram</strong></p>
+
+<ol>
+  <li>Original <code>struct</code>, on the <strong>stack</strong></li>
+  <li>The <code>struct</code> being <em>boxed</em> into an <code>object</code> that lives on the <strong>heap</strong></li>
+  <li>Adjustment made to <em>this</em> pointer so <code>MyStruct::ToString()</code> will work</li>
+</ol>
+
+<p>These stubs make is possible for ‘value types’ (structs) to override methods from <code>System.Object</code>, such as <code>ToString()</code> and <code>GetHashCode()</code>. The fix-up is needed because structs don’t have an ‘object header’, but when they’re <em>boxed</em> into an <code>Object</code> they do. So the stub has the job of moving or adjusting the ‘this’ pointer so that the code in the <code>ToString()</code> method can work the same, regardless of whether it’s operating on a regular ‘struct’ or one that’s been boxed into an ‘object.</p>
+
+<p>The unboxing stubs are created in <code>MethodDesc::DoPrestub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1455-L1487">here</a>, which in turn calls into <code>MakeUnboxingStubWorker(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1455-L1487">here</a></p>
+
+<ul>
+  <li>when <code>FEATURE_STUBS_AS_IL</code> is <strong>disabled</strong> it then calls <code>EmitUnboxMethodStub(..)</code> to create the stub, there are per-CPU versions:
+    <ul>
+      <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L3135-L3193">i386</a></li>
+      <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L2145-L2189">ARM</a></li>
+      <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm64/stubs.cpp#L1831-L1841">ARM64</a></li>
+    </ul>
+  </li>
+  <li>when <code>FEATURE_STUBS_AS_IL</code> is <strong>enabled</strong> is instead calls into  <code>CreateUnboxingILStubForSharedGenericValueTypeMethods(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1258-L1351">here</a></li>
+</ul>
+
+<p>For more information on some of the internal details of unboxing stubs and how they interact with <a href="#generics">‘generic instantiations’</a> see <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/genmeth.cpp#L641-L703">this informative comment</a> and one in the code for <code>MethodDesc::FindOrCreateAssociatedMethodDesc(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/genmeth.cpp#L843-L1036">here</a>.</p>
+
+<h3 id="arrays">Arrays</h3>
+
+<p>As discussed <a href="#why-are-stubs-needed">at the beginning</a>, the method bodies for arrays is provided by the runtime, that is the array access methods, ‘get’ and ‘set’, that allow <code>var a = myArray[5]</code> and <code>myArray[7] = 5</code> to work.  Not surprisingly, these are done as stubs to allow them to be as small and efficient as possible.</p>
+
+<p>Here is the flow for wiring up ‘array stubs’. It all starts up in <code>MethodDesc::DoPrestub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/prestub.cpp#L1914">here</a>:</p>
+
+<ul>
+  <li>If <code>FEATURE_ARRAYSTUB_AS_IL</code> is defined (see <a href="#stubs-as-il">‘Stubs-as-IL’</a>), it happens in <code>GenerateArrayOpStub(ArrayMethodDesc* pMD)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/array.cpp#L1023-L1068">here</a>
+    <ul>
+      <li>Then <code>ArrayOpLinker::EmitStub()</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/array.cpp#L778-L1020">here</a>, which is responsible for generating 3 types of stubs <code>{ ILSTUB_ARRAYOP_GET, ILSTUB_ARRAYOP_SET, ILSTUB_ARRAYOP_ADDRESS }</code>.</li>
+      <li>Before calling <code>ILStubCache::CreateAndLinkNewILStubMethodDesc(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/ilstubcache.cpp#L84-L138">here</a></li>
+      <li>Finally ending up in <code>JitILStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/dllimport.cpp#L5666-L5712">here</a></li>
+    </ul>
+  </li>
+  <li>When <code>FEATURE_ARRAYSTUB_AS_IL</code> isn’t defined, happens in another version of <code>GenerateArrayOpStub(ArrayMethodDesc* pMD)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/array.cpp#L1255-L1271">lower down</a>
+    <ul>
+      <li>Then <code>void GenerateArrayOpScript(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/array.cpp#L1071-L1226">here</a></li>
+      <li>Followed by a call to <code>StubCacheBase::Canonicalize(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubcache.cpp#L70-L165">here</a>, that ends up in <code>ArrayStubCache::CompileStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/array.cpp#L1273-L1279">here</a>.</li>
+      <li>Eventually, we end up in <code>StubLinkerCPU::EmitArrayOpStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L4786-L5636">here</a>, which does the heavy lifting (despite being under ‘\src\vm\i386' seems to support x86 and AMD64?)</li>
+    </ul>
+  </li>
+</ul>
+
+<p>I’m not going to include the code for the ‘stub-as-IL’ (<code>ArrayOpLinker::EmitStub()</code>) or the assembly code (<code>StubLinkerCPU::EmitArrayOpStub(..)</code>) versions of the array stubs because they’re both 100’s of lines long, dealing with type and bounds checking, computing address, multi-dimensional arrays and mode. But to give an idea of the complexities, take a look at this comment from <code>StubLinkerCPU::EmitArrayOpStub(..)</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L4809">here</a>:</p>
+
+<pre><code>// Register usage
+//
+//                                          x86                 AMD64
+// Inputs:
+//  managed array                           THIS_kREG (ecx)     THIS_kREG (rcx)
+//  index 0                                 edx                 rdx
+//  index 1/value                           &lt;stack&gt;             r8
+//  index 2/value                           &lt;stack&gt;             r9
+//  expected element type for LOADADDR      eax                 rax                 rdx
+// Working registers:
+//  total (accumulates unscaled offset)     edi                 r10
+//  factor (accumulates the slice factor)   esi                 r11
+</code></pre>
+
+<p>Finally, these stubs are still being improved, for example see <a href="https://github.com/dotnet/coreclr/pull/22376/files">Use unsigned index extension in muldi-dimensional array stubs</a>.</p>
+
+<h3 id="tail-calls">Tail Calls</h3>
+
+<p>The .NET runtime provides a nice optimisation when doing ‘tail calls’, that (amoung other things) will prevent <code>StackoverflowExceptions</code> in recursive scenarios. For more on <em>why</em> these tail call optimisations are useful and how they work, take a look at:</p>
+
+<ul>
+  <li><a href="https://dev.to/rohit/demystifying-tail-call-optimization-5bf3">Demystifying Tail Call Optimization</a></li>
+  <li><a href="https://blogs.msdn.microsoft.com/abhinaba/2008/09/26/tail-call-optimization/">Tail call optimization</a></li>
+  <li><a href="https://volgarev.me/2013/09/27/tail-recursion-and-trampolining-in-csharp.html">Tail Recursion And Trampolining In C#</a></li>
+  <li><a href="https://blogs.msdn.microsoft.com/davbr/2007/06/20/enter-leave-tailcall-hooks-part-2-tall-tales-of-tail-calls/">Enter, Leave, Tailcall Hooks Part 2: Tall tales of tail calls</a></li>
+  <li><a href="https://blogs.msdn.microsoft.com/davbr/2007/06/20/tail-call-jit-conditions/">Tail call JIT conditions</a></li>
+</ul>
+
+<p>In summary, a tail call optimisation allows the <em>same</em> stack frame to be re-used if in the <em>caller</em>, there is no work done after the function call to the <em>callee</em> (see <a href="https://blogs.msdn.microsoft.com/davbr/2007/06/20/tail-call-jit-conditions/">Tail call JIT conditions</a> (2007) for a more precise definition).</p>
+
+<p>And why is this beneficial? From <a href="https://blogs.msdn.microsoft.com/clrcodegeneration/2009/05/11/tail-call-improvements-in-net-framework-4/">Tail Call Improvements in .NET Framework 4</a>:</p>
+
+<blockquote>
+  <p>The primary reason for a tail call as an optimization is to improve data locality, memory usage, and cache usage.  By doing a tail call the callee will use the same stack space as the caller.  This reduces memory pressure.  It marginally improves the cache because the same memory is reused for subsequent callers and thus can stay in the cache, rather than evicting some older cache line to make room for a new cache line.</p>
+</blockquote>
+
+<p>To make this clear, the code below <em>can</em> benefit from the optimisation, because both functions return straight after calling each the other:</p>
+
+<pre><code>public static long Ping(int cnt, long val)
+{
+    if (cnt-- == 0)
+        return val;
+
+    return Pong(cnt, val + cnt);
+}
+
+public static long Pong(int cnt, long val)
+{
+    if (cnt-- == 0)
+        return val;
+
+    return Ping(cnt, val + cnt);
+}
+</code></pre>
+
+<p>However, if the code was changed to the version below, the optimisation would no longer work because <code>PingNotOptimised(..)</code> does some extra work between calling <code>Pong(..)</code> and when it returns:</p>
+
+<pre><code>public static long PingNotOptimised(int cnt, long val)
+{
+    if (cnt-- == 0)
+        return val;
+
+    var result = Pong(cnt, val + cnt);
+    result += 1; // prevents the Tail-call optimization
+    return result;
+}
+
+public static long Pong(int cnt, long val)
+{
+    if (cnt-- == 0)
+        return val;
+
+    return PingNotOptimised(cnt, val + cnt);
+}
+</code></pre>
+
+<p>You can see the difference in the code emitted by the JIT compiler for the different scenarios <a href="https://sharplab.io/#v2:EYLgxg9gTgpgtADwGwBYA0AXEBDAzgWwB8ABAJgAJiBGAdgFgAoAb0fLfIHoPyBhCAExjlc2fAAcANkIBmUCPnIALDBjG4QXAOYBLDIoCuwAHSR8HfhAwA7GBg5hci7FEnYrmjtty59MXB1IAVhQUAGIvHxhTfBgrDDgaAE4ABgAOVFJSVnZqJEoUcgBZbG0rAApqZIBtAF1yZ01cAEpsthYGdk7ODmojakSygAVSzTLSjCNihAA1bAlfNHJkpqaAblaurl7+oZGAOUsAeTEMbXwvGH4xuMnsGbmFpZX1jvYAX0YN4gBmSio8iQQdzkYbua4YchgOKLQHAgBucxarzaG062mk5DKUPicHIAF48U9UV02MQaOQERIXsTSeTBkDRtjFpTyABqSFxNYktgbD7I8hfX65ciwzQg/ZHE5nC5XcYcjAwhkUxEbdrc8jozHYuC4glE/nqsnKqmfA3sBFQciwHwSCGE+lgpnGtnytY0q1+fS2tmEqirbrkMSwOGxDC4ch6IQAFRKEjgYDmEnIECl5wAXthTkD3UbrV6MC9OnzOoK/gClQ7RnKnaLjUjOmruZqsXEdfjCct3Z0jZTqWbaeLHdDnezsW7+90jaDNAcMMdTudcJcWwqR67C+9GG8gA=">in SharpLab</a>.</p>
+
+<p>But where do the ‘tail call optimisation <em>stubs</em>’ come into play? Helpfully there is a tail call related <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/tailcalls-with-helpers.md">design doc</a> that explains, from ‘current way of handling tail-calls’:</p>
+
+<blockquote>
+  <p><strong>Fast tail calls</strong>
+These are tail calls that are handled directly by the jitter and no runtime cooperation is needed. They are limited to cases where:</p>
+
+  <ul>
+    <li>Return value and call target arguments are all either primitive types, reference types, or valuetypes with a single primitive type or reference type fields</li>
+    <li>The aligned size of call target arguments is less or equal to aligned size of caller arguments</li>
+  </ul>
+</blockquote>
+
+<p>So, the stubs aren’t always needed, sometimes the work can be done by the JIT, if there scenario is simple enough.</p>
+
+<p>However for the more complex cases, a ‘helper’ stub is needed:</p>
+
+<blockquote>
+  <p><strong>Tail calls using a helper</strong>
+Tail calls in cases where we cannot perform the call in a simple way are implemented using a tail call helper. Here is a rough description of how it works:</p>
+
+  <ul>
+    <li>For each tail call target, the jitter asks runtime to <strong>generate an assembler argument copying routine</strong>. This routine reads vararg list of arguments and places the arguments in their proper slots in the CONTEXT or on the stack. Together with the argument copying routine, the runtime also builds a list of offsets of references and byrefs for return value of reference type or structs returned in a hidden return buffer and for structs passed by ref. The gc layout data block is stored at the end of the argument copying thunk.</li>
+    <li>At the time of the tail call, the caller generates a vararg list of all arguments of the tail called function and then calls <code>JIT_TailCall</code> runtime function. It passes it the copying routine address, the target address and the vararg list of the arguments.</li>
+    <li>The <code>JIT_TailCall</code> then performs the following:
+…</li>
+  </ul>
+</blockquote>
+
+<p>To see the rest of the steps that <code>JIT_TailCall</code> takes you can read the <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/tailcalls-with-helpers.md#tail-calls-using-a-helper">design doc</a> or if you’re really keen you can look at the code in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/jithelpers.cpp#L5978-L6195">/vm/jithelpers.cpp</a>. Also, there’s a useful explanation of what it needs to handle in the JIT code, see <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/jit/morph.cpp#L7491-L7528">here</a> and <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/jit/lower.cpp#L2125-L2150">here</a>.</p>
+
+<p>However, we’re just going to focus on the stubs, refered to as an ‘assembler argument copying routine’. Firstly, we can see that they have their own stub manager, <code>TailCallStubManager</code>, which is implemented <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/stubmgr.cpp#L2350-L2488">here</a> and allows the stubs to play nicely with the debugger. Also interesting to look at is the <code>TailCallFrame</code> <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/frames.h#L3141-L3271">here</a> that is used to ensure that the ‘stack walker’ can work well with tail calls.</p>
+
+<p>Now, onto the stubs themselves, the ‘copying routines’ are provided by the runtime via a call to <code>CEEInfo::getTailCallCopyArgsThunk(..)</code> in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/jitinterface.cpp#L13814-L13838">/vm/jitinterface.cpp</a>. This in turn calls the CPU specific versions of <code>CPUSTUBLINKER::CreateTailCallCopyArgsThunk(..)</code>:</p>
+
+<ul>
+  <li>X86 <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L6042-L6435">/vm/i386/stublinkerx86.cpp</a></li>
+  <li>ARM <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L3089-L3339">/vm/arm/stubs.cpp</a></li>
+</ul>
+
+<p>These routines have the complex and hairy job of dealing with the CPU registers and calling conventions. They achieve this by dynamicially emitting assembly instructions, to create a function that looks like the <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/stublinkerx86.cpp#L6051-L6064">following pseudo code</a> (X86 version):</p>
+
+<pre><code>    // size_t CopyArguments(va_list args,         (RCX)
+    //                      CONTEXT *pCtx,        (RDX)
+    //                      DWORD64 *pvStack,     (R8)
+    //                      size_t cbStack)       (R9)
+    // {
+    //     if (pCtx != NULL) {
+    //         foreach (arg in args) {
+    //             copy into pCtx or pvStack
+    //         }
+    //     }
+    //     return &lt;size of stack needed&gt;;
+    // }
+</code></pre>
+
+<p>In addition there is one other type of stub that is used. Known as the <code>TailCallHelperStub</code>, they also come in per-CPU versions:</p>
+
+<ul>
+  <li>AMD64 <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/JitHelpers_Fast.asm#L858-L956">/vm/amd64/JitHelpers_Fast.asm</a></li>
+  <li>ARM <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/asmhelpers.asm#L203-L315">/vm/arm/asmhelpers.asm</a>.</li>
+</ul>
+
+<p>Going forward, there are several limitations of to this approach of using per-CPU stubs, <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/tailcalls-with-helpers.md#tail-calls-using-a-helper">as the design doc explains</a>:</p>
+
+<blockquote>
+  <ul>
+    <li><strong>It is expensive to port to new platforms</strong>
+      <ul>
+        <li>Parsing the vararg list is not possible to do in a portable way on Unix. Unlike on Windows, the list is not stored a linear sequence of the parameter data bytes in memory. va_list on Unix is an opaque data type, some of the parameters can be in registers and some in the memory.</li>
+        <li>Generating the copying asm routine needs to be done for each target architecture / platform differently. And it is also very complex, error prone and impossible to do on platforms where code generation at runtime is not allowed.</li>
+      </ul>
+    </li>
+    <li><strong>It is slower than it has to be</strong>
+      <ul>
+        <li>The parameters are copied possibly twice - once from the vararg list to the stack and then one more time if there was not enough space in the caller’s stack frame.</li>
+        <li><code>RtlRestoreContext</code> restores all registers from the <code>CONTEXT</code> structure, not just a subset of them that is really necessary for the functionality, so it results in another unnecessary memory accesses.</li>
+      </ul>
+    </li>
+    <li><strong>Stack walking over the stack frames of the tail calls requires runtime assistance.</strong></li>
+  </ul>
+</blockquote>
+
+<p>Fortunately, it then goes into great depth discussing how a new approach <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/tailcalls-with-helpers.md#the-new-approach-to-tail-calls-using-helpers">could be implemented</a> and how it would solve these issues. Even better, work has already started and we can follow along in <a href="https://github.com/dotnet/coreclr/pull/26418">Implement portable tailcall helpers #26418</a> (currently sitting at ‘31 of 55’ tasks completed, with over 50 files modified, it’s not a small job!).</p>
+
+<p>Finally, for other PRs related to tail calls, see:</p>
+
+<ul>
+  <li><a href="https://github.com/dotnet/coreclr/pull/703/files">Disable JIT_TailCall invocation on Unix #703</a></li>
+  <li><a href="https://github.com/dotnet/coreclr/pull/9405">JIT: enable implicit tail calls from inlined code #9405</a></li>
+  <li><a href="https://github.com/dotnet/coreclr/issues/2556">Full tailcall support on Unix #2556</a></li>
+</ul>
+
+<h3 id="virtual-stub-dispatch-vsd">Virtual Stub Dispatch (VSD)</h3>
+
+<p>I’ve saved the best for last, ‘Virtual Stub Dispatch’ or VSD is such an in-depth topic, that it an entire <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/virtual-stub-dispatch.md">BotR page devoted to it</a>!! From the introduction:</p>
+
+<blockquote>
+  <p>Virtual stub dispatching (VSD) is the <strong>technique of using stubs for virtual method invocations instead of the traditional virtual method table</strong>. In the past, interface dispatch required that interfaces had process-unique identifiers, and that every loaded interface was added to a global interface virtual table map. This requirement meant that all interfaces and all classes that implemented interfaces had to be restored at runtime in NGEN scenarios, causing significant startup working set increases. <strong>The motivation for stub dispatching was to eliminate much of the related working set, as well as distribute the remaining work throughout the lifetime of the process</strong>.</p>
+</blockquote>
+
+<p>It then goes on to say:</p>
+
+<blockquote>
+  <p>Although it is possible for VSD to dispatch both virtual instance and interface method calls, <strong>it is currently used only for interface dispatch</strong>.</p>
+</blockquote>
+
+<p>So despite having the work ‘virtual’ in the title, it’s not actually used for C# methods with the <code>virtual</code> modifier on them. However, if you look at the <a href="https://sharplab.io/#v2:EYLgxg9gTgpgtADwGwBYA0AXEBLANgHwAEAmARgFgAoQgZgAIS6BhOkOgSQDEII6BvKnSEN6hFHQAiEbhAAUASn6DhKgPSrJvAM4QAtjAwALbADsA5gEJlQgL5U7lKrTqmMMKADMAhmBgcZSpR0AJBimjIKANzC9kA==">IL for interface methods</a> you can see why they are also known as ‘virtual’.</p>
+
+<p>Virtual Stub Dispatch is so complex, it actually has several different stub types, from <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/virtualcallstub.h#L311--L318">/vm/virtualcallstub.h</a>:</p>
+
+<pre><code>enum StubKind { 
+  SK_UNKNOWN, 
+  SK_LOOKUP,      // Lookup Stubs are SLOW stubs that simply call into the runtime to do all work.
+  SK_DISPATCH,    // Dispatch Stubs have a fast check for one type otherwise jumps to runtime.  Works for monomorphic sites
+  SK_RESOLVE,     // Resolve Stubs do a hash lookup before fallling back to the runtime.  Works for polymorphic sites.
+  SK_VTABLECALL,  // Stub that jumps to a target method using vtable-based indirections. Works for non-interface calls.
+  SK_BREAKPOINT 
+};
+</code></pre>
+
+<p>So there are the following types (these are links to the <code>AMD64</code> versions, <code>x86</code> versions are in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/i386/virtualcallstubcpu.hpp">/vm/i386/virtualcallstubcpu.hpp</a>):</p>
+
+<ul>
+  <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/virtualcallstubcpu.hpp#L50-L82">Lookup Stubs</a>:
+    <ul>
+      <li><code>// Virtual and interface call sites are initially setup to point at LookupStubs. This is because the runtime type of the &lt;this&gt; pointer is not yet known, so the target cannot be resolved.</code></li>
+    </ul>
+  </li>
+  <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/virtualcallstubcpu.hpp#L194-L286">Dispatch Stubs</a>:
+    <ul>
+      <li><code>// Monomorphic and mostly monomorphic call sites eventually point to DispatchStubs. A dispatch stub has an expected type (expectedMT), target address (target) and fail address (failure). If the calling frame does in fact have the &lt;this&gt; type be of the expected type, then control is transfered to the target address, the method implementation. If not, then control is transfered to the fail address, a fail stub (see below) where a polymorphic lookup is done to find the correct address to go to.</code></li>
+      <li>There’s also specific versions, <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/virtualcallstubcpu.hpp#L118-L143">DispatchStubShort</a> and <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/virtualcallstubcpu.hpp#L154-L183">DispatchStubLong</a>, see <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/virtualcallstubcpu.hpp#L110-L116">this comment</a> for why they are both needed.</li>
+    </ul>
+  </li>
+  <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/virtualcallstubcpu.hpp#L337-L435">Resolve Stubs</a>:
+    <ul>
+      <li><code>// Polymorphic call sites and monomorphic calls that fail end up in a ResolverStub. There is only one resolver stub built for any given token, even though there may be many call sites that use that token and many distinct &lt;this&gt; types that are used in the calling call frames. A resolver stub actually has two entry points, one for polymorphic call sites and one for dispatch stubs that fail on their expectedMT test.  There is a third part of the resolver stub that enters the ee when a decision should be made about changing the callsite.</code></li>
+    </ul>
+  </li>
+  <li><a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/virtualcallstubcpu.hpp#L460-L494">V-Table or Virtual Call Stubs</a>
+    <ul>
+      <li><code>//These are jump stubs that perform a vtable-base virtual call. These stubs assume that an object is placed in the first argument register (this pointer). From there, the stub extracts the MethodTable pointer, followed by the vtable pointer, and finally jumps to the target method at a given slot in the vtable.</code></li>
+    </ul>
+  </li>
+</ul>
+
+<p>The below diagram shows the general control flow between these stubs</p>
+
+<p><img src="https://mattwarren.org/images/2019/09/virtualstubdispatch-fig2.png" alt="Virtual Stub Dispatch"></p>
+
+<p>(Image from <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/virtual-stub-dispatch.md#design-of-virtual-stub-dispatch">‘Design of Virtual Stub Dispatch’</a>)</p>
+
+<p>Finally, if you want <em>even</em> more in-depth information see <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/virtualcallstub.h#L176-L219">this comment</a>.</p>
+
+<p>However, these stubs come at a cost, which makes <em>virtual</em> method calls more expensive than <em>direct</em> ones. This is why <em>de-virtualization</em> is so important, i.e. the process of the .NET JIT detecting when a <em>virtual</em> call can instead be replaced by a <em>direct</em> one. There has been some work done in .NET Core to improve this, see <a href="https://github.com/dotnet/coreclr/pull/9230">Simple devirtualization #9230</a> which covers <code>sealed</code> classes/methods and when the object type is known <em>exactly</em>. However there is still more to be done, as shown in <a href="https://github.com/dotnet/coreclr/issues/9908">JIT: devirtualization next steps #9908</a>, where ‘5 of 23’ tasks have been completed.</p>
+
+<h2 id="other-types-of-stubs">Other Types of Stubs</h2>
+
+<p>This post is already <em>way</em> too long, so I don’t intend to offer any analysis of the following stubs. Instead I’ve just included some links to more information so you can read up on any that interest you!</p>
+
+<p><strong>‘Jump’ stubs</strong></p>
+
+<ul>
+  <li><a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/jump-stubs.md">‘Jump Stubs’ design doc</a></li>
+  <li><a href="https://support.microsoft.com/en-gb/help/3152158/out-of-memory-exception-in-a-managed-application-that-s-running-on-the#section-3">Out-of-memory exception in a managed application that’s running on the 64-bit .NET Framework</a></li>
+</ul>
+
+<p><strong>‘Function Pointer’ stubs</strong></p>
+
+<ul>
+  <li>‘Function Pointer’ Stubs, see <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/fptrstubs.cpp">/vm/fptrstubs.cpp</a> and <a href="https://github.com/dotnet/coreclr/blob/master/src/vm/fptrstubs.h">/vm/fptrstubs.h</a></li>
+  <li><code>// FuncPtrStubs contains stubs that is used by GetMultiCallableAddrOfCode() if the function has not been jitted. Using a stub decouples ldftn from the prestub, so prestub does not need to be backpatched. This stub is also used in other places which need a function pointer</code></li>
+</ul>
+
+<p><strong>‘Thread Hijacking’ stubs</strong></p>
+
+<p>From the <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/botr/threading.md">BotR page on ‘Threading’</a>:</p>
+
+<blockquote>
+  <ul>
+    <li>If fully interruptable, it is safe to perform a GC at any point, since the thread is, by definition, at a safe point. It is reasonable to leave the thread suspended at this point (because it’s safe) but various historical OS bugs prevent this from working, because the CONTEXT retrieved earlier may be corrupt). Instead, the thread’s instruction pointer is overwritten, redirecting it to a <strong>stub</strong> that will capture a more complete CONTEXT, leave cooperative mode, wait for the GC to complete, reenter cooperative mode, and restore the thread to its previous state.</li>
+    <li>If partially-interruptable, the thread is, by definition, not at a safe point. However, the caller will be at a safe point (method transition). Using that knowledge, the CLR “hijacks” the top-most stack frame’s return address (physically overwrite that location on the stack) with a <strong>stub</strong> similar to the one used for fully-interruptable code. When the method returns, it will no longer return to its actual caller, but rather to the <strong>stub</strong> (the method may also perform a GC poll, inserted by the JIT, before that point, which will cause it to leave cooperative mode and undo the hijack).</li>
+  </ul>
+</blockquote>
+
+<p>Done with the <code>OnHijackTripThread</code> method in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/amd64/AsmHelpers.asm#L431-L456">/vm/amd64/AsmHelpers.asm</a>, which calls into <code>OnHijackWorker(..)</code> in <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/threadsuspend.cpp#L5691-L5734">/vm/threadsuspend.cpp</a>.</p>
+
+<p><strong>‘NGEN Fixup’ stubs</strong></p>
+
+<p>From <a href="https://web.archive.org/web/20090213104137/http://msdn.microsoft.com/en-us/magazine/cc163610.aspx#S7">CLR Inside Out - The Performance Benefits of NGen</a> (2006):</p>
+
+<blockquote>
+  <p>Throughput of NGen-compiled code is lower than that of JIT-compiled code primarily for one reason: cross-assembly references. In JIT-compiled code, cross-assembly references can be implemented as direct calls or jumps since the exact addresses of these references are known at run time. For statically compiled code, however, <strong>cross-assembly references need to go through a jump slot that gets populated with the correct address at run time by executing a method pre-stub</strong>. The method pre-stub ensures, among other things, that the <strong>native images for assemblies referenced by that method are loaded into memory before the method is executed</strong>. The pre-stub only needs to be executed the first time the method is called; it is short-circuited out for subsequent calls. However, every time the method is called, cross-assembly references do need to go through a level of indirection. This is principally what accounted for the 5-10 percent drop in throughput for NGen-compiled code when compared to JIT-compiled code.</p>
+</blockquote>
+
+<p>Also see the <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/jump-stubs.md#ngen">‘NGEN’ section</a> of the ‘jump stub’ design doc.</p>
+
+<hr>
+
+<h2 id="stubs-in-the-mono-runtime">Stubs in the Mono Runtime</h2>
+
+<p>Mono refers to ‘Stubs’ as ‘Trampolines’ and they’re <a href="https://github.com/mono/mono/search?l=C&amp;q=trampoline&amp;type=Code">widely used</a> in the source code.</p>
+
+<p>The Mono docs have an excellent page <a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/">all about ‘Trampolines’</a>, that lists the following types:</p>
+
+<ol>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#jit-trampolines">JIT Trampolines</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#virtual-call-trampolines">Virtual Call Trampolines</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#jump-trampolines">Jump Trampolines</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#class-init-trampolines">Class Init Trampolines</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#generic-class-init-trampoline">Generic Class Init Trampoline</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#rgctx-lazy-fetch-trampolines">RGCTX Lazy Fetch Trampolines</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#aot-trampolines">AOT Trampolines</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#delegate-trampolines">Delegate Trampolines</a></li>
+  <li><a href="https://www.mono-project.com/docs/advanced/runtime/docs/trampolines/#monitor-enterexit-trampolines">Monitor Enter/Exit Trampolines</a></li>
+</ol>
+
+<p>Also the docs page on <a href="https://www.mono-project.com/docs/advanced/runtime/docs/generic-sharing/">Generic Sharing</a> has some good, in-depth information.</p>
+
+<ul>
+  <li><a href="https://web.archive.org/web/20170628151528/http://www.advogato.org/person/lupus/diary/24.html">Memory savings with magic trampolines in Mono</a></li>
+  <li><a href="https://www.infoq.com/news/2007/10/Mono-JIT/">Mono JIT Enhancements: Trampolines and Code Sharing</a></li>
+  <li><a href="https://tirania.org/blog/archive/2007/Sep-21.html">Generics Improvements</a></li>
+  <li><a href="https://schani.wordpress.com/2007/09/22/generics-sharing-in-mono/">Generics Sharing in Mono</a></li>
+  <li><a href="https://schani.wordpress.com/2007/10/12/the-trouble-with-shared-generics/">The Trouble with Shared Generics</a></li>
+  <li><a href="https://blogs.unity3d.com/2015/06/16/il2cpp-internals-generic-sharing-implementation/">IL2CPP Internals: Generic sharing implementation</a></li>
+  <li><a href="https://github.com/mono/mono/blob/master/docs/jit-trampolines">How-to trigger JIT compilation</a></li>
+</ul>
+
+<hr>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>So it turns out that ‘stubs’ are way more prevelant in the .NET Core Runtime that I imagined when I first started on this post. They are an interesting technique and they contain a fair amount of complexity. In addition, I only covered each stub in isolation, in reality many of them have to play nicely together, for instance imagine a <code>delegate</code> calling a <code>virtual</code> method that has <code>generic</code> type parameters and you can see that things start to get complex! (that scenario <em>might</em> contain 3 seperate stubs, although they are also <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/arm/stubs.cpp#L1677-L1684">shared where possible</a>). If you were then to add <code>array</code> methods, <code>P/Invoke</code> marshalling and <code>un-boxing</code> to the mix, things get <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/comdelegate.cpp#L3228-L3252">even more hairy</a> and <a href="https://github.com/dotnet/coreclr/blob/4895a06c/src/vm/genmeth.cpp#L660-L703">even more complex</a>!</p>
+
+<p><strong>If anyone has read this far and wants a fun challenge, try and figure out what’s the most stubs you can force a single method call to go via! If you do, let me know in the comments or <a href="https://twitter.com/matthewwarren">via twitter</a></strong></p>
+
+<p>Finally, by knowing <strong>where</strong> and <strong>when</strong> stubs are involved in our  method calls, we can start to understand the overhead of each scenario. For instance, it explains why <code>delegate</code> method calls are a bit slower than calling a method directly and why ‘de-virtualization’ is so important. Having the JIT be able to perform extra analysis to determine that a virtual call can be converted into a direct one skips an entire level of indirection, for more on this see:</p>
+
+<ul>
+  <li><a href="https://github.com/dotnet/coreclr/pull/9230">Simple devirtualization #9230</a> (already implemented)</li>
+  <li><a href="https://github.com/dotnet/coreclr/issues/9908">JIT: devirtualization next steps #9908</a></li>
+  <li><a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/GuardedDevirtualization.md">‘Guarded Devirtualization’ design doc</a></li>
+</ul>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Tracing .NET Core applications - Red Hat Developer - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Tracing .NET Core applications - Red Hat Developer - linksfor.dev(s)"/>
+    <meta property="article:author" content="By Tom Deseyn December 23, 2019January 20, 2020"/>
+    <meta property="og:description" content="Tom Deseyn shows how you can capture events from the .NET Core runtime and BCL using EventListener, dotnet-trace, and EventPipe environment variables."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://developers.redhat.com/blog/2019/12/23/tracing-net-core-applications/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Tracing .NET Core applications - Red Hat Developer</title>
+<div class="readable">
+        <h1>Tracing .NET Core applications - Red Hat Developer</h1>
+            <div>by By Tom Deseyn December 23, 2019January 20, 2020</div>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 06 Jan 2020</div>
+        <p><a href="https://developers.redhat.com/blog/2019/12/23/tracing-net-core-applications/">https://developers.redhat.com/blog/2019/12/23/tracing-net-core-applications/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="primary">
+		<main id="main" role="main">
+
+		
+			
+<article id="post-660147">
+    <div>
+		        <!-- .entry-meta -->
+        
+        <p><img width="1225" height="686" src="https://developers.redhat.com/blog/wp-content/uploads/2019/12/trace-pixabay.jpg" alt="Tracing .NET Core applications" srcset="https://developers.redhat.com/blog/wp-content/uploads/2019/12/trace-pixabay.jpg 1225w, https://developers.redhat.com/blog/wp-content/uploads/2019/12/trace-pixabay-300x168.jpg 300w, https://developers.redhat.com/blog/wp-content/uploads/2019/12/trace-pixabay-768x430.jpg 768w, https://developers.redhat.com/blog/wp-content/uploads/2019/12/trace-pixabay-1024x573.jpg 1024w" sizes="(max-width: 1225px) 100vw, 1225px"></p><p>In this article, we’ll look at different ways of collecting and inspecting events from the <a href="https://developers.redhat.com/products/dotnet/overview">.NET Core runtime</a> and base class library (BCL).</p>
+<h2>EventListener</h2>
+<p>The <code><a href="https://docs.microsoft.com/en-us/dotnet/api/system.diagnostics.tracing.eventlistener?view=netcore-3.0">EventListener</a></code> class allows us to get events of the running application. Let’s learn how to use it with an example application. Our application performs an HTTP get and prints the length of the received response.<span id="more-660147"></span></p>
+<pre>using var httpClient = new HttpClient();
+string response = await httpClient.GetStringAsync("http://redhatloves.net/");
+Console.WriteLine($"Received response with length {response.Length}");
+</pre>
+<p>The .NET Core base classes (like <code>HttpClient</code>) record events using the <code>EventSource</code> class. Each <code><a href="https://docs.microsoft.com/en-us/dotnet/api/system.diagnostics.tracing.eventsource?view=netcore-3.0">EventSource</a></code> has a name. <code>EventSources</code> are created when we are using some functionality. To know what sources are available, we’ll create an <code>EventListener</code> and override <code>OnEventSourceCreated</code>.</p>
+<pre>sealed class EventSourceCreatedListener : EventListener
+{
+    protected override void OnEventSourceCreated(EventSource eventSource)
+    {
+        base.OnEventSourceCreated(eventSource);
+        Console.WriteLine($"New event source: {eventSource.Name}");
+    }
+}
+</pre>
+<p>When we instantiate this class, the base constructor will call <code>OnEventSourceCreated</code> for all existing sources. When new sources are added (for example, when we first use <code>HttpClient</code>) <code>OnEventSourceCreated</code> will be called for them, too.</p>
+<p>We add an instance to our application:</p>
+<pre>using var eventSourceListener = new EventSourceCreatedListener();
+using var httpClient = new HttpClient();
+...
+</pre>
+<p>When we run the application this is this output:</p>
+<pre>New event source: Microsoft-Windows-DotNETRuntime
+New event source: System.Runtime
+New event source: Microsoft-System-Net-Http
+New event source: System.Diagnostics.Eventing.FrameworkEventSource
+New event source: Microsoft-Diagnostics-DiagnosticSource
+New event source: Microsoft-System-Net-Sockets
+New event source: Microsoft-System-Net-NameResolution
+New event source: System.Threading.Tasks.TplEventSource
+New event source: System.Buffers.ArrayPoolEventSource
+New event source: Microsoft-System-Net-Security
+New event source: System.Collections.Concurrent.ConcurrentCollectionsEventSource
+</pre>
+<p>The <code>Microsoft-Windows-DotNETRuntime</code> and <code>System.Runtime</code> are present when we create the <code>EventSourceCreatedListener</code>. The other event sources are created when we use the <code>HttpClient</code>. There is an event source for HTTP (Microsoft-System-Net-Http), we also see an event source for the name resolution (Microsoft-System-Net-NameResolution), security (Microsoft-System-Net-Security) and sockets (Microsoft-System-Net-Sockets). Let’s print events from the HTTP source to <code>Console</code> with another listener.</p>
+<p>We create an <code>EventListener</code> that prints events for a specific <code>EventSource</code>:</p>
+<pre>sealed class EventSourceListener : EventListener
+{
+    private readonly string _eventSourceName;
+    private readonly StringBuilder _messageBuilder = new StringBuilder();
+
+    public EventSourceListener(string name)
+    {
+        _eventSourceName = name;
+    }
+
+    protected override void OnEventSourceCreated(EventSource eventSource)
+    {
+        base.OnEventSourceCreated(eventSource);
+
+        if (eventSource.Name == _eventSourceName)
+        {
+            EnableEvents(eventSource, EventLevel.LogAlways, EventKeywords.All);
+        }
+    }
+
+    protected override void OnEventWritten(EventWrittenEventArgs eventData)
+    {
+        base.OnEventWritten(eventData);
+
+        string message;
+        lock (_messageBuilder)
+&nbsp; &nbsp; &nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.Append("&lt;- Event ");
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.Append(<a href="http://eventdata.eventsource.name/" target="_blank" rel="noopener noreferrer" data-saferedirecturl="https://www.google.com/url?q=http://eventData.EventSource.Name&amp;source=gmail&amp;ust=1579630428334000&amp;usg=AFQjCNGnUflfgyokXTu7TzS1fvvllibSrQ">eventDa<wbr>ta.EventSource.Name</a>);
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.Append(" - ");
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.Append(eventDa<wbr>ta.EventName);
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.Append(" : ");
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.AppendJoin(','<wbr>, eventData.Payload);
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.AppendLine(" -&gt;");
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; message = _messageBuilder.ToString();
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; _messageBuilder.Clear();
+&nbsp; &nbsp; &nbsp; &nbsp; }
+        Console.WriteLine(message);
+    }
+}
+</pre>
+<p>In <code>OnEventSourceCreated</code> we enable the receiving of events for the specific source. We’re not filtering for a specific log level (EventLevel.LogAlways) or specific keywords (EventKeywords.All). In <code>OnEventWritten</code> we print the event to the <code>Console</code>.</p>
+<p>Now we add an instance to our program for the <code>Microsoft-System-Net-Http</code> EventSource:</p>
+<pre>using var httpEventListener = new EventSourceListener("Microsoft-System-Net-Http");
+...
+</pre>
+<p>When we run our program again we get a lot of events from the HTTP <code>EventSource</code>. For example, we see that our request gets redirected and we see information about the SSL negotiation.</p>
+<pre>…
+Event Microsoft-System-Net-Http - HandlerMessage : 55530882,6044116,0,SendAsyncCore,Received response: StatusCode: 301, ReasonPhrase: 'Moved Permanently'
+…
+&lt;- Event Microsoft-System-Net-Http - HandlerMessage : 16294043,41622463,0,TraceConnection,HttpConnection(HttpConnectionPool https://developers.redhat.com:443). SslProtocol:Tls12, NegotiatedApplicationProtocol:, NegotiatedCipherSuite:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, CipherAlgorithm:Aes256, CipherStrength:256, HashAlgorithm:None, HashStrength:0, KeyExchangeAlgorithm:DiffieHellman, KeyExchangeStrength:0, LocalCertificate:, RemoteCertificate:[Subject]
+  CN=openshift.redhat.com, O=Red Hat, L=Raleigh, S=North Carolina, C=US
+
+[Issuer]
+  CN=GeoTrust RSA CA 2018, OU=www.digicert.com, O=DigiCert Inc, C=US
+…
+</pre>
+<p>The <code>EventSource</code> named <code>Microsoft-Windows-DotNETRuntime</code> provides events from the runtime like the Garbage Collector (GC), just in time compiler (JIT) and <code>ThreadPool</code>.</p>
+<h2>dotnet-trace</h2>
+<p><code><a href="https://docs.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace">dotnet-trace</a></code> is a new global tool with .NET Core 3.0. With <code>dotnet-trace</code> we can create a trace from a running application.</p>
+<p>To install dotnet-trace run:</p>
+<pre>dotnet tool install --global dotnet-trace
+</pre>
+<p>A trace can be created with the following command:</p>
+<pre>dotnet trace collect -p &lt;pid&gt; [--buffersize 256] [-o &lt;outputpath&gt;] [--providers &lt;providerlist&gt;] [--profile &lt;profilename&gt;] [--format NetTrace|Speedscope]
+</pre>
+<p>We need to specify the <code>&lt;pid&gt;</code> of the program that we want to trace. Optionally, we can specify a buffer size (default: 256MB). The output path is the filename for the trace file. <code>providers</code> and <code>profile</code> allow us to specify the events we are interested in. A <code>profile</code> is a pre-defined number of providers. You can see the available profiles using the <code>list-profiles</code> subcommand:</p>
+<pre>$ dotnet trace list-profiles
+cpu-sampling     - Useful for tracking CPU usage and general .NET runtime information. This is the default option if no profile or providers are specified.
+gc-verbose       - Tracks GC collections and samples object allocations.
+gc-collect       - Tracks GC collections only at very low overhead.
+</pre>
+<p>As indicated in the output, if you don’t specify <code>providers</code> and a <code>profile</code>, the <code>cpu-samping</code> profile is used by default.</p>
+<p>Multiple providers can be specified using a comma to separate them. By default, events will be captured for any keyword and level verbose. We can change this by appending a <code>:[&lt;keyword_hex_nr&gt;]:&lt;loglevel_nr&gt;]</code> suffix to the provider name. The <code>keyword_hex_nr</code> may be omitted to indicate all keywords. For example, to trace the <code>Microsoft-System-Net-Http</code> <code>EventSource</code> at <a href="https://docs.microsoft.com/en-us/dotnet/api/system.diagnostics.tracing.eventlevel?view=netcore-3.0">EventLevel.Informational</a>, we can specify: <code>--providers Microsoft-System-Net-Http::4</code>. An asterisk may be used to trace all events (i.e. <code>--providers '*'</code>).</p>
+<p>Some providers can be configured with additional key-value pairs. These are added to the provider name <code>:[key1=value1][;key2=value2]</code>. When the <code>EventSource</code> has associated <code><a href="https://docs.microsoft.com/en-us/dotnet/api/system.diagnostics.tracing.eventcounter?view=netcore-3.0">EventCounters</a></code>, the report interval can be set using the <code>EventCounterIntervalSec</code> key.</p>
+<p>The default format (nettrace) is meant for the Windows <a href="https://github.com/microsoft/perfview">PerfView</a> tool. If you are doing performance analysis, you can use the <code>speedscope</code> format which can be opened on any platform using the <a href="https://www.speedscope.app/">https://www.speedscope.app/</a> website, or offline using the npm <a href="https://www.npmjs.com/package/speedscope">speedscopeapp</a> package. When you are logging in the <code>speedscope</code> format, the trace is first captured into the <code>nettrace</code> format and then converted into the <code>speedscope</code> format. This conversion can also be done on the command line using <code>dotnet trace convert</code>.</p>
+<p>For example, this is how you can trace a .NET Core application named <code>web</code> for the default profile (cpu-sampling) and output a <code>speedscope</code> file.</p>
+<pre>$ dotnet trace collect -p $(pidof web) --format speedscope
+
+Provider Name                           Keywords            Level               Enabled By
+Microsoft-System-Net-Http               0xFFFFFFFFFFFFFFFF  Verbose(5)          --providers
+
+Process        : /tmp/web/bin/Debug/netcoreapp3.0/web
+Output File    : /tmp/trace/trace.nettrace
+
+[00:00:00:08]   Recording trace 2.3301   (MB)
+Press  or  to exit...
+
+Trace completed.
+Writing:        /tmp/trace/trace.speedscope.json
+Conversion complete
+</pre>
+<p>As indicated by the tool, you can stop tracing using Ctrl+C or Enter. For more information about using speedscope, check out <a href="https://adamsitnik.com/speedscope/">Adam Sitnick’s blog post</a>.</p>
+<h2>EventPipe environment variables</h2>
+<p>dotnet-trace enables the trace output when an application is running. By using environment variables we can also enable tracing from the application start. This also allows us to trace a tree of processes.</p>
+<table>
+<tbody>
+<tr>
+<td>Name</td>
+<td>Description</td>
+</tr>
+<tr>
+<td>COMPlus_EnableEventPipe</td>
+<td>Enable/disable event pipe.</td>
+</tr>
+<tr>
+<td>COMPlus_EventPipeOutputPath</td>
+<td>The full path excluding filename for the trace file.</td>
+</tr>
+<tr>
+<td>COMPlus_EventPipeCircularMB</td>
+<td>Circular buffer size in megabytes (default: 1024 MB).</td>
+</tr>
+<tr>
+<td>COMPlus_EventPipeConfig</td>
+<td>Configuration for EventPipe.</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>EventPipeConfig</code> has the same format as the <code>dotnet trace</code> <code>providers</code> argument. The <code>EventPipeOutputPath</code> refers to a folder. This allows multiple processes to write a trace file by including the process pid in the filename. The <code>EventPipe</code> uses the <code>nettrace</code> format.</p>
+<p>For example, to capture all events from a console application, we can run:</p>
+<pre>COMPlus_EnableEventPipe=1 COMPlus_EventPipeConfig=* dotnet console.dll
+</pre>
+<h2>TraceEvent library</h2>
+<p>If you want to write tools that process these trace files, you can use the <a href="https://www.nuget.org/packages/Microsoft.Diagnostics.Tracing.TraceEvent/">Microsoft.Diagnostics.Tracing.TraceEvent</a> library. This library also allows us to read the nettrace files on Linux:</p>
+<pre># add the package:
+#      dotnet add package Microsoft.Diagnostics.Tracing.TraceEvent
+
+using System;
+using Microsoft.Diagnostics.Tracing;
+using Microsoft.Diagnostics.Tracing.Etlx;
+using Microsoft.Diagnostics.Tracing.Parsers;
+
+namespace console
+{
+    class Program
+    {
+
+        static void Main(string[] args)
+        {
+            if (args.Length &lt; 1)
+            {
+                Console.WriteLine("You must specify a nettrace file.");
+                return;
+            }
+
+            using (var traceLog = new TraceLog(TraceLog.CreateFromEventPipeDataFile(args[0])))
+            {
+                var traceSource = traceLog.Events.GetSource();
+
+                traceSource.AllEvents += delegate (TraceEvent data) {
+                    Console.WriteLine("{0}", data);
+                };
+
+                traceSource.Process();
+
+           }
+        }
+    }
+}
+</pre>
+<h2>Microsoft.Extensions.Logging</h2>
+<p>ASP.NET Core uses the <code>Microsoft.Extensions.Logging</code> package for logging. You can find more information about this in <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/logging/?view=aspnetcore-3.0">Logging in .NET Core and ASP.NET Core</a>. Multiple sinks can be configured as <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/logging/?view=aspnetcore-3.0#built-in-logging-providers">Logging providers</a>. The <code>EventSource</code> logger provider (which is included by default) allows to include the ASP.NET Core log output in the trace output. The <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/logging/?view=aspnetcore-3.0#event-source-provider">EventSource section</a> describes how to use the <code>Microsoft-Extensions-Logging</code> EventSource with <code>dotnet-trace</code>, and control the format, and log level of the individual loggers.</p>
+<h2>dotnet-counters</h2>
+<p><a href="https://docs.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace">dotnet-counters</a> is a new global tool with .NET Core 3.0. With <code>dotnet-counters</code> we can live monitor <a href="https://docs.microsoft.com/en-us/dotnet/api/system.diagnostics.tracing.eventcounter?view=netcore-3.0">EventCounters</a> of a running .NET Core application.<br>
+To install counters run:</p>
+<pre>dotnet tool install --global dotnet-counters
+</pre>
+<p>Monitoring can be performed with the following command.</p>
+<pre>dotnet-counters monitor -p &lt;pid&gt; [--refreshInterval &lt;intervalSec&gt;] [&lt;counter_list&gt;]
+</pre>
+<p>When no counter list is specified, a default set of .NET runtime counters are shown information about the GC, <code>ThreadPool</code>, lock contention, active timers, and exception count.</p>
+<p><code>&lt;counter_list&gt;</code> can be specified as a space separated list of <code>provider_name[:counter_name]</code>. When the <code>&lt;counter_name&gt;</code> is omitted, all counters of the provider are included.</p>
+<h2>Conclusion</h2>
+<p>In this article, you’ve learned how you can capture events from the<a href="https://developers.redhat.com/products/dotnet/docs-and-apis"> .NET Core runtime</a> and BCL using <code>EventListener</code>, <code><a href="https://docs.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace">dotnet-trace</a></code>, and <code>EventPipe</code> environment variables. Using the <code>LoggingEventSource</code> we can including events from <code>Microsoft.Extensions.Logging</code> (like ASP.NET Core). To view and analyze these events you can use <a href="https://github.com/microsoft/perfview">PerfView</a> on windows, the cross-platform <a href="https://www.speedscope.app/">speedscope</a>, or build your own cross-platform tools using <a href="https://www.nuget.org/packages/Microsoft.Diagnostics.Tracing.TraceEvent/">Microsoft.Diagnostics.Tracing.TraceEvent</a>. With <code><a href="https://docs.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace">dotnet-counters</a></code> we can get a live view of EventCounters.</p>
+
+			</div><!-- .entry-content -->
+
+
+
+
+	<!-- .entry-footer -->
+</article><!-- #post-## -->
+			
+
+		
+		</main><!-- #main -->
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 10 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 10 - linksfor.dev(s)"/>
+    <meta property="og:description" content="Last time on FAIC I discussed a technique for parallelizing computation of Life grids by using SIMD instructions to handle 256 bits worth of grid state truly in parallel. Today I&#x2019;m going to n&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/05/18/life-part-10/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 10</title>
+<div class="readable">
+        <h1>Life, part 10</h1>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 18 May 2020</div>
+        <p><a href="https://ericlippert.com/2020/05/18/life-part-10/">https://ericlippert.com/2020/05/18/life-part-10/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p data-adtags-visited="true">Last time on FAIC I discussed a technique for parallelizing computation of Life grids by using SIMD instructions to handle 256 bits worth of grid state truly in parallel. Today I’m going to not present an implementation, but rather discuss how the Life problem is one that is ideally suited for existing hardware acceleration that many PC users have on their machines already.</p>
+<hr>
+<p data-adtags-visited="true">I’ve often marveled at the technology that goes into monitors and the computers that they’re plugged into. I have two 1920×1080 monitors hooked up to my machine right now. They refresh the screens 60 times a second, and there is typically 4 to 6 bytes of colour information sent per pixel; let’s be conservative and say 4.&nbsp; So that is:</p>
+<p data-adtags-visited="true">2 x 1920 x 1080 x 60 x 4 = just under one billion bytes per second</p>
+<p data-adtags-visited="true">and that’s for my simple little two-monitor setup! I could have more monitors at higher resolution and higher refresh rates easily enough.</p>
+<p data-adtags-visited="true">How on earth do computers keep up, particularly for something like a game where there are many computations to make to determine the value of each pixel on each screen refresh?</p>
+<p data-adtags-visited="true">The answer of course is that we’ve built specialized hardware that attacks the problem of “apply a function to every one of this grid of pixels in parallel”. Today I want to describe one of the most basic operations that can be handled by highly optimized parallel hardware by restricting the function at hand to a very particular set of functions called <strong>convolutions</strong>.</p>
+<p data-adtags-visited="true"><strong>Aside:</strong> I note that we’ll be discussing <em>discrete</em> <em>convolutions</em> today; there is also a whole theory of continuous convolutions in signal processing theory that does not concern us.</p>
+<p data-adtags-visited="true">The terminology is somewhat intimidating, but convolutions are actually very simple when you see how they work. For our purposes today a convolution is a <strong>function</strong> that takes <strong>two arguments</strong>, both<strong> two-dimensional arrays</strong>.</p>
+<p data-adtags-visited="true">The first argument is called the <b>kernel</b>. It is typically small, typically square, and typically has an odd side length; 3×3 is common and without loss of generality, we’ll look just at 3×3 kernels today. Its values are numbers; for our purposes let’s suppose they are floating point numbers.</p>
+<p data-adtags-visited="true">The second argument is an two-dimensional array with one value per pixel being computed. Think of it as the “input screen”. For our purposes, let’s suppose they are integers.</p>
+<p data-adtags-visited="true">The output of the function is a new array of values, one per pixel. Think of it as the “output screen”, and it is also a two-dimensional array of integers.</p>
+<p data-adtags-visited="true">What then is the function that takes these two arguments? The idea is very straightforward.</p>
+<ul>
+<li>For each pixel in the input, imagine “overlaying” the kernel on that pixel so that the center of the kernel array is over the pixel.</li>
+<li>Multiply each value in the kernel with the corresponding input pixel “below” it.</li>
+<li>Take the sum of the products.</li>
+<li>That’s the value for the corresponding output pixel.</li>
+</ul>
+<p data-adtags-visited="true">Let’s work an example.</p>
+<p data-adtags-visited="true">Suppose our input is a two-dimensional array corresponding to this <strong>greyscale</strong> 32 x 32 bitmap which I have blown up to examine the detail:</p>
+<p data-adtags-visited="true"><a href="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-2.png"><img data-attachment-id="7040" data-permalink="https://ericlippert.com/2020/05/18/life-part-10/2020-05-08-2/" data-orig-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-2.png" data-orig-size="225,259" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="2020-05-08 (2)" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-2.png?w=225" data-large-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-2.png?w=225" src="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-2.png?w=584" alt="" srcset="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-2.png 225w, https://ericlippert.files.wordpress.com/2020/05/2020-05-08-2.png?w=130 130w" sizes="(max-width: 225px) 100vw, 225px"></a></p>
+<p data-adtags-visited="true">All of these input values are <strong>255</strong> (the white) or <strong>0</strong> (the black).</p>
+<p data-adtags-visited="true">Let’s suppose our kernel is</p>
+<pre>0.0625   0.125   0.0625
+
+0.125    0.25    0.125
+
+0.0625   0.125   0.0625</pre>
+<p data-adtags-visited="true">That is, 1/16th, 1/8th, 1/16th, and so on.</p>
+<p data-adtags-visited="true">Now we can compute the convolution. Remember, we’re going to do the same operation on every pixel: overlay the kernel centered on the pixel, multiply corresponding values, sum them up. Let’s suppose the current pixel we are looking at is the one in the center of the nine pixels I’ve highlighted below:</p>
+<p data-adtags-visited="true"><a href="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-3.png"><img data-attachment-id="7042" data-permalink="https://ericlippert.com/2020/05/18/life-part-10/2020-05-08-3/" data-orig-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-3.png" data-orig-size="200,220" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="2020-05-08 (3)" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-3.png?w=200" data-large-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-3.png?w=200" src="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-3.png?w=584" alt="" srcset="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-3.png 200w, https://ericlippert.files.wordpress.com/2020/05/2020-05-08-3.png?w=136 136w" sizes="(max-width: 200px) 100vw, 200px"></a></p>
+<p data-adtags-visited="true">The situation is as follows:</p>
+<pre>  kernel                     overlaid on          product (rounded)
+
+0.0625   0.125   0.0625      0   255    255       0   32    16  
+
+0.0625   0.25    0.0625      0     0    255       0    0    16
+
+0.0625   0.125   0.0625      0     0      0       0    0    0</pre>
+<p data-adtags-visited="true">The sum of the products is 64, so the old value of this pixel is the 0 in the center and the new value is 64.</p>
+<p data-adtags-visited="true">Now suppose we applied that process to every pixel in the bitmap and then displayed the output bitmap as a grayscale:</p>
+<p data-adtags-visited="true"><a href="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-4.png"><img data-attachment-id="7045" data-permalink="https://ericlippert.com/2020/05/18/life-part-10/2020-05-08-4/" data-orig-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-4.png" data-orig-size="214,262" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="2020-05-08 (4)" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-4.png?w=214" data-large-file="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-4.png?w=214" src="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-4.png?w=584" alt="" srcset="https://ericlippert.files.wordpress.com/2020/05/2020-05-08-4.png 214w, https://ericlippert.files.wordpress.com/2020/05/2020-05-08-4.png?w=123 123w" sizes="(max-width: 214px) 100vw, 214px"></a></p>
+<p data-adtags-visited="true">We blurred it! This particular blur is called “3×3 Gaussian” and it is extremely common in graphics processing. There are many other common kernels for blurring, sharpening, edge detection, brightening, dimming, and so on. Basically the idea here is that the <strong>new value of every pixel is a weighted average of the nearby pixels</strong>; precisely how you choose those weights determines what image operation the particular convolution with that kernel performs.</p>
+<p data-adtags-visited="true">That is maybe all very interesting and the next time you play some video game you can notice all the places in which graphical elements are blurred or sharpened or dimmed or whatever. But why is this relevant to Life?</p>
+<p data-adtags-visited="true">Because if you take as your kernel</p>
+<pre>1  1  1
+1  9  1
+1  1  1</pre>
+<p data-adtags-visited="true">then the convolution of a Life grid with that kernel is a new grid of numbers that should seem familiar; as I mentioned at the end of episode 7, <em>all the places in the output array that have the value 3, 10 or 11 are living cells in the next tick, and everything else is dead</em>. The 3s are dead cells with three living neighbours, the 10s and 11s are living cells with two and three neighbours.</p>
+<p data-adtags-visited="true">(Thanks once again to reader yurivkhan, whose comment on part six inspired me to add this episode; I was not initially planning on discussing image processing, but I am glad I did.)</p>
+<p data-adtags-visited="true">Now, there are some issues to worry about. I completely glossed over what happened on the edges of that blur, for example. The definition of the convolution function I gave assumed that the overlaying of the kernel on the image actually overlapped, and in real graphics processing you need to specify what happens when the kernel goes “over an edge”.</p>
+<p data-adtags-visited="true">What I did of course was I skipped running the convolution entirely on the edges and just kept them white. For our Life implementation, were we to use this technique, we’d probably do something similar to keep the edge permanently dead.</p>
+<p data-adtags-visited="true">If we had special-purpose software libraries and hardware that could compute convolutions on large grids extremely quickly, then we could use that to get a big marginal speedup in our Life algorithms.</p>
+<p data-adtags-visited="true">How big is “big”?</p>
+<p data-adtags-visited="true">I am not set up to do GPU experiments on my little gaming machine here, but even cheap gaming machine GPUs can run a convolution at a rate of many hundred millions of pixels per second. <a href="http://www.marekfiser.com/Projects/Conways-Game-of-Life-on-GPU-using-CUDA">Back in 2013 a graduate student did a fascinating writeup on optimizing Life on a GPU</a> and managed to get an astonishing 20 billion cell computations per second. However, that throughput was only attained when the grid sizes became quite large, and there was considerable optimization work done to attain a fast kernel function that worked on grids that stored cells as bits.</p>
+<p data-adtags-visited="true">Let’s do a quick back-of-the-envelope to see how that compares to our efforts so far.</p>
+<ul>
+<li>My best implementation so far did 5000 generations of 64k cells in 3.25 seconds, so that’s 100 million cells per second. The optimized GPU reported in 2013 is 200x faster.</li>
+<li>Jeroen’s SIMD did 5 million generations of 256 cells in 1 second, so that’s about 1.3 billion cells per second — though there is a bit caveat here that the program can only do 16×16 grids! A program that used SIMD instructions on larger grids would be a bit slower than 1.3 billion cells per second, but it would be in that neighbourhood. The optimized GPU is on the order of 20x faster.</li>
+</ul>
+<hr>
+<p data-adtags-visited="true">I keep on coming back to this main theme: adding raw power to improve the marginal performance of an algorithm can only go so far, and we’re seeing here what the limits of that are. <strong>We are not going to do better than GPUs on any variation of the Life algorithm that works by examining every cell in a finite grid in order to determine the next tick’s grid state</strong>. GPUs are the best available technology for parallelizing simple math operations onto grids where the new cell value is a function of the near neighbours of each cell.</p>
+<p data-adtags-visited="true">Moreover, an increase in speed by 200x again just means that if our previous implementation is in its performance budget for an n-quad, then throwing a GPU at the problem means that we can now do an n+3 or n+4-quad in the same time budget.</p>
+<p data-adtags-visited="true">And also it is worth remembering that a GPU only has so much addressable memory on board! One expects that a typical GPU might handle something like an 8192×8192 image — a 13-quad — before it runs out of space.</p>
+<p data-adtags-visited="true">We’ve found a rough upper bound on how good we can make any variation on the naive “examine every cell every time” algorithm.<strong> If we want to get better speed, we’re going to have to stop looking at every cell and counting its neighbors.</strong></p>
+<p data-adtags-visited="true"><strong>Next time on FAIC:</strong> All that said, I’m going to look at <em>one</em> more algorithm that examines every cell every time, but we will at least make a start at using specific characteristics of the Life problem in order to do less work. We will take an insight from this episode and see if we can use it to advantage to get a marginal advantage, and then use that as the basis for further improvements in coming episodes. Stay tuned!</p>
+			
+			
+						</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

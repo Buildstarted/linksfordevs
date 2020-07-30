@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+ASP.NET Core middleware with Roslyn Analyzers - Part 2 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="ASP.NET Core middleware with Roslyn Analyzers - Part 2 - linksfor.dev(s)"/>
+    <meta property="article:author" content="Written by Thomas Ardal, March 03, 2020"/>
+    <meta property="og:description" content="Learn how to create a Roslyn analyzer that helps your users insert middleware in the Configure method of the Startup.cs file and in the right order."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.elmah.io/asp-net-core-middleware-with-roslyn-analyzers-part-2/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - ASP.NET Core middleware with Roslyn Analyzers - Part 2</title>
+<div class="readable">
+        <h1>ASP.NET Core middleware with Roslyn Analyzers - Part 2</h1>
+            <div>by Written by Thomas Ardal, March 03, 2020</div>
+            <div>Reading time: 8-11 minutes</div>
+        <div>Posted here: 04 Mar 2020</div>
+        <p><a href="https://blog.elmah.io/asp-net-core-middleware-with-roslyn-analyzers-part-2/">https://blog.elmah.io/asp-net-core-middleware-with-roslyn-analyzers-part-2/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+    <div>
+
+		
+
+        <article>
+            <div>
+            	<div>
+
+					
+					
+					
+
+					<p>This is the second post in the series about Roslyn analyzers with ASP.NET Core middleware. If you haven't read <a href="https://blog.elmah.io/asp-net-core-middleware-with-roslyn-analyzers-part-1/">part 1</a> already, go ahead a do that for a general introduction. In this post, I'll continue the example from the first post and start looking at the order middleware are added.</p><figure><a href="https://blog.elmah.io/content/images/2020/03/asp-net-core-middleware-with-roslyn-analyzers-part-2.png" data-fancybox=""><img src="https://blog.elmah.io/content/images/2020/03/asp-net-core-middleware-with-roslyn-analyzers-part-2.png"></a></figure><p>Setting up middleware often isn't enough for everything to work properly. The order in which different middleware components are added is important for almost all features in ASP.NET Core. As mentioned in the previous post, middleware works like pearls on a string. The order you add your middleware determines which middleware is called first and which is called last. If you add exception handling middleware too soon or too late, important errors in the pipeline, are never picked up and handled.</p><p>Let's create a new analyzer that validates the right placement of a middleware component. Again, I'm using the elmah.io middleware, but that's because I already wrote the code for that. You can implement this for any middleware.</p><p>The code will go into a new analyzer, why I create a new file named <code>UseElmahIoOrderAnalyzer.cs</code>. The overall structure looks similar to the analyzer from the previous post:</p><!--kg-card-begin: markdown--><pre><code>[DiagnosticAnalyzer(LanguageNames.CSharp)]
+<span>public</span> <span>class</span> <span>UseElmahIoOrderAnalyzer</span> : <span>DiagnosticAnalyzer</span>
+{
+    <span>public</span> <span>const</span> <span>string</span> DiagnosticId = <span>"EIO1002"</span>;
+
+    <span>private</span> <span>static</span> DiagnosticDescriptor Rule = <span>new</span> DiagnosticDescriptor(
+        DiagnosticId,
+        <span>"UseElmahIo must be called in the right order"</span>,
+        <span>"UseElmahIo must be called after {1}"</span>,
+        <span>"Elmah.Io.CSharp.AspNetCoreRules"</span>,
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: <span>true</span>);
+
+        <span>public</span> <span>override</span> ImmutableArray&lt;DiagnosticDescriptor&gt; SupportedDiagnostics { <span>get</span> { <span>return</span> ImmutableArray.Create(Rule); } }
+
+        <span><span>public</span> <span>override</span> <span>void</span> <span>Initialize</span><span>(AnalysisContext context)</span>
+        </span>{
+        }
+    }
+</code></pre>
+<!--kg-card-end: markdown--><p>I changed two things: the analyzer id (<code>DiagnosticId</code>) and the text messages inside the <code>DiagnosticDescriptor</code>. Notice how the second message is no longer simply a hard-coded string. Analyzers support formatting too, which we will dig into in a bit.</p><p>The analyzer should only run on the method named <code>Configure</code> in classes named <code>Startup</code>. Let's repeat how the first lines from the <code>Initialize</code> method can decide if the analyzer should run or not:</p><!--kg-card-begin: markdown--><pre><code>context.RegisterCodeBlockStartAction&lt;SyntaxKind&gt;(cb =&gt;
+{
+    <span>if</span> (cb.OwningSymbol.Kind != SymbolKind.Method) <span>return</span>;
+    <span>var</span> method = (IMethodSymbol)cb.OwningSymbol;
+    
+    <span>if</span> (method.Name != <span>"Configure"</span>) <span>return</span>;
+    <span>if</span> (method.ContainingType.Name != <span>"Startup"</span>) <span>return</span>;
+
+    
+});
+</code></pre>
+<!--kg-card-end: markdown--><p>With that out of the way, let's start implementing the rule. For the <code>UseElmahIo</code> method, I want to make sure that it is called after any calls to <code>UseDeveloperExceptionPage</code> or <code>UseExceptionHandler</code>. To implement this in the most simple way I can imagine, my analyzer will iterate through the <code>Configure</code> method and remember all calls starting with <code>Use</code> and in the end, verify that the order is correct:</p><!--kg-card-begin: markdown--><pre><code>Location useElmahIoLocation = <span>null</span>;
+List&lt;<span>string</span>&gt; calls = <span>new</span> List&lt;<span>string</span>&gt;();
+cb.RegisterSyntaxNodeAction(ctx =&gt;
+{
+    <span>var</span> node = ctx.Node <span>as</span> InvocationExpressionSyntax;
+    <span>if</span> (node == <span>null</span>) <span>return</span>;
+    <span>var</span> expression = node.Expression <span>as</span> MemberAccessExpressionSyntax;
+    <span>if</span> (expression == <span>null</span>) <span>return</span>;
+    <span>var</span> methodName = expression.Name?.Identifier.ValueText;
+    <span>if</span> (<span>string</span>.IsNullOrWhiteSpace(methodName) || !methodName.StartsWith(<span>"Use"</span>)) <span>return</span>;
+    calls.Add(methodName);
+    <span>if</span> (methodName.Equals(<span>"UseElmahIo"</span>)) useElmahIoLocation = expression.GetLocation();
+}, SyntaxKind.InvocationExpression);
+</code></pre>
+<!--kg-card-end: markdown--><p>I register a syntax node action once we are inside the <code>Configure</code> method. If you lost track of where this code should be placed you can relax. The full code is available later in this post 😃 The code stores any method invocations starting with <code>Use</code>. It also saves the location of the <code>UseElmahIo</code> method, which we will use when reporting the warning.</p><p>Once we are out of scope of the <code>Configure</code> method, we can inspect the invoked methods:</p><!--kg-card-begin: markdown--><pre><code>cb.RegisterCodeBlockEndAction(ctx =&gt;
+{
+    
+    <span>if</span> (!calls.Contains(<span>"UseElmahIo"</span>)) <span>return</span>;
+
+    <span>var</span> index = calls.IndexOf(<span>"UseElmahIo"</span>);
+    <span>var</span> useDeveloperExceptionPageIndex = calls.IndexOf(<span>"UseDeveloperExceptionPage"</span>);
+    <span>var</span> useExceptionHandlerIndex = calls.IndexOf(<span>"UseExceptionHandler"</span>);
+    
+    <span>if</span> (useDeveloperExceptionPageIndex != -<span>1</span> &amp;&amp; index &lt; useDeveloperExceptionPageIndex)
+        Report(ctx, useElmahIoLocation, <span>"UseDeveloperExceptionPage"</span>);
+    <span><span>else</span> <span>if</span> <span>(useExceptionHandlerIndex != -<span>1</span> &amp;&amp; index &lt; useExceptionHandlerIndex)</span>
+        <span>Report</span><span>(ctx, useElmahIoLocation, <span>"UseExceptionHandler"</span>)</span></span>;
+});
+</code></pre>
+<!--kg-card-end: markdown--><p>The <code>Report</code> method should look familiar to what you've already seen, so let's jump in:</p><!--kg-card-begin: markdown--><pre><code><span><span>private</span> <span>void</span> <span>Report</span><span>(CodeBlockAnalysisContext context, Location location, <span>string</span> use)</span>
+</span>{
+    <span>var</span> diag = Diagnostic.Create(Rule, location, use);
+    context.ReportDiagnostic(diag);
+}
+</code></pre>
+<!--kg-card-end: markdown--><p>The method reports the warning to Visual Studio. Depending on which method name was sent by the analyzer, the <code>Diagnostic.Create</code> method replaces <code>{0}</code> in the message with the method name provided by the analyzer (<code>UseDeveloperExceptionPage</code> or <code>UseExceptionHandler</code>).</p><p>Let's look at the entire <code>Initialize</code> method:</p><!--kg-card-begin: markdown--><pre><code><span><span>public</span> <span>override</span> <span>void</span> <span>Initialize</span><span>(AnalysisContext context)</span>
+</span>{
+    context.RegisterCodeBlockStartAction&lt;SyntaxKind&gt;(cb =&gt;
+    {
+        
+        <span>if</span> (cb.OwningSymbol.Kind != SymbolKind.Method) <span>return</span>;
+        <span>var</span> method = (IMethodSymbol)cb.OwningSymbol;
+        
+        <span>if</span> (method.Name != <span>"Configure"</span>) <span>return</span>;
+        <span>if</span> (method.ContainingType.Name != <span>"Startup"</span>) <span>return</span>;
+        Location useElmahIoLocation = <span>null</span>;
+
+        List&lt;<span>string</span>&gt; calls = <span>new</span> List&lt;<span>string</span>&gt;();
+
+        cb.RegisterSyntaxNodeAction(ctx =&gt;
+        {
+            <span>var</span> node = ctx.Node <span>as</span> InvocationExpressionSyntax;
+            <span>if</span> (node == <span>null</span>) <span>return</span>;
+            <span>var</span> expression = node.Expression <span>as</span> MemberAccessExpressionSyntax;
+            <span>if</span> (expression == <span>null</span>) <span>return</span>;
+            <span>var</span> methodName = expression.Name?.Identifier.ValueText;
+            <span>if</span> (<span>string</span>.IsNullOrWhiteSpace(methodName) || !methodName.StartsWith(<span>"Use"</span>)) <span>return</span>;
+            calls.Add(methodName);
+            <span>if</span> (methodName.Equals(<span>"UseElmahIo"</span>)) useElmahIoLocation = expression.GetLocation();
+        }, SyntaxKind.InvocationExpression);
+
+        cb.RegisterCodeBlockEndAction(ctx =&gt;
+        {
+            
+            <span>if</span> (!calls.Contains(<span>"UseElmahIo"</span>)) <span>return</span>;
+
+            <span>var</span> index = calls.IndexOf(<span>"UseElmahIo"</span>);
+
+            <span>var</span> useDeveloperExceptionPageIndex = calls.IndexOf(<span>"UseDeveloperExceptionPage"</span>);
+            <span>var</span> useExceptionHandlerIndex = calls.IndexOf(<span>"UseExceptionHandler"</span>);
+            <span>var</span> useAuthorizationIndex = calls.IndexOf(<span>"UseAuthorization"</span>);
+
+            <span>if</span> (useDeveloperExceptionPageIndex != -<span>1</span> &amp;&amp; index &lt; useDeveloperExceptionPageIndex)
+                Report(ctx, useElmahIoLocation, <span>"UseDeveloperExceptionPage"</span>);
+            <span><span>else</span> <span>if</span> <span>(useExceptionHandlerIndex != -<span>1</span> &amp;&amp; index &lt; useExceptionHandlerIndex)</span>
+                <span>Report</span><span>(ctx, useElmahIoLocation, <span>"UseExceptionHandler"</span>)</span></span>;
+        });
+    });
+}
+</code></pre>
+<!--kg-card-end: markdown--><!--kg-card-begin: markdown--><p>To test the analyzer, make sure to set the VSIX project as the startup project and hit <kbd>F5</kbd>. This will start an experimental instance of Visual Studio. Create a new ASP.NET Core project or open an existing one and navigate to the <code>Startup</code> class. When adding the <code>UseElmahIo</code> call before <code>UseDeveloperExceptionPage</code> the warning is shown in Visual Studio:</p>
+<!--kg-card-end: markdown--><figure><a href="https://blog.elmah.io/content/images/2020/02/useelmahio-after-exceptionpage.png" data-fancybox=""><img src="https://blog.elmah.io/content/images/2020/02/useelmahio-after-exceptionpage.png"></a></figure><p>Multiple analyzers can be distributed in the same VSIX and/or NuGet package. Visual Studio automatically picks up all analyzers in installed packages.</p><p>That's it! The next step is for you to start experimenting with Roslyn Analyzers for your middleware. The full source code for the elmah.io Roslyn Analyzers for ASP.NET Core can be found here: <a href="https://github.com/elmahio/Elmah.Io.AspNetCore.Analyzers">https://github.com/elmahio/Elmah.Io.AspNetCore.Analyzers</a></p>
+
+					
+
+					<div>
+						<div>
+							<div>
+								<div>
+									<p><img src="https://blog.elmah.io/assets/img/features-image.png?v=a100334ce8" alt="Features steps">
+									</p>
+								</div>
+								<div>
+									<div>
+										<p><img src="https://blog.elmah.io/assets/img/features-step-1.png?v=a100334ce8" alt="We monitor your websites"></p><h3>We monitor your websites</h3>
+										<p>We monitor your websites for crashes and availability. This helps you get an overview of the quality of your applications and to spot trends in your releases.</p>
+									</div>
+									<div>
+										<p><img src="https://blog.elmah.io/assets/img/features-step-2.png?v=a100334ce8" alt="We notify you"></p><h3>We notify you</h3>
+										<p>We notify you when errors starts happening using Slack, Microsoft Teams, mail or other forms of communication to help you react to errors before your users do.</p>
+									</div>
+									<div>
+										<p><img src="https://blog.elmah.io/assets/img/features-step-3.png?v=a100334ce8" alt="We help you fix bugs"></p><h3>We help you fix bugs</h3>
+										<p>We help you fix bugs quickly by combining error diagnostic information with innovative quick fixes and answers from Stack Overflow and social media.</p>
+									</div>
+								</div>
+
+							</div>
+						</div>
+					</div>
+
+					<p>
+						<a href="https://app.elmah.io/signup/">See how we can help you monitor your website for crashes</a>
+						<a href="https://app.elmah.io/signup/">Monitor your website</a>
+					</p>
+
+				</div>
+			</div>
+		</article>
+
+	</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

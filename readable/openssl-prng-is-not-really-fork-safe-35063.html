@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+OpenSSL PRNG is not (really) fork-safe - Martin Bo&#xDF;let - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="OpenSSL PRNG is not (really) fork-safe - Martin Bo&#xDF;let - linksfor.dev(s)"/>
+    <meta property="article:author" content="Martin Bo&#xDF;let"/>
+    <meta property="og:description" content="When the patch&#xA;for Android&#x2019;s SecureRandom was released last week, I was a little surprised.&#xA;In addition to fixing the Apache Harmony implementation of SecureRandom, the&#xA;patch also contained"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://emboss.github.io/blog/2013/08/21/openssl-prng-is-not-really-fork-safe"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - OpenSSL PRNG is not (really) fork-safe - Martin Bo&#xDF;let</title>
+<div class="readable">
+        <h1>OpenSSL PRNG is not (really) fork-safe - Martin Bo&#xDF;let</h1>
+            <div>by Martin Bo&#xDF;let</div>
+            <div>Reading time: 18-23 minutes</div>
+        <div>Posted here: 01 Sep 2019</div>
+        <p><a href="http://emboss.github.io/blog/2013/08/21/openssl-prng-is-not-really-fork-safe">http://emboss.github.io/blog/2013/08/21/openssl-prng-is-not-really-fork-safe</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><h2>The Android SecureRandom incident</h2>
+
+<p>When the <a href="http://android-developers.blogspot.de/2013/08/some-securerandom-thoughts.html">patch</a>
+for Android’s SecureRandom was released last week, I was a little surprised.
+In addition to fixing the Apache Harmony implementation of SecureRandom, the
+patch also contained</p>
+
+<blockquote><p>Applies the fix for OpenSSL PRNG having low entropy. Does nothing if the fix is not needed.</p></blockquote>
+
+<p>What was that all about? I understood that the problem with the Harmony
+implementation was a reaction to <a href="http://www.nds.rub.de/media/nds/veroeffentlichungen/2013/03/25/paper_2.pdf">this paper</a>
+published earlier this year and was more or less an implementation issue,
+but what about OpenSSL? Newer versions of Android use a version of <a href="https://android.googlesource.com/platform/external/openssl/+/master">OpenSSL</a>
+internally and there is a <a href="https://android.googlesource.com/platform/libcore/+/master/crypto/src/main/java/org/conscrypt/NativeCrypto.java">Java bridge</a>
+that exposes, among other things, access to OpenSSL’s Pseudo-Random Number
+Generator (PRNG). What caught my attention is that the Android patch
+explicitly seeds the OpenSSL PRNG using more or less predictable data
+and then it mixes in additional entropy from /dev/urandom. This seemed
+weird at first, since the OpenSSL PRNG <a href="https://github.com/openssl/openssl/blob/902efde1cca5910703af57cfc9b5e0fb7980f5b6/crypto/rand/md_rand.c#L408-L412">seeds itself</a>
+from /dev/urandom <a href="https://github.com/openssl/openssl/blob/902efde1cca5910703af57cfc9b5e0fb7980f5b6/crypto/rand/rand_unix.c#L153">on systems where it is available</a>
+before it will return any random data. Why would there be the need to
+do that manually then?</p>
+
+<h2>Zygote, Ruby and forking OpenSSL</h2>
+
+<blockquote><p>UPDATE: Eric has asked me to additionally credit Alexander Dymo for
+<a href="http://bogomips.org/unicorn.git/patch?id=1107ede716461049033d6a5b311e14c742c9363a">bringing up this issue</a>!</p></blockquote>
+
+<p>Then I found out about how Android heavily relies on forking processes
+using <a href="https://android.googlesource.com/platform/frameworks/base.git/+/master/core/java/com/android/internal/os/ZygoteInit.java">Zygote</a>
+and I now suspect that this is the reason for patching OpenSSL. I was
+immediately reminded of a problem that was brought up on the Ruby mailing
+list <a href="https://bugs.ruby-lang.org/issues/4579">a while ago</a>. Eric Wong had
+discovered that Ruby’s SecureRandom implementation would serve exactly the
+same ‘random’ byte sequence when forked in a child process as soon as the
+PIDs (process identifiers) start to wrap around. Typically PIDs start with
+0 again after exhausting PID number 32768 - this may vary, to be sure you
+may find out the exact value using</p>
+
+<figure><figcaption><span>Retrieving the maximum possible PID</span></figcaption><div><table><tbody><tr><td><pre><span>1</span>
+</pre></td><td><pre><code><span>  cat /proc/sys/kernel/pid_max
+</span></code></pre></td></tr></tbody></table></div></figure>
+
+
+<p>While this was fixed for SecureRandom (more on that later), you may still
+observe the same behavior with OpenSSL::Random today - as Ruby’s OpenSSL
+extension is meant to be a mere wrapper around OpenSSL itself we try to
+avoid adding custom behavior when possible. To try it out, we simply have
+to replace ‘SecureRandom’ with ‘OpenSSL::Random’ in Eric’s script:</p>
+
+<figure><figcaption><span>Predictable OpenSSL::Random</span></figcaption><div><table><tbody><tr><td><pre><span>1</span>
+<span>2</span>
+<span>3</span>
+<span>4</span>
+<span>5</span>
+<span>6</span>
+<span>7</span>
+<span>8</span>
+<span>9</span>
+<span>10</span>
+<span>11</span>
+<span>12</span>
+<span>13</span>
+<span>14</span>
+<span>15</span>
+</pre></td><td><pre><code><span><span>require</span> <span>"openssl"</span>
+</span><span>
+</span><span><span>OpenSSL</span><span>::</span><span>Random</span><span>.</span><span>random_bytes</span><span>(</span><span>4</span><span>)</span>
+</span><span><span>pid</span> <span>=</span> <span>fork</span> <span>do</span>
+</span><span>  <span>p</span> <span>[</span> <span>$$</span><span>,</span> <span>OpenSSL</span><span>::</span><span>Random</span><span>.</span><span>random_bytes</span><span>(</span><span>4</span><span>)</span> <span>]</span>
+</span><span><span>end</span>
+</span><span><span>Process</span><span>.</span><span>waitpid2</span><span>(</span><span>pid</span><span>)</span>
+</span><span>
+</span><span><span>loop</span> <span>do</span>
+</span><span>  <span>xpid</span> <span>=</span> <span>fork</span> <span>do</span>
+</span><span>    <span>p</span> <span>[</span> <span>$$</span><span>,</span> <span>OpenSSL</span><span>::</span><span>Random</span><span>.</span><span>random_bytes</span><span>(</span><span>4</span><span>)</span> <span>]</span> <span>if</span> <span>$$</span> <span>==</span> <span>pid</span>
+</span><span>  <span>end</span>
+</span><span>  <span>Process</span><span>.</span><span>waitpid2</span><span>(</span><span>xpid</span><span>)</span>
+</span><span>  <span>break</span> <span>if</span> <span>xpid</span> <span>==</span> <span>pid</span>
+</span><span><span>end</span>
+</span></code></pre></td></tr></tbody></table></div></figure>
+
+
+<p>The script takes a while to run, but it is well worth the surprise. At the
+time, we discussed whether this is an OpenSSL-internal issue or not and Eric
+also posted to the <a href="http://marc.info/?l=openssl-dev&amp;m=130289811108150">OpenSSL mailing list</a>.
+The OpenSSL devs did not want to solve this internally, as they would like
+to stay agnostic to OS specifics as much as possible. The argument that
+‘fork’ may not be the only way to perform process bifurcation is certainly
+correct. The recommendation was to mix in something unique every time a
+child process is forked so that the initially equivalent state is sufficiently
+altered. This is also what we did for <a href="https://github.com/ruby/ruby/blob/4c661094c9d2c6800a7f43f41b812fa4aee18634/lib/securerandom.rb#L53-L63">SecureRandom</a>
+eventually.</p>
+
+<p>The key of why Eric’s script works is that the OpenSSL PRNG must be initialized
+in the parent before we fork the child processes. This way, every child process
+starts out with exactly the same internal PRNG state, and the PID is the only
+thing process-specific that is fed to the PRNG algorithm when requesting
+random bytes. Let’s have a look at ssleay_rand_bytes, the function
+responsible for generating pseudo-random bytes:</p>
+
+<figure><figcaption><span>md_rand.c: ssleay_rand_bytes</span></figcaption><div><table><tbody><tr><td><pre><span>1</span>
+<span>2</span>
+<span>3</span>
+<span>4</span>
+<span>5</span>
+<span>6</span>
+<span>7</span>
+<span>8</span>
+<span>9</span>
+<span>10</span>
+<span>11</span>
+<span>12</span>
+<span>13</span>
+<span>14</span>
+<span>15</span>
+<span>16</span>
+<span>17</span>
+<span>18</span>
+<span>19</span>
+<span>20</span>
+<span>21</span>
+<span>22</span>
+<span>23</span>
+<span>24</span>
+<span>25</span>
+<span>26</span>
+<span>27</span>
+<span>28</span>
+<span>29</span>
+<span>30</span>
+<span>31</span>
+<span>32</span>
+<span>33</span>
+<span>34</span>
+<span>35</span>
+<span>36</span>
+<span>37</span>
+<span>38</span>
+<span>39</span>
+<span>40</span>
+<span>41</span>
+<span>42</span>
+<span>43</span>
+<span>44</span>
+<span>45</span>
+<span>46</span>
+<span>47</span>
+<span>48</span>
+<span>49</span>
+<span>50</span>
+<span>51</span>
+<span>52</span>
+<span>53</span>
+<span>54</span>
+<span>55</span>
+<span>56</span>
+<span>57</span>
+<span>58</span>
+<span>59</span>
+<span>60</span>
+<span>61</span>
+<span>62</span>
+<span>63</span>
+<span>64</span>
+<span>65</span>
+<span>66</span>
+<span>67</span>
+<span>68</span>
+<span>69</span>
+<span>70</span>
+<span>71</span>
+<span>72</span>
+<span>73</span>
+<span>74</span>
+<span>75</span>
+<span>76</span>
+<span>77</span>
+<span>78</span>
+<span>79</span>
+<span>80</span>
+<span>81</span>
+<span>82</span>
+<span>83</span>
+<span>84</span>
+<span>85</span>
+<span>86</span>
+<span>87</span>
+<span>88</span>
+<span>89</span>
+<span>90</span>
+<span>91</span>
+<span>92</span>
+<span>93</span>
+<span>94</span>
+<span>95</span>
+<span>96</span>
+<span>97</span>
+<span>98</span>
+<span>99</span>
+<span>100</span>
+<span>101</span>
+<span>102</span>
+<span>103</span>
+<span>104</span>
+<span>105</span>
+<span>106</span>
+<span>107</span>
+<span>108</span>
+<span>109</span>
+<span>110</span>
+</pre></td><td><pre><code><span><span>static</span> <span>int</span> <span>ssleay_rand_bytes</span><span>(</span><span>unsigned</span> <span>char</span> <span>*</span><span>buf</span><span>,</span> <span>int</span> <span>num</span><span>,</span> <span>int</span> <span>pseudo</span><span>)</span>
+</span><span>  <span>{</span>
+</span><span>  
+</span><span>        <span>/* Leaving out some details and adding comments of my own */</span>
+</span><span>
+</span><span>        <span>...</span>
+</span><span>
+</span><span>        <span>/* Since the PRNG was initialized in the parent process, initialized</span>
+</span><span><span>         * will be set to 1 already and this is skipped</span>
+</span><span><span>         */</span>
+</span><span>  <span>if</span> <span>(</span><span>!</span><span>initialized</span><span>)</span>
+</span><span>      <span>{</span>
+</span><span>      <span>RAND_poll</span><span>();</span>
+</span><span>      <span>initialized</span> <span>=</span> <span>1</span><span>;</span>
+</span><span>      <span>}</span>
+</span><span>
+</span><span>        <span>/* This is also 1 and skipped */</span>
+</span><span>  <span>if</span> <span>(</span><span>!</span><span>stirred_pool</span><span>)</span>
+</span><span>      <span>do_stir_pool</span> <span>=</span> <span>1</span><span>;</span>
+</span><span>
+</span><span>        <span>/* We have enough entropy because the PRNG is already initialized */</span>
+</span><span>  <span>ok</span> <span>=</span> <span>(</span><span>entropy</span> <span>&gt;=</span> <span>ENTROPY_NEEDED</span><span>);</span>
+</span><span>  <span>if</span> <span>(</span><span>!</span><span>ok</span><span>)</span>
+</span><span>      <span>{</span>
+</span><span>              <span>/* Not executed */</span>
+</span><span>                    <span>...</span>    
+</span><span>      <span>}</span>
+</span><span>
+</span><span>  <span>if</span> <span>(</span><span>do_stir_pool</span><span>)</span>
+</span><span>      <span>{</span>
+</span><span>          <span>/* Not executed */</span>
+</span><span>                    <span>...</span>
+</span><span>      <span>}</span>
+</span><span>
+</span><span>
+</span><span>        <span>/* These are identical for every forked child */</span>
+</span><span>  <span>st_idx</span><span>=</span><span>state_index</span><span>;</span>
+</span><span>  <span>st_num</span><span>=</span><span>state_num</span><span>;</span>
+</span><span>  <span>md_c</span><span>[</span><span>0</span><span>]</span> <span>=</span> <span>md_count</span><span>[</span><span>0</span><span>];</span>
+</span><span>  <span>md_c</span><span>[</span><span>1</span><span>]</span> <span>=</span> <span>md_count</span><span>[</span><span>1</span><span>];</span>
+</span><span>  <span>memcpy</span><span>(</span><span>local_md</span><span>,</span> <span>md</span><span>,</span> <span>sizeof</span> <span>md</span><span>);</span>
+</span><span>
+</span><span>  <span>state_index</span><span>+=</span><span>num_ceil</span><span>;</span>
+</span><span>  <span>if</span> <span>(</span><span>state_index</span> <span>&gt;</span> <span>state_num</span><span>)</span>
+</span><span>      <span>state_index</span> <span>%=</span> <span>state_num</span><span>;</span>
+</span><span>
+</span><span>  <span>md_count</span><span>[</span><span>0</span><span>]</span> <span>+=</span> <span>1</span><span>;</span>
+</span><span>
+</span><span>  <span>while</span> <span>(</span><span>num</span> <span>&gt;</span> <span>0</span><span>)</span>
+</span><span>      <span>{</span>
+</span><span>      <span>j</span><span>=</span><span>(</span><span>num</span> <span>&gt;=</span> <span>MD_DIGEST_LENGTH</span><span>/</span><span>2</span><span>)</span><span>?</span><span>MD_DIGEST_LENGTH</span><span>/</span><span>2</span><span>:</span><span>num</span><span>;</span>
+</span><span>      <span>num</span><span>-=</span><span>j</span><span>;</span>
+</span><span>      <span>if</span> <span>(</span><span>!</span><span>MD_Init</span><span>(</span><span>&amp;</span><span>m</span><span>))</span>
+</span><span>          <span>goto</span> <span>err</span><span>;</span>
+</span><span>
+</span><span>                <span>/* This is actually the only child process-specific value */</span>
+</span><span>
+</span><span>      <span>if</span> <span>(</span><span>curr_pid</span><span>)</span>
+</span><span>          <span>{</span>
+</span><span>          <span>if</span> <span>(</span><span>!</span><span>MD_Update</span><span>(</span><span>&amp;</span><span>m</span><span>,(</span><span>unsigned</span> <span>char</span><span>*</span><span>)</span><span>&amp;</span><span>curr_pid</span><span>,</span><span>sizeof</span> <span>curr_pid</span><span>))</span>
+</span><span>              <span>goto</span> <span>err</span><span>;</span>
+</span><span>          <span>curr_pid</span> <span>=</span> <span>0</span><span>;</span>
+</span><span>          <span>}</span>
+</span><span>
+</span><span>      <span>if</span> <span>(</span><span>!</span><span>MD_Update</span><span>(</span><span>&amp;</span><span>m</span><span>,</span><span>local_md</span><span>,</span><span>MD_DIGEST_LENGTH</span><span>))</span>
+</span><span>          <span>goto</span> <span>err</span><span>;</span>
+</span><span>      <span>if</span> <span>(</span><span>!</span><span>MD_Update</span><span>(</span><span>&amp;</span><span>m</span><span>,(</span><span>unsigned</span> <span>char</span> <span>*</span><span>)</span><span>&amp;</span><span>(</span><span>md_c</span><span>[</span><span>0</span><span>]),</span><span>sizeof</span><span>(</span><span>md_c</span><span>)))</span>
+</span><span>          <span>goto</span> <span>err</span><span>;</span>
+</span><span>
+</span><span><span>#ifndef PURIFY</span>
+</span><span>      <span>/* VERY interesting, more on that in a minute. For now, assume it's the</span>
+</span><span><span>                 * same in each child process</span>
+</span><span><span>      */</span>
+</span><span>      <span>if</span> <span>(</span><span>!</span><span>MD_Update</span><span>(</span><span>&amp;</span><span>m</span><span>,</span><span>buf</span><span>,</span><span>j</span><span>))</span>
+</span><span>          <span>goto</span> <span>err</span><span>;</span>
+</span><span><span>#endif</span>
+</span><span>
+</span><span>      <span>k</span><span>=</span><span>(</span><span>st_idx</span><span>+</span><span>MD_DIGEST_LENGTH</span><span>/</span><span>2</span><span>)</span><span>-</span><span>st_num</span><span>;</span>
+</span><span>      <span>if</span> <span>(</span><span>k</span> <span>&gt;</span> <span>0</span><span>)</span>
+</span><span>          <span>{</span>
+</span><span>          <span>if</span> <span>(</span><span>!</span><span>MD_Update</span><span>(</span><span>&amp;</span><span>m</span><span>,</span><span>&amp;</span><span>(</span><span>state</span><span>[</span><span>st_idx</span><span>]),</span><span>MD_DIGEST_LENGTH</span><span>/</span><span>2</span><span>-</span><span>k</span><span>))</span>
+</span><span>              <span>goto</span> <span>err</span><span>;</span>
+</span><span>          <span>if</span> <span>(</span><span>!</span><span>MD_Update</span><span>(</span><span>&amp;</span><span>m</span><span>,</span><span>&amp;</span><span>(</span><span>state</span><span>[</span><span>0</span><span>]),</span><span>k</span><span>))</span>
+</span><span>              <span>goto</span> <span>err</span><span>;</span>
+</span><span>          <span>}</span>
+</span><span>      <span>else</span>
+</span><span>          <span>if</span> <span>(</span><span>!</span><span>MD_Update</span><span>(</span><span>&amp;</span><span>m</span><span>,</span><span>&amp;</span><span>(</span><span>state</span><span>[</span><span>st_idx</span><span>]),</span><span>MD_DIGEST_LENGTH</span><span>/</span><span>2</span><span>))</span>
+</span><span>              <span>goto</span> <span>err</span><span>;</span>
+</span><span>      <span>if</span> <span>(</span><span>!</span><span>MD_Final</span><span>(</span><span>&amp;</span><span>m</span><span>,</span><span>local_md</span><span>))</span>
+</span><span>          <span>goto</span> <span>err</span><span>;</span>
+</span><span>
+</span><span>      <span>for</span> <span>(</span><span>i</span><span>=</span><span>0</span><span>;</span> <span>i</span><span>&lt;</span><span>MD_DIGEST_LENGTH</span><span>/</span><span>2</span><span>;</span> <span>i</span><span>++</span><span>)</span>
+</span><span>          <span>{</span>
+</span><span>          <span>state</span><span>[</span><span>st_idx</span><span>++</span><span>]</span><span>^=</span><span>local_md</span><span>[</span><span>i</span><span>];</span>
+</span><span>          <span>if</span> <span>(</span><span>st_idx</span> <span>&gt;=</span> <span>st_num</span><span>)</span>
+</span><span>              <span>st_idx</span><span>=</span><span>0</span><span>;</span>
+</span><span>          <span>if</span> <span>(</span><span>i</span> <span>&lt;</span> <span>j</span><span>)</span>
+</span><span>              <span>*</span><span>(</span><span>buf</span><span>++</span><span>)</span><span>=</span><span>local_md</span><span>[</span><span>i</span><span>+</span><span>MD_DIGEST_LENGTH</span><span>/</span><span>2</span><span>];</span>
+</span><span>
+</span><span>                        <span>/* This is where the output is generated. Everything that</span>
+</span><span><span>                         * was fed to local_md is exactly the same for each child</span>
+</span><span><span>                         * except for the PID.</span>
+</span><span><span>                         */</span>
+</span><span>          <span>}</span>
+</span><span>      <span>}</span>
+</span><span>
+</span><span>  <span>/* The rest is not relevant for our observation */</span>
+</span><span>        <span>...</span>
+</span><span>
+</span><span>  <span>}</span>
+</span></code></pre></td></tr></tbody></table></div></figure>
+
+
+<p>Because the child process PID is the only thing specific to each child process,
+we will eventually see exactly the same random bytes once PID values start to
+recycle. This means that while adding the PID to the message digest makes for
+some fork safety, it is not enough when we consider that PIDs are not
+incremented infinitely but will wrap eventually. I could very well imagine
+that this is somehow related to the Android OpenSSL patch and their extensive
+use of forking…</p>
+
+<h2>It works in Ruby, so how about C?</h2>
+
+<p>Eric Wong did post a C example along with his post to the OpenSSL mailing list,
+which was essentially a C version of the Ruby code that we already saw:</p>
+
+<figure><figcaption><span>C version of Eric Wong’s proof of concept</span></figcaption><div><table><tbody><tr><td><pre><span>1</span>
+<span>2</span>
+<span>3</span>
+<span>4</span>
+<span>5</span>
+<span>6</span>
+<span>7</span>
+<span>8</span>
+<span>9</span>
+<span>10</span>
+<span>11</span>
+<span>12</span>
+<span>13</span>
+<span>14</span>
+<span>15</span>
+<span>16</span>
+<span>17</span>
+<span>18</span>
+<span>19</span>
+<span>20</span>
+<span>21</span>
+<span>22</span>
+<span>23</span>
+<span>24</span>
+<span>25</span>
+<span>26</span>
+<span>27</span>
+<span>28</span>
+<span>29</span>
+<span>30</span>
+<span>31</span>
+<span>32</span>
+<span>33</span>
+<span>34</span>
+<span>35</span>
+<span>36</span>
+<span>37</span>
+<span>38</span>
+<span>39</span>
+<span>40</span>
+<span>41</span>
+<span>42</span>
+<span>43</span>
+<span>44</span>
+<span>45</span>
+<span>46</span>
+<span>47</span>
+<span>48</span>
+<span>49</span>
+<span>50</span>
+<span>51</span>
+<span>52</span>
+</pre></td><td><pre><code><span><span>#include &lt;sys/types.h&gt;</span>
+</span><span><span>#include &lt;sys/wait.h&gt;</span>
+</span><span><span>#include &lt;unistd.h&gt;</span>
+</span><span><span>#include &lt;stdio.h&gt;</span>
+</span><span><span>#include &lt;openssl/rand.h&gt;</span>
+</span><span>
+</span><span><span>static</span> <span>void</span> <span>dump_random</span><span>(</span><span>void</span><span>)</span>
+</span><span><span>{</span>
+</span><span>  <span>int</span> <span>i</span><span>;</span>
+</span><span>  <span>unsigned</span> <span>char</span> <span>buf</span><span>[</span><span>4</span><span>];</span>
+</span><span>
+</span><span>  <span>RAND_bytes</span><span>(</span><span>buf</span><span>,</span> <span>sizeof</span><span>(</span><span>buf</span><span>));</span>
+</span><span>  <span>printf</span><span>(</span><span>"pid=%d "</span><span>,</span> <span>getpid</span><span>());</span>
+</span><span>  <span>for</span> <span>(</span><span>i</span> <span>=</span> <span>0</span><span>;</span> <span>i</span> <span>&lt;</span> <span>sizeof</span><span>(</span><span>buf</span><span>);</span> <span>i</span><span>++</span><span>)</span> <span>{</span>
+</span><span>            <span>printf</span><span>(</span><span>"</span><span>\\</span><span>x%02x"</span><span>,</span> <span>buf</span><span>[</span><span>i</span><span>]);</span>
+</span><span>        <span>}</span>
+</span><span>  <span>puts</span><span>(</span><span>""</span><span>);</span>
+</span><span><span>}</span>
+</span><span>
+</span><span><span>int</span> <span>main</span><span>(</span><span>void</span><span>)</span>
+</span><span><span>{</span>
+</span><span>  <span>pid_t</span> <span>pid</span><span>,</span> <span>xpid</span><span>;</span>
+</span><span>
+</span><span>  <span>/* PRNG needs to be initialized in original process to reproduce */</span>
+</span><span>  <span>RAND_bytes</span><span>((</span><span>unsigned</span> <span>char</span> <span>*</span><span>)</span><span>&amp;</span><span>pid</span><span>,</span> <span>sizeof</span><span>(</span><span>pid</span><span>));</span>
+</span><span>
+</span><span>  <span>pid</span> <span>=</span> <span>fork</span><span>();</span>
+</span><span>  <span>if</span> <span>(</span><span>pid</span> <span>==</span> <span>0</span><span>)</span> <span>{</span>
+</span><span>      <span>dump_random</span><span>();</span>
+</span><span>      <span>return</span> <span>0</span><span>;</span>
+</span><span>  <span>}</span> <span>else</span> <span>if</span> <span>(</span><span>pid</span> <span>&gt;</span> <span>0</span><span>)</span> <span>{</span>
+</span><span>      <span>wait</span><span>(</span><span>NULL</span><span>);</span>
+</span><span>
+</span><span>      <span>do</span> <span>{</span>
+</span><span>          <span>xpid</span> <span>=</span> <span>fork</span><span>();</span>
+</span><span>          <span>if</span> <span>(</span><span>xpid</span> <span>==</span> <span>0</span><span>)</span> <span>{</span>
+</span><span>              <span>if</span> <span>(</span><span>getpid</span><span>()</span> <span>==</span> <span>pid</span><span>)</span>
+</span><span>                  <span>dump_random</span><span>();</span>
+</span><span>              <span>return</span> <span>0</span><span>;</span>
+</span><span>          <span>}</span> <span>else</span> <span>if</span> <span>(</span><span>xpid</span> <span>&gt;</span> <span>0</span><span>)</span> <span>{</span>
+</span><span>              <span>wait</span><span>(</span><span>NULL</span><span>);</span>
+</span><span>          <span>}</span> <span>else</span> <span>{</span>
+</span><span>              <span>perror</span><span>(</span><span>"fork"</span><span>);</span>
+</span><span>          <span>}</span>
+</span><span>      <span>}</span> <span>while</span> <span>(</span><span>pid</span> <span>!=</span> <span>xpid</span><span>);</span>
+</span><span>  <span>}</span> <span>else</span> <span>{</span>
+</span><span>      <span>perror</span><span>(</span><span>"fork"</span><span>);</span>
+</span><span>      <span>return</span> <span>1</span><span>;</span>
+</span><span>  <span>}</span>
+</span><span>
+</span><span>  <span>return</span> <span>0</span><span>;</span>
+</span><span><span>}</span>
+</span></code></pre></td></tr></tbody></table></div></figure>
+
+
+<p>I ran this to see if maybe the problem had been fixed somehow in OpenSSL in the
+meantime. Much to my surprise, I could reproduce the repeated ‘random’ numbers
+on my laptop (running Linux Mint) but I could not when running it on my desktop
+(running Fedora). What the? I downloaded sources for both distributions and I
+compared them to the official OpenSSL 1.0.1e. Fedora was using the same code as
+in 1.0.1e and consequently I couldn’t reproduce the behavior with 1.0.1e either.</p>
+
+<h2>It’s me again, the Debian OpenSSL bug</h2>
+
+<p>So was it fixed there but it somehow wasn’t in the Mint version of OpenSSL?! I
+couldn’t spot any difference until I finally simply used the diff command. There.
+Just one single difference between Fedora/the official OpenSSL versions and the
+Mint version:</p>
+
+<figure><figcaption><span>The difference in ssleay_rand_bytes</span></figcaption><div><table><tbody><tr><td><pre><span>1</span>
+<span>2</span>
+<span>3</span>
+<span>4</span>
+<span>5</span>
+<span>6</span>
+<span>7</span>
+<span>8</span>
+<span>9</span>
+<span>10</span>
+<span>11</span>
+<span>12</span>
+</pre></td><td><pre><code><span><span>#ifndef PURIFY </span><span>/* purify complains */</span><span></span>
+</span><span><span>#if 0</span><span></span>
+</span><span><span>      /* The following line uses the supplied buffer as a small</span>
+</span><span><span>       * source of entropy: since this buffer is often uninitialised</span>
+</span><span><span>       * it may cause programs such as purify or valgrind to</span>
+</span><span><span>       * complain. So for those builds it is not used: the removal</span>
+</span><span><span>       * of such a small source of entropy has negligible impact on</span>
+</span><span><span>       * security.</span>
+</span><span><span>       */</span>
+</span><span><span>      MD_Update(&amp;m,buf,j);</span>
+</span><span><span>#endif</span>
+</span><span><span>#endif</span>
+</span></code></pre></td></tr></tbody></table></div></figure>
+
+
+<p>There’s an ‘#if 0’ around the line that I marked as ‘interesting’ before. And then
+it clicked. Mint uses Ubuntu packages which again uses Debian packages. This is
+actually the Debian version of OpenSSL! The ‘#if 0’ is actually a remainder of the
+famous Debian OpenSSL ‘patch’ that severely crippled the PRNG’s entropy a couple of
+years ago! If you haven’t heard about it, here is a mean but precise <a href="http://www.gergely.risko.hu/debian-dsa1571.en.html">article</a>
+describing what went wrong there. While one part of the patch had to be removed,
+this gem was actually sanctioned to stay in there. But how can this have any impact
+when the OpenSSL devs clearly state that it should have little to no impact on the
+overall security? The reason is uninitialized memory. The official version (without
+the ‘#if 0’) does something dubious: it adds the user-provided buffer to the hash
+calculation in the hope that most users would not have initialized the buffer at
+this point. If uninitialized, the buffer could(!) contain unpredictable values and
+would contribute a little entropy.</p>
+
+<p>This now works with Eric Wong’s example code because we do not initialize the buffer
+there, and this is why the final behavior is different when compared to 1.0.1e/Fedora.
+But this can be easily ‘fixed’ by initializing the buffer - and voilà, random bytes
+are repeated again, regardless of the OpenSSL version in use:</p>
+
+<figure><figcaption><span>‘Fixed’ version for predictable output regardless of OpenSSL version</span></figcaption><div><table><tbody><tr><td><pre><span>1</span>
+<span>2</span>
+<span>3</span>
+<span>4</span>
+<span>5</span>
+<span>6</span>
+<span>7</span>
+<span>8</span>
+<span>9</span>
+<span>10</span>
+<span>11</span>
+<span>12</span>
+<span>13</span>
+<span>14</span>
+<span>15</span>
+<span>16</span>
+<span>17</span>
+<span>18</span>
+<span>19</span>
+<span>20</span>
+<span>21</span>
+<span>22</span>
+<span>23</span>
+<span>24</span>
+<span>25</span>
+<span>26</span>
+<span>27</span>
+<span>28</span>
+</pre></td><td><pre><code><span><span>#include &lt;sys/types.h&gt;</span>
+</span><span><span>#include &lt;sys/wait.h&gt;</span>
+</span><span><span>#include &lt;unistd.h&gt;</span>
+</span><span><span>#include &lt;stdio.h&gt;</span>
+</span><span><span>#include &lt;string.h&gt;</span>
+</span><span>
+</span><span><span>#include &lt;openssl/rand.h&gt;</span>
+</span><span>
+</span><span><span>static</span> <span>void</span> <span>dump_random</span><span>(</span><span>void</span><span>)</span>
+</span><span><span>{</span>
+</span><span>    <span>int</span> <span>i</span><span>;</span>
+</span><span>    <span>unsigned</span> <span>char</span> <span>buf</span><span>[</span><span>4</span><span>];</span>
+</span><span>
+</span><span>    <span>/* does the 'trick' */</span>
+</span><span>    <span>memset</span><span>(</span><span>buf</span><span>,</span> <span>0</span><span>,</span> <span>sizeof</span><span>(</span><span>buf</span><span>));</span>
+</span><span>
+</span><span>    <span>RAND_bytes</span><span>(</span><span>buf</span><span>,</span> <span>sizeof</span><span>(</span><span>buf</span><span>));</span>
+</span><span>    <span>printf</span><span>(</span><span>"pid=%d "</span><span>,</span> <span>getpid</span><span>());</span>
+</span><span>    <span>for</span> <span>(</span><span>i</span> <span>=</span> <span>0</span><span>;</span> <span>i</span> <span>&lt;</span> <span>sizeof</span><span>(</span><span>buf</span><span>);</span> <span>i</span><span>++</span><span>)</span> <span>{</span>
+</span><span>        <span>printf</span><span>(</span><span>"</span><span>\\</span><span>x%02x"</span><span>,</span> <span>buf</span><span>[</span><span>i</span><span>]);</span>
+</span><span>    <span>}</span>
+</span><span>    <span>puts</span><span>(</span><span>""</span><span>);</span>
+</span><span><span>}</span>
+</span><span>
+</span><span><span>int</span> <span>main</span><span>(</span><span>void</span><span>)</span>
+</span><span><span>{</span>
+</span><span>   <span>/* as before */</span>
+</span><span><span>}</span>
+</span></code></pre></td></tr></tbody></table></div></figure>
+
+
+<h2>So is it fixed or not or what?!</h2>
+
+<p>Now you may also realize why the Ruby code sample worked regardless of the
+OpenSSL version while in the C example we needed to explicitly initialize
+the memory first: the solution is that the C code behind
+Ruby’s OpenSSL::Random actually <a href="https://github.com/ruby/ruby/blob/4c661094c9d2c6800a7f43f41b812fa4aee18634/ext/openssl/ossl_rand.c#L95-107">does initialize</a>
+the buffer first. Considering a user-provided value as your safety net
+is never a good idea, but it’s even worse in this case: not only does the
+dubious practice of relying on uninitialized values cause problems with
+tools such as valgrind (which ironically were the reason for the Debian
+disaster) but it also masks the problem at hand while contributing little
+to none to security. This cannot be regarded as the solution to the
+problem, I would be very much in favor of removing this confusing line
+completely.</p>
+
+<p>Anyhow, the question seems to be much more if we may consider this ‘PID
+wrapping issue’ a problem of OpenSSL itself or if this must be marked
+as ‘the developer has to take care of this’. Now those who know me also
+know that for me, there can be only one definitive answer to
+this question. Sure, developers could take care of this and handle it
+properly on their own, but we have striking examples now for how often
+this will <em>not</em> happen in reality. The first time I saw this was when Eric
+brought it up on bugs.ruby-lang.org, but it has now most likely bitten the
+Android developers and some research brought up that it has also
+affected <a href="http://www.postgresql.org/message-id/E1UKzBn-0006c2-Cy@gemulon.postgresql.org">Postgres</a>
+developers. Now even if you don’t trust us Ruby developers, I’m pretty
+sure we can all agree that Android and Postgres developers are fairly good at what
+they’re doing. Still they overlooked this. And honestly - who of us would
+have thought about this when forking a process? Funny anecdote: A long time
+ago, this was a valid concern for OpenSSL devs as well- as this
+<a href="https://github.com/openssl/openssl/commit/62ac2938015939e2ef30f12295f0ee59ff79c11b#crypto/rand">ancient commit</a>
+clearly shows.</p>
+
+<h2>How to fix this for good?</h2>
+
+<p>We cannot keep on adding ‘best practice’ after ‘best practice’ to what
+developers need to keep in the back of their heads when writing everyday
+code. This approach must fail eventually and the only reliable solution
+is to fix problems like this at the root - and this is clearly in the
+library providing the functionality itself. A quick fix like already
+proposed on the OpenSSL mailing list might be to mix in the current
+time in addition to the PID. Even if we add a predictable value like that
+an attacker hopefully cannot observe enough of the internal PRNG state
+to make any use of the predictable values to find out more about the
+internal state. To exploit the repeated random numbers we had to rely on
+the internal PRNG state being exactly the same in different child processes
+while nothing was actually revealed about the internal state. Simply changing the
+internal state, even with predictable values, seems to be enough at this point.</p>
+
+<p>This is the fix that had been applied to Ruby’s SecureRandom, but there
+are several reasons why I’m still not too happy with OpenSSL’s PRNG. The
+biggest issue for me is that it’s more or less an ad-hoc design that
+doesn’t follow an official standard or recommendation. There is for example
+<a href="http://en.wikipedia.org/wiki/Fortuna_%28PRNG%29">Fortuna</a> or
+<a href="http://csrc.nist.gov/publications/nistpubs/800-90A/SP800-90A.pdf">NIST SP 800-90A</a>,
+<a href="http://csrc.nist.gov/publications/drafts/800-90/draft-sp800-90b.pdf">B</a>
+and <a href="http://csrc.nist.gov/publications/drafts/800-90/draft-sp800-90c.pdf">C</a>,
+and interestingly enough OpenSSL uses one of the NIST designs for its FIPS
+version. People analyzing the OpenSSL PRNG security have complained many times
+that the source code is complicated and hard to grasp (see the Debian issue),
+and it is therefore so much harder to assess its general security. I would
+appreciate a more standardized design. Markku-Juhani O. Saarinen discovered
+a flaw in the PRNG <a href="http://mjos.fi/doc/secadv_prng.txt">more than a decade ago</a>.
+Because of the ad-hoc design, who is to say that this has been fixed for
+good?</p>
+
+<p>The easiest way out is probably to completely rely on /dev/urandom where
+available. Sure it comes with its own <a href="http://eprint.iacr.org/2006/086.pdf">baggage</a>
+and there’s the problem with availability and different behavior on different
+platforms, but after all, it has a fairly <a href="http://eprint.iacr.org/2012/251.pdf">good reputation</a>.
+Most of all, it is not affected by any forking issues.</p>
+
+<h2>What’s the impact of all of this?</h2>
+
+<p>To be fair, the issue with forking demonstrated here should have little
+impact in everyday software (other than <em>cough</em>, Android that is). Even
+if you are developing a Rails app using a forking web server like Unicorn
+with Resque background jobs and OpenSSL::Random instead of SecureRandom,
+you should not be affected.  Most software that I can think of allocates a
+pool of ‘worker processes’, so it is probably unlikely that you would ever
+run into the problem of wrapping PIDs. Still, we consider a cipher broken even
+if the attack is impractical in reality - if only the attack involves less
+work than trying brute force. In this sense, the OpenSSL PRNG is broken in its
+current state because we have found a way to predict its output other
+than by brute force. I hope the OpenSSL team will fix this internally
+and make our lives easier by not having to think about these issues
+when working on our everyday projects.</p>
+
+<p>If you are on Ruby and you think that you might be affected you might
+try adding additional entropy to OpenSSL::Random after a fork:</p>
+
+<figure><figcaption><span>Adding entropy to OpenSSL::Random after a fork</span></figcaption><div><table><tbody><tr><td><pre><span>1</span>
+<span>2</span>
+<span>3</span>
+<span>4</span>
+<span>5</span>
+<span>6</span>
+<span>7</span>
+<span>8</span>
+<span>9</span>
+<span>10</span>
+<span>11</span>
+<span>12</span>
+<span>13</span>
+<span>14</span>
+<span>15</span>
+<span>16</span>
+<span>17</span>
+<span>18</span>
+<span>19</span>
+<span>20</span>
+<span>21</span>
+<span>22</span>
+<span>23</span>
+<span>24</span>
+<span>25</span>
+<span>26</span>
+<span>27</span>
+<span>28</span>
+<span>29</span>
+<span>30</span>
+<span>31</span>
+<span>32</span>
+<span>33</span>
+<span>34</span>
+<span>35</span>
+<span>36</span>
+<span>37</span>
+<span>38</span>
+</pre></td><td><pre><code><span><span>require</span> <span>'openssl'</span>
+</span><span>
+</span><span><span>module</span> <span>OpenSSL::Random</span>
+</span><span>  <span>class</span> <span>&lt;&lt;</span> <span>self</span>
+</span><span>
+</span><span>    <span>old_rand</span> <span>=</span> <span>instance_method</span><span>(</span><span>:random_bytes</span><span>)</span>
+</span><span>
+</span><span>    <span>define_method</span> <span>:random_bytes</span> <span>do</span> <span>|</span><span>n</span><span>=</span><span>nil</span><span>|</span>
+</span><span>      <span>n</span> <span>=</span> <span>n</span> <span>?</span> <span>n</span><span>.</span><span>to_int</span> <span>:</span> <span>16</span>
+</span><span>
+</span><span>      <span>@pid</span> <span>=</span> <span>0</span> <span>unless</span> <span>defined?</span><span>(</span><span>@pid</span><span>)</span>
+</span><span>      <span>pid</span> <span>=</span> <span>$$</span>
+</span><span>      <span>unless</span> <span>@pid</span> <span>==</span> <span>pid</span> <span># detect a fork and modify PRNG state</span>
+</span><span>        <span>add_predictable</span><span>(</span><span>pid</span><span>)</span>
+</span><span>        <span>add_urandom</span>
+</span><span>        <span>@pid</span> <span>=</span> <span>pid</span>
+</span><span>      <span>end</span>
+</span><span>      <span>old_rand</span><span>.</span><span>bind</span><span>(</span><span>self</span><span>)</span><span>.</span><span>call</span><span>(</span><span>n</span><span>)</span>
+</span><span>    <span>end</span>
+</span><span>
+</span><span>    <span>private</span>
+</span><span>
+</span><span>    <span>def</span> <span>add_predictable</span><span>(</span><span>pid</span><span>)</span>
+</span><span>      <span>now</span> <span>=</span> <span>Time</span><span>.</span><span>now</span>
+</span><span>      <span>ary</span> <span>=</span> <span>[</span><span>now</span><span>.</span><span>to_i</span><span>,</span> <span>now</span><span>.</span><span>nsec</span><span>,</span> <span>@pid</span><span>,</span> <span>pid</span><span>]</span>
+</span><span>      <span>OpenSSL</span><span>::</span><span>Random</span><span>.</span><span>random_add</span><span>(</span><span>ary</span><span>.</span><span>join</span><span>(</span><span>''</span><span>)</span><span>.</span><span>to_s</span><span>,</span> <span>0</span><span>.</span><span>0</span><span>)</span>
+</span><span>    <span>end</span>
+</span><span>
+</span><span>    <span>def</span> <span>add_urandom</span>
+</span><span>      <span>begin</span>
+</span><span>        <span>OpenSSL</span><span>::</span><span>Random</span><span>.</span><span>load_random_file</span><span>(</span><span>'/dev/urandom'</span><span>)</span>
+</span><span>      <span>rescue</span> <span>OpenSSL</span><span>::</span><span>Random</span><span>::</span><span>RandomError</span>
+</span><span>        <span># probably not available, reraise if mandatory for you</span>
+</span><span>      <span>end</span>
+</span><span>    <span>end</span>
+</span><span>
+</span><span>  <span>end</span>
+</span><span><span>end</span>
+</span></code></pre></td></tr></tbody></table></div></figure>
+
+
+<p>‘add_predictable’ is basically the same as the SecureRandom fix. It’s
+enough to make the repeated random numbers go away, but the truly
+paranoid will also want to use ‘add_urandom’ as it refreshes OpenSSL’s
+PRNG internal state using random data gathered from /dev/urandom.
+OpenSSL::Random.load_random_file causes the OpenSSL PRNG to gather
+<a href="https://github.com/openssl/openssl/blob/902efde1cca5910703af57cfc9b5e0fb7980f5b6/crypto/rand/randfile.c#L149">2048</a>
+bytes of entropy that are then mixed in to its internal state.
+Because 2048 is quite a bit larger than the internal state, this ensures
+that every single state byte is updated by the data read from /dev/urandom.
+This reflects the fix proposed in the Android SecureRandom patch.
+The same principle might of course be applied in C code as well.</p>
+
+<h2>Lessons learned</h2>
+
+<p>Random numbers are absolutely essential for a crypto library, if they
+suck we don’t even have to get started with encryption or anything else,
+because it all collapses to something trivially deterministic and
+therefore predictable. I very much like the idea of using /dev/urandom
+as sole Random Number Generator for cryptographic purposes, mostly
+because this would give us a single construct that research could
+focus on and it provides more flexibility to mix in data generated
+by hardware RNGs.</p>
+
+<p>Also, this is again a perfect example for how confusing code can cause
+a lot of trouble. There is so much code shared between ssleay_rand_bytes
+and ssleay_rand_add that it’s really hard to spot the differences. This
+was probably a major reason for the Debian disaster. A little bit of
+refactoring would do wonders here - move shared parts to separate
+functions and give them expressive meaningful names. Template Method
+Pattern for the win. To be fair, the <a href="https://github.com/torvalds/linux/blob/fd3930f70c8d14008f3377d51ce039806dfc542e/drivers/char/random.c">Kernel code</a>
+implementing /dev/urandom is also no beauty. But if clarity, expressiveness
+and the DRY principle in general are good practice for everyday coding, their
+value is doubled for security-critical code.</p>
+
+<p>Thanks to Eric Wong again for all his work, not just on this issue!</p>
+
+<p>Source code accompanying this post can be found <a href="https://github.com/emboss/openssl-prng">here</a>.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

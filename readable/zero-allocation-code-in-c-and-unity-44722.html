@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Zero allocation code in C# and Unity - Seba&#x27;s Lab - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Zero allocation code in C# and Unity - Seba&#x27;s Lab - linksfor.dev(s)"/>
+    <meta property="article:author" content="By: Sebastiano Mandal&#xE0;   In: C#, Code Design, Unity3D   With: 8 Comments"/>
+    <meta property="og:description" content="The home of Svelto ECS and advanced Unity C# articles"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://www.sebaslab.com/zero-allocation-code-in-unity/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Zero allocation code in C# and Unity - Seba&#x27;s Lab</title>
+<div class="readable">
+        <h1>Zero allocation code in C# and Unity - Seba&#x27;s Lab</h1>
+            <div>by By: Sebastiano Mandal&#xE0;   In: C#, Code Design, Unity3D   With: 8 Comments</div>
+            <div>Reading time: 15-19 minutes</div>
+        <div>Posted here: 18 Dec 2019</div>
+        <p><a href="http://www.sebaslab.com/zero-allocation-code-in-unity/">http://www.sebaslab.com/zero-allocation-code-in-unity/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody">
+
+			<div>
+				
+<p>I promised myself to not write new articles until Svelto.ECS 3.0 is out, however a recent tweet asking about how to achieve zero allocation code in Unity inspired me to write a short piece about the importance of memory allocation in c# and game development that I previously planned as part of a new ECS theory related article. Oh well, this means that I won’t focus on ECS much.</p>
+
+
+
+<p>C# wasn’t initially designed for game development, but today, thanks to <em>Unity, ECS and <strong>Burst</strong></em>, we can achieve great results in terms of performance that were previously only domain of c++ developed products. However, in order to get to these results, the c# programmer must understand the fundamental limitations of operative systems and CPU architectures, like a c++ programmer does. The c# programmer must also know how c# works at its core to understand why seemingly harmless behaviors can actually heavily affect the execution performance.</p>
+
+
+
+<p>This article is therefore aimed to people who wants to be sure they are using optimally their tools. If you don’t need this kind of performance, the article is still useful for knowledge.</p>
+
+
+
+<h3>Allocating data structures and objects</h3>
+
+
+
+<p>Let’s start from the c# memory allocation strategy. We all know that c# uses garbage collection, but this doesn’t come for free. According my tests, allocating an empty class is 3 times slower than allocating the same class using native memory (<em>Marshal.AllocHGlobal</em>) and <em>50 times slower</em> than creating a new struct. Structs are much faster because no allocation are ever involved with them, unless by mistake boxing/unboxing happen.</p>
+
+
+
+<p>There is more to it though: object references are not garbage collected until they are referenced by something. How does the GC know if a reference is still held though? Contrary to what one may think, a reference assigned to a field of an object is not just an assignment! More, slower, stuff happens under the hood to help the garbage collector detect what is reference by what, <em>hence working with references, instead of structs, is slower not just for allocations</em>.</p>
+
+
+
+<p>Of course let’s not forget that allocating continuously eventually leads to a garbage collection kicking in <em>at any point of the execution time</em> which is made worse by the fact that the Unity garbage collection is one of the slowest implementations out there.</p>
+
+
+
+<p>If you want to know more about what happens under the hood with c# memory allocation, you should definitively read this book:</p>
+
+
+
+<figure></figure>
+
+
+
+<p>Remember that even with GC, memory leaking are still possible! The most common case of memory leaking is usually due to stateful static classes not clearing their references. <em>As static classes are never collected, what their reference will never be released either!</em></p>
+
+
+
+<p>What is the best solution to the consequences of using object references? In few words using the<em> Entity Component System</em> paradigm, through a proper implementation of it, which pushes the programmer to use just structs. Since this is not an ECS related article, then what alternative do we have?</p>
+
+
+
+<p>C++ coders know well that frame based allocations must be avoided at all costs. I don’t know any valid argument that would justify every frame allocations either. User input based allocations, which happen every now and then, may be OK.</p>
+
+
+
+<p>The standard strategy is then<em> preallocate and reuse as much as you can</em>. If you are going to use 1000 bullets at most, allocate an array of 1000 bullets even if normally much less are used.</p>
+
+
+
+<p>Avoid using any data structure that allocates continuously. Y<em>our friends are Arrays, Lists and Dictionaries</em>. Preallocate them, don’t allow any resizing during the execution of the game. <em>Clear </em>instead of <em>New </em>should be the common pattern in order to reuse data structures at the begin of every frame.</p>
+
+
+
+<p>I don’t use <em>GameObjects </em>(or any kind of other object) in my current <a href="https://store.steampowered.com/app/1078000/Gamecraft/">Unity project</a>, so I don’t need to used <em>ObjectPools</em>. However Object Pools are your friends exactly for the same reason. They allow you to reuse objects in a preallocated array instead to need to create them every time! Use Object Pools.</p>
+
+
+
+<h3>Boxing/Unboxing and other trickier allocations</h3>
+
+
+
+<p>Regarding c# allocation this was the simplest part so far. The trickier sneakier allocations are relative instead to<em> boxing/unboxing, external variable capturing and wrong use of delegates.</em></p>
+
+
+
+<p>These are so tricky, that the only way to be sure that you don’t fall for them is to use tools that help you visualise what’s going on. Let’s see what possibly can help us:</p>
+
+
+
+<ul><li><strong>Jetbrains Rider </strong>and its<strong> heap Allocation Viewer plugin</strong>. This is useful most of the times although sporadically it is not reliable. Visual Studio also has something similar, but I haven’t used it in a while, <a href="https://marketplace.visualstudio.com/items?itemName=MukulSabharwal.ClrHeapAllocationAnalyzer">so try it</a> (at least Visual Studio has a free version)</li><li><strong>Static code analyzers</strong>. Unity is maintaining <a href="https://github.com/mtrive/ProjectAuditor">Project Auditor</a>. I didn’t use it yet, but I love these kind of tools. Leave me some feedback about it if you use it please. Static code analyzers are able to check your code and tell you the places where things can go wrong.</li><li>Use any <strong>IL viewer</strong> and check the code you have doubts on. Of course this is the worst tool, because you need to have some suspects first, while the others will warn you about what’s wrong.</li><li>Use the <strong>Unity Profiler</strong> (see below).</li><li>Use the <a href="https://docs.unity3d.com/Packages/com.unity.test-framework@1.1/manual/reference-custom-constraints.html">Unity Test suite to write functional tests for your code.</a></li></ul>
+
+
+
+<p>If you don’t know what boxing is, you should look it up. Briefly, as I hinted, c# treats differently objects from structs/value types. However there are cases where the user may accidentally ask c# to convert a struct/value type in an object, ending up in a new allocation of this object.</p>
+
+
+
+<h4>Interface boxing</h4>
+
+
+
+<p>Boxing is the process, hidden to the user, to transform a <strong>Struct </strong>in to an <strong>Object</strong>, <em>boxing </em>the struct inside the new object that must be allocated. It’s even worse than allocating an object, because boxing can happen multiple times without the user realising it. <em>The most common way to box is to cast a struct to an interface</em>. Let’s say that you have a <em>struct </em>(<strong>TestStructI</strong>) that implements <em>interface (</em><strong>ITest</strong><em>)</em> then you decide to cast the struct to  <strong>ITest</strong> or you assign to a class that has an <strong>ITest</strong> field. WRONG, BOXING will trigger an allocation!</p>
+
+
+
+<div data-carousel-extra="{&quot;blog_id&quot;:1,&quot;permalink&quot;:&quot;http:\/\/www.sebaslab.com\/zero-allocation-code-in-unity\/&quot;}"><figure><img data-attachment-id="2924" data-permalink="http://www.sebaslab.com/zero-allocation-code-in-unity/image-1-3/" data-orig-file="https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-1.png?fit=411%2C178" data-orig-size="411,178" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="image-1" data-image-description="" data-medium-file="https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-1.png?fit=300%2C130" data-large-file="https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-1.png?fit=411%2C178" src="https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-1.png?w=1380&amp;is-pending-load=1" alt="" data-recalc-dims="1" data-lazy-srcset="https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-1.png?w=411 411w, https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-1.png?resize=300%2C130 300w" data-lazy-sizes="(max-width: 411px) 100vw, 411px" data-lazy-src="https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-1.png?w=1380&amp;is-pending-load=1" srcset="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><figcaption>Rider underlines in red ALL the operations that result in memory allocation (at least we hope so)</figcaption></figure></div>
+
+
+
+<p>in the same way, assigning the return value of a <em>GetEnumerator()</em> to an <em>IEnumerator </em>results in a boxing <strong>as most of the times <em>Enumerators </em>are implemented as structs</strong>. </p>
+
+
+
+<p>Tip: when you implement your own enumerable/enumerator, implement it as a struct. There is no reason to use classes for custom enumerators. You don’t need even to implement the <em>IEnumerator/IEnumerable</em> interface. <em>Foreach </em>will look for the <em>GetEnumerator()</em> method regardless. In this way for each will also be slightly faster because the <em>IDisposable </em>pattern code won’t be generated. A proof of concept can be <a href="https://sharplab.io/#v2:C4LglgNgPgAgTARgLACgYGYAE9MGFMDeqmJmAzsAE4CuAxsJgLICeAogHbUC2AppQIYAjCD2KkiKUlOxYKNepgBi/CnwAiYemAD27fpWYBpHswBq/CNR4duffsG2Ux0ws5ekMmQdu0Qm2gDceADkeAA9gAAoASjd3V0l49xgAdkwAMwsyHgBuOPcAX1R8l08wdgZcakpKHgrMAF4APkwABjzElyLO6RKZJRVgdU1gHT0DYzMLKxteAQdKTABxHmBZuwWYvokkjzT2HgB3AdVKDS1dfSMTc0trTjn7RxiO+O6pd9I3TxgAFiYYgl4gF9JghhR1gJhDxGpgDscWJChCIXn10o4ePxaAALTCREGLcEMcpgngQh52aGxHpSHaFNzdApAA===">found here</a>.</p>
+
+
+
+<p>Note that once Unity Mono implementation had a bug that forced boxing every Enumerator inside a <em>foreach</em>, but this is not the case anymore.</p>
+
+
+
+<h4>Boxing through IEqualityComparer</h4>
+
+
+
+<p>In previous projects I worked on, this happened a few times. Algorithms that needed the an <em>IEqualityComparer</em> using the  <a href="http://msdn.microsoft.com/en-us/library/ms224763.aspx"><code>EqualityComparer&lt;T&gt;.Default</code></a> would make a tons of allocations if <strong>T</strong> is a struct without the <em>IEqualityComparer</em> defined explicitly. Common case is using structs as a key for dictionary without implementing  <em>IEqualityComparer</em>. Nowadays I am so wary of it that, if needed, I actually implement  <em>IEquatable&lt;EGID&gt;,IEqualityComparer&lt;EGID&gt;,IComparable&lt;EGID&gt; </em></p>
+
+
+
+<h4>Iterator blocks</h4>
+
+
+
+<p>If you use<a href="https://csharpindepth.com/articles/StreamingAndIterators"> Iterator blocks</a> (<em>which are IEnumerator function that use the yield keyword, ergo: coroutines</em>), be aware that every time you use an Iterator block like <em>StartCoroutine(IteratorBlock())</em> a new iterator block object is created and allocated!</p>
+
+
+
+<p><em>Coroutines </em>are tricky as well, but another simple advice is to try to reuse as much as you can the <em>Unity Yield Instructions</em>, like <em>WaitForSeconds</em>. Do not new them every time you need to yield them, <a href="https://forum.unity.com/threads/c-coroutine-waitforseconds-garbage-collection-tip.224878/">but cache the variable and reuse it</a>.</p>
+
+
+
+<h4>Careful about initializing structs whose type is defined through generic parameter.</h4>
+
+
+
+<p>Recently I have been surprised by the profiler, I suddenly got this (consider that our product is allocation free at run time)</p>
+
+
+
+<figure><ul data-carousel-extra="{&quot;blog_id&quot;:1,&quot;permalink&quot;:&quot;http:\/\/www.sebaslab.com\/zero-allocation-code-in-unity\/&quot;}"><li><figure><a href="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?fit=600%2C224"><img data-attachment-id="3081" data-permalink="http://www.sebaslab.com/zero-allocation-code-in-unity/image-8-4/" data-orig-file="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?fit=1726%2C645" data-orig-size="1726,645" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="image-8" data-image-description="" data-medium-file="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?fit=300%2C112" data-large-file="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?fit=600%2C224" src="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?fit=600%2C224&amp;is-pending-load=1" alt="" data-id="3081" data-lazy-srcset="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?w=1726 1726w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?resize=300%2C112 300w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?resize=600%2C224 600w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?resize=768%2C287 768w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?resize=1536%2C574 1536w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?resize=465%2C174 465w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?resize=695%2C260 695w" data-lazy-sizes="(max-width: 1380px) 100vw, 1380px" data-lazy-src="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-8.png?fit=600%2C224&amp;is-pending-load=1" srcset="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a></figure></li></ul></figure>
+
+
+
+<p>Why all of the sudden, thousands of allocations? It’s because I naively did this:</p>
+
+
+
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+
+
+		<div id="crayon-5e4a262c5ad1a331651966" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>struct</span><span> </span><span>AllocatingConstraints</span><span>&lt;</span><span>TBuffer</span><span>&gt;</span><span> </span><span>where </span><span>TBuffer</span><span>:</span><span>struct</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>AllocatingConstraints</span><span>(</span><span>bool</span><span> </span><span>test</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>_buffer</span><span> </span>=<span> </span><span>new</span><span> </span><span>TBuffer</span><span>(</span><span>)</span><span>;</span><span> </span><span>//call !!0 [System.Private.CoreLib]System.Activator::CreateInstance&lt;!TBuffer&gt;() seriously?</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>TBuffer </span><span>_buffer</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0013 seconds] -->
+
+
+
+
+<p>instead of this:</p>
+
+
+
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+
+
+		<div id="crayon-5e4a262c5ad2d651212188" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					
+				</td>
+						<td><div><p><span>struct</span><span> </span><span>AllocatingConstraintsNoNew</span><span>&lt;</span><span>TBuffer</span><span>&gt;</span><span> </span><span>where </span><span>TBuffer</span><span>:</span><span>struct</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>AllocatingConstraintsNoNew</span><span>(</span><span>bool</span><span> </span><span>test</span><span>)</span><span>:</span><span>this</span><span>(</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>TBuffer </span><span>_buffer</span><span>;</span><span> </span><span>//this is initialized as a struct phewww</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0002 seconds] -->
+
+
+
+
+<p>Even if the constraints struct is used, with the former the buffer is initialized through reflection! <a href="https://sharplab.io/#v2:C4LglgNgPgAgTARgLACgYGYAE9MGFMDeqmJmAzsAE4CuAxsJgIIQQD2tAhsGAHYDmuVjwqUOvYGQA8AFQBC1AGYKAppQB8mAO4ALVcsxzFKyiBF1gxUkRSlb2LMzadu/QcKpieEgBQAjVqwQmMDKFACUlnaEkVGkAPq+RqqYALyYPMqaBvJKqt5hANyYAPTFnCyYAISVAAyYANowCAB0AAqUYABuXMrNgpTKADJgvgC6Tc2M9F1crCYguAM9AJLuHDy0ypKVhrnq+eSqYKzUZBAAngD8MbYAvjekDyS7xpgJSZQFMfc2j78kZnoTBY7C4vAEQhEngkADlWDDMjIcsYNDo9NkPqYqOYYtZYvZgU4wa5IR5xGQ4QjNH4AkEQuEQMBtGAyPkntF/nYfvj2S9ku89kVSkyWZhRbwwNwOBAwAAvZQAE0wHDIyvI2KBAAddJpdd8YjEMNgACyYACyBzxpB+tyAA===">Madness!</a></p>
+
+
+
+<h4>The params keyword</h4>
+
+
+
+<p>Using the <a href="https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/params"><em>params </em>keyword</a> for function parameters also <a href="https://stackoverflow.com/questions/38679180/will-params-in-c-sharp-always-cause-a-new-array-to-be-allocated-on-every-call">leads to sneak allocations</a>, as an array is always allocated under the hood, even if just one parameter is used! </p>
+
+
+
+<h4>Lambdas and Delegates</h4>
+
+
+
+<p>If you use many <em>lambas and delegates</em> you are in for troubles. Passing actions (and other delegates) by parameter always allocate unless you preallocate the delegate beforehand. In the following examples I am using the<em> Unity Test Package</em> to test memory allocation, which may confuse you (sorry about that). For the first case I wrote a function, <strong>TestDelegate</strong>, that accepts a <strong>System.Action</strong>. In the way I am using it (passing a lambda) I will cause an allocation:</p>
+
+
+
+<div data-carousel-extra="{&quot;blog_id&quot;:1,&quot;permalink&quot;:&quot;http:\/\/www.sebaslab.com\/zero-allocation-code-in-unity\/&quot;}"><figure><img data-attachment-id="2925" data-permalink="http://www.sebaslab.com/zero-allocation-code-in-unity/image-2-4/" data-orig-file="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?fit=876%2C367" data-orig-size="876,367" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="image-2" data-image-description="" data-medium-file="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?fit=300%2C126" data-large-file="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?fit=600%2C251" src="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?fit=600%2C251&amp;is-pending-load=1" alt="" data-lazy-srcset="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?w=876 876w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?resize=300%2C126 300w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?resize=600%2C251 600w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?resize=768%2C322 768w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?resize=465%2C195 465w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?resize=695%2C291 695w" data-lazy-sizes="(max-width: 876px) 100vw, 876px" data-lazy-src="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-2.png?fit=600%2C251&amp;is-pending-load=1" srcset="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><figcaption>Using TestDelegate like this will allocate memory, just because a new delegate is allocated to hold the lambda reference.</figcaption></figure></div>
+
+
+
+<div data-carousel-extra="{&quot;blog_id&quot;:1,&quot;permalink&quot;:&quot;http:\/\/www.sebaslab.com\/zero-allocation-code-in-unity\/&quot;}"><figure><img data-attachment-id="2926" data-permalink="http://www.sebaslab.com/zero-allocation-code-in-unity/image-3-4/" data-orig-file="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?fit=823%2C486" data-orig-size="823,486" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="image-3" data-image-description="" data-medium-file="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?fit=300%2C177" data-large-file="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?fit=600%2C354" src="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?fit=600%2C354&amp;is-pending-load=1" alt="" data-lazy-srcset="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?w=823 823w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?resize=300%2C177 300w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?resize=600%2C354 600w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?resize=768%2C454 768w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?resize=465%2C275 465w, https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?resize=695%2C410 695w" data-lazy-sizes="(max-width: 823px) 100vw, 823px" data-lazy-src="https://i1.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-3.png?fit=600%2C354&amp;is-pending-load=1" srcset="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><figcaption>the only way to avoid allocation is to preallocate the delegate (i.e.: inside a constructor) and hold its reference. This is OK as long as variables must not be passed</figcaption></figure></div>
+
+
+
+<p><em>in reality in case of  a simple lambda, C# under the hood does exactly the same thing, the lambda will be allocated once, cached and reused.</em></p>
+
+
+
+<p>However Generally lambda should be avoided <em>as once you accidentally catch an external variable, c# is not able to automatically cache the implementation</em>. Catching an external variable means using any variable from outside the scope of the Lambda.</p>
+
+
+
+<p>Local functions won’t help either once passed as parameters as there isn’t a struct implementation of the delegate class, hence an object will be always created.</p>
+
+
+
+<p>If you need to use preallocated delegates that need parameters, then they should be used like this:</p>
+
+
+
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+
+
+		<div id="crayon-5e4a262c5ad30519907738" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p><p>23</p></div>
+				</td>
+						<td><div><p><span>public</span><span> </span><span>class</span><span> </span><span>C</span><span> </span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>System</span><span>.</span><span>Action</span><span>&lt;</span><span>int</span><span>&gt;</span><span> </span><span>_preallocatedAction</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>C</span><span>(</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>_preallocatedAction</span><span> </span>=<span> </span><span>MethodToCall</span><span>;</span><span> </span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>void</span><span> </span><span>MethodToCall</span><span>(</span><span>int</span><span> </span><span>parameter</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>System</span><span>.</span><span>Console</span><span>.</span><span>WriteLine</span><span>(</span><span>parameter</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>void</span><span> </span><span>MethodCallingTheDelegateLaterOn</span><span>(</span><span>System</span><span>.</span><span>Action</span><span>&lt;</span><span>int</span><span>&gt;</span><span> </span><span>delegateAction</span><span>,</span><span> </span><span>int</span><span> </span><span>parameter</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>delegateAction</span><span>(</span><span>parameter</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>public</span><span> </span><span>void</span><span> </span><span>M</span><span>(</span><span>)</span><span> </span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>MethodCallingTheDelegateLaterOn</span><span>(</span><span>_preallocatedAction</span><span>,</span><span> </span><span>2</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0004 seconds] -->
+
+
+
+
+<p>note that I preallocate the <strong>MethodToCall </strong>delegate using the <em>_preallocatedAction </em>field, which can then be used later on by the <strong>MethodCallingTheDelegateLaterOn </strong>method. This example looks weird, but in reality it’s quite a common case when delegates are involved.</p>
+
+
+
+<h4>Linq and Tasks</h4>
+
+
+
+<p>By the way, I am not even touching <strong>Linq </strong>here. While Linq is a terrific tool, it should be avoided like the plague for game development. Linq has been optimized a lot over the time, but it is still cause, at least, of many enumerator allocations. Note that there are libraries that promise Linq like 0 allocation code. Do the work? No clue as I don’t use Linq, but you can have a look: https://github.com/NetFabric/NetFabric.Hyperlinq</p>
+
+
+
+<p>I should also mention the use of the <strong>Task</strong> class<strong> </strong>and <em>await/async</em>, but if you use those, you probably already know what you are doing. If you still want to know more, <a href="https://devblogs.microsoft.com/dotnet/understanding-the-whys-whats-and-whens-of-valuetask/">check out this link which explains everything</a>.</p>
+
+
+
+<h3>Strings</h3>
+
+
+
+<p>let’s face it, if you are using strings at run-time (frame based operations), you are doing something wrong. Always find an alternative to strings, but when it’s totally necessary, be aware that most of the operations involving strings result in an allocation. Many articles will tell you to use <strong>StringBuilder </strong>as a way to alleviate the problem, but be aware that it won’t solve it. In fact, even if it will save a lot of allocations during concatenations and other operations, the final result, that happens through a <em>ToString()</em>, will allocate a new string. A <strong>StringBuilder </strong>is effective only if it’s reused and not recreated every single time.</p>
+
+
+
+<h3>Profile It</h3>
+
+
+
+<p>Once you learn these tricks and good practices what it is left to do is to run the game and open the <strong>Unity editor profiler</strong>. Click on the <em>Call Stack </em>button (Unity 2019.3, previously was called <em>allocation callstack</em>) and check closely for red allocations. In the following example I am making the mistake to assign a struct to an interface. Every 10 frames the Unity Profiler will show a red mark in the time line view (hierarchical view is useful as well to check overall allocations)</p>
+
+
+<!-- Crayon Syntax Highlighter v_2.7.2_beta -->
+
+
+
+		<div id="crayon-5e4a262c5ad36358625943" data-settings=" minimize scroll-mouseover">
+		
+			
+			
+			
+			<div>
+				<table>
+					<tbody><tr>
+				<td data-settings="show">
+					<div><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p><p>18</p><p>19</p><p>20</p><p>21</p><p>22</p><p>23</p><p>24</p><p>25</p><p>26</p><p>27</p><p>28</p></div>
+				</td>
+						<td><div><p><span>public</span><span> </span><span>class</span><span> </span><span>Allocate</span><span> </span><span>:</span><span> </span><span>MonoBehaviour</span></p><p><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>// Update is called once per frame</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>void</span><span> </span><span>Update</span><span>(</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>if</span><span> </span><span>(</span><span>Time</span><span>.</span><span>frameCount</span><span> </span><span>%</span><span> </span><span>10</span><span> </span>==<span> </span><span>0</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>using</span><span> </span><span>(</span><span>new</span><span> </span><span>ProfilerMarker</span><span>(</span><span>"Allocating Frame"</span><span>)</span><span>.</span><span>Auto</span><span>(</span><span>)</span><span>)</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>ITestInterface </span><span>test</span><span> </span>=<span> </span><span>new</span><span> </span><span>TestInterface</span><span>(</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span>Thread</span><span>.</span><span>Sleep</span><span>(</span><span>10</span><span>)</span><span>;</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>interface</span><span> </span><span>ITestInterface</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span><span> </span><span>}</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>struct</span><span> </span><span>TestInterface</span><span> </span><span>:</span><span> </span><span>ITestInterface</span></p><p><span>&nbsp;&nbsp;&nbsp;&nbsp;</span><span>{</span><span> </span><span>}</span></p><p><span>}</span></p></div></td>
+					</tr>
+				</tbody></table>
+			</div>
+		</div>
+<!-- [Format Time: 0.0004 seconds] -->
+
+
+
+
+<figure><ul data-carousel-extra="{&quot;blog_id&quot;:1,&quot;permalink&quot;:&quot;http:\/\/www.sebaslab.com\/zero-allocation-code-in-unity\/&quot;}"><li><figure><a href="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?fit=600%2C306"><img data-attachment-id="2928" data-permalink="http://www.sebaslab.com/zero-allocation-code-in-unity/image-5-4/" data-orig-file="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?fit=1782%2C909" data-orig-size="1782,909" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="image-5" data-image-description="" data-medium-file="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?fit=300%2C153" data-large-file="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?fit=600%2C306" src="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?fit=600%2C306&amp;is-pending-load=1" alt="" data-id="2928" data-lazy-srcset="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?w=1782 1782w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?resize=300%2C153 300w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?resize=600%2C306 600w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?resize=768%2C392 768w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?resize=1536%2C784 1536w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?resize=465%2C237 465w, https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?resize=695%2C355 695w" data-lazy-sizes="(max-width: 1380px) 100vw, 1380px" data-lazy-src="https://i2.wp.com/www.sebaslab.com/wp-content/uploads/2019/12/image-5.png?fit=600%2C306&amp;is-pending-load=1" srcset="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a></figure></li></ul></figure>
+
+
+
+<p>Since 2019.3 is even possible to track GC allocation from specific standalone clients (Windows for example). This is probably the easiest way to track and fix allocations at the moment.</p>
+
+
+
+<p>The example shows just a tiny allocation, that really won’t affect much your performance, however when boxing creeps in, it’s easy to end up boxing in loops having, as result, thousands of allocations per frame.</p>
+
+
+
+<p>All the optimizations discussed so far shouldn’t be applied until the profiler shows you that there is a real problem, otherwise you will fall in the early optimization issue. However for people like me who write 100% objectless ECS code, not striving to zero allocation may end up in milliseconds spent in thousands of allocations per frame.</p>
+
+
+
+<p>I also suggest you to have a look at the Unity <a href="https://docs.unity3d.com/Packages/com.unity.test-framework.performance@1.2/manual/index.html">performance test API</a>. It is really convenient and it can tell you if allocations happen as well.</p>
+
+
+
+<p>If I forgot something or you have any question or you need more details on something, leave a comment below and I will reply ASAP.</p>
+
+
+
+<h3>Other references to read</h3>
+
+
+
+<p><a href="https://docs.unity3d.com/Manual/BestPracticeUnderstandingPerformanceInUnity4-1.html">https://docs.unity3d.com/Manual/BestPracticeUnderstandingPerformanceInUnity4-1.html</a></p>
+
+
+
+<p><a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing">https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing</a></p>
+
+
+
+<p><a href="https://docs.unity3d.com/Manual/BestPracticeUnderstandingPerformanceInUnity5.html">https://docs.unity3d.com/Manual/BestPracticeUnderstandingPerformanceInUnity5.html</a></p>
+
+
+
+<p><a href="https://docs.unity3d.com/Manual/BestPracticeUnderstandingPerformanceInUnity7.html">https://docs.unity3d.com/Manual/BestPracticeUnderstandingPerformanceInUnity7.html</a></p>
+
+
+
+<p><iframe title="Matt Ellis - Writing Allocation Free Code in C# - Dotnetos Conference 2019" src="https://www.youtube.com/embed/bMmuSXx5vsQ?feature=oembed" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen="" id="fitvid393805"></iframe></p>
+
+
+
+
+
+<div id="jp-relatedposts">
+	<h3><em>Possibly related topics :)</em></h3>
+<div><div data-post-id="1594" data-post-format="false"><p><a href="http://www.sebaslab.com/svelto-ecs-2-5-and-allocation-0-code/" title="Introducing Svelto ECS 2.5
+
+Svelto ECS so far... Svelto.ECS wasn't born just from the needs of a large team, but also as result of years of reasoning behind software engineering applied to game development(*). Compared to Unity.ECS the main&nbsp;goals and reasons for&nbsp;Svelto.ECS&nbsp;to exist&nbsp;are different enough to justify its on going development (plus Svelto is…" data-origin="2921" data-position="0"><img src="https://i0.wp.com/www.sebaslab.com/wp-content/uploads/2018/05/Svelto-ECS-e1535364459881.jpg?fit=500%2C386&amp;resize=350%2C200" width="350" alt="Introducing Svelto ECS 2.5"></a></p><h4><a href="http://www.sebaslab.com/svelto-ecs-2-5-and-allocation-0-code/" title="Introducing Svelto ECS 2.5
+
+Svelto ECS so far... Svelto.ECS wasn't born just from the needs of a large team, but also as result of years of reasoning behind software engineering applied to game development(*). Compared to Unity.ECS the main&nbsp;goals and reasons for&nbsp;Svelto.ECS&nbsp;to exist&nbsp;are different enough to justify its on going development (plus Svelto is…" data-origin="2921" data-position="0">Introducing Svelto ECS 2.5</a></h4><p>Svelto ECS so far... Svelto.ECS wasn't born just from the needs of a large team, but also as result of years of reasoning behind software engineering applied to game development(*). Compared to Unity.ECS the main&nbsp;goals and reasons for&nbsp;Svelto.ECS&nbsp;to exist&nbsp;are different enough to justify its on going development (plus Svelto is…</p><p>May 25, 2018</p></div></div></div>			</div>
+					</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

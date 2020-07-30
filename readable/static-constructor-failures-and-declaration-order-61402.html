@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Static Constructor Failures and Declaration Order - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Static Constructor Failures and Declaration Order - linksfor.dev(s)"/>
+    <meta property="article:author" content="https://facebook.com/rickstrahl"/>
+    <meta property="og:description" content="I ran into an ugly problem today with an application where nested static constructors where not doing the expected thing - failing to provide a value when one should be available. It turns out the issue has to do with constructor calls nesting and the order in which auto-initialized values are assigned."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://weblog.west-wind.com/posts/2020/May/04/Static-Constructors-and-Declaration-Order-Errors"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Static Constructor Failures and Declaration Order</title>
+<div class="readable">
+        <h1>Static Constructor Failures and Declaration Order</h1>
+            <div>by https://facebook.com/rickstrahl</div>
+            <div>Reading time: 6-8 minutes</div>
+        <div>Posted here: 06 May 2020</div>
+        <p><a href="https://weblog.west-wind.com/posts/2020/May/04/Static-Constructors-and-Declaration-Order-Errors">https://weblog.west-wind.com/posts/2020/May/04/Static-Constructors-and-Declaration-Order-Errors</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="ArticleBody" itemprop="articleBody">
+        
+        
+
+
+        <p><a href="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/ConstructionFailure.jpg"><img src="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/ConstructionFailure.jpg" title="Oooops..." alt=""></a></p>
+<p>I ran into a weird and hard to identify error today that wasted way more time than I care to admit because you know... assumptions on what you know when you don't actually know 😄</p>
+<p>Check out the following bit of code and see why this would fail (you can paste this into <a href="https://www.linqpad.net/">LinqPad</a> to execute):</p>
+<pre><code><span><span>void</span> <span>Main</span>(<span></span>)</span>
+{
+	<span>var</span> lic = <span>new</span> LicenseConfiguration();
+	lic.Dump();
+}
+
+<span>public</span> <span>class</span> <span>LicenseConfiguration</span>
+{
+	<span>public</span> <span>static</span> LicenseConfiguration Current { <span>get</span>; <span>set</span>; } = <span>new</span> LicenseConfiguration();
+	
+	<span>static</span> <span>readonly</span> <span>byte</span>[] _dek = <span>new</span> <span>byte</span>[] { <span>88</span>, <span>103</span>, <span>77</span>, <span>81</span>, <span>66</span>, <span>56</span>, <span>89</span>, <span>120</span> };
+
+	<span>public</span> <span>string</span> LicenseEncryptionKey { <span>get</span>; <span>set</span>; }
+
+	<span><span>public</span> <span>LicenseConfiguration</span>(<span><span>string</span> encryptionKey = <span>null</span></span>)</span>
+	{
+		<span>if</span> (!<span>string</span>.IsNullOrEmpty(encryptionKey))
+			LicenseEncryptionKey = encryptionKey;
+		<span>else</span>
+		{
+			<span>var</span> d = LicenseConfiguration._dek;
+			LicenseEncryptionKey = Encoding.ASCII.GetString(d);
+		}
+	}
+}
+</code></pre>
+<p>In LinqPad this fails with the following error:</p>
+<p><a href="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/LP6_FailedStaticByteArray.png"><img src="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/LP6_FailedStaticByteArray.png" alt=""></a></p>
+<p>Can you spot the problem here?  No? Yeah well, me either at least for a while! If you did figure this out just by looking at it your eye to code coordination is much better than mine 😄.</p>
+<p>The problem in the code as shown is that the <code>LicenseConfiguration._dek</code> value is always <code>null</code> when accessed in the constructor, <strong>even though there's a field initializer</strong> on the field. This in turn blows up the <code>.GetString()</code> call that cannot be passed a null value. But that value should never be <code>null</code> because it's assigned with the (implicit) static constructor - but there it is blowing up in my face.</p>
+<p>I tried a few different things like explicitly adding a static constructor and assigning the <code>byte[]</code> value there, but the static CTOR never actually fired. Double WTF? But it did give a hint to the problem.</p>
+<h2 id="order-matters"><a name="order-matters" href="#order-matters"></a>Order Matters</h2>
+<p>To make a very long story short the problem is</p>
+<ul>
+<li><strong>Static Declaration Order matters!</strong></li>
+</ul>
+<p>Notice the order in how I have the two static properties declared:</p>
+<pre><code><span>public</span> <span>static</span> LicenseConfiguration Current { <span>get</span>; <span>set</span>; } = <span>new</span> LicenseConfiguration();
+<span>static</span> <span>readonly</span> <span>byte</span>[] _dek = <span>new</span> <span>byte</span>[] { <span>88</span>, <span>103</span>, <span>77</span>, <span>81</span>, <span>66</span>, <span>56</span>, <span>89</span>, <span>120</span> };
+</code></pre>
+<p>Notice that <code>Current</code> comes before the private <code>_dek</code> declaration and it does... drum roll please: a <code>new LicenseConfiguration()</code>. Classic case of recursive ctor calls.</p>
+<p>More explicitly the compiler translates the implicit property/field declarations into a static CTOR which does something like this:</p>
+<pre><code><span><span>static</span> <span>LicenseConfiguration</span>(<span></span>)</span> 
+{ 
+    Current = <span>new</span> LicenseConfiguration();
+    _dek = <span>new</span> <span>byte</span>[] { <span>88</span>, <span>103</span>, <span>77</span>, <span>81</span>, <span>66</span>, <span>56</span>, <span>89</span>, <span>120</span> };
+}
+</code></pre>
+<p>Now can you spot the problem? 💡</p>
+<p>When the non-static constructor fires it does:</p>
+<pre><code><span>var</span> d = LicenseConfiguration._dek;
+LicenseEncryptionKey = Encoding.ASCII.GetString(_dek);
+</code></pre>
+<p>So it tries to get the <code>_dek</code> property, which triggers the static CTOR. Then it tries to create the <code>.Current</code> instance and here's where the recursive call happens launching into another static initialization. At this point the <code>_dek</code> field still has not been initialized. When the code falls through to the <code>.GetString()</code> call with the <code>_dek</code> default value in the constructor the value is <code>null</code> and things go <strong>boom</strong>.</p>
+<p>Oddly when looking at the Visual Studio call stack display, it doesn't show the recursive constructor nesting:</p>
+<p><a href="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/NestedCtorNotInStack.png"><img src="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/NestedCtorNotInStack.png" alt=""></a></p>
+<p>But the error message in Visual Studio provides a hint in that it points <code>GetString()</code> where it blows up.</p>
+<p>I'm sitting on the first use of the <code>_dek</code> field when the type initialization error occurs. In that scope <code>.GetString(_dek)</code> <strong>has not fired yet</strong>, but the error says it errors at <code>.GetString(_dek)</code>. It's the nested CTOR call that's blowing up. Aha! 💡</p>
+<p>Notice that the exception message correctly points at the nested <code>.GetString()</code> call which hasn't fired in the top level constructor, but is being fired for the nested static constructor initialization of the <code>.Current</code> instance.</p>
+<p>Yikes - how is that for an esoteric error?</p>
+<p>The quick fix for this is to shuffle the declarations into desired execution order where the byte array is initialized before the Current instance is set.</p>
+<pre><code><span>static</span> <span>readonly</span> <span>byte</span>[] _dek = <span>new</span> <span>byte</span>[] { <span>88</span>, <span>103</span>, <span>77</span>, <span>81</span>, <span>66</span>, <span>56</span>, <span>89</span>, <span>120</span> };
+<span>public</span> <span>static</span> LicenseConfiguration Current { <span>get</span>; <span>set</span>; } = <span>new</span> LicenseConfiguration();
+</code></pre>
+<p>This lets the non-static constructor work without a failure and the code goes on its merry way without errors.</p>
+<p>Since the declaration order is significant here, it's probably a good idea to be explicit and create a static constructor instead of the auto-declarations, which makes it more obvious and allows for a comment notice:</p>
+<pre><code><span><span>static</span> <span>LicenseConfiguration</span>(<span></span>)</span> 
+{
+     
+     _dek = <span>new</span> <span>byte</span>[] { <span>88</span>, <span>103</span>, <span>77</span>, <span>81</span>, <span>66</span>, <span>56</span>, <span>89</span>, <span>120</span> };
+     LicenseConfiguration Current = <span>new</span> LicenseConfiguration();
+}
+</code></pre>
+<p>And now it works:</p>
+<p><a href="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/CorrectOrder.png"><img src="https://weblog.west-wind.com/images/2020/Static-Constructors-and-Declaration-Order-Errors/CorrectOrder.png" alt=""></a></p>
+<h2 id="summary"><a name="summary" href="#summary"></a>Summary</h2>
+<p>Another one of those edge case scenarios where you look at code and go "How could this possibly be failing?" Yet there's a fairly logical reason why this is actually failing the way it is, once you look at the whole picture.</p>
+<p>The moral of this little fable is: Make sure you know how automatic properties are assigned and ensure that the order is such that each property has what it needs before it auto-initializes, including potentially properties/fields that were declared first.</p>
+<p>Auto-initialization is nice compiler sugar, but it's not magic, so you're still responsible for making sure the initialization fires in the right order.</p>
+<p>If you have a bunch of properties that do depend on others, it's probably a very good idea to create explicit constructors, static or otherwise. Note that although this post is about a static constructor blowing up due to declaration order, the same rules apply for non-static auto initialized fields and properties. Order matters no matter what.</p>
+<p>Constructor nesting calls are always tricky and usually unintended or a side effect. When something goes wrong with constructor code it's often difficult to debug, because it's easy to lose sight of what's firing when, unless you look very closely. And apparently the debugger can be deceiving you you too sometimes, not stepping into the nested calls as is the case here.</p>
+<p>This is clearly an edge case but that makes it all the more annoying to track down. A silly mistake was causing me an unexpected error and a good hour of wasted time. Hopefully this post can save someone from wasting that hour and doubting their sanity as I did 😄...</p>
+
+
+
+
+
+        
+        
+        
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

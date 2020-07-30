@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 9 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 9 - linksfor.dev(s)"/>
+    <meta property="og:description" content="Code for this episode can be found here, which &#x2014; unusually &#x2014; is not my GitHub repo. Last time on FAIC I mentioned that there were two basic techniques for improving raw performance: kee&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/05/14/life-part-9/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 9</title>
+<div class="readable">
+        <h1>Life, part 9</h1>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 14 May 2020</div>
+        <p><a href="https://ericlippert.com/2020/05/14/life-part-9/">https://ericlippert.com/2020/05/14/life-part-9/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p data-adtags-visited="true">Code for this episode can be found <a href="https://gist.github.com/jfrijters/19dffa13c7e00fa1d4d7d77888613eee">here</a>, which — unusually — is not my GitHub repo.</p>
+<hr>
+<p data-adtags-visited="true">Last time on FAIC I mentioned that there were two basic techniques for improving raw performance:</p>
+<ul>
+<li>keep the algorithm the same but find a marginal improvement that makes an iteration of the algorithm run faster (or use less memory, or whatever)</li>
+<li>find some characteristic of the problem that allows us to use a better algorithm entirely</li>
+</ul>
+<p data-adtags-visited="true">My hope was that we’d be past the first one by now, but a number of readers and commenters have brought up points that ought to be addressed, so I’m going to spend two more episodes on the “marginal improvement” road. Specifically, on the “throw specialized hardware at the problem” technique.</p>
+<hr>
+<p data-adtags-visited="true">I said during our discussion of Scholes’ algorithm that, though it appears to be doing exactly the same computations as the standard implementation of the naive algorithm, it is conceptually different because <em>logically</em> it treats the Life problem as a series of operations on matrices; that is, <em>values</em>. My implementation of course had a bunch of O(n) loops in it, but those loops were implementation details of the operations like “shift this matrix to the left” or “add these eight matrices together”.</p>
+<p data-adtags-visited="true">What if we could <em>actually</em> perform matrix operations in parallel across all matrix elements at the same time? That is, <em>truly</em> apply the operations we’re laboriously doing byte-by-byte in each array all at once, as though they were values?</p>
+<p data-adtags-visited="true">After all, we do this for the bit arrays that we call integers! When we add two 32 bit integers together we do not think of the fact that the underlying hardware is doing operations on each bit. Under what circumstances could we do the same thing to Life grids?</p>
+<p data-adtags-visited="true">I’m going to discuss two techniques for this. Today, SIMD, and next time, some ideas from image processing.</p>
+<hr>
+<p data-adtags-visited="true">It is extremely common in modern computing to wish to perform the same operation to multiple integers. Let’s say, for example, we have 44000 short (16 bit) integers representing the waveform of one second of CD audio. We’re performing some transformation on all that data in real time, as the bits are coming off the disc. Let’s say we’re reducing the volume by half. Well that’s easy enough! It’s just a one-bit unsigned shift to the right.</p>
+<p data-adtags-visited="true">What would be really great though is if we could copy, say, sixteen of those short integers out of a buffer and into a 256 bit register, shift all of them to the right <em>in parallel</em>, and then put them back in the buffer. Plainly that would be much faster than pulling 16 bits out of the buffer, shifting it, putting it back, repeat, <em>provided that we had hardware that could do the shifting in parallel on 16 shorts stuck into a 256 bit register.</em></p>
+<p data-adtags-visited="true">But we do have such hardware; a great many chips now support SIMD instructions. That is<em> Single Instruction on Multiple Data</em>. Moreover, .NET Core provides methods that allow you to insert calls to SIMD instructions into your C# programs; if the hardware supports it, then the jitter will turn those calls into these instructions that act in parallel.</p>
+<p data-adtags-visited="true">How could we use that for Life? Suppose we restricted ourselves to a 4-quad. That is, a 16 x 16 grid in my nomenclature. That’s pretty small, but we could fit a 16×16 array of cells into an array of 16 shorts if we did one bit per cell, and then we could implement Scholes’s algorithm by doing parallel bit shifts for the left and right rotations, and pointer offsets for the up and down rotations.</p>
+<p data-adtags-visited="true">As it turns out, we do not have to actually suppose anything at all; we can just examine the <a href="https://gist.github.com/jfrijters/19dffa13c7e00fa1d4d7d77888613eee">implementation</a> sent to me<a href="https://twitter.com/JeroenFrijters/status/1256873241584570369"> by Jeroen Frijters</a> which does exactly that. I’m not going to go through it line by line, but I’ll hit the highlights. We can divide the program into three parts: initialization, the core stepping algorithm, and the adder. (And there is also some debug output, which I will ignore.)</p>
+<p data-adtags-visited="true">Initialization is straightforward; we have a 16×16 grid and we load it into a 256 bit buffer one ushort at a time:</p>
+<pre>var v = new Vector256&lt;ushort&gt;()
+v = v.WithElement(0x0, (ushort)0b0100_0000_0000_0000);
+v = v.WithElement(0x1, (ushort)0b0010_0000_0000_0111);
+...
+</pre>
+<p data-adtags-visited="true">That buffer is then dumped into an 18-ushort fixed-width array.</p>
+<pre>fixed ushort state[18];
+internal Life16x16(Vector256&lt;ushort&gt; initialState)
+{
+  fixed (ushort* p = state)
+  {
+    Avx.Store(p + 1, initialState);
+  }
+}</pre>
+<p data-adtags-visited="true">You might not be familiar with fixed-width arrays in C#, as they are typically only ever used for unmanaged code interop scenarios and the like. The basic idea is that we allocate enough memory to hold exactly 18 ushorts, and then tell the garbage collector <em>keep this thing still for a moment because I’m going to make a pointer into its interior</em>. (Remember, the GC is allowed to relocate the storage associated with living objects at its discretion.)</p>
+<p data-adtags-visited="true">Unfortunately this leads to some nomenclature confusion because we then have a <strong>fixed</strong> <strong>width</strong> buffer that is <strong>fixed in place</strong> and boy is it easy to get those meanings mixed up if you are not careful. I really wish the designers of C# 1.0 had used “pinned” or “immovable” or some other term to distinguish the two meanings of “fixed” in this context.</p>
+<p data-adtags-visited="true">Why 18? We shall see in a moment.</p>
+<p data-adtags-visited="true">That does it for the initialization phase. The heart of the algorithm is of course the step function, and let me take this opportunity to rewrite it very slightly to make it easier to understand:</p>
+<pre>fixed (ushort* p = state)
+{
+  var cells = Avx.LoadDquVector256(p + 1);
+&nbsp;&nbsp;var s = Avx.LoadDquVector256(p);
+&nbsp;&nbsp;var n = Avx.LoadDquVector256(p + 2);
+&nbsp;&nbsp;var e = Avx2.ShiftRightLogical(cells, 1);
+&nbsp;&nbsp;var se = Avx2.ShiftRightLogical(s, 1);
+&nbsp;&nbsp;var sw = Avx2.ShiftLeftLogical(s, 1);
+&nbsp;&nbsp;var w = Avx2.ShiftLeftLogical(cells, 1);
+&nbsp;&nbsp;var ne = Avx2.ShiftRightLogical(n, 1);
+&nbsp;&nbsp;var nw = Avx2.ShiftLeftLogical(n, 1);</pre>
+<p data-adtags-visited="true">We copied the 16 ushorts worth of board state into the interior of the 18 byte buffer, so that there would be an all-zero word at the top and bottom. That way the “shift north” and “shift south” operations are nothing more than reading the bits starting from the first and third ushorts in the fixed-size array.</p>
+<p data-adtags-visited="true">The shifts to the east and west are done in parallel on all 256 bits in the vector. Something to keep in mind here is that this is not a right or left shift of a 256 bit integer! That would be wrong because the edges would wrap incorrectly. Rather, it is truly doing a single shift-by-one operation on each of the 16 ushorts in the bit vector, so we get a zero bit on the left or right appropriately. Recall that when I implemented this a couple episodes ago on a byte array I needed to add code to ensure that zeros were filled in appropriately, but here we get that for free from the hardware.</p>
+<p data-adtags-visited="true">We then have the remainder of Scholes’ algorithm, though it is slightly more verbose than I wrote:</p>
+<pre>var acc = new FourBitAccumulator(se, s, sw, e);
+acc.Add(cells);
+acc.Add(w);
+acc.Add(se);
+acc.Add(n);
+acc.Add(sw);
+Avx.Store(p + 1, Avx2.Or(acc.IsThree, Avx2.And(acc.IsFour, cells)));</pre>
+<p data-adtags-visited="true">What’s happening here is we have a helper class that implements the “add these nine bit vectors together to get the living neighbor count”, which of course fits into four bits.</p>
+<p data-adtags-visited="true">We then do the same thing as before: call helper methods to find all the threes and living fours, and that’s our next generation.</p>
+<p data-adtags-visited="true">The remainder of the program is a four-bit parallel adder that also uses SIMD instructions to add all nine 256 bit vectors together in parallel, which produces four 256 bit vectors each of which has one bit of the sum. Going through the code to verify that it is a correct adder is tedious and spoiler alert, it is correct, so I’ll skip that.</p>
+<hr>
+<p data-adtags-visited="true">What kind of performance boost would we get if we used this thing? We can do a quick calculation to get an order of magnitude.</p>
+<p data-adtags-visited="true">My implementation of Scholes’ algorithm took 3.25 seconds to compute 5000 generations of an 8-quad — that is, a 256×256 cell grid. That works out to 100 megacells/s.</p>
+<p data-adtags-visited="true">I did a quick performance check of this algorithm and I got <strong>5 million ticks per second</strong>, but only doing the work on 256 cells. That’s 1.3 gigacells/s, 13 times faster on a cells-per-second basis. That seems like the right order of magnitude speedup considering that all the work is being done in parallel.</p>
+<p data-adtags-visited="true">Now, of course scaling this algorithm up to use SIMD instructions on 8-quads would not be simply doing 256 times the work as was done on a 4-quad because we cannot use the fact that the north, south, east and west shifts put zeros along the edges! We need those bits to be filled in <em>with the correct bits from the grid state</em>, and that’s going to be many additional instructions, so maybe this would only be 10x or 8x faster after that. But 8x faster is pretty good.</p>
+<p data-adtags-visited="true">On the other hand, remember what our scalability problem is here. Every time we double the width of the grid we get 4x as many cells in it. So what this means is that if an n-quad is within our performance budget for my unoptimized algorithm, then an (n+1) or maybe if we are lucky, an (n+2) quad is in our budget for this SIMD version assuming we could scale it up to larger grids. It doesn’t sound like nearly so great an increase when you look at it that way.</p>
+<p data-adtags-visited="true">Many thanks to Jeroen for inspiring this episode and providing the code.<strong> Next time on FAIC</strong> we’ll finish off our discussion of parallelism with a quick introduction to a basic image processing technique that is germane to our topic.</p>
+			
+			
+						</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

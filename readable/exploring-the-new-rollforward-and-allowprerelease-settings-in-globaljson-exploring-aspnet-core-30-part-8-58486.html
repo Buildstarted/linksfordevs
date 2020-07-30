@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Exploring the new rollForward and allowPrerelease settings in global.json: Exploring ASP.NET Core 3.0 - Part 8 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Exploring the new rollForward and allowPrerelease settings in global.json: Exploring ASP.NET Core 3.0 - Part 8 - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I explore the new rollForward and allowPrerelease settings added to the global.json file in .NET Core 3.0 and how they impact SDK selection."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/exploring-the-new-rollforward-and-allowprerelease-settings-in-global-json/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Exploring the new rollForward and allowPrerelease settings in global.json: Exploring ASP.NET Core 3.0 - Part 8</title>
+<div class="readable">
+        <h1>Exploring the new rollForward and allowPrerelease settings in global.json: Exploring ASP.NET Core 3.0 - Part 8</h1>
+            <div>Reading time: 16-20 minutes</div>
+        <div>Posted here: 18 Feb 2020</div>
+        <p><a href="https://andrewlock.net/exploring-the-new-rollforward-and-allowprerelease-settings-in-global-json/">https://andrewlock.net/exploring-the-new-rollforward-and-allowprerelease-settings-in-global-json/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>I was listening to the <a href="http://azuredevopspodcast.clear-measure.com/setting-up-your-machine-for-net-core-with-kathleen-dollard-episode-69">Azure DevOps Podcast with Jeffrey Palermero recently</a> and heard <a href="https://twitter.com/KathleenDollard">Kathleen Dollard</a> mention that there were some updates to the <em>global.json</em> file and .NET Core SDK in 3.0. This post explores those additions and the effects they have on SDK selection for a machine with multiple SDKs installed.</p>
+<p>The <a href="https://docs.microsoft.com/en-us/dotnet/core/tools/global-json?tabs=netcore3x">official documentation</a> for this behaviour covers everything in this post, but I found it pretty hard to internalise the various rules it describes. This post primarily adds some extra background, a couple of pictures, and explores the rules using examples to make it easier to grok!</p>
+<h2 id="the-net-core-runtime-vs-the-net-core-sdk-">The .NET Core Runtime vs the .NET Core SDK.<a href="#the-net-core-runtime-vs-the-net-core-sdk-"></a></h2>
+<p>Before we start, it's important to understand the difference between the .NET Code runtime and the .NET Core SDK:</p>
+<ul>
+<li>The <strong>.NET Core runtime</strong> is what <em>runs</em> a .NET application. It has very limited functionality - it literally just runs a compiled application. It's the important piece when you're <em>running your application in production</em>.</li>
+<li>The <strong>.NET Core SDK</strong> does everything else: it compiles your application, tests it, downloads NuGet packages, and a whole lot more. This is the important piece when you're <em>developing your application</em>.</li>
+</ul>
+<p>Generally speaking, you need to choose the version of the .NET Core <em>runtime</em> you use carefully. Different versions have different support windows (<a href="https://dotnet.microsoft.com/platform/support/policy/dotnet-core">depending if they're LTS or current</a>) and have different features. It's the <em>runtime</em> version that you specify in the <code>&lt;TargetFramework&gt;</code> element of your project file. For example, the project file below specifies that the .NET Core <code>3.1</code> runtime should be used:</p>
+<pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFramework</span><span>&gt;</span></span>netcoreapp3.1<span><span><span>&lt;/</span>TargetFramework</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre>
+<p>In contrast, you generally <em>don't</em> specify a version of the .NET Core <em>SDK</em> that's needed to build the application. Normally all that matters is that you have a version of the SDK that supports the given runtime version. So to target the <code>3.1</code> runtime, you'll need an SDK version that supports building for it, e.g. version SDK <code>3.1.101</code> of the SDK.</p>
+<p>An important thing to note, is that the .NET Core SDK is supposed to be backwards compatible. So the <code>3.1.101</code> SDK can build .NET Core <code>2.1</code> applications and <code>2.2</code> applications etc as well. In other words, <strong>you generally don't need to use a specific version of the .NET Core SDK</strong>. Any SDK that is high enough will do.</p>
+<h2 id="specifying-a-specific-sdk-version-with-a-global-json">Specifying a specific SDK version with a <em>global.json</em><a href="#specifying-a-specific-sdk-version-with-a-global-json"></a></h2>
+<p>Typically then you shouldn't have to worry about which versions of the SDK you have installed. Backwards compatibility means that the most recent SDK should be able to build everything. </p>
+<p>Unfortunately that's not <em>always</em> the case: bugs creep in, features change, and sometimes you need (or want) a specific version of the SDK installed. Some peripheral things change from version-t0-version too, such as the project templates that you use with <code>dotnet new</code>. The templates that come with the .NET Core <code>1.0</code> SDK are very different to those that come with the .NET Core <code>3.1</code> SDK for example.</p>
+<p>For that reason, sometimes you might want to "pin" the version of the .NET Core SDK to a <em>specific</em> version for a particular project or for a particular folder. For example you might want <em>one</em> specific project to use the .NET Core <code>1.0</code> SDK, while letting all the other projects on your machine use the latest <code>3.1</code> version. To do that, you can use <a href="https://docs.microsoft.com/en-us/dotnet/core/tools/global-json">a <em>global.json</em> file</a>.</p>
+<p>Whenever you run a <code>dotnet</code> SDK command like <code>dotnet build</code>, <code>dotnet publish</code>, or <code>dotnet new</code>, the <em>dotnet.exe</em> entrypoint looks for a <em>global.json</em> file in the same directory as the command being run. If it doesn't find one, it looks in the parent directory instead. If it still doesn't find one it keeps working up through the parent directories until it finds a <em>global.json</em> file, or until it reaches the root directory.</p>
+<p>At this point <em>dotnet.exe</em> will either have the "nearest" <em>global.json</em> file, or no file at all. It then uses the values in the <em>global.json</em> file (or the absence of the file), to decide which SDK version to use to handle the command (<code>dotnet build</code> etc).</p>
+<p>The <em>rules</em> governing which version to use depends on four things: </p>
+<ul>
+<li>Which versions of the .NET Core SDK do you have installed?</li>
+<li>Which version does the <em>global.json</em> request (if any)</li>
+<li>What is the current "roll-forward" policy for SDK versions</li>
+<li>Are pre-release versions allowed to be used?</li>
+</ul>
+<p>We'll look at how each of those affect the final version of the SDK selected in the remainder of the post.</p>
+<h2 id="how-to-see-which-versions-of-the-net-core-sdk-you-have-installed">How to see which versions of the .NET Core SDK you have installed<a href="#how-to-see-which-versions-of-the-net-core-sdk-you-have-installed"></a></h2>
+<p>The first variable for determining which version of the .NET Core SDK will be used to run a command, is which SDKs are available. Thankfully that's easy to check in .NET Core 3+, as you can use <code>dotnet --list-sdks</code>. </p>
+<p>Running the command on my machine, I get:</p>
+<pre><code><span>&gt;</span> dotnet --list-sdks
+1.1.14 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+2.1.600 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+2.1.602 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+2.1.604 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+2.1.700 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+2.1.801 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+2.2.203 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+3.0.100 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+3.1.101 <span>[</span>C:\Program Files\dotnet\sdk<span>]</span>
+</code></pre>
+<p>This shows that I have 9 SDKs currently installed (all in <em>C:\Program Files\dotnet\sdk</em>). </p>
+<h3 id="understanding-the-net-core-sdk-version-numbers">Understanding the .NET Core SDK version numbers<a href="#understanding-the-net-core-sdk-version-numbers"></a></h3>
+<p>A slightly tricky aspect of the .NET Core SDK, is that it doesn't really use the <a href="https://semver.org/">semantic versioning</a> that you may be familiar with, <a href="https://docs.microsoft.com/en-us/dotnet/core/versions/">and which the runtime uses</a>. It <em>kind</em> of does, but it's a bit more complicated than that, (plus it's changed throughout the last few versions of .NET Core).</p>
+<p>Currently, the .NET Core SDK version number is broken down into 4 sections. For example, for the <code>2.1.801</code> SDK version:</p>
+<picture>
+<source srcset="/content/images/2020/version_numbers.svg" type="image/svg+xml">
+<img src="https://andrewlock.net/content/images/2020/version_numbers.png" alt="Breakdown of .NET Core SDK version number">
+</picture>
+<p>Those different sections will become important in the next section, when we look at "roll-forward" policies. Broadly speaking, the <code>major</code> and <code>minor</code> version numbers align with the <code>major</code> and <code>minor</code> version of .NET Core, e.g. <code>2.2</code> or <code>3.1</code>. The <code>feature</code> version is the complicated one, where it gets incremented when new features are added to the <em>SDK</em> (potentially without any changes in the <em>runtime</em>). The <code>patch</code> version is for patches to a given <code>feature</code> version.</p>
+<h2 id="the-global-json-schema-in-net-core-1-2-is-very-limited">The <em>global.json</em> schema in .NET Core 1/2 is very limited<a href="#the-global-json-schema-in-net-core-1-2-is-very-limited"></a></h2>
+<p>The <em>global.json</em> file has been available since .NET Core 1.0, and up until the recent changes in .NET Core 3.0, it had a very simple structure:</p>
+<pre><code><span>{</span>
+  <span>"sdk"</span><span>:</span> <span>{</span>
+    <span>"version"</span><span>:</span> <span>"2.1.600"</span>
+  <span>}</span>
+<span>}</span>
+</code></pre>
+<p>The version in the <em>global.json</em> would define which version of the SDK you needed. If it was installed, that version of the SDK would be used, otherwise you would get an error message similar to the following:</p>
+<pre><code>A compatible installed .NET Core SDK <span>for</span> global.json version <span>[</span>2.1.600<span>]</span> from <span>[</span>C:\repos\globaljsontest\global.json<span>]</span> was not found
+Install the <span>[</span>2.1.600<span>]</span> .NET Core SDK or update <span>[</span>C:\repos\globaljsontest\global.json<span>]</span> with an installed .NET Core SDK
+</code></pre>
+<blockquote>
+<p>To be precise, the legacy behaviour was to use the <code>patch</code> roll-forward policy which <a href="https://andrewlock.net/exploring-the-new-rollforward-and-allowprerelease-settings-in-global-json/#understanding-the-various-rollforward-policies">we'll discuss shortly</a>.</p>
+</blockquote>
+<p>Specifying a single version was often rather limiting. In many cases the intention of the version number was used to indicate either a <em>minimum</em> SDK that was needed, or alternatively a <em>maximum major version</em>. Unfortunately the <code>version</code> field does not support wildcards, so that wasn't possible, and proved a poor substitute.</p>
+<p>For example, if you still had projects stuck on .NET Core 1.0, you might add a <em>global.json</em> to require a <code>1.x</code> SDK, like <code>1.1.14</code>. In reality, you likely wouldn't need a <em>specific</em> version of the <code>1.x</code> SDK (<code>1.0.1</code> or <code>1.1.13</code> would work just fine), but the <em>global.json</em> forces you to specify a single version.</p>
+<p>That's a pain, as it forces anyone using your project to install a new SDK version, when they may well have one that works just fine already.</p>
+<h2 id="additions-to-global-json-in-net-core-3-0">Additions to <em>global.json</em> in .NET Core 3.0<a href="#additions-to-global-json-in-net-core-3-0"></a></h2>
+<p>In NET Core 3.0, the <em>global.json</em> file got a couple of important updates, the <code>rollForward</code> and <code>allowPrerelease</code> fields:</p>
+<pre><code><span>{</span>
+  <span>"sdk"</span><span>:</span> <span>{</span>
+    <span>"version"</span><span>:</span> <span>"2.1.600"</span><span>,</span>
+    <span>"allowPrerelease"</span><span>:</span> <span>true</span><span>,</span>
+    <span>"rollForward"</span><span>:</span> <span>"patch"</span>
+  <span>}</span>
+<span>}</span>
+</code></pre>
+<p>The algorithm for determining which version of the SDK to use was relatively simple in .NET Core <code>1.x</code>/<code>2.x</code> - if a <em>global.json</em> was found and the requested SDK version was installed, that version (or a patched version) was used. </p>
+<p>In .NET Core 3.0 the algorithm gets rather more complex, giving you extra controls. The flow chart below shows how values for the <code>version</code>, <code>allowPrerelease</code>, and <code>rollForward</code> values are determined based on the presence of the <em>global.json</em>, whether each field is present in the <em>global.json</em>, and whether or not the command is being run explicitly from the command line, or it's being run <em>implicitly</em> by Visual Studio (VS) (for example when Visual Studio runs a build):</p>
+<picture>
+<source srcset="/content/images/2020/sdk-selection.svg" type="image/svg+xml">
+<img src="https://andrewlock.net/content/images/2020/sdk-selection.png" alt="Flowchart for SDK version number selection">
+</picture>
+<p>At the end of this flow chart, we have values for the following:</p>
+<ul>
+<li><code>version</code>: Either a specific version requested by a <em>global.json</em>, or if none was set, the highest installed version.</li>
+<li><code>allowPrerelease</code>: Determines whether prerelease/preview SDKs that are installed should be considered when calculating which SDK version to use (e.g. <code>3.1.100-preview1</code>)</li>
+<li><code>rollForward</code>: The <em>roll-forward</em> policy to apply.</li>
+</ul>
+<p>This brings us to the most complex section, understanding the <em>roll-forward</em> policy, and how each option controls which version of the SDK is selected.</p>
+<h2 id="understanding-the-various-rollforward-policies">Understanding the various <code>rollForward</code> policies<a href="#understanding-the-various-rollforward-policies"></a></h2>
+<p>The roll-forward policy is used to determine which of the various installed SDKs should be selected when a given <code>version</code> is requested. By changing the roll-forward policy, you can relax or tighten the selection criteria. That's a bit vague, but we'll looks at some examples soon. </p>
+<p>In .NET Core 3.x, there are now <em>nine</em> different values for the <code>rollForward</code> policy, which can broadly be separated into three different categories:</p>
+<p>First we have the disable policy:</p>
+<ul>
+<li><code>disable</code>: If the requested version doesn't exist, then fail outright. Don't ever use an SDK version other than the <em>specific</em> version requested.</li>
+</ul>
+<p>Next we have the conservative roll-forward policies, which get progressively more lenient in looking for suitable SDK versions:</p>
+<ul>
+<li><code>patch</code>: <em>If the requested version doesn't exist</em>, use the highest installed SDK version with the same <strong>major</strong>, <strong>minor</strong>, and <strong>feature</strong> value e.g. <code>2.1.6xx</code></li>
+<li><code>feature</code>: Use the highest installed SDK version with the same <strong>major</strong>, <strong>minor</strong>, and <strong>feature</strong> value e.g. <code>2.1.6xx</code>. If no such version exists, uses the next installed SDK version with the same <strong>major</strong> and <strong>minor</strong> value e.g. <code>2.1.7xx</code>, otherwise fails.</li>
+<li><code>minor</code>: Apply the <code>feature</code> policy. If no suitable SDK version is found, use the highest installed SDK version with the same <strong>major</strong> value e.g. <code>2.x.xxx</code></li>
+<li><code>major</code>: Apply the <code>minor</code> policy. If no suitable SDK version is found, use the highest installed SDK version, e.g. <code>x.x.xxx</code></li>
+</ul>
+<p>Finally we have the "latest" roll-forward policies, which always try and use the latest versions of suitable SDKs:</p>
+<ul>
+<li><code>latestPatch</code> : Always use the highest installed SDK version with the same <strong>major</strong>, <strong>minor</strong>, and <strong>feature</strong> value e.g. <code>2.1.6xx</code> </li>
+<li><code>latestFeature</code> : Uses highest installed SDK version with the same <strong>major</strong> and <strong>minor</strong> value e.g. <code>2.1.xxx</code> </li>
+<li><code>latestMinor</code> : Uses highest installed SDK version with the same <strong>major</strong> value e.g. <code>2.x.xxx</code> </li>
+<li><code>latestMajor</code> : Uses highest installed SDK version</li>
+</ul>
+<p>I'm aware that's a lot of information to digest! The conservative policies in particular are quite confusing, as the <code>patch</code> policy works subtly differently to the others. I think it's easiest to understand the differences by looking at examples, so the next few sections run through various scenarios, and describe the results in each case.</p>
+<p>In each of these scenarios, I'm building a project on a system with the following SDKs installed (listed using <code>dotnet --list-sdks</code>):</p>
+<pre><code>1.1.14
+2.1.600
+2.1.602
+2.1.604
+2.1.700
+2.1.801
+2.2.203
+3.0.100
+3.1.101
+</code></pre>
+<p>You can view the SDK version that was selected based on a given <em>global.json</em> by running <code>dotnet --version</code> in the same folder. When there is no <em>global.json</em> in the folder (or in any parent folders) you should see the <em>latest</em> SDK installed on your machine:</p>
+<pre><code><span>&gt;</span> dotnet --version
+3.1.101
+</code></pre>
+<blockquote>
+<p>Note that I'm ignoring the <code>allowPrerelease</code> flag in these tests. It doesn't have any impact if you don't have preview SDK versions installed. If you do have preview SDKs installed, the results will follow the same patterns shown below.</p>
+</blockquote>
+<h3 id="when-the-requested-sdk-version-is-available">When the requested SDK version is available<a href="#when-the-requested-sdk-version-is-available"></a></h3>
+<p>Lets start first by selecting an SDK version that <em>does</em> exist on the system, <code>2.1.600</code>, and see which SDK version is selected for all the different <code>rollForward</code> values. I create a <em>global.json</em> (by running <code>dotnet new global.json</code>) and change the <code>rollForward</code> property to test each policy:</p>
+<pre><code><span>{</span>
+  <span>"sdk"</span><span>:</span> <span>{</span>
+    <span>"version"</span><span>:</span> <span>"2.1.600"</span><span>,</span>
+    <span>"rollForward"</span><span>:</span> <span>"xxx"</span>
+  <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Running <code>dotnet --version</code> after applying each of the roll-forward policies in turn gives the following results:</p>
+<table>
+<thead>
+<tr>
+<th><code>rollForward</code> policy</th>
+<th>Selected SDK Version</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>disable</code></td>
+<td><code>2.1.600</code></td>
+<td>Uses requested SDK</td>
+</tr>
+<tr>
+<td><code>patch</code></td>
+<td><code>2.1.600</code></td>
+<td>Uses requested SDK</td>
+</tr>
+<tr>
+<td><code>feature</code></td>
+<td><code>2.1.604</code></td>
+<td>Rolls forward <code>patch</code></td>
+</tr>
+<tr>
+<td><code>minor</code></td>
+<td><code>2.1.604</code></td>
+<td>Rolls forward <code>patch</code></td>
+</tr>
+<tr>
+<td><code>major</code></td>
+<td><code>2.1.604</code></td>
+<td>Rolls forward <code>patch</code></td>
+</tr>
+<tr>
+<td><code>latestPatch</code></td>
+<td><code>2.1.604</code></td>
+<td>Rolls forward <code>patch</code></td>
+</tr>
+<tr>
+<td><code>latestFeature</code></td>
+<td><code>2.1.801</code></td>
+<td>Rolls forward <code>feature</code></td>
+</tr>
+<tr>
+<td><code>latestMinor</code></td>
+<td><code>2.2.203</code></td>
+<td>Rolls forward <code>minor</code></td>
+</tr>
+<tr>
+<td><code>latestMajor</code></td>
+<td><code>3.1.101</code></td>
+<td>Rolls forward to latest <code>major</code></td>
+</tr>
+</tbody>
+</table>
+<p>Note that even though we have the exact requested version available, <code>2.1.600</code>, only the <code>disable</code> and <code>patch</code> policies use the actual SDK. Everything else uses <em>at least</em> a patched version of the SDK. Also note that the "conservative" policies, <em>only</em> use the patched version, even though we have additional minor and major versions available.</p>
+<h3 id="when-the-requested-sdk-version-is-not-available">When the requested SDK version is not available<a href="#when-the-requested-sdk-version-is-not-available"></a></h3>
+<p>Now lets try requesting an SDK version that <em>doesn't</em> exist on our machine, <code>2.1.601</code>. Other than that, we have the same <em>global.json</em> and the same SDKs installed.</p>
+<pre><code><span>{</span>
+  <span>"sdk"</span><span>:</span> <span>{</span>
+    <span>"version"</span><span>:</span> <span>"2.1.601"</span><span>,</span>
+    <span>"rollForward"</span><span>:</span> <span>"xxx"</span>
+  <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Running <code>dotnet --version</code> after applying each of the roll-forward policies in turn gives the following results:</p>
+<table>
+<thead>
+<tr>
+<th><code>rollForward</code> policy</th>
+<th>Selected SDK Version</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>disable</code></td>
+<td>FAIL</td>
+<td>You'll get an error when trying to run SDK commands</td>
+</tr>
+<tr>
+<td><code>patch</code></td>
+<td><code>2.1.604</code></td>
+<td>Rolls forward to latest patch</td>
+</tr>
+<tr>
+<td><code>feature</code></td>
+<td><code>2.1.604</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>minor</code></td>
+<td><code>2.1.604</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>major</code></td>
+<td><code>2.1.604</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>latestPatch</code></td>
+<td><code>2.1.604</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>latestFeature</code></td>
+<td><code>2.1.801</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>latestMinor</code></td>
+<td><code>2.2.203</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>latestMajor</code></td>
+<td><code>3.1.101</code></td>
+</tr>
+</tbody>
+</table>
+<p>The results are <em>almost</em> identical to the previous case, with the following exceptions:</p>
+<ul>
+<li>The <code>disable</code> policy causes all SDK commands to fail.</li>
+<li>The <code>patch</code> policy skips the next-highest patch version, <code>2.1.602</code>, and uses the latest patch <code>2.1.604</code> instead.</li>
+</ul>
+<h3 id="when-no-higher-patch-version-exists">When no higher patch version exists<a href="#when-no-higher-patch-version-exists"></a></h3>
+<p>Finally, let's imagine that we've requested the <code>2.1.605</code> SDK, which has a higher <em>patch</em> version than any of the <code>2.1.6xx</code> SDKs installed on the machine. Let's see what happens in this case:</p>
+<table>
+<thead>
+<tr>
+<th><code>rollForward</code> policy</th>
+<th>Selected SDK Version</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>disable</code></td>
+<td>FAIL</td>
+<td></td>
+</tr>
+<tr>
+<td><code>patch</code></td>
+<td>FAIL</td>
+<td>No <code>2.1.6xx</code> SDKs equal or higher than <code>2.1.605</code></td>
+</tr>
+<tr>
+<td><code>feature</code></td>
+<td><code>2.1.700</code></td>
+<td>Only rolls forward to <code>2.1.700</code>, not <code>2.1.801</code></td>
+</tr>
+<tr>
+<td><code>minor</code></td>
+<td><code>2.1.700</code></td>
+<td>Same as <code>feature</code></td>
+</tr>
+<tr>
+<td><code>major</code></td>
+<td><code>2.1.700</code></td>
+<td>Same as <code>minor</code></td>
+</tr>
+<tr>
+<td><code>latestPatch</code></td>
+<td>FAIL</td>
+<td>No <code>2.1.6xx</code> SDKs equal or higher than <code>2.1.605</code></td>
+</tr>
+<tr>
+<td><code>latestFeature</code></td>
+<td><code>2.1.801</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>latestMinor</code></td>
+<td><code>2.2.203</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>latestMajor</code></td>
+<td><code>3.1.101</code></td>
+</tr>
+</tbody>
+</table>
+<p>Now we have some interesting results:</p>
+<ul>
+<li>With no high enough SDK versions matching the <code>2.1.6xx</code> pattern the <code>disable</code>, <code>patch</code>, and <code>latestPatch</code> policies all fail. </li>
+<li>The other <code>latest*</code> policies use the same versions they have in all other experiments.</li>
+<li>The conservative policies (<code>feature</code>, <code>minor</code>, and <code>major</code>) all roll-forward to the next available SDK, <code>2.1.700</code>, which is different to the previous experiments. Note that they <em>don't</em> use the highest feature version available, <code>2.1.801</code>, they only roll forward to the <em>next</em> feature version, <code>2.1.700</code>.</li>
+</ul>
+<p>You could take these experiments further, but I think they demonstrate the patterns pretty well. That leaves just one final question…</p>
+<h2 id="which-roll-forward-policy-should-you-use-">Which roll-forward policy should you use?<a href="#which-roll-forward-policy-should-you-use-"></a></h2>
+<p>In general, I suggest you don't use a <em>global.json</em> if you can help it. This effectively gives you the <code>latestMajor</code> policy by default, which uses the latest version of the .NET Core SDK, ensuring you get any associated bug fixes and performance improvements. </p>
+<p>If you <em>have</em> to use a <em>global.json</em> and specify an SDK version for some reason, then I suggest you specify the <em>lowest</em> SDK version that works, and apply the <code>latestMinor</code> or <code>latestFeature</code> policy as appropriate. That will ensure your project can be built by the widest number of people (while still allowing you to control the range of SDK versions that are compatible).</p>
+<p>Note that the flow charts and matching rules I've described above are specific to the .NET Core 3.x SDK. However, <a href="https://docs.microsoft.com/en-us/dotnet/core/tools/global-json?tabs=netcore3x#matching-rules">the matching rules for the highest SDK installed on your machine</a> are used, so as long as you have any .NET Core 3.x SDK installed, they will apply to you.</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I looked in some depth at the new <code>allowPrerelease</code> and <code>rollForward</code> fields added to the <em>global.json</em> file in .NET Core 3.0. I described the algorithm used to determine which <code>version</code>, <code>allowPrerelease</code>, and <code>rollForward</code> values would be used, based on the presence of a <em>global.json</em> and whether or not you were running from Visual Studio. I then showed how each of the roll-forward policies affects the final selected SDK version.</p>
+<p>Having the additional flexibility to define ranges of SDK versions is definitely useful, but should be used sparingly where possible. It can be easy to add accidental onerous requirements on people trying to build your project. Only add a <em>global.json</em> where it is necessary, and try to use permissive roll-forward policies like <code>latestMajor</code> or <code>latestMinor</code> where possible.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

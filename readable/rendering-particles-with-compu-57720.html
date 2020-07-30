@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Rendering Particles with Compute Shaders - Mike Turitzin - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Rendering Particles with Compute Shaders - Mike Turitzin - linksfor.dev(s)"/>
+    <meta property="og:description" content="Overview I developed a technique to render single-pixel particles (using additive blending) with compute shaders rather than the usual fixed-function rasterization with vertex and fragment shaders. My approach runs 25-335% faster than rasterization on the cases I tested and is particularly faster for some &#x201C;pathological&#x201D; cases (which for my application are not actually that uncommon). I observed these speedups on both NVIDIA and AMD GPUs.&#xA;Using this technique allowed me to ship an app that runs on minimum-spec hardware without sacrificing visual fidelity."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://miketuritzin.com/post/rendering-particles-with-compute-shaders/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Rendering Particles with Compute Shaders - Mike Turitzin</title>
+<div class="readable">
+        <h1>Rendering Particles with Compute Shaders - Mike Turitzin</h1>
+            <div>Reading time: 22-28 minutes</div>
+        <div>Posted here: 12 Feb 2020</div>
+        <p><a href="https://miketuritzin.com/post/rendering-particles-with-compute-shaders/">https://miketuritzin.com/post/rendering-particles-with-compute-shaders/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="content-container">
+        
+        <div id="post-content">
+            
+<p>I developed a technique to render single-pixel particles (using additive blending) with compute shaders rather than the usual fixed-function rasterization with vertex and fragment shaders. My approach runs <strong>25-335% faster</strong> than rasterization on the cases I tested and is particularly faster for some “pathological” cases (which for my application are not actually that uncommon). I observed these speedups on both NVIDIA and AMD GPUs.</p>
+<p>Using this technique allowed me to ship an app that runs on minimum-spec hardware without sacrificing visual fidelity.</p>
+
+<p>I developed a custom engine for the VR app I wrote over the course of 2 years: <a href="https://miketuritzin.com/particulate/">PARTICULATE</a>. The app enables the user to create interesting particle effects and scenes, so the particles take the front seat, and the vast majority of GPU time is spent on simulating and rendering them. (Note that I do all particle simulation on the GPU as is common these days.)</p>
+<p>The trailer for the app gives a feel for the particle rendering it does:</p>
+<p>
+    <iframe src="https://www.youtube.com/embed/IaUXBHbC9oc" allowfullscreen="" title="YouTube Video"></iframe>
+</p>
+<p>The app needs to render 2 million+ particles to two framebuffers (one for each VR eye) at 90hz. All particles are rendered using additive blending, so no sorting is necessary before rendering.</p>
+<p>There are three types of particles that are rendered: two types are larger, velocity-stretched particles (of which there are at most a few tens of thousands). Rendering time is dominated by the third type, which comprises the smallest particles (of which there are millions).</p>
+<p>For the rest of this article, when I refer to “particles” I am talking about these smallest particles. The larger ones (which are part of the same “particle cloud”) are rendered using velocity stretched quads in a geometry shader, and take up a minuscule amount of rendering time because there are comparatively few of them.</p>
+<h2 id="speeding-up-the-rasterization-based-approach">Speeding Up the Rasterization-based Approach</h2>
+<p>I was originally rendering the smallest particles as point sprites. The size of point sprites is never smaller than a pixel, so I would proportionally darken them if their projected on-screen size was actually less than 1 pixel. (The technique to find a particle’s projected on-screen size for an asymmetric projection matrix is described <a href="https://forums.oculusvr.com/community/discussion/comment/239593/#Comment_239593">here</a>.) As a side-note, this 1-pixel clamping / darkening is a good way of avoiding geometric aliasing for the particles as well.</p>
+<p>Performance was not good enough for minimum-spec GPUs (NVIDIA GTX 970 and AMD R9 290), and particle rendering was the biggest expense, so I needed to speed it up. Since overdraw is usually a big culprit for particle rendering, I first experimented with reducing particle sizes (smaller quads with a steeper falloff texture). As expected this did improve performance, but it was still not good enough in a number of common cases.</p>
+<p>Initially as an experiment, I then tried clamping particle size to 1 pixel (so in addition to particles never being smaller than a pixel, they could also never be larger than one). In the same way that particles are proportionally darkened when their projected size is smaller than a pixel, they are proportionally brightened when their projected size is larger than a pixel.</p>
+<p>Unsurprisingly this was a performance win - but surprisingly it was also a quality win! In VR screen resolution is at a premium, so any finer grained detail is very noticeable, and the lack of a perspective effect on the on-screen size of particles wasn’t noticeable because with millions of small, dim particles (that are usually in motion) one tends to observe the shapes formed by the particles rather than each one individually.</p>
+<h2 id="pathological-cases-motivate-trying-something-different">Pathological Cases Motivate Trying Something Different</h2>
+<p>At this point, performance was usually good enough, but there were certain pathological cases, where the same number of on-screen particles would take much longer to render. (And these cases are unavoidable in my app because the user has full control over the forces affecting particles and thus their configuration - and these cases are not actually that uncommon, either.)</p>
+<p>I noticed that, on NVIDIA hardware in particular (I was using a GTX 980), if the particles were spread relatively evenly across screen space OR if they were clumped up to very small screenspace regions (like thousands of particles rendered to just a few pixels) performance would tank. In more-average situations - the particles don’t spread across the whole screen but are also not super-clumped - performance was acceptable.</p>
+<p>To give an idea, rendering time could vary by more than 3x for the same number of on-screen particles depending on their on-screen configuration (and remember that particles are always rendered as a single pixel, so this wasn’t a proximity-based fill rate issue).</p>
+<p>I’m not sure what causes these discrepancies, but it’s likely due to details in the low-level implementation of the rasterization pipeline (and of course that differs on NVIDIA vs. AMD GPUs, and between generations of GPUs by the same vendor, etc.).</p>
+<p>At this point, I decided to experiment with skipping fixed-function rasterization entirely and rendering the particles using compute. This makes a lot of sense in my case because:</p>
+<ol>
+<li>No actual rasterization is happening when rendering single-pixel particles - fundamentally we’re just splatting single pixels to the screen.</li>
+<li>Rasterization requires that 2x2 quads be executed even when rendering triangles that cover just a single pixel. This is very wasteful of occupancy and also totally unnecessary in my case as I do not rely on screenspace derivatives.</li>
+<li>Rendering APIs guarantee that primitives are drawn in the order they’re given, but this is unnecessary when additive blending is used (which it is for my particle rendering). This constraint could potentially be costing performance.</li>
+</ol>
+
+<p>I’m not going to describe everything I tried here, but I do want to give the broad strokes explanation of how I arrived at the technique I’m using as this context explains the choices I made.</p>
+<p>In order to render with a compute shader, we need either to sort particles by output pixel (or screenspace tile) so that each output pixel is written to by at most one thread, OR we need to update output pixels atomically so that writes from multiple threads don’t conflict.</p>
+<p>I did look into tiled rendering (particularly the approach to tiled particle rendering outlined in <a href="https://www.slideshare.net/DevCentralAMD/holy-smoke-faster-particle-rendering-using-direct-compute-by-gareth-thomas">this presentation by Gareth Thomas</a>) but decided that it is not a good fit for my case. As far as I can tell, tiled rendering won’t work well for my app because particles may be (and often are) very “clumpy” in screenspace, which would cause massive imbalances in the amount of work needed for some tiles. (It’s possible, for example, for every single particle to be contained in just a few screenspace tiles). Thus parallelism would be very low, and worse case performance would be very bad.</p>
+<p>Light tiling (or clustering) approaches generally rely on a relatively even (or at least not massively uneven) distribution of lights across the grid being tiled. The presentation by Thomas I mentioned above also relies on this, and it shows benchmarks for scenes where particles are fairly spread out in screenspace.</p>
+<p>So I decided instead to go down the road of updating pixel colors atomically. This approach allows me to avoid binning particles into screenspace tiles and the resulting imbalances doing so can cause.</p>
+<h2 id="additive-blending-using-atomic-operations">Additive Blending Using Atomic Operations</h2>
+<p>There are a few challenges with updating pixel colors atomically via a compute shader. (I should note here that my engine uses OpenGL (4.5) as its rendering backend, so I am constrained by what’s possible in that API.) I’m using RGBA half-float (16 bit) textures for my framebuffers (for HDR rendering, which is important for additive blending of particles), and there is no way to atomically add to a half-float in OpenGL. (I’m guessing this is the case in other APIs as well, though I haven’t confirmed that.)</p>
+<p>OpenGL also doesn’t support atomic adds to full (32-bit) floats, though there is an <a href="https://www.khronos.org/registry/OpenGL/extensions/NV/NV_shader_atomic_float.txt">NVIDIA extension</a> that enables this. However, as far as I know there is no equivalent AMD extension, and also (as I’ll discuss later) I can’t afford performance-wise to update 3 full floats (one for each color channel) for every particle</p>
+<p>Thus I was forced down the road of using integer values to represent color channels, as those are what can be added to atomically in a compute shader. This unfortunately complicates things, as it means the rendering compute shader needs to update a separate buffer (not the normal framebuffer) and then composite the result back onto the normal framebuffer. And because the compute shader needs to operate on integers, it needs to translate particle colors from float to integer when doing the atomic adds and then translate the result back to float when compositing.</p>
+<p>There are two things to determine, then:</p>
+<ol>
+<li>How to convert between float and integer color channel values.</li>
+<li>The bit depth of the RGB integer colors channel value that are added to for each particle.</li>
+</ol>
+<p>Because the color channels are HDR (meaning they aren’t clamped to [0,1]), the conversion process isn’t as simple as what is normally done for 8-bit normalized channels, say (which <em>are</em> clamped to [0,1]). And because we’re doing atomic adds to the channels, they need to be represented in linear space, so no nonlinear tricks like sRGB can be used to conserve bits of precision.</p>
+<p>I settled on converting HDR float values to integer ones through the following process. First empirically determine the maximum value a channel (for a pixel) can have after summing the contributions of every particle. Note that I say “empirically” here because this doesn’t have to be the theoretical maximum value (but rather a “likely” maximum for my application), and in fact if integer overflow happens occasionally it’s not the end of the world (as I’ll elaborate on later). Call this empirical maximum <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mtext>max</mtext></msub></mrow><annotation encoding="application/x-tex"> E_{\text{max}} </annotation></semantics></math></span></span></span>.</p>
+<p>Call the maximum storable unsigned integer value <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>I</mi><mtext>max</mtext></msub></mrow><annotation encoding="application/x-tex"> I_{\text{max}} </annotation></semantics></math></span></span></span>. (This is dependent on the integer bit depth that is used to represent each channel - more on that next.) We can then convert a float color value <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>c</mi><mtext>f</mtext></msub></mrow><annotation encoding="application/x-tex"> c_{\text{f}} </annotation></semantics></math></span></span></span> to an (unsigned) integer one <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>c</mi><mtext>i</mtext></msub></mrow><annotation encoding="application/x-tex"> c_{\text{i}} </annotation></semantics></math></span></span></span> using the formula</p>
+<p><span><span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>c</mi><mtext>i</mtext></msub><mo>=</mo><mtext>round</mtext><mo stretchy="false">(</mo><msub><mi>c</mi><mtext>f</mtext></msub><mo>⋅</mo><mfrac><msub><mi>I</mi><mtext>max</mtext></msub><msub><mi>E</mi><mtext>max</mtext></msub></mfrac><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">
+c_{\text{i}} = \text{round}(c_{\text{f}} \cdot \frac{I_{\text{max}}}{E_{\text{max}}})
+</annotation></semantics></math></span></span></span></span></p>
+<p>This spreads the expected float range across the available integer range.</p>
+<p>The most obvious way to proceed would be to allocate 3 uints per pixel for the 3 color channels and atomically add to each of them for every particle. I tried this, and it was too slow. Luckily, we can pack multiple color channels into a single uint. For example, the 3 color channels can be packed into a 32-bit uint by allocating 11 bits for R, 11 bits for G, and 10 for B (call this R11G11B10). Then we can atomically add all 3 at once using a single atomicAdd operation.</p>
+<p>There is one caveat to this, which is that this means the high bits for one channel can overflow into the low bits of another - in the R11G11B10 case, G can overflow into R and B can overflow into G. Assuming the <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mtext>max</mtext></msub></mrow><annotation encoding="application/x-tex"> E_{\text{max}} </annotation></semantics></math></span></span></span> above was chosen well, however, this is unlikely to happen (and when it does happen it is often unnoticeable as will be explained later).</p>
+<p>I did try the R11G11B10 approach (which uses a single uint per pixel), and it did not work well. There are far too few bits per channel to handle the dynamic range that I am working with - individual particles can be very dark (especially when positioned far from the viewer, as they are darkened with distance), but thousands of them can add together to HDR values as high as 10.0. When I tried this approach, there were very noticeable color shifting effects due to precision as the viewpoint (and particles) moved around.</p>
+<p>So 1 uint per pixel was too little (for precision reasons), and 3 was too much (for performance reasons). This left me to try packing the 3 color channels into 2 uints. Things were getting complicated, but I knew I was close, and I was determined to make this work :)</p>
+<p>I ended up settling on the following approach. The 3 channels are divided among the combined 64 bits of 2 uints. R and B are both allocated 21 bits in one of the 2 uints, and G is allocated 22 bits that are split across the 2 uints. So the first uint is R21Gh11 (‘Gh11’ is the high 11 bits of G) and the second is Gl11B21 (‘Gl11’ is the low 11 bits of G).</p>
+<figure>
+    <img src="https://miketuritzin.com/post/rendering-particles-with-compute-shaders/packed-uints.svg" alt="The RGB color channels are packed into two 32-bit uints: R21Gh11 and Gl11B21. The 22-bit G channel is split in half - its high 11 bits (Gh11) are in the first uint, and its low 11 bits (Gl11) are in the second." width="60%"> <figcaption>
+            <p>The RGB color channels are packed into two 32-bit uints: R21Gh11 and Gl11B21. The 22-bit G channel is split in half - its high 11 bits (Gh11) are in the first uint, and its low 11 bits (Gl11) are in the second.</p>
+        </figcaption>
+</figure>
+
+<p>There is an obvious complication here, which is that because G is split across the 2 uints, overflows when adding to the low 11 bits of G will be lost and not carried to the high 11 bits. The solution to this is to check if this overflow happened after the atomicAdd to Gl11B21. We can do this by using the return value of atomicAdd(), which is the value prior to the atomic addition. We take this return value, unpack Gl11 from it, and then add the Gl11 value that was added in the atomicAdd call - and then test if this addition overflowed the 11 bits. If it did overflow, we then add the overflowed bit(s) (right-shift the result of the addition by 11) to Gh11 in the other uint.</p>
+<p>It’s fine that the second atomicAdd is non-atomic with the first, as the order of additions to each uint is not important (we just want to guarantee that the carried bit(s) are not lost). There is shader code later in this article showing exactly how this is done.</p>
+<h2 id="everything-else-done-by-the-compute-shader">Everything Else Done by the Compute Shader</h2>
+<p>So far I’ve only described how the additive blending works in the compute shader. There are a few other things it does. (These are a subset of the things that would happen in normal rasterization.)</p>
+<p>First it culls particles that are outside the view frustum. This is easy, as particles are always a single pixel, so no clipping is required. Then it computes screenspace coordinates and does the depth test. (Particles don’t write to the depth buffer, but earlier rendering does.) The fragment color is computed using the per-particle color scaled by projected area in screenspace divided by 1 pixel (the actual area), as described earlier. Then the additive blending happens as just described.</p>
+<p>This is the shader code that converts a particle’s world-space position to a pixel coordinate in screenspace:</p>
+<div><pre><code data-lang="glsl"><span>vec4</span> clipSpacePosition <span>=</span> u_matWVP <span>*</span> <span>vec4</span>(worldPosition, <span>1.0</span>);
+
+<span>// Frustum cull before perspective divide by checking of any of xyz are outside [-w, w].
+</span>
+<span>if</span> (any(greaterThan(abs(clipSpacePosition.xyz), <span>vec3</span>(abs(clipSpacePosition.w))))) {
+	<span>return</span>;
+}
+
+<span>vec3</span> ndcPosition <span>=</span> clipSpacePosition.xyz <span>/</span> clipSpacePosition.w;
+<span>vec3</span> unscaledWindowCoords <span>=</span> <span>0.5</span> <span>*</span> ndcPosition <span>+</span> <span>vec3</span>(<span>0.5</span>);
+
+<span>// Techically this calculation should use the values set for glDepthRange and glViewport.
+</span>
+<span>vec3</span> windowCoords <span>=</span> <span>vec3</span>(u_renderTextureDimensions <span>*</span> unscaledWindowCoords.xy,
+	                     unscaledWindowCoords.z);
+
+<span>// Account for pixel centers being halfway between integers.
+</span>
+<span>ivec2</span> pixelCoord <span>=</span> clamp(<span>ivec2</span>(round(windowCoords.xy <span>-</span> <span>vec2</span>(<span>0.5</span>))),
+                         <span>ivec2</span>(<span>0</span>), u_renderTextureDimensions);
+</code></pre></div><p>In order to not tank performance, I needed to <a href="http://rastergrid.com/blog/2010/10/hierarchical-z-map-based-occlusion-culling/">build a hierarchical depth buffer</a> (compute a pyramid of mip levels for the depth buffer, where the value of a texel at level N is equal to the min() of the 4 texels it subsumes from level N - 1). The depth test in the compute shader first checks the depth in the 4th mip level (1/16th x 1/16th resolution) first and then only level 0 when necessary.</p>
+<p>I do this to have a fast out for the common case that a particle is in front of opaque geometry, thus reducing memory pressure for depth tests. This is similar to the <a href="https://pdfs.semanticscholar.org/ef95/d232b78146cc16e6212cc062fb622136f3f3.pdf">Hi-Z optimization in some GPUs</a>. I suspect that always testing against the full-res depth buffer was tanking performance because the accesses were effectively random (as I’m not tiling or sorting particles in any way).</p>
+<p>(Note that since I’m only querying one higher level of the depth mip chain, building the whole pyramid isn’t necessary - and I’ll likely change this in the future to a single compute invocation that generates just the level needed.)</p>
+<p>So in summary, the basic idea of the approach I took is to allocate a new buffer with 2 uints per pixel, clear that buffer to 0’s every frame, and then run the compute shader described above to determine the pixel location of each particle (as well as its color), convert that color to uint, and do atomicAdd’s on the 2 uints corresponding to that pixel. Then do a full-screen triangle pass that reads the final uint values, converts them back to float, and additively blends them onto the normal framebuffer.</p>
+
+<p>I compared the performance of using the normal rasterization pipeline (with single-pixel point sprites) to the compute shader rendering technique I just described. For the comparison I rendered the following three exact images. All are of scenes containing approximately 2 million particles. The images are 1648x1776, which was the eye buffer resolution requested by the Oculus SDK. Note that I’m measuring VR rendering performance, so in reality two eye buffers were rendered to - I’m only showing the left eye here.</p>
+<figure>
+    <img src="https://miketuritzin.com/post/rendering-particles-with-compute-shaders/normal-spread.jpg" alt="&amp;lsquo;normal&amp;rsquo; - This is a fairly representative image as far as normal app performance goes (particles are not normally covering the entire screen)." width="50%"> <figcaption>
+            <p><strong>‘normal’</strong> - This is a fairly representative image as far as normal app performance goes (particles are not normally covering the entire screen).</p>
+        </figcaption>
+</figure>
+
+<figure>
+    <img src="https://miketuritzin.com/post/rendering-particles-with-compute-shaders/orange-spread-new.jpg" alt="&amp;lsquo;spread&amp;rsquo; - Here particles are spread out across the rendered image. This case was resulting in large slowdowns when using rasterization." width="50%"> <figcaption>
+            <p><strong>‘spread’</strong> - Here particles are spread out across the rendered image. This case was resulting in large slowdowns when using rasterization.</p>
+        </figcaption>
+</figure>
+
+<figure>
+    <img src="https://miketuritzin.com/post/rendering-particles-with-compute-shaders/green-clumpy.jpg" alt="&amp;lsquo;clumpy&amp;rsquo; - Here particles are clumped together into very small on-screen regions (post-process bloom is causing these regions to expand in the final image). This case was also resulting in large slowdowns when using rasterization." width="50%"> <figcaption>
+            <p><strong>‘clumpy’</strong> - Here particles are clumped together into very small on-screen regions (post-process bloom is causing these regions to expand in the final image). This case was also resulting in large slowdowns when using rasterization.</p>
+        </figcaption>
+</figure>
+
+<p>These were the results for rendering the particles to the two eye buffers for each of the above test cases on an <strong>NVIDIA GTX 980</strong>:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>‘normal’</th>
+<th>‘spread’</th>
+<th>‘clumpy’</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rasterization</td>
+<td>4.2 ms</td>
+<td>11.1 ms</td>
+<td>11.7 ms</td>
+</tr>
+<tr>
+<td>Compute shader</td>
+<td>2.4 ms</td>
+<td>6.2 ms</td>
+<td>2.7 ms</td>
+</tr>
+<tr>
+<td><strong>% change</strong></td>
+<td><strong>-43%</strong></td>
+<td><strong>-44%</strong></td>
+<td><strong>-77%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>And these were the results for an <strong>AMD R9 290</strong>:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>‘normal’</th>
+<th>‘spread’</th>
+<th>‘clumpy’</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rasterization</td>
+<td>3.7 ms</td>
+<td>5.9 ms</td>
+<td>3.1 ms</td>
+</tr>
+<tr>
+<td>Compute shader</td>
+<td>2.5 ms</td>
+<td>4.7 ms</td>
+<td>2.4 ms</td>
+</tr>
+<tr>
+<td><strong>% change</strong></td>
+<td><strong>-32%</strong></td>
+<td><strong>-20%</strong></td>
+<td><strong>-23%</strong></td>
+</tr>
+</tbody>
+</table>
+<p><em>(Note that in this comparison I’m including all the additional costs of the compute-shader-based rendering approach, including clearing and compositing the uint buffer each frame, as well as building the hierarchical depth buffer (so I’m assuming the latter isn’t already available for some other purpose).)</em></p>
+<p>As we can see from the tables, compute shader rendering is a significant improvement for all three test cases on both the NVIDIA and AMD GPUs. The biggest improvement is for the ‘clumpy’ image on NVIDIA (-77% rendering time, or 335% faster). Given how poorly rasterization performed for that case vs. both NVIDIA with compute shader rendering and AMD with both types of rendering, I’m guessing there is something pathological going on for that case on the NVIDIA hardware tested.</p>
+<p>The AMD GPU shows significant - though less dramatic - improvements. It’s also interesting that the AMD R9 290 performs better than the NVIDIA GTX 980 on nearly every test (both using rasterization and the compute shader approach) given that the 290 is a less powerful GPU than the 980 overall.</p>
+
+<h2 id="integer-quantization-error">Integer Quantization Error</h2>
+<p>I mentioned earlier that I initially tried packing the bits for all three color channels into a single 32-bit uint. This didn’t work because the quantization was too coarse, resulting in very noticeable color shifting as the distance between the particles and the viewer shifted (as particle colors are scaled in proportion to what their projected on-screen area would be).</p>
+<p>Precision is much higher with the approach I took, but some color shifting effects are still visible at very far distances. In these cases, the colors of individual particles are getting scaled to very small values, so relative error for the color of each particle becomes much higher (and then this error is magnified as many particles are summed together). In practice this isn’t an issue in my app, as the user is never far enough away that these effects are visible.</p>
+<p>If it were necessary to view particles at large distances, it would probably be possible to use an LOD scheme: render fewer particles with distance and proportionally brighten the ones that are rendered to account for the ones that aren’t. This way the quantization error for individual particles could be held constant rather than increasing with distance.</p>
+<h2 id="color-channel-overflow">Color Channel Overflow</h2>
+<p>Earlier I mentioned that integer overflow is possible for the color channels when summing the contribution of each particle. When overflow happens for a channel, that channel’s value wraps around to zero, and an adjacent channel can have spurious bits carried over to it (e.g., the high bits of B can overflow into the low bits of G). This will not happen often if <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mtext>max</mtext></msub></mrow><annotation encoding="application/x-tex"> E_{\text{max}} </annotation></semantics></math></span></span></span> is chosen well. <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mtext>max</mtext></msub></mrow><annotation encoding="application/x-tex"> E_{\text{max}} </annotation></semantics></math></span></span></span> is the floating point value corresponding to the maximum representable integer value - if it’s too high, quantization of individual particles will be too coarse, and if it’s too low, overflow will happen too often.</p>
+<p>For the value of <span><span><span><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mtext>max</mtext></msub></mrow><annotation encoding="application/x-tex"> E_{\text{max}} </annotation></semantics></math></span></span></span> used in my app, there is sometimes overflow, but it isn’t visible. This is because only small regions of the hottest pixels will overflow (if any pixels overflow at all), and because of the post-process bloom effect applied later, nearby bright pixels (that themselves didn’t overflow) will bloom over and obscure the overflowed pixels.</p>
+<h2 id="atomicadd-dependencies">atomicAdd Dependencies</h2>
+<p>Earlier I detailed how the two per-pixel uints are atomically added to for each particle. I capture overflows to the low bits of the G channel (in one uint) and add those to the high bits of the G channel (in the other uint).</p>
+<p>My initial approach to this was to always perform two atomicAdd’s: First add to the uint containing the low bits of G. Then when that returns, test if there was overflow and add to the second uint (containing the high bits of G) incorporating the carried bits.</p>
+<p>It turns out that doing the atomicAdd’s this way is substantially slower (on the NVIDIA hardware I tested, at least) than simply adding to the two uints in a non-dependent fashion. I haven’t looked into this in more detail, but I suspect that the two atomicAdd’s can be parallelized, but this can’t happen when the second atomicAdd depends on the result of the first.</p>
+<p>The approach I ended up using first does independent atomicAdd’s to both uints. It then tests if the low bits of G overflowed for the uint that contains them. If they did, it performs a <em>third</em> atomicAdd to the uint containing the high bits of G to carry the overflowed bits. Because this carry is needed very rarely, this is only marginally slower than doing two independent atomicAdd’s (which is to say, better than the dependent approach I tried initially).</p>
+<p>This is the shader code I use to pack the color channel values and perform the (up to three) atomicAdd’s:</p>
+<div><pre><code data-lang="glsl"><span>// RG uint contains R in the high 21 bits and the high 11 bits of G in the low 11 bits.
+</span>
+uint rgValueToAdd <span>=</span> ((fragmentColorAsUint.r <span>&lt;&lt;</span> <span>11</span>) <span>|</span> (fragmentColorAsUint.g <span>&gt;&gt;</span> <span>11</span>));
+
+<span>// GB uint contains the low 11 bits of G in the high 11 bits and B in the low 21 bits.
+</span>
+uint gbValueToAdd <span>=</span> ((fragmentColorAsUint.g <span>&lt;&lt;</span> <span>21</span>) <span>|</span> fragmentColorAsUint.b);
+
+atomicAdd(perPixelRGBAtomicUints[rgUintIndex], rgValueToAdd);
+uint previousGB <span>=</span> atomicAdd(perPixelRGBAtomicUints[gbUintIndex], gbValueToAdd);
+
+<span>// Detect if there was an overflow when adding to the low 11 bits of G and if so add the carry-over to the high bits in the other uint.
+</span>
+uint previousGPlusGValueToAdd <span>=</span> (previousGB <span>&gt;&gt;</span> <span>21</span>) <span>+</span> (gbValueToAdd <span>&gt;&gt;</span> <span>21</span>);
+uint gCarryOverToAdd <span>=</span> (previousGPlusGValueToAdd <span>&gt;&gt;</span> <span>11</span>);
+<span>if</span> (gCarryOverToAdd <span>!=</span> <span>0</span>) {
+	atomicAdd(perPixelRGBAtomicUints[rgUintIndex], gCarryOverToAdd);
+}
+</code></pre></div>
+        </div>
+        
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

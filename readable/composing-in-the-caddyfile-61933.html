@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Composing in the Caddyfile - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Composing in the Caddyfile - linksfor.dev(s)"/>
+    <meta property="og:description" content="Web server config files are mostly about expressing HTTP handling logic. Often, various handlers or middlewares need to be &#x201C;composed&#x201D; to form a cohesive HTTP handler that returns the desired responses.  Structurally, config files are basically limited to two dimensions: rows and columns (or, lines and tokens). Syntactically, a config file&#x2019;s second dimension can expand into more dimensions or scopes when blocks are opened (which are usually represented by curly braces { } and/or indentation, simi..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://caddy.community/t/composing-in-the-caddyfile/8291?u=matt"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Composing in the Caddyfile</title>
+<div class="readable">
+        <h1>Composing in the Caddyfile</h1>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 21 May 2020</div>
+        <p><a href="https://caddy.community/t/composing-in-the-caddyfile/8291?u=matt">https://caddy.community/t/composing-in-the-caddyfile/8291?u=matt</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><div><p>Web server config files are mostly about expressing HTTP handling logic. Often, various handlers or middlewares need to be “composed” to form a cohesive HTTP handler that returns the desired responses.</p>
+<p>Structurally, config files are basically limited to two dimensions: rows and columns (or, lines and tokens). Syntactically, a config file’s second dimension can expand into more dimensions or scopes when blocks are opened (which are usually represented by curly braces <code>{ }</code> and/or indentation, similar to most programming languages); the added dimensionality is useful for expressing complex, nested ideas, but makes it difficult to access higher scopes that “go up and over” if you were to draw them like a tree: there are profound theoretical underpinnings for why most programming languages and config parsers implement scopes like stacks instead of trees. Keep that in mind as we proceed to discuss web server config files.</p>
+<p>In a config file, there are two primary ways to describe how to handle HTTP requests:</p>
+<ul>
+<li>
+<strong>Behavior-first.</strong> This involves defining the behavior first, then describing matching/routing within each behavior. <em>Handler logic on the “outside” / routing logic on the “inside”.</em>
+</li>
+<li>
+<strong>Routing-first.</strong> This involves defining the matching/routing first, then describing the behavior within each route/block. <em>Routing logic on the “outside” / handler logic on the “inside”.</em>
+</li>
+</ul>
+<p>When we say “first” or “outside” here, we basically mean “from left-to-right” in a config file.</p>
+<p>We’ll explore both in detail after introducing some crucial background first.</p>
+<h2>Two problems</h2>
+<p>Consider this <strong>behavior-first</strong> Caddyfile excerpt:</p>
+<pre><code>rewrite <span>/docs/foo/</span>* /docs/foo.html
+rewrite <span>/docs/</span>*     /docs/index.html
+
+header                Cache-Control max-age=<span>86400</span>
+header /docs/foo.html Cache-Control <span>no</span>-cache
+</code></pre>
+<p>This is very nice to read and write, but it won’t work the way you expect: <em>all requests</em> will have a <code>Cache-Control</code> header of <code>max-age=86400</code>, even though you would think that requests for <code>/docs/foo.html</code> get a value of <code>no-cache</code>.</p>
+<p>Why? First you need to understand two problems.</p>
+<h3>Problem 1: Handler order</h3>
+<p>One problem is <strong>ordering</strong>. The Caddyfile is helpful because, by default, it sorts handlers for you into an order that makes sense for most sites.</p>
+<p>First, <a href="https://caddyserver.com/docs/caddyfile/directives#directive-order">it sorts by directive name</a>. This ensures, for example, that even if <code>root</code> is the last line of your Caddyfile, the <code>file_server</code> directive that appears at the top will still know where your site’s files are. It means that most of the time, you don’t have to worry about the implementation details of the server when you write your Caddyfile.</p>
+<p>Then, within multiple instances of the same directive, the Caddyfile sorts them that have only a path matcher by the descending lengths of their path. This means that directive instances with the longest (most specific) paths are ordered first – otherwise, less specific instances of the directive would <em>always</em> take precedence! To illustrate, imagine this config:</p>
+<pre><code>reverse_proxy        localhost:<span>5000</span>  
+reverse_proxy <span>/api/</span>* localhost:<span>8000</span>  
+</code></pre>
+<p>If the Caddyfile did not reorder these handlers for you, the reverse proxy to <code>localhost:5000</code> would <em>always</em> be used and the proxy to <code>localhost:8000</code> would <em>never</em> be used, because it appears first and it matches a superset of the requests that the second proxy does. Since <code>reverse_proxy</code> is a terminal handler (i.e. it writes a response and does not call the next handler in the chain), no handlers will be called after it.</p>
+<p>To solve this problem, the Caddyfile automatically reorders these internally so that the second proxy in your config will be prioritized to match requests to <code>/api/*</code>; all other requests will still match the first one otherwise.</p>
+<h3>Problem 2: Mutual exclusion</h3>
+<p>Another problem is <strong>mutual exclusion</strong>, or using one handler and not any others that match the same request.</p>
+<p>Consider this config (an actual excerpt from the Caddy website’s Caddyfile):</p>
+<pre><code>rewrite <span>/docs/json/</span>*    /docs/json/index.html
+rewrite <span>/docs/modules/</span>* /docs/modules/index.html
+rewrite <span>/docs/</span>*         /docs/index.html
+</code></pre>
+<p>What would happen if <code>rewrite</code> was not mutually exclusive? A request to <code>/docs/modules/http</code> would be rewritten to <code>/docs/modules/index.html</code> (which is what we want), but then it would finally be rewritten to <code>/docs/index.html</code>, which we intended only for all other requests in <code>/docs/</code> that weren’t to <code>/docs/modules/</code> – oops!</p>
+<p>Because cascading rewrites are often undesirable and similar logic applies to some other directives, the Caddyfile currently considers three standard directives to be mutually exclusive with other instances of themselves:</p>
+<ul>
+<li>rewrite</li>
+<li>handle</li>
+<li>root</li>
+</ul>
+<p>In other words, after the directives are sorted, only the first matching instance of each of these directives will be invoked. (The Caddyfile adapter uses <a href="https://caddyserver.com/docs/modules/http#servers/routes/group">route groups</a> to enforce mutual exclusion.)</p>
+<p>This automatic behavior is what makes the two <code>rewrite</code> lines in our first config excerpt above work as expected. <img src="https://caddy.community/images/emoji/apple/+1.png?v=9" title=":+1:" alt=":+1:"> But what about the <code>header</code> directives?</p>
+<p>You’ll notice that <code>header</code> is not on that list… hmm… <img src="https://caddy.community/images/emoji/apple/thinking.png?v=9" title=":thinking:" alt=":thinking:">  ah, right, that’s because we’ll often want header directives to cascade:</p>
+<pre><code>@<span>options</span> {
+	<span>method</span> <span>OPTIONS</span>
+}
+<span>header</span> @<span>options</span> Access-Control-Allow-Methods <span>"POST, GET, OPTIONS"</span>
+header          Access-Control-Allow-Origin  example.com
+</code></pre>
+<p>Notice that here, we want all requests to get the <code>Access-Control-Allow-Origin</code> header, but only OPTIONS requests to get the <code>Access-Control-Allow-Methods</code> header. Because of these kinds of extremely handy cases, the Caddyfile can’t assume that all <code>header</code> directives should be mutually exclusive of each other. (We also can’t program the Caddyfile with special logic to peer inside each directive and only make it mutually-exclusive if the first argument is the same – the Caddyfile is extensible, so this would not only break several abstractions but it would also be impossible to maintain.)</p>
+<h3>Answering the question</h3>
+<p>Back to the original question: Why? Why does that config way above not yield the desired result?</p>
+<p>Well, you know that directives are sorted so that their handlers are ordered most effectively for most use cases, and then some directives are made mutually exclusive within themselves.</p>
+<p>The answer should be much more obvious now: multiple header directives cascade into each other, so order <em>might</em> matter. For example, as we wrote:</p>
+<pre><code><span><span>header</span></span>                Cache-Control max-age=86400
+<span><span>header</span></span> /docs/foo.html Cache-Control no-cache
+</code></pre>
+<p>Because of how the Caddyfile does the internal sorting, first sets the <code>Cache-Control: no-cache</code> header for requests to <code>/docs/foo.html</code> – which is what we want! – but then immediately overwrites that for by setting <code>Cache-Control: max-age=86400</code> on all requests (because there is no matcher). <img src="https://caddy.community/images/emoji/apple/frowning_face.png?v=9" title=":frowning_face:" alt=":frowning_face:"></p>
+<p>Ahhh… well shoot.</p>
+<p>We also know that simply switching the order of these two lines won’t have any effect, because the Caddyfile (helpfully) orders them so that no directives become inert.</p>
+<p>So how do we solve this?</p>
+<p>In this specific case, we have two possible solutions:</p>
+<ul>
+<li>Make those two header directives mutually exclusive,<br>
+<strong>or</strong>
+</li>
+<li>Manually switch the order so that the overwriting ends favorably.</li>
+</ul>
+<h3>Solution A</h3>
+<p>To make any directives – or group of directives – mutually exclusive, we can simply wrap them in a <a href="https://caddyserver.com/docs/caddyfile/directives/handle"><code>handle</code> directive</a> block:</p>
+<pre><code>handle /docs/foo.html {
+	header Cache-Control no-cache
+}
+handle {
+	header Cache-Control max-age=86400
+}
+</code></pre>
+<p>Observant readers will find this pattern similar to nginx’s <code>location</code> blocks. By definition, the <code>handle</code> directive is mutually exclusive to all other handle blocks at the same level of nesting! So this is very useful sometimes.</p>
+<p>And as it turns out, this part of the config is now <strong>routing-first</strong>. As you scan from left to right (“outer to inner”), you’ll notice it first defines routing logic, and the behavior is inside it. This approach is useful and necessary at times when you need to achieve specific results.</p>
+<p>Unlike nginx, however, you are not coerced to use this approach. The Caddyfile lets you use both/either! But you certainly may use this approach exclusively if you prefer.</p>
+<h3>Solution B</h3>
+<p>The other approach is to force the order so that the final header modification is the one we want. We can do this using the <a href="https://caddyserver.com/docs/caddyfile/directives/route"><code>route</code> directive</a>:</p>
+<pre><code>route {
+	header                Cache-Control max-age=86400
+	header /docs/foo.html Cache-Control no-cache
+}
+</code></pre>
+<p>The <code>route</code> directive defines a literal route that the Caddyfile does not dare re-order; and it is not mutually exclusive with other route blocks. With this config, Caddy will literally invoke those handlers in that order: first applying the <code>max-age=</code> value to all requests, then immediately after will overwrite that with the <code>no-cache</code> value <em>only for requests to <code>/docs/foo.html</code></em>, which is precisely what we want.</p>
+<p>But maybe Solution A is slightly “cleaner” in that it doesn’t require overwriting a previous handler’s result.</p>
+<hr>
+<p>Now you know some of the intricacies of handler order and mutual exclusion. Now you can appreciate two equally-valid and equally-useful paradigms for writing a web server configuration!</p>
+<h2>Behavior-first</h2>
+<p>This paradigm is most effective when a site’s behavior can be easily described by a sequence of handlers that do not depend on the routing logic of other handlers.</p>
+<p>For example, the actual Caddyfile for the Caddy website is quite elegant this way:</p>
+<pre><code>caddyserver.com
+
+root ./src
+
+file_server
+templates
+encode gzip
+
+try_files {path}.html {path}
+
+redir   <span>/docs/json      /docs/json/</span>
+redir   <span>/docs/modules   /docs/modules/</span>
+rewrite <span>/docs/json/</span>*    /docs/json/index.html
+rewrite <span>/docs/modules/</span>* /docs/modules/index.html
+rewrite <span>/docs/</span>*         /docs/index.html
+
+reverse_proxy <span>/api/</span>* localhost:<span>4444</span>
+</code></pre>
+<p>Notice how the left-most elements of the configuration primarily describe behaviors, and then most behaviors (directives) are scoped by matchers. As you scan from left to right, you first see behaviors and then matchers (and then the behaviors are configured in more detail).</p>
+<p>This works well in our case because the Caddyfile takes care of the general ordering and mutual exclusion for us. It is easy to read and write. However, it can be difficult to reason about the routing (or “matching”) logic because this visual structure does not achieve parity with the final route that a request would take in the handler chain. Instead, it is optimized for grouping behaviors together and letting the server sort out the routes.</p>
+<h2>Routing-first</h2>
+<p>This paradigm is most effective when a site’s behavior can be easily described by the sequence of handlers a request will invoke depending on its properties.</p>
+<p>To demonstrate, I’ll use <a href="https://caddy.community/t/v1-to-v2-rewrite-404-errors/7123/9">a real config from a real production use case on our forums a while ago</a>. <strong>This config is behavior-first, and is incorrect for the desired result:</strong></p>
+<pre><code>:<span>80</span>
+
+encode gzip
+root * /Users/shared/server/components/web
+file_server browse
+reverse_proxy <span>/soc/</span>* <span>127.0</span><span>.0</span><span>.1</span>:<span>9710</span>
+reverse_proxy <span>/api/</span>* <span>127.0</span><span>.0</span><span>.1</span>:<span>9720</span>
+reverse_proxy <span>/fio/</span>* <span>127.0</span><span>.0</span><span>.1</span>:<span>9730</span>
+try_files {path} /index.html
+</code></pre>
+<p>Notice that none of the <code>reverse_proxy</code> directives will get invoked because the <code>try_files</code> directive rewrites everything that isn’t a static file on disk to <code>/index.html</code>, which is handled only by <code>file_server</code>. Hence, the logic of this behavior-first config is incorrect.</p>
+<p>As you saw above, we could solve this by using <code>handle</code> or <code>route</code> (there are often multiple ways to solve a config problem). <a href="https://caddy.community/t/v1-to-v2-rewrite-404-errors/7123/10">If we use <code>handle</code></a>, the corrected config is:</p>
+<pre><code>:<span>80</span>
+
+encode gzip
+root * /Users/shared/server/components/web
+handle <span>/soc/</span>* {
+	reverse_proxy <span>127.0</span><span>.0</span><span>.1</span>:<span>9710</span>
+}
+handle <span>/api/</span>* {
+	reverse_proxy <span>127.0</span><span>.0</span><span>.1</span>:<span>9720</span>
+}
+handle <span>/fio/</span>* {
+	reverse_proxy <span>127.0</span><span>.0</span><span>.1</span>:<span>9730</span>
+}
+handle {
+	try_files {path} /index.html
+	file_server browse
+}
+</code></pre>
+<p>This will <em>first</em> route the request into the proper <code>handle</code> block, and then execute each directive group within the block. Notice how this is particularly important since <code>try_files</code> and <code>file_server</code> are separated by <code>reverse_proxy</code> in the <a href="https://caddyserver.com/docs/caddyfile/directives#directive-order">directive order</a>, meaning that if they weren’t divided into separate groups, the Caddyfile would put <code>try_files</code> before any <code>reverse_proxy</code>, resulting in the wrong behavior from the <strong>behavior-first</strong> attempt.</p>
+<p>Hence, the <strong>routing-first</strong> approach is better for this config. (Actually, we kind of use both! The Caddyfile doesn’t require you to put everything within a <code>handle</code> block. You can compose your handlers the best way for any given part of your config, without being restricted to only a single paradigm.)</p>
+<p>If we use <code>route</code> instead:</p>
+<pre><code>:<span>80</span>
+
+encode gzip
+root * /Users/shared/server/components/web
+route {
+	reverse_proxy <span>/soc/</span>* <span>127.0</span><span>.0</span><span>.1</span>:<span>9710</span>
+	reverse_proxy <span>/api/</span>* <span>127.0</span><span>.0</span><span>.1</span>:<span>9720</span>
+	reverse_proxy <span>/fio/</span>* <span>127.0</span><span>.0</span><span>.1</span>:<span>9730</span>
+	try_files {path} /index.html
+	file_server browse
+}
+</code></pre>
+<p>This config is more concise, but we have to mind the exact order of each line, since the Caddyfile won’t rescue us if we get something out of order. It can also be a matter of preference: is it obvious to you that requests in <code>/soc/</code> will be handled by the first reverse proxy, and that none of the other directives after it will execute? We can use that guarantee to our advantage here, but it’s also not as visually clear.</p>
+<p>This also works because we guarantee that <code>try_files</code> isn’t run until <em>after</em> the reverse proxies have all been skipped.</p>
+<p>So, how you do it is up to you, as long as it is correct.</p>
+<h2>Summary</h2>
+<p>There are two basic ways to express web server configuration: <strong>behavior-first</strong> or <strong>routing-first</strong> paradigms.</p>
+<p><strong>Either directives are ordered and then grouped (behavior-first), or grouped and then ordered (routing-first).</strong></p>
+<p>Between the Caddyfile’s default <strong>behavior-first</strong> composition, and its support for <strong>routing-first</strong> composition, you can express many kinds of HTTP handling logic in a way that you find most suitable. This hybrid model results in leaner, more flexible configurations than other web servers allow, while also giving you manual control when you need it.</p>
+<p>Related reading:</p>
+<ul>
+<li><a href="https://caddy.community/t/v1-to-v2-rewrite-404-errors/7123/12">V1 to V2: rewrite 404 errors</a></li>
+<li><a href="https://caddy.community/t/cant-get-simple-alias-to-work/7911/10">Can't get simple alias to work</a></li>
+<li><a href="https://caddy.community/t/header-directive-is-not-mutually-exclusive/8146/12">Header directive is not mutually exclusive</a></li>
+<li><a href="https://github.com/caddyserver/caddy/issues/3108#issuecomment-593227715">https://github.com/caddyserver/caddy/issues/3108#issuecomment-593227715</a></li>
+</ul></div></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

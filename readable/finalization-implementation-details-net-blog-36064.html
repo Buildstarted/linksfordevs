@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Finalization implementation details | .NET Blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Finalization implementation details | .NET Blog - linksfor.dev(s)"/>
+    <meta property="article:author" content="Maoni StephensFollow Maoni"/>
+    <meta property="og:description" content="Years ago I wrote a document on making finalization scanning concurrent. At the time there was an internal team that was using finalization as a way to resurrect objects and putting them back in their cache. While we&#x2019;ve always advised to folks that finalization was for releasing native resources I couldn&#x2019;t fault this team for using it the way they did."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://devblogs.microsoft.com/dotnet/finalization-implementation-details/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Finalization implementation details | .NET Blog</title>
+<div class="readable">
+        <h1>Finalization implementation details | .NET Blog</h1>
+            <div>by Maoni StephensFollow Maoni</div>
+            <div>Reading time: 5-7 minutes</div>
+        <div>Posted here: 16 Sep 2019</div>
+        <p><a href="https://devblogs.microsoft.com/dotnet/finalization-implementation-details/">https://devblogs.microsoft.com/dotnet/finalization-implementation-details/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="featured"><div><div><div><div><p><img src="https://devblogs.microsoft.com/dotnet/wp-content/uploads/sites/10/2019/05/twitter-profile-150x150.jpg" width="58" height="58" alt="maoni"></p><p>Maoni</p></div></div></div><p>September 16th, 2019</p><p><span>Years ago I wrote a document on making finalization scanning concurrent. At the time there was an internal team that was using finalization as a way to resurrect objects and putting them back in their cache. While we’ve always advised to folks that finalization was for releasing native resources I couldn’t fault this team for using it the way they did. And of course finalization scanning was taking quite some time because well, there were so many finalizable objects to scan so I wanted to make this part concurrent. As part of the on-going latency reduction effort we’ve finally put this on the agenda. Of course between the time I wrote that doc and now, things have changed quite a bit and there are new considerations I have to make so I’m still thinking about the design. While I’m thinking about it I thought it would be interesting to explain some of the finalization implementation details so that’s what I’ll do in this blog entry. I’m in the process of working on a design doc for concurrent finalization scanning that I will be checking into the coreclr repo.</span></p><p><span>First of all I wanted to clarify some terminology. I’ve seen some confusing terms in various articles and books. So instead of using something that’s interpreted differently by different people I will just use the terms used in the GC code. </span></p><p><span>Internally we have a <a href="https://github.com/dotnet/coreclr/blob/master/src/gc/gcpriv.h#L3980" target="_blank">CFinalize</a> class that manages the finalization. The only consumers of this class are the GC itself and of course the finalizer thread. And there’s only one finalizer thread (over the years there were talks about having multiple finalizer threads but there wasn’t enough justification; I have heard that there’s usage that actually depends on the fact there’s only one finalizer thread. While we have no plans to make this multiple I would strong suggest against doing that). The finalizer thread runs at <code>THREAD_PRIORITY_HIGHEST</code>. And this is an important detail as it will have performance implications that I will mention below.</span></p><p><span>The <code>CFinalize</code> class has an array which we use to track all finalizable objects. And we divide this array into a few parts that I will call segs (as in segments, not to be confused with the GC heap segments). The array looks like this – from lower addresses to higher addresses:</span></p><p><span><code>Gen2 seg | Gen1 seg | Gen0 seg | Critical Finalizer seg | Finalizer seg | Free seg</code></span></p><p><span>(I’m just calling each portion a “seg” so it’s easier to refer to them)</span></p><p><span>The genX segs are to record finalizable objects that are still live, ie, either in the generation that GC hasn’t collected so all objects in those generations are live by definition, or is held live by user code. When GC discovers an object to be dead, it then promotes the object which means the object is now tracked by either the Critical Finalizer seg or the Finalizer seg which I will refer to as CF/F segs (this is what’s usually referred to as f-reachable). </span></p><p><span>When the finalizer thread actually runs finalizers they would pick them off from the CF/F segs. And the ones whose finalizers have been run are now tracked in the Free seg (although saying tracked can be misleading as currently we just treat this seg as “we no longer care about the objects in this seg” and the seg is really just to indicate the free slots we have in the array).</span></p><p><span>Within GC, each heap has its own <code>CFinalize</code> instance which is called <code>finalize_queue</code>. For lifetime tracking, GC does the following with <code>finalize_queue</code>:</span></p><ul><li><span>The CF/F segs are considered as a source of roots so they will be scanned to indicate which objects should be live. This is what <code>CFinalize::GcScanRoots</code> does. Because the finalizer thread runs at high priority, it’s very likely that there’s nothing here to scan because when we were done with the GC that discovered these objects and moved them to these segs, the finalizer thread was allowed to run and would’ve quickly finished running the finalizers (unless of course the finalizers were blocked for some reason – so there you go, another reason why it’s bad to have your finalizers block which means GC will need to scan the CF/F segs again).</span></li></ul><p><span><span>Of course there are other sources of roots like the stack or GC handles. After we are done marking all the objects held live, directly or indirectly by all those roots, we now have the full knowledge of object lifetime. </span></span></p><ul><li><span>Then we scan the genX segs to see which objects tracked there are dead, in other words, not promoted (<code>!IsPromoted(obj)</code>), and for those objects we need to promote them so the finalizers can run. So these newly promoted objects are promoted due to finalization. This is what <code>CFinalize::ScanForFinalization</code> does. There are exceptions to this – if it’s a <code>WeakReference</code> or `WeakReference&lt;T&gt;`, we just run what the finalizer is supposed to do (remember finalizers are written in managed code and run on the finalizer thread – we wouldn’t be running the finalizer the normal way when the EE is suspended) and *not* promote those objects ’cause now we have no reason to. This is a nice perf shortcut. The other exception is when the finalizer is suppressed.</span></li></ul><p><span>There’s another relevant thing to mention which is the short and long weak handles. These are the handle types we use in the runtime. They are exposed as <code>GCHandleType.Weak</code> and <code>GCHandleType.WeakTrackResurrection</code> respectively. Before we do <code>ScanForFinalization</code>, we null the target of short weak handles if the target object is not promoted. After <code>ScanForFinalization</code>, we do that for long weak handles. So what distinguishes these 2 handle types is the promotion due to finalization. </span></p></div></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

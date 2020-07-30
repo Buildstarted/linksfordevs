@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Compilers Do Static Analysis, They Just Don&#x27;t Tell You &#xB7; Peter Dimov - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Compilers Do Static Analysis, They Just Don&#x27;t Tell You &#xB7; Peter Dimov - linksfor.dev(s)"/>
+    <meta property="og:description" content="24 Jul 2020"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://pdimov.github.io/blog/2020/07/24/compilers-do-static-analysis/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Compilers Do Static Analysis, They Just Don&#x27;t Tell You &#xB7; Peter Dimov</title>
+<div class="readable">
+        <h1>Compilers Do Static Analysis, They Just Don&#x27;t Tell You &#xB7; Peter Dimov</h1>
+            <div>Reading time: 3-4 minutes</div>
+        <div>Posted here: 27 Jul 2020</div>
+        <p><a href="https://pdimov.github.io/blog/2020/07/24/compilers-do-static-analysis/">https://pdimov.github.io/blog/2020/07/24/compilers-do-static-analysis/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+        <div>
+  
+  <p><span>24 Jul 2020</span></p><p>Let’s take the following code:</p>
+
+<div><div><pre><code>int * f()
+{
+    int x = 2;
+    return &amp;x;
+}
+
+int g( int * p  )
+{
+    return 3 + *( p? f(): p );
+}
+</code></pre></div></div>
+
+<p>It has two errors in it. First, <code>f</code> returns a pointer to a local variable,
+which goes out of scope. Second, the check in <code>g</code> is reversed; in the case
+<code>p</code> is a null pointer, it dereferences it, instead of doing the opposite –
+dereference <code>p</code> only when it’s not null.</p>
+
+<p>This is what <a href="https://godbolt.org/z/rbn9KP">GCC emits</a> for <code>g</code>:</p>
+
+<div><div><pre><code>g(int*):
+        mov     eax, DWORD PTR ds:0
+        ud2
+</code></pre></div></div>
+
+<p>That is, it can obviously see that <code>g</code> will either dereference a null pointer
+(undefined behavior), or an invalid pointer (undefined behavior), so it generates
+code that dereferences a null pointer (<code>mov eax, [0]</code>), which crashes, and then
+emits the guaranteed-invalid instruction <code>ud2</code>, which crashes.</p>
+
+<p>(You can’t be too sure, is GCC’s motto.)</p>
+
+<p>And this is what <a href="https://godbolt.org/z/zW5dzY">Clang emits</a> for the same function:</p>
+
+
+
+<p>Presumably, the logic here is that one of the branches leads to undefined behavior,
+and the other also leads to undefined behavior, so we might as well remove the whole
+thing, it’s not going to get called anyway in a correct program. (But if it does, let’s
+just return, as crashing would be gauche.)</p>
+
+<p>Now, I don’t know about you, but I’m left wondering here; if the compilers can clearly
+see that all possible code paths through this function lead to undefined behavior,
+why don’t they <em>tell us that</em>? Something like “Warning: function invokes undefined behaviour
+on all control paths, you might want to check your code, mate”, except less formal.</p>
+
+<p>Who cares about that, some might say, nobody writes such code anyway, this will catch
+no bugs. Well, I have obviously oversimplified a bit. Let’s take a slightly more
+realistic example, such as this one:</p>
+
+<div><div><pre><code>int slice_sum( std::vector&lt;int&gt; const&amp; v, int i, int n )
+{
+    int s = 0;
+
+    for( int j = 0; j &lt; n; ++j )
+    {
+        assert( i+j &gt;= 0 );
+        assert( i+j &lt; v.size() );
+        
+        s += v[ i+j ];
+    }
+
+    return s;
+}
+
+int f()
+{
+    std::vector&lt;int&gt; v{ 1, 2, 3, 4 };
+    return slice_sum( v, 3, 2 );
+}
+</code></pre></div></div>
+
+<p>What does <a href="https://godbolt.org/z/5YGYYd">GCC do</a>?</p>
+
+<div><div><pre><code>.LC0:
+        .string "int slice_sum(const std::vector&lt;int&gt;&amp;, int, int)"
+.LC1:
+        .string "./example.cpp"
+.LC3:
+        .string "i+j &lt; v.size()"
+
+f():
+        sub     rsp, 8
+        mov     ecx, OFFSET FLAT:.LC0
+        mov     edx, 11
+        mov     esi, OFFSET FLAT:.LC1
+        mov     edi, OFFSET FLAT:.LC3
+        call    __assert_fail
+</code></pre></div></div>
+
+<p>Goes straight to <code>__assert_fail</code>, without passing Go and collecting $200.</p>
+
+<p>What does <a href="https://godbolt.org/z/aP5qEW">Clang do</a>? Same thing.</p>
+
+<p>Again, if the compilers can clearly see that calling <code>f</code> produces a guaranteed
+assertion failure, why don’t they tell us?</p>
+
+<p>Because we are put here on this planet to suffer, that is why.</p>
+
+<p>(Also because <code>assert</code> is a macro that the compilers do not even see, and they
+don’t know that <code>__assert_fail</code> is the assertion failure handler, and contracts,
+which would have allowed us to write <code>[[assert: i+j &lt; v.size()]]</code> , were removed
+from C++20 as being too useful, but those are just random second-order
+manifestations of the cosmic need for suffering.)</p>
+
+</div>
+
+<!--
+
+<div class="related">
+  <h2>Related posts</h2>
+  <ul class="related-posts">
+    
+    
+      <li>
+        <h3>
+          <a href="/blog/2020/07/23/tuple-in-a-tweet/">
+            Tuple in a Tweet
+            <small>23 Jul 2020</small>
+          </a>
+        </h3>
+      </li>
+    
+    
+    
+      <li>
+        <h3>
+          <a href="/blog/2020/07/22/a-c14-lambda-library/">
+            A C++14 Lambda Library
+            <small>22 Jul 2020</small>
+          </a>
+        </h3>
+      </li>
+    
+    
+    
+      <li>
+        <h3>
+          <a href="/blog/2020/07/21/implementing-visit_by_index/">
+            Implementing visit_by_index
+            <small>21 Jul 2020</small>
+          </a>
+        </h3>
+      </li>
+    
+    
+  </ul>
+</div>
+
+-->
+
+      </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

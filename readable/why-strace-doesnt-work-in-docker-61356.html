@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Why strace doesn&#x27;t work in Docker - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Why strace doesn&#x27;t work in Docker - linksfor.dev(s)"/>
+    <meta property="article:author" content="Julia Evans"/>
+    <meta property="og:description" content="While editing the capabilities page of the how containers work zine, I found myself trying to explain why strace doesn&#x2019;t work in a Docker container.&#xA;The problem here is &#x2013; if I run strace in a Docker container on my laptop, this happens:&#xA;$ docker run -it ubuntu:18.04 /bin/bash $ # ... install strace ... root@e27f594da870:/# strace ls strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted  strace works using the ptrace system call, so if ptrace isn&#x2019;t allowed, it&#x2019;s definitely not gonna work!"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://jvns.ca/blog/2020/04/29/why-strace-doesnt-work-in-docker/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Why strace doesn&#x27;t work in Docker</title>
+<div class="readable">
+        <h1>Why strace doesn&#x27;t work in Docker</h1>
+            <div>by Julia Evans</div>
+            <div>Reading time: 6-8 minutes</div>
+        <div>Posted here: 04 May 2020</div>
+        <p><a href="https://jvns.ca/blog/2020/04/29/why-strace-doesnt-work-in-docker/">https://jvns.ca/blog/2020/04/29/why-strace-doesnt-work-in-docker/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>While editing the capabilities page of the <a href="https://wizardzines.com/zines/containers">how containers work</a> zine, I found myself
+trying to explain why <code>strace</code> doesn’t work in a Docker container.</p>
+<p>The problem here is – if I run <code>strace</code> in a Docker container on my laptop, this happens:</p>
+<pre><code>$ docker run  -it ubuntu:18.04 /bin/bash
+$ # ... install strace ...
+root@e27f594da870:/# strace ls
+strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted
+</code></pre>
+<p>strace works using the <code>ptrace</code> system call, so if <code>ptrace</code> isn’t
+allowed, it’s definitely not gonna work! This is pretty easy to fix – on
+my machine, this fixes it:</p>
+<pre><code>docker run --cap-add=SYS_PTRACE  -it ubuntu:18.04 /bin/bash
+</code></pre>
+<p>But I wasn’t interested in fixing it, I wanted to know why it happens. So
+why does strace not work, and why does <code>--cap-add=SYS_PTRACE</code> fix it?</p>
+<h3 id="hypothesis-1-container-processes-are-missing-the-cap-sys-ptrace-capability">hypothesis 1: container processes are missing the <code>CAP_SYS_PTRACE</code> capability</h3>
+<p>I always thought the reason was that Docker container processes by
+default didn’t have the <code>CAP_SYS_PTRACE</code> capability. This is consistent
+with it being fixed by <code>--cap-add=SYS_PTRACE</code>, right?</p>
+<p>But this actually doesn’t make sense for 2 reasons.</p>
+<p><strong>Reason 1</strong>: Experimentally, as a regular user, I can strace on any process run by my
+user. But if I check if my current process has the <code>CAP_SYS_PTRACE</code> capability, I don’t:</p>
+<pre><code>$ getpcaps $$
+Capabilities for `11589': =
+</code></pre>
+<p><strong>Reason 2</strong>: <code>man capabilities</code> says this about <code>CAP_SYS_PTRACE</code>:</p>
+<pre><code>CAP_SYS_PTRACE
+       * Trace arbitrary processes using ptrace(2);
+</code></pre>
+<p>So the point of <code>CAP_SYS_PTRACE</code> is to let you ptrace <strong>arbitrary</strong>
+processes owned by any user, the way that root usually can. You shouldn’t
+need it to just ptrace a regular process owned by your user.</p>
+<p>And I tested this a third way – I ran a Docker container with <code>docker
+run --cap-add=SYS_PTRACE -it ubuntu:18.04 /bin/bash</code>, dropped the
+<code>CAP_SYS_PTRACE</code> capability, and I could still strace processes even
+though I didn’t have that capability anymore. What? Why?</p>
+<h3 id="hypothesis-2-something-about-user-namespaces">hypothesis 2: something about user namespaces???</h3>
+<p>My next (much less well-founded) hypothesis was something along the lines
+of “um, maybe the process is in a different user namespace and strace
+doesn’t work because of… reasons?” This isn’t really coherent but
+here’s what happened when I looked into it.</p>
+<p>Is the container process in a different user namespace? Well, in the container:</p>
+<pre><code>root@e27f594da870:/# ls /proc/$$/ns/user -l
+... /proc/1/ns/user -&gt; 'user:[4026531837]'
+</code></pre>
+<p>On the host:</p>
+<pre><code>bork@kiwi:~$ ls /proc/$$/ns/user -l
+... /proc/12177/ns/user -&gt; 'user:[4026531837]'
+</code></pre>
+<p>Because the user namespace ID (<code>4026531837</code>) is the same, the root user
+in the container is the exact same user as the root user on the host. So
+there’s definitely no reason it shouldn’t be able to strace processes
+that it created!</p>
+<p>This hypothesis doesn’t make much sense but I hadn’t realized that the
+root user in a Docker container is the same as the root user on the host,
+so I thought that was interesting.</p>
+<h3 id="hypothesis-3-the-ptrace-system-call-is-being-blocked-by-a-seccomp-bpf-rule">hypothesis 3: the ptrace system call is being blocked by a seccomp-bpf rule</h3>
+<p>I also knew that Docker uses seccomp-bpf to stop container processes from
+running a lot of system calls. And ptrace is in the <a href="https://docs.docker.com/engine/security/seccomp/">list of system calls
+blocked by Docker’s default seccomp
+profile</a>! (actually the
+list of allowed system calls is a whitelist, so it’s just that ptrace is
+not in the default whitelist. But it comes out to the same thing.)</p>
+<p>That easily explains why strace wouldn’t work in a Docker container – if
+the <code>ptrace</code> system call is totally blocked, then of course you can’t
+call it at all and strace would fail.</p>
+<p>Let’s verify this hypothesis – if we disable all seccomp rules, can we
+strace in a Docker container?</p>
+<pre><code>$ docker run --security-opt seccomp=unconfined -it ubuntu:18.04  /bin/bash
+$ strace ls
+execve("/bin/ls", ["ls"], 0x7ffc69a65580 /* 8 vars */) = 0
+... it works fine ...
+</code></pre>
+<p>Yes! It works! Great. Mystery solved, except…</p>
+<h3 id="why-does-cap-add-sys-ptrace-fix-the-problem">why does <code>--cap-add=SYS_PTRACE</code> fix the problem?</h3>
+<p>What we still haven’t explained is: why does <code>--cap-add=SYS_PTRACE</code> would
+fix the problem?</p>
+<p>The man page for <code>docker run</code> explains the <code>--cap-add</code> argument this way:</p>
+<pre><code>--cap-add=[]
+   Add Linux capabilities
+</code></pre>
+<p>That doesn’t have anything to do with seccomp rules! What’s going on?</p>
+<h3 id="let-s-look-at-the-docker-source-code">let’s look at the Docker source code.</h3>
+<p>When the documentation doesn’t help, the only thing to do is go look at
+the source.</p>
+<p>The nice thing about Go is, because dependencies are often vendored in a
+Go repository, you can just grep the repository to figure out where the
+code that does a thing is. So I cloned <code>github.com/moby/moby</code> and grepped
+for some things, like <code>rg CAP_SYS_PTRACE</code>.</p>
+<p>Here’s what I think is going on. In containerd’s seccomp implementation, in
+<a href="https://github.com/containerd/containerd/blob/4be98fa28b62e8a012491d655a4d6818ef87b080/contrib/seccomp/seccomp_default.go#L527-L537">contrib/seccomp/seccomp_default.go</a>,
+there’s a bunch of code that makes sure that if a process has a
+capability, then it’s also given access (through a seccomp rule) to use
+the system calls that go with that capability.</p>
+<pre><code>		case "CAP_SYS_PTRACE":
+			s.Syscalls = append(s.Syscalls, specs.LinuxSyscall{
+				Names: []string{
+					"kcmp",
+					"process_vm_readv",
+					"process_vm_writev",
+					"ptrace",
+				},
+				Action: specs.ActAllow,
+				Args:   []specs.LinuxSeccompArg{},
+			})
+</code></pre>
+<p>There’s some other code that seems to do something very similar in
+<a href="https://github.com/moby/moby/blob/cc0dfb6e7b22ad120c60a9ce770ea15415767cf9/profiles/seccomp/seccomp.go#L126-L132">profiles/seccomp/seccomp.go</a>
+in moby and the <a href="https://github.com/moby/moby/blob/master/profiles/seccomp/default.json#L723-L739">default seccomp
+profile</a>,
+so it’s possible that that’s what’s doing it instead.</p>
+<p>So I think we have our answer!</p>
+<h3 id="cap-add-in-docker-does-a-little-more-than-what-it-says"><code>--cap-add</code> in Docker does a little more than what it says</h3>
+<p>The upshot seems to be that <code>--cap-add</code> doesn’t do exactly what it says
+it does in the man page, it’s more like
+<code>--cap-add-and-also-whitelist-some-extra-system-calls-if-required</code>. Which makes
+sense! If you have a capability like <code>CAP_SYS_PTRACE</code> which is supposed
+to let you use the <code>process_vm_readv</code> system call but that system call is
+blocked by a seccomp profile, that’s not going to help you much!</p>
+<p>So allowing the <code>process_vm_readv</code> and <code>ptrace</code> system calls when you
+give the container <code>CAP_SYS_PTRACE</code> seems like a reasonable choice.</p>
+<h3 id="strace-actually-does-work-in-newer-versions-of-docker">strace actually does work in newer versions of Docker</h3>
+<p>As of <a href="https://github.com/moby/moby/commit/1124543ca8071074a537a15db251af46a5189907">this commit</a> (docker 19.03), Docker does actually allow the <code>ptrace</code> system calls for kernel versions newer than 4.8.</p>
+<p>But the Docker version on my laptop is 18.09.7, so it predates that commit.</p>
+<h3 id="that-s-all">that’s all!</h3>
+<p>This was a fun small thing to investigate, and I think it’s a nice
+example of how containers are made of lots of moving pieces that work
+together in not-completely-obvious ways.</p>
+<p>If you liked this, you might like my new zine called <a href="https://wizardzines.com/zines/containers">How Containers Work</a> that explains the Linux kernel features that make containers work in 24 pages. You can read the pages on <a href="https://wizardzines.com/comics/capabilities/">capabilities</a> and <a href="https://wizardzines.com/comics/seccomp-bpf/">seccomp-bpf</a> from the zine.</p>
+<p><a href="https://wizardzines.com/zines/containers"><img width="300px" src="https://jvns.ca/images/containers-cover.jpg"></a>
+</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

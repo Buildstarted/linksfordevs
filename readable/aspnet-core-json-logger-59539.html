@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+ASP.NET Core - JSON logger - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="ASP.NET Core - JSON logger - linksfor.dev(s)"/>
+    <meta property="article:author" content="G&#xE9;rald Barr&#xE9;"/>
+    <meta property="og:description" content="ASP.NET Core supports a logging API that works with a variety of built-in and third-party logging providers. The built-in providers allow to log to the console, the debug output or as ETW messages.&#xA;In my case I needed to output the messages and their associated data to console as JSON. This means I had to create a custom logger and integrate it in the ASP.NET Core application.&#xA;Let&#x27;s define the structure&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.meziantou.net/asp-net-core-json-logger.htm"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - ASP.NET Core - JSON logger</title>
+<div class="readable">
+        <h1>ASP.NET Core - JSON logger</h1>
+            <div>by G&#xE9;rald Barr&#xE9;</div>
+            <div>Reading time: 10-12 minutes</div>
+        <div>Posted here: 11 Mar 2020</div>
+        <p><a href="https://www.meziantou.net/asp-net-core-json-logger.htm">https://www.meziantou.net/asp-net-core-json-logger.htm</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody"><p>ASP.NET Core supports a logging API that works with a variety of built-in and third-party logging providers. The built-in providers allow to log to the console, the debug output or as ETW messages. In my case I needed to output the messages and their associated data to console as JSON. This means I had to create a custom logger and integrate it in the ASP.NET Core application.</p><p>Let's define the structure of a message:</p><pre><code><span>internal</span> <span>sealed</span> <span>class</span> <span>JsonLogEntry</span>
+<span>{</span>
+    <span>public</span> <span>DateTimeOffset</span> Timestamp <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>int</span> LogLevel <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>int</span> EventId <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> EventName <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> Category <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> Exception <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> Message <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> IDictionary<span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;</span> Scope <span>{</span> <span>get</span><span>;</span> <span>}</span> <span>=</span> <span>new</span> <span><span>Dictionary</span><span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;</span></span><span>(</span>StringComparer<span>.</span>Ordinal<span>)</span><span>;</span>
+<span>}</span></code></pre><p>Then, the logger can be implemented. The idea is to create a <code>JsonLogEntry</code> with the data of the message and then convert it to json.</p><pre><code><span>public</span> <span>sealed</span> <span>class</span> <span>JsonLogger</span> <span>:</span> <span>ILogger</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>TextWriter</span> _writer<span>;</span>
+    <span>private</span> <span>readonly</span> <span>string</span> _categoryName<span>;</span>
+
+    <span>internal</span> <span>IExternalScopeProvider</span> ScopeProvider <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+
+    <span>public</span> <span>JsonLogger</span><span>(</span><span>TextWriter</span> writer<span>,</span> <span>string</span> categoryName<span>,</span> <span>IExternalScopeProvider</span> scopeProvider<span>)</span>
+    <span>{</span>
+        _writer <span>=</span> writer<span>;</span>
+        _categoryName <span>=</span> categoryName<span>;</span>
+        ScopeProvider <span>=</span> scopeProvider<span>;</span>
+    <span>}</span>
+
+    <span>public</span> IDisposable <span><span>BeginScope</span><span>&lt;</span><span>TState</span><span>&gt;</span></span><span>(</span><span>TState</span> state<span>)</span> <span>=&gt;</span> ScopeProvider<span>?.</span><span>Push</span><span>(</span>state<span>)</span> <span>??</span> NullScope<span>.</span>Instance<span>;</span>
+
+    <span>public</span> <span>bool</span> <span>IsEnabled</span><span>(</span><span>LogLevel</span> logLevel<span>)</span> <span>=&gt;</span> logLevel <span>!=</span> LogLevel<span>.</span>None<span>;</span>
+
+    <span>public</span> <span>void</span> <span><span>Log</span><span>&lt;</span><span>TState</span><span>&gt;</span></span><span>(</span><span>LogLevel</span> logLevel<span>,</span> <span>EventId</span> eventId<span>,</span> <span>TState</span> state<span>,</span> <span>Exception</span> exception<span>,</span> Func<span>&lt;</span>TState<span>,</span> Exception<span>,</span> <span>string</span><span>&gt;</span> formatter<span>)</span>
+    <span>{</span>
+        <span>if</span> <span>(</span>formatter <span>is</span> <span>null</span><span>)</span>
+            <span>throw</span> <span>new</span> <span>ArgumentNullException</span><span>(</span><span>nameof</span><span>(</span>formatter<span>)</span><span>)</span><span>;</span>
+
+        <span>var</span> message <span>=</span> <span>new</span> <span>JsonLogEntry</span>
+        <span>{</span>
+            Timestamp <span>=</span> DateTime<span>.</span>UtcNow<span>,</span>
+            LogLevel <span>=</span> <span>(</span><span>int</span><span>)</span>logLevel<span>,</span>
+            EventId <span>=</span> eventId<span>.</span>Id<span>,</span>
+            EventName <span>=</span> eventId<span>.</span>Name<span>,</span>
+            Category <span>=</span> _categoryName<span>,</span>
+            Exception <span>=</span> exception<span>?.</span><span>ToString</span><span>(</span><span>)</span><span>,</span>
+            Message <span>=</span> <span>formatter</span><span>(</span>state<span>,</span> exception<span>)</span><span>,</span>
+        <span>}</span><span>;</span>
+
+        <span>// Append the data of all BeginScope and LogXXX parameters to the message dictionary</span>
+        <span>AppendScope</span><span>(</span>message<span>.</span>Scope<span>,</span> state<span>)</span><span>;</span>
+        <span>AppendScope</span><span>(</span>message<span>.</span>Scope<span>)</span><span>;</span>
+
+        _writer<span>.</span><span>WriteLine</span><span>(</span>JsonConvert<span>.</span><span>SerializeObject</span><span>(</span>message<span>,</span> Formatting<span>.</span>None<span>)</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>private</span> <span>void</span> <span>AppendScope</span><span>(</span>IDictionary<span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;</span> dictionary<span>)</span>
+    <span>{</span>
+        ScopeProvider<span>.</span><span>ForEachScope</span><span>(</span><span>(</span>scope<span>,</span> state<span>)</span> <span>=&gt;</span> <span>AppendScope</span><span>(</span>state<span>,</span> scope<span>)</span><span>,</span> dictionary<span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>private</span> <span>static</span> <span>void</span> <span>AppendScope</span><span>(</span>IDictionary<span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;</span> dictionary<span>,</span> <span>object</span> scope<span>)</span>
+    <span>{</span>
+        <span>if</span> <span>(</span>scope <span>==</span> <span>null</span><span>)</span>
+            <span>return</span><span>;</span>
+
+        <span>// The scope can be defined using BeginScope or LogXXX methods.</span>
+        <span>// - logger.BeginScope(new { Author = "meziantou" })</span>
+        <span>// - logger.LogInformation("Hello {Author}", "meziaantou")</span>
+        <span>// Using LogXXX, an object of type FormattedLogValues is created. This type is internal but it implements IReadOnlyList, so we can use it.</span>
+        <span>// https://github.com/aspnet/Extensions/blob/cc9a033c6a8a4470984a4cc8395e42b887c07c2e/src/Logging/Logging.Abstractions/src/FormattedLogValues.cs</span>
+        <span>if</span> <span>(</span>scope <span>is</span> IReadOnlyList<span>&lt;</span>KeyValuePair<span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;&gt;</span> formattedLogValues<span>)</span>
+        <span>{</span>
+            <span>if</span> <span>(</span>formattedLogValues<span>.</span>Count <span>&gt;</span> <span>0</span><span>)</span>
+            <span>{</span>
+                <span>foreach</span> <span>(</span><span>var</span> <span>value</span> <span>in</span> formattedLogValues<span>)</span>
+                <span>{</span>
+                    <span>// MethodInfo is set by ASP.NET Core when reaching a controller. This type cannot be serialized using JSON.NET, but I don't need it.</span>
+                    <span>if</span> <span>(</span><span>value</span><span>.</span><span>Value</span> <span>is</span> MethodInfo<span>)</span>
+                        <span>continue</span><span>;</span>
+
+                    dictionary<span>[</span><span>value</span><span>.</span>Key<span>]</span> <span>=</span> <span>value</span><span>.</span>Value<span>;</span>
+                <span>}</span>
+            <span>}</span>
+        <span>}</span>
+        <span>else</span>
+        <span>{</span>
+            <span>// The idea is to get the value of all properties of the object and add them to the dictionary.</span>
+            <span>//      dictionary["Prop1"] = scope.Prop1;</span>
+            <span>//      dictionary["Prop2"] = scope.Prop2;</span>
+            <span>//      ...</span>
+            <span>// We always log the same objects, so we can create a cache of compiled expressions to fill the dictionary.</span>
+            <span>// Using reflection each time would slow down the logger.</span>
+            <span>var</span> appendToDictionaryMethod <span>=</span> ExpressionCache<span>.</span><span>GetOrCreateAppendToDictionaryMethod</span><span>(</span>scope<span>.</span><span>GetType</span><span>(</span><span>)</span><span>)</span><span>;</span>
+            <span>appendToDictionaryMethod</span><span>(</span>dictionary<span>,</span> scope<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    <span>// In ASP.NET Core 3.0 this classes is now internal. This means you need to add it to your code.</span>
+    <span>private</span> <span>sealed</span> <span>class</span> <span>NullScope</span> <span>:</span> <span>IDisposable</span>
+    <span>{</span>
+        <span>public</span> <span>static</span> <span>NullScope</span> Instance <span>{</span> <span>get</span><span>;</span> <span>}</span> <span>=</span> <span>new</span> <span>NullScope</span><span>(</span><span>)</span><span>;</span>
+        <span>private</span> <span>NullScope</span><span>(</span><span>)</span> <span>{</span> <span>}</span>
+        <span>public</span> <span>void</span> <span>Dispose</span><span>(</span><span>)</span> <span>{</span> <span>}</span>
+    <span>}</span>
+
+    <span>// Create and cache compiled expression to fill the dictionary from an object</span>
+    <span>private</span> <span>static</span> <span>class</span> <span>ExpressionCache</span>
+    <span>{</span>
+        <span>public</span> <span>delegate</span> <span>void</span> <span>AppendToDictionary</span><span>(</span>IDictionary<span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;</span> dictionary<span>,</span> <span>object</span> o<span>)</span><span>;</span>
+
+        <span>private</span> <span>static</span> <span>readonly</span> ConcurrentDictionary<span>&lt;</span>Type<span>,</span> AppendToDictionary<span>&gt;</span> s_typeCache <span>=</span> <span>new</span> <span><span>ConcurrentDictionary</span><span>&lt;</span><span>Type</span><span>,</span> <span>AppendToDictionary</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+        <span>private</span> <span>static</span> <span>readonly</span> <span>PropertyInfo</span> _dictionaryIndexerProperty <span>=</span> <span>GetDictionaryIndexer</span><span>(</span><span>)</span><span>;</span>
+
+        <span>public</span> <span>static</span> <span>AppendToDictionary</span> <span>GetOrCreateAppendToDictionaryMethod</span><span>(</span><span>Type</span> type<span>)</span>
+        <span>{</span>
+            <span>return</span> s_typeCache<span>.</span><span>GetOrAdd</span><span>(</span>type<span>,</span> t <span>=&gt;</span> <span>CreateAppendToDictionaryMethod</span><span>(</span>t<span>)</span><span>)</span><span>;</span>
+        <span>}</span>
+
+        <span>private</span> <span>static</span> <span>AppendToDictionary</span> <span>CreateAppendToDictionaryMethod</span><span>(</span><span>Type</span> type<span>)</span>
+        <span>{</span>
+            <span>var</span> dictionaryParameter <span>=</span> Expression<span>.</span><span>Parameter</span><span>(</span><span>typeof</span><span>(</span>IDictionary<span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;</span><span>)</span><span>,</span> <span>"dictionary"</span><span>)</span><span>;</span>
+            <span>var</span> objectParameter <span>=</span> Expression<span>.</span><span>Parameter</span><span>(</span><span>typeof</span><span>(</span><span>object</span><span>)</span><span>,</span> <span>"o"</span><span>)</span><span>;</span>
+
+            <span>var</span> castedParameter <span>=</span> Expression<span>.</span><span>Convert</span><span>(</span>objectParameter<span>,</span> type<span>)</span><span>;</span> <span>// cast o to the actual type</span>
+
+            <span>// Create setter for each properties</span>
+            <span>// dictionary["PropertyName"] = o.PropertyName;</span>
+            <span>var</span> properties <span>=</span> type<span>.</span><span>GetProperties</span><span>(</span>BindingFlags<span>.</span>Instance <span>|</span> BindingFlags<span>.</span>Public <span>|</span> BindingFlags<span>.</span>FlattenHierarchy<span>)</span><span>;</span>
+            <span>var</span> setters <span>=</span>
+                <span>from</span> prop <span>in</span> properties
+                <span>where</span> prop<span>.</span><span>CanRead</span>
+                <span>let</span> indexerExpression <span>=</span> Expression<span>.</span><span>Property</span><span>(</span>dictionaryParameter<span>,</span> _dictionaryIndexerProperty<span>,</span> Expression<span>.</span><span>Constant</span><span>(</span>prop<span>.</span>Name<span>)</span><span>)</span>
+                <span>let</span> getExpression <span>=</span> Expression<span>.</span><span>Property</span><span>(</span>castedParameter<span>,</span> prop<span>.</span>GetMethod<span>)</span>
+                <span>select</span> Expression<span>.</span><span>Assign</span><span>(</span>indexerExpression<span>,</span> getExpression<span>)</span><span>;</span>
+
+            <span>var</span> body <span>=</span> <span>new</span> <span><span>List</span><span>&lt;</span><span>Expression</span><span>&gt;</span></span><span>(</span>properties<span>.</span>Count <span>+</span> <span>1</span><span>)</span><span>;</span>
+            body<span>.</span><span>Add</span><span>(</span>castedParameter<span>)</span><span>;</span>
+            body<span>.</span><span>AddRange</span><span>(</span>setters<span>)</span><span>;</span>
+
+            <span>var</span> lambdaExpression <span>=</span> Expression<span>.</span><span><span>Lambda</span><span>&lt;</span><span>AppendToDictionary</span><span>&gt;</span></span><span>(</span>Expression<span>.</span><span>Block</span><span>(</span>body<span>)</span><span>,</span> dictionaryParameter<span>,</span> objectParameter<span>)</span><span>;</span>
+            <span>return</span> lambdaExpression<span>.</span><span>Compile</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span>
+
+        <span>// Get the PropertyInfo for IDictionary&lt;string, object&gt;.this[string key]</span>
+        <span>private</span> <span>static</span> <span>PropertyInfo</span> <span>GetDictionaryIndexer</span><span>(</span><span>)</span>
+        <span>{</span>
+            <span>var</span> indexers <span>=</span> <span>from</span> prop <span>in</span> <span>typeof</span><span>(</span>IDictionary<span>&lt;</span><span>string</span><span>,</span> <span>object</span><span>&gt;</span><span>)</span><span>.</span><span>GetProperties</span><span>(</span>BindingFlags<span>.</span>Instance <span>|</span> BindingFlags<span>.</span>Public<span>)</span>
+                           <span>let</span> indexParameters <span>=</span> prop<span>.</span><span>GetIndexParameters</span><span>(</span><span>)</span>
+                           <span>where</span> indexParameters<span>.</span>Length <span>==</span> <span>1</span> <span>&amp;&amp;</span> <span>typeof</span><span>(</span><span>string</span><span>)</span><span>.</span><span>IsAssignableFrom</span><span>(</span>indexParameters<span>[</span><span>0</span><span>]</span><span>.</span>ParameterType<span>)</span>
+                           <span>select</span> prop<span>;</span>
+
+            <span>return</span> indexers<span>.</span><span>Single</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+<span>}</span></code></pre><p>To integrate the logger in ASP.NET, you need to implement the <code>ILoggerProvider</code> interface. This interface contains only one method: <code>CreateLogger(string categoryName)</code>. This method returns an instance of <code>ILogger</code>. To not instantiate to much objects, you can use a dictionary to store existing instances and reuse them when needed.</p><pre><code><span>public</span> <span>sealed</span> <span>class</span> <span>JsonLoggerProvider</span> <span>:</span> <span>ILoggerProvider</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>LoggerExternalScopeProvider</span> _scopeProvider <span>=</span> <span>new</span> <span>LoggerExternalScopeProvider</span><span>(</span><span>)</span><span>;</span>
+    <span>private</span> <span>readonly</span> ConcurrentDictionary<span>&lt;</span><span>string</span><span>,</span> JsonLogger<span>&gt;</span> _loggers <span>=</span> <span>new</span> <span><span>ConcurrentDictionary</span><span>&lt;</span><span>string</span><span>,</span> <span>JsonLogger</span><span>&gt;</span></span><span>(</span>StringComparer<span>.</span>Ordinal<span>)</span><span>;</span>
+
+    <span>public</span> <span>ILogger</span> <span>CreateLogger</span><span>(</span><span>string</span> categoryName<span>)</span>
+    <span>{</span>
+        <span>return</span> _loggers<span>.</span><span>GetOrAdd</span><span>(</span>categoryName<span>,</span> category <span>=&gt;</span> <span>new</span> <span>JsonLogger</span><span>(</span>Console<span>.</span>Out<span>,</span> category<span>,</span> _scopeProvider<span>)</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>Dispose</span><span>(</span><span>)</span>
+    <span>{</span>
+    <span>}</span>
+<span>}</span></code></pre><p>Finally, you can integrate the logger in the ASP.NET Core. Open the <code>Program.cs</code> file and edit the main method to replace existing loggers by the JSON logger.</p><pre><code><span>// In ASP.NET Core 2</span>
+<span>public</span> <span>static</span> <span>IWebHostBuilder</span> <span>CreateWebHostBuilder</span><span>(</span><span>string</span><span>[</span><span>]</span> args<span>)</span> <span>=&gt;</span>
+    WebHost<span>.</span><span>CreateDefaultBuilder</span><span>(</span>args<span>)</span>
+        <span>.</span><span>ConfigureLogging</span><span>(</span><span>(</span>host<span>,</span> builder<span>)</span> <span>=&gt;</span>
+        <span>{</span>
+            <span>// Register json logger in non-development environments only.</span>
+            <span>if</span> <span>(</span><span>!</span>host<span>.</span>HostingEnvironment<span>.</span><span>IsDevelopment</span><span>(</span><span>)</span><span>)</span>
+            <span>{</span>
+                <span>// Remove default loggers</span>
+                <span>foreach</span> <span>(</span><span>var</span> s <span>in</span> builder<span>.</span>Services<span>.</span><span>Where</span><span>(</span>service <span>=&gt;</span> service<span>.</span>ServiceType <span>==</span> <span>typeof</span><span>(</span>ILoggerProvider<span>)</span><span>)</span><span>.</span><span>ToList</span><span>(</span><span>)</span><span>)</span>
+                <span>{</span>
+                    builder<span>.</span>Services<span>.</span><span>Remove</span><span>(</span>s<span>)</span><span>;</span>
+                <span>}</span>
+
+                builder<span>.</span>Services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>ILoggerProvider</span><span>,</span> <span>JsonLoggerProvider</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span><span>)</span>
+        <span>.</span><span><span>UseStartup</span><span>&lt;</span><span>Startup</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+<span>// In .NET Core 3.0</span>
+<span>public</span> <span>static</span> <span>IHostBuilder</span> <span>CreateHostBuilder</span><span>(</span><span>string</span><span>[</span><span>]</span> args<span>)</span> <span>=&gt;</span>
+    Host<span>.</span><span>CreateDefaultBuilder</span><span>(</span>args<span>)</span>
+        <span>.</span><span>ConfigureLogging</span><span>(</span><span>(</span>host<span>,</span> builder<span>)</span> <span>=&gt;</span>
+        <span>{</span>
+            <span>// Register json logger in non-development environments only.</span>
+            <span>if</span> <span>(</span><span>!</span>host<span>.</span>HostingEnvironment<span>.</span><span>IsDevelopment</span><span>(</span><span>)</span><span>)</span>
+            <span>{</span>
+                <span>// Remove default loggers</span>
+                <span>foreach</span> <span>(</span><span>var</span> s <span>in</span> builder<span>.</span>Services<span>.</span><span>Where</span><span>(</span>service <span>=&gt;</span> service<span>.</span>ServiceType <span>==</span> <span>typeof</span><span>(</span>ILoggerProvider<span>)</span><span>)</span><span>.</span><span>ToList</span><span>(</span><span>)</span><span>)</span>
+                <span>{</span>
+                    builder<span>.</span>Services<span>.</span><span>Remove</span><span>(</span>s<span>)</span><span>;</span>
+                <span>}</span>
+
+                builder<span>.</span>Services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>ILoggerProvider</span><span>,</span> <span>JsonLoggerProvider</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>}</span>
+        <span>}</span><span>)</span>
+        <span>.</span><span>ConfigureWebHostDefaults</span><span>(</span>webBuilder <span>=&gt;</span>
+        <span>{</span>
+            webBuilder<span>.</span><span><span>UseStartup</span><span>&lt;</span><span>Startup</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            webBuilder<span>.</span><span>UseKestrel</span><span>(</span>options <span>=&gt;</span> options<span>.</span>AddServerHeader <span>=</span> <span>false</span><span>)</span><span>;</span>
+        <span>}</span><span>)</span><span>;</span></code></pre><p>That's it. The application now outputs logs as JSON in the console.</p><p><a href="https://www.meziantou.net/assets/jsonloggerconsole-1.png?v=d158b5f0&amp;utm_medium=social&amp;utm_source=web"><img src="https://www.meziantou.net/assets/jsonloggerconsole-1.png?v=d158b5f0&amp;utm_medium=social&amp;utm_source=web" width="800" height="418" srcset="/assets/jsonloggerconsole-1-th-w500-h0.png?v=325ae46b&amp;utm_medium=social&amp;utm_source=web 500w,/assets/jsonloggerconsole-1-th-w800-h0.png?v=e83d118d&amp;utm_medium=social&amp;utm_source=web 800w,/assets/jsonloggerconsole-1.png?v=d158b5f0&amp;utm_medium=social&amp;utm_source=web 979w" sizes="100vw"></a></p> <p>Do you have a question or a suggestion about this post? <a href="https://www.meziantou.net/contact.htm?utm_medium=social&amp;utm_source=web">Contact me!</a></p></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

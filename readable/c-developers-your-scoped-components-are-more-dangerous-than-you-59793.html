@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+C# developers! Your scoped components are more dangerous than you... - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="C# developers! Your scoped components are more dangerous than you... - linksfor.dev(s)"/>
+    <meta property="article:author" content="Jonathan George"/>
+    <meta property="og:description" content="There are hidden pitfalls with dependency injection, particularly when managing the lifetime of scoped components. What is safe? And are there other approaches we can take to managing scoped object lifetimes? #csharp #dependencyinjection"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blogs.endjin.com/2020/03/csharp-scoped-di-components-are-dangerous/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - C# developers! Your scoped components are more dangerous than you...</title>
+<div class="readable">
+        <h1>C# developers! Your scoped components are more dangerous than you...</h1>
+            <div>by Jonathan George</div>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 18 Mar 2020</div>
+        <p><a href="https://blogs.endjin.com/2020/03/csharp-scoped-di-components-are-dangerous/">https://blogs.endjin.com/2020/03/csharp-scoped-di-components-are-dangerous/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+            <section>       
+  <article>
+  
+        
+    <header> 
+      
+      <!--<div class="blog-avatar">
+       <img alt='' src='https://secure.gravatar.com/avatar/a606bce947438d8a4c1352122e573311?s=64&#038;r=g' srcset='https://secure.gravatar.com/avatar/a606bce947438d8a4c1352122e573311?s=128&#038;r=g 2x' class='avatar avatar-64 photo' height='64' width='64' nopin="nopin" />      </div>-->
+      
+       <hgroup>
+          
+          <h2><time datetime="2020-03-13" pubdate="">March 13, 2020</time> by Jonathan George</h2>
+      </hgroup>
+    </header>
+            
+    
+<!-- wpsso schema image for pinterest pin it button -->
+<!-- .wpsso-schema-image-for-pinterest -->
+
+<p><img src="https://blogs.endjin.com/wp-content/uploads/2020/01/header-request-scoped-components-P1-1024px.png" alt="Request-scoped components should be considered dangerous in DI"></p>
+<p>For a long time, we have had a ban on using request-scoped components in our DI. We happen to be using <code>Microsoft.Extensions.DependencyInjection</code> (which I’m going to call MSEDI because why not), but the reasoning is generally applicable.</p>
+<p>Recently, we diverged from this rule, because it looked like a good solution to making various types of “request-specific” information to components, and hacked together a proof-of-concept.</p>
+<p>However, it neatly illustrated the reason why we deprecated it in the first place.</p>
+<p>The problem is with the permitted dependencies. Here they are:</p>
+<p><img src="https://blogs.endjin.com/wp-content/uploads/2020/01/Example-of-different-DI-dependencies-2.svg" alt="Example of different DI dependencies"></p>
+<p>All is well until you try to make a singleton component depend on a scoped component. That’s clearly not going to work, because your singleton is created…well “at some point”…from the root container, along with its dependencies. But how do we resolve the scoped component?</p>
+<p>Exactly what happens depends on the particular container implementation, but with MSEDI, it just silently “works”. For some values of “works”. There are all the right types instantiated…but not necessarily from the scope we require<a href="#ref1">[1]</a>.</p>
+<p>Imagine you are building a component that depends on a component you register from another subsystem. If you restricted yourself to singleton and transient dependencies, this will always be OK. (Providing you are OK with a constructor-injected transient in a singleton effectively becoming a singleton itself <strong>for that particular singleton</strong> – other components will get their own instance.)</p>
+<p>However, if that subsystem has a transient that itself adds a dependency on a scoped component in its implementation <strong>without changing its public interface</strong> that is, in fact, a breaking change. And one that you will only pick up at runtime, when the components that are resolved are not the ones you expect.</p>
+<p><img src="https://blogs.endjin.com/wp-content/uploads/2020/01/Example-of-different-DI-dependencies-between-subsystems-1.svg" alt="Example of different DI dependencies between subsystems"></p>
+<p>So, we are probably in one of these situations:</p>
+<ul>
+<li>the person who resolved the component wasn’t thinking about scopes, and so wasn’t expecting a scope</li>
+<li>the person who resolved the component was thinking about scopes and since they are attempting to resolve a component they know to be a singleton, they were expecting there not to be a scope</li>
+<li>the person who resolved the component was thinking about scopes, and didn’t think they thing they were resolving was a singleton because they know it has scoped dependencies, and so they were expecting that entire subtree of dependencies to belong to the current scope</li>
+</ul>
+<p>Not very pleasant!</p>
+<p>But clearly, request-scoped components are really useful. When we were discussing this internally, there were two arguments in favour of scoped components:</p>
+<ol>
+<li>AspNetCore manages to use them, and they can be useful for sharing resources that are intrinsically bound to a scope, and are expensive to create.</li>
+<li>It is complex, but the complexity is somewhat akin to that of async code; once you use scoped dependencies, you are “all in” on thinking about its implications. Once you make your leaf functions async, the whole stack above you must become async, and that is (broadly) true of scoped dependencies too.</li>
+</ol>
+<p>Point 1 has some force. Clearly it is <strong>possible</strong> to get it to work. And very useful if you can.</p>
+<p>But point 2 illustrates why it can be dangerous. Writing async code is hard, and <strong>everyone knows it</strong>. Whereas consuming components from a DI container is comparatively easy and <strong>everyone knows that too</strong>. If we suddenly subvert those expectations by introducing scoped components, we are far more likely to introduce subtle bugs for which developers are not on alert.</p>
+<p>This makes it sound like a people problem, rather than a technology problem, and that is, of course, true of most development challenges. And it is not a long-term argument against using scoped components. The analogy with async is a good one – it is hard to retrofit good async practices into an existing codebase precisely because it becomes pervasive, and the same is true of scoped components. But in a greenfield project, you can engineer those practices in from the beginning.</p>
+<p>That said, there is also a technical challenge – the containers themselves do not necessarily help us with “doing the right thing”; finding out that we are misconfigured is a subtle challenge. It leads to the big yellow warning boxes we see in the <a href="https://docs.microsoft.com/en-gb/aspnet/core/fundamentals/dependency-injection?view=aspnetcore-3.1#service-lifetimes" target="_blank" rel="noopener noreferrer">aspnetcore documentation</a>, for example.</p>
+<p>Now, it is not impossible to address this with run-time help. My colleague <a href="https://twitter.com/idg10">@ian.griffiths</a> quickly crufted up this example to illustrate that container validation can “just work”.</p>
+<div id="gist100729686">
+    <div>
+      <div>
+        <div>
+  <div id="file-servicecollectioncheckerextensions-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L1" data-line-number="1"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC1"><span>using</span> <span>System</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L2" data-line-number="2"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC2"><span>using</span> <span>System</span>.<span>Collections</span>.<span>Generic</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L3" data-line-number="3"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC3"><span>using</span> <span>System</span>.<span>Collections</span>.<span>Immutable</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L4" data-line-number="4"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC4"><span>using</span> <span>System</span>.<span>Linq</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L5" data-line-number="5"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC5"><span>using</span> <span>Microsoft</span>.<span>Extensions</span>.<span>DependencyInjection</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L6" data-line-number="6"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC6">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L7" data-line-number="7"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC7"><span>namespace</span> <span>DITest</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L8" data-line-number="8"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC8">{</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L9" data-line-number="9"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC9">    <span>public</span> <span>static</span> <span>class</span> <span>ServiceCollectionCheckerExtensions</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L10" data-line-number="10"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC10">    {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L11" data-line-number="11"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC11">        <span>public</span> <span>static</span> <span>void</span> <span>CheckMyDependenciesArentBonkers</span>(<span>this</span> <span>IServiceCollection</span> <span>services</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L12" data-line-number="12"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC12">        {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L13" data-line-number="13"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC13">            <span>_</span> <span>=</span> <span>services</span>.<span>Aggregate</span>(<span>ImmutableDictionary</span>&lt;<span>Type</span>, <span>ServiceLifetime</span>&gt;.<span>Empty</span>, (<span>d</span>, <span>sd</span>) <span>=&gt;</span> <span>CharacteriseService</span>(<span>services</span>, <span>sd</span>, <span>d</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L14" data-line-number="14"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC14">        }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L15" data-line-number="15"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC15">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L16" data-line-number="16"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC16">        <span>private</span> <span>static</span> <span>ImmutableDictionary</span>&lt;<span>Type</span>, <span>ServiceLifetime</span>&gt; <span>CharacteriseService</span>(<span>IServiceCollection</span> <span>services</span>, <span>ServiceDescriptor</span> <span>sd</span>, <span>ImmutableDictionary</span>&lt;<span>Type</span>, <span>ServiceLifetime</span>&gt; <span>alreadyCharacterised</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L17" data-line-number="17"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC17">        {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L18" data-line-number="18"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC18">            <span>if</span> (<span>alreadyCharacterised</span>.<span>ContainsKey</span>(<span>sd</span>.<span>ServiceType</span>))</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L19" data-line-number="19"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC19">            {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L20" data-line-number="20"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC20">                <span>return</span> <span>alreadyCharacterised</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L21" data-line-number="21"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC21">            }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L22" data-line-number="22"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC22">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L23" data-line-number="23"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC23">            <span>if</span> (<span>IsLeaf</span>(<span>sd</span>))</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L24" data-line-number="24"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC24">            {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L25" data-line-number="25"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC25">                <span>return</span> <span>alreadyCharacterised</span>.<span>Add</span>(<span>sd</span>.<span>ServiceType</span>, <span>sd</span>.<span>Lifetime</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L26" data-line-number="26"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC26">            }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L27" data-line-number="27"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC27">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L28" data-line-number="28"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC28">            <span>IEnumerable</span>&lt;<span>Type</span>&gt; <span>dependencyServiceTypes</span> <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L29" data-line-number="29"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC29">                (<span>from</span> <span>ctor</span> <span>in</span> <span>sd</span>.<span>ImplementationType</span>.<span>GetConstructors</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L30" data-line-number="30"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC30">                 <span>from</span> <span>ctorParam</span> <span>in</span> <span>ctor</span>.<span>GetParameters</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L31" data-line-number="31"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC31">                 <span>select</span> <span>ctorParam</span>.<span>ParameterType</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L32" data-line-number="32"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC32">                 .<span>Distinct</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L33" data-line-number="33"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC33">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L34" data-line-number="34"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC34">            <span>IEnumerable</span>&lt;<span>ServiceDescriptor</span>&gt; <span>dependencies</span> <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L35" data-line-number="35"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC35">                <span>from</span> <span>dependencyServiceType</span> <span>in</span> <span>dependencyServiceTypes</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L36" data-line-number="36"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC36">                <span>from</span> <span>descriptor</span> <span>in</span> <span>GetServiceDescriptorsForDependencyServiceType</span>(<span>services</span>, <span>dependencyServiceType</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L37" data-line-number="37"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC37">                <span>select</span> <span>descriptor</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L38" data-line-number="38"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC38">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L39" data-line-number="39"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC39">            <span>alreadyCharacterised</span> <span>=</span> <span>dependencies</span>.<span>Aggregate</span>(<span>alreadyCharacterised</span>, (<span>d</span>, <span>dependentServiceDescriptor</span>) <span>=&gt;</span> <span>CharacteriseService</span>(<span>services</span>, <span>dependentServiceDescriptor</span>, <span>d</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L40" data-line-number="40"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC40">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L41" data-line-number="41"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC41">            <span>var</span> <span>invalidDependencies</span> <span>=</span> <span>dependencies</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L42" data-line-number="42"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC42">                .<span>Where</span>(<span>dependentServiceDescriptor</span> <span>=&gt;</span> <span>!</span><span>DependencyIsValid</span>(<span>sd</span>.<span>Lifetime</span>, <span>alreadyCharacterised</span>[<span>dependentServiceDescriptor</span>.<span>ServiceType</span>]))</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L43" data-line-number="43"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC43">                .<span>ToList</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L44" data-line-number="44"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC44">            <span>if</span> (<span>invalidDependencies</span>.<span>Count</span> <span>&gt;</span> <span>0</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L45" data-line-number="45"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC45">            {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L46" data-line-number="46"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC46">                <span>var</span> <span>invalidMessages</span> <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L47" data-line-number="47"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC47">                    <span>from</span> <span>invalidDependency</span> <span>in</span> <span>invalidDependencies</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L48" data-line-number="48"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC48">                    <span>select</span> <span><span>$"</span>{<span>sd</span>.<span>ImplementationType</span>} ({<span>sd</span>.<span>Lifetime</span>}) depends on {<span>invalidDependency</span>.<span>ServiceType</span>} ({<span>invalidDependency</span>.<span>Lifetime</span>})<span>"</span></span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L49" data-line-number="49"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC49">                <span>throw</span> <span>new</span> <span>InvalidOperationException</span>(<span><span>"</span>One or more invalid dependencies: <span>"</span></span> <span>+</span> <span>string</span>.<span>Join</span>(<span><span>"</span>, <span>"</span></span>, <span>invalidMessages</span>));</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L50" data-line-number="50"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC50">            }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L51" data-line-number="51"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC51">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L52" data-line-number="52"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC52">            <span>return</span> <span>alreadyCharacterised</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L53" data-line-number="53"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC53">        }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L54" data-line-number="54"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC54">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L55" data-line-number="55"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC55">        <span>private</span> <span>static</span> <span>bool</span> <span>DependencyIsValid</span>(<span>ServiceLifetime</span> <span>consumerLifetime</span>, <span>ServiceLifetime</span> <span>dependencyLifetime</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L56" data-line-number="56"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC56">        {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L57" data-line-number="57"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC57">            <span>return</span> (<span>consumerLifetime</span>, <span>dependencyLifetime</span>) <span>switch</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L58" data-line-number="58"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC58">            {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L59" data-line-number="59"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC59">                (ServiceLifetime.<span>Scoped</span>, <span>_</span>) <span>=&gt;</span> <span>true</span>,</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L60" data-line-number="60"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC60">                (ServiceLifetime.<span>Transient</span>, ServiceLifetime.<span>Transient</span>) <span>=&gt;</span> <span>true</span>,</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L61" data-line-number="61"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC61">                (ServiceLifetime.<span>Transient</span>, ServiceLifetime.<span>Singleton</span>) <span>=&gt;</span> <span>true</span>,</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L62" data-line-number="62"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC62">                (ServiceLifetime.<span>Singleton</span>, ServiceLifetime.<span>Singleton</span>) <span>=&gt;</span> <span>true</span>,</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L63" data-line-number="63"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC63">                <span>_</span> <span>=&gt;</span> <span>false</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L64" data-line-number="64"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC64">            };</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L65" data-line-number="65"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC65">        }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L66" data-line-number="66"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC66">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L67" data-line-number="67"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC67">        <span>private</span> <span>static</span> <span>bool</span> <span>IsLeaf</span>(<span>ServiceDescriptor</span> <span>sd</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L68" data-line-number="68"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC68">        {</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L69" data-line-number="69"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC69">            <span>return</span> <span>sd</span>.<span>ImplementationInstance</span> <span>!=</span> <span>null</span> <span>||</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L70" data-line-number="70"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC70">                <span>sd</span>.<span>ImplementationType</span>.<span>GetConstructors</span>().<span>All</span>(<span>ctor</span> <span>=&gt;</span> <span>ctor</span>.<span>GetParameters</span>().<span>Length</span> <span>==</span> <span>0</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L71" data-line-number="71"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC71">        }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L72" data-line-number="72"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC72">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L73" data-line-number="73"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC73">        <span>private</span> <span>static</span> <span>IEnumerable</span>&lt;<span>ServiceDescriptor</span>&gt; <span>GetServiceDescriptorsForDependencyServiceType</span>(<span>IServiceCollection</span> <span>services</span>, <span>Type</span> <span>serviceType</span>) <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L74" data-line-number="74"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC74">            <span>serviceType</span>.<span>IsGenericType</span> <span>&amp;&amp;</span> <span>serviceType</span>.<span>GetGenericTypeDefinition</span>() <span>==</span> <span>typeof</span>(<span>IEnumerable</span>&lt;&gt;)</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L75" data-line-number="75"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC75">                <span>?</span> <span>GetServiceDescriptorsForDependencyServiceTypeCore</span>(<span>services</span>, <span>serviceType</span>.<span>GetGenericArguments</span>()[<span>0</span>]) <span><span>//</span> Not recursing because we don't want to flatten IEnumerable&lt;IEnumerable&lt;T&gt;&gt; out to T</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L76" data-line-number="76"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC76">                <span>:</span> <span>GetServiceDescriptorsForDependencyServiceTypeCore</span>(<span>services</span>, <span>serviceType</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L77" data-line-number="77"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC77">
+</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L78" data-line-number="78"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC78">        <span>private</span> <span>static</span> <span>IEnumerable</span>&lt;<span>ServiceDescriptor</span>&gt; <span>GetServiceDescriptorsForDependencyServiceTypeCore</span>(<span>IServiceCollection</span> <span>services</span>, <span>Type</span> <span>serviceType</span>) <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L79" data-line-number="79"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC79">            <span>services</span>.<span>Where</span>(<span>sd</span> <span>=&gt;</span> <span>sd</span>.<span>ServiceType</span> <span>==</span> <span>serviceType</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L80" data-line-number="80"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC80">    }</td>
+      </tr>
+      <tr>
+        <td id="file-servicecollectioncheckerextensions-cs-L81" data-line-number="81"></td>
+        <td id="file-servicecollectioncheckerextensions-cs-LC81">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+<p><strong>(Notice that it lacks support for e.g. factory methods, or any notion of testing – please don’t use it in production code!)</strong></p>
+<p>This code introduces an exception at the point of configuration (usually app start-up) if we have a “surprising” dependency tree, and it gives us a (runtime) path to discovering that we were not necessarily configured the way we expected. The danger described above is limited to start-up and should be detected by the most rudimentary of smoke tests.</p>
+<p>That approach goes a long way towards addressing my concerns. But are there other approaches to sharing scoped/contextual information that we might use?</p>
+<p>One that I found very interesting is used by AspNetCore. There is a type in the dotnet framework called <a href="https://docs.microsoft.com/en-us/dotnet/api/system.threading.asynclocal-1?view=netstandard-2.1"><code>AsyncLocal</code></a>. This is akin to <code>ThreadLocal</code> which you may have come across before. Instead of scoping to the current thread, it scopes to the current async context. Aspnet’s <code>IHttpContextAccessor</code> implementation uses an <code>AsyncLocal</code> to scope the <code>HttpContext</code> instance to the request. Clearly, this relies on the fact that the request itself is scoped to an async context.</p>
+<p>With this approach, the complexity is hidden inside the component – whoever built it needs to understand the async application model quite deeply. But from a consumer’s point of view, the <code>IHttpContextAccessor</code> is a simple singleton, and it “just works” – there are no implementation details leaked to the outside.</p>
+<p>On the other hand, those implementation details are really quite gnarly and, from the outside, it amounts to “a magic box”; those magic boxes are initially very attractive, but often cause future pain when the need to understand them properly arises.</p>
+<p>So, what’s my conclusion after all this narrative?</p>
+<p>Without additional framework support for misconfigured dependencies, scoped components are too dangerous for mere mortals like ourselves. And even with that support (and an outright ban is no longer necessary!) we have to treat them with the same kind of care we would take when structuring our async code.</p>
+<p><span id="ref1">[1]</span> You can actually get exceptions in some environments (e.g. resolving components during aspnetcore application startup) – but in the general case, it silently “does its best”.</p>
+
+    <div>
+    <h3>About the author</h3>
+    <p><img alt="" src="https://secure.gravatar.com/avatar/a606bce947438d8a4c1352122e573311?s=128&amp;r=g" srcset="https://secure.gravatar.com/avatar/a606bce947438d8a4c1352122e573311?s=256&amp;r=g 2x" height="128" width="128" nopin="nopin" id="grav-a606bce947438d8a4c1352122e573311-0">    </p>
+    <p>
+        <em>Jon is an experienced project lead and architect who has spent nearly 20 years delivering industry-leading solutions for clients across multiple industries including oil and gas, retail, financial services and healthcare. At endjin, he helps clients take advantage of the huge opportunities presented by cloud technologies to better understand and grow their businesses.</em>
+    </p>
+    </div>
+    
+    
+      
+    
+  </article>
+
+            </section>
+
+            <!-- EOF intro container -->
+        </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Using dotTrace and dotMemory for production analysis on Linux - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Using dotTrace and dotMemory for production analysis on Linux - linksfor.dev(s)"/>
+    <meta property="og:description" content="Recently JetBrains announce that dotTrace and dotMemory supports profiling applications on Linux. We have been testing these out for production usage, analyz..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ayende.com/blog/190689-B/using-dottrace-and-dotmemory-for-production-analysis-on-linux"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Using dotTrace and dotMemory for production analysis on Linux</title>
+<div class="readable">
+        <h1>Using dotTrace and dotMemory for production analysis on Linux</h1>
+            <div>Reading time: 5-6 minutes</div>
+        <div>Posted here: 28 Apr 2020</div>
+        <p><a href="https://ayende.com/blog/190689-B/using-dottrace-and-dotmemory-for-production-analysis-on-linux">https://ayende.com/blog/190689-B/using-dottrace-and-dotmemory-for-production-analysis-on-linux</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+        <p>Recently JetBrains announce that dotTrace and dotMemory supports <a href="https://www.jetbrains.com/profiler/whatsnew/">profiling applications on Linux</a>. We have been testing these out for production usage, analyzing production scenarios and have been finding (and fixing) issues with about an order of magnitude less work and hassle. I have been a fan of JetBrains for over 15 years and they have been providing excellent software for a long time. So why this post (and no, this isn’t an ad and we are paying for a subscription to JetBrains for all our devs). </p><p>I’m <em>super</em> excited about being able to profile on Linux, because this is where most of our customers are now running. Before, we had to use arcane tooling and try to figure things out. With better tools, we are able to pinpoint issues almost immediately. </p><p>Here is the result of a single profiling session:</p><p><img alt="image" src="https://user-images.githubusercontent.com/116915/80068210-e20e9480-8547-11ea-9992-7f5ac39619be.png"></p><p>Here, we create a new List and then called ToArray() on it. All we had to do here was just create the array upfront, without going through resize and additional allocations. </p><p><img alt="image" src="https://user-images.githubusercontent.com/116915/80068400-39ad0000-8548-11ea-834b-998c415a454b.png"></p><p>Here we had to do a much move involved operation, remembering values across transactions to reduce load. Note how much time we saved! </p><p>And of course, just as important:</p><p><img alt="image" src="https://user-images.githubusercontent.com/116915/80068416-42053b00-8548-11ea-83fd-4f51872d5dcd.png"></p><p>We tried to optimize an operation. It looks like it didn’t work out exactly as expected, so we need to take additional look at that. </p><p>These are about performance,&nbsp; but even more important here is the ability to track memory and its sources. We were able to identify multiple places where we are using too much memory. In some cases, this is about configuration options. In one such case, limiting the amount of memory that we speculatively hold back resulted in a reduction of memory utilization over time from 3.5 GB to 800 MB. And these are much harder to figure out, because it is very hard to see the full picture.</p><p>Another factor that became obvious is that RavenDB’s current infrastructure was written in 2015 / 2016. The lowest pieces of the code were written on what was then called DNX. It was written to be high performance and stable. We didn’t have to touch it much ever since. Profiling memory utilization showed us that we hold a large number of values in the large object heap. This is because we need to have a byte[] that we can also send to native code, so we need to pin it. That was because we needed to call some methods, such as Stream.Read(byte[], int,int()&nbsp; and then process it using raw pointers. </p><p>When the code was written, that was the only choice. Allocate it on the large object heap ( to reduce fragmentation) and run with it. Now, however, we have Memory&lt;byte&gt; and Span&lt;byte&gt;, which are much easier to work with for this scenario, so we can discard this specific feature and optimize our memory utilization further. </p><p>I don’t think we would have gotten to this without the profiler point a big red blinking arrow at the issue. And here is another good example, here is the memory state of RavenDB from dotTrace after running a benchmark consisting of a hundred thousands queries with javascript projections, this one:</p><p><a href="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_4.png"><img width="334" height="98" title="image" alt="image" src="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_thumb_1.png"></a></p><p>And here is the state:</p><p><a href="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_2.png"><img width="556" height="202" title="image" alt="image" src="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_thumb.png"></a></p><p>That is… interesting. Why do we have so many? The JavaScript engine is single threaded, but we have concurrent queries, so we use multiple such engines. We cache them, so we have:</p><p><a href="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_10.png"><img width="497" height="30" title="image" alt="image" src="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_thumb_4.png"></a></p><p>And the mechanism there to clean them up will not be triggered normally. So we have this needlessly around. After fixing the cache eviction logic, we get:</p><p><a href="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_12.png"><img width="668" height="183" title="image" alt="image" src="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_thumb_5.png"></a></p><p>Looking at the byte arrays here, we can track this down further, to see that the root cause is the pinning buffer I spoke about earlier. We’re handling that fix in a different branch, so this is pretty good sign that we are done with this kind of benchmark.</p><p><a href="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_14.png"><img width="420" height="120" title="image" alt="image" src="https://ayende.com/blog/Images/Open-Live-Writer/Using-dotTrace-and-dotMemory-for-product_A0E3/image_thumb_6.png"></a></p><p>The down sides dotTrace and dotMemory, exist. On Linux, dotTrace only supports sampling, not tracing. That sounds like a minor issue, but it means that when I’m running the same benchmark, I’m missing something that I find critical. The number of times a method was run. If a method is taking 50% of the runtime, but it is invoked hundred millions times, I need a very different approach from something that happens three times. The lack on tracing option with number of times the methods were called is a real issue for my usual workflow.</p><p>For dotMemory, if you have a <em>highly</em> connected graph (for example, a doubly linked list) and a <em>lot</em> of objects, the amount of resources that it takes to analyze the process is huge. I deployed a cloud machine with 128 GB of RAM and 32 cores to try to analyze an 18 GB process dump. That wasn’t sufficient to give all the details, sadly. It was still able to provide me with enough so I could figure out what the issue was, though.</p><p>Another issue is that the visuals are amazing, but when I have a 120 millions links in a node, trying to represent that in the UI is a hopeless cause. I wish that there was a way to dump to text the same information that dotMemory provides. That would allow to analyze ridiculous amount of information in a structured manner.</p>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

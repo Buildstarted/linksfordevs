@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Jasper&#x2019;s Efficient and Flexible Roslyn-Powered Execution Pipeline - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Jasper&#x2019;s Efficient and Flexible Roslyn-Powered Execution Pipeline - linksfor.dev(s)"/>
+    <meta property="article:author" content="by jeremydmiller"/>
+    <meta property="og:description" content="You&#x2019;ll need to pull the very latest code from the sample application linked to in this post because of course I found some bugs by dog-fooding while writing this:/ This is an update to a post&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://jeremydmiller.com/2020/04/23/jaspers-efficient-and-flexible-roslyn-powered-execution-pipeline/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Jasper&#x2019;s Efficient and Flexible Roslyn-Powered Execution Pipeline</title>
+<div class="readable">
+        <h1>Jasper&#x2019;s Efficient and Flexible Roslyn-Powered Execution Pipeline</h1>
+            <div>by by jeremydmiller</div>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 24 Apr 2020</div>
+        <p><a href="https://jeremydmiller.com/2020/04/23/jaspers-efficient-and-flexible-roslyn-powered-execution-pipeline/">https://jeremydmiller.com/2020/04/23/jaspers-efficient-and-flexible-roslyn-powered-execution-pipeline/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+			<p data-adtags-visited="true"><strong>You’ll need to pull the very latest code from the sample application linked to in this post because of course I found some bugs by dog-fooding while writing this:/</strong></p>
+<p data-adtags-visited="true"><em>This is an update to a post from a couple years ago called <a href="https://jeremydmiller.com/2018/01/11/jaspers-roslyn-powered-special-sauce/">Jasper’s Roslyn-Powered “Special Sauce.”</a> You can also find more information about Lamar’s code generation and runtime compilation support from my <a href="https://www.youtube.com/watch?v=wPlfHrdjMMA&amp;t=376s">Dynamic Runtime Code with Roslyn</a> talk at London NDC 2019.</em></p>
+<p data-adtags-visited="true">The more or less accepted understanding of a “framework” as opposed to a “library” is that a framework calls your application code (the <a href="https://wiki.c2.com/?HollywoodPrinciple">Hollywood Principle</a>). To be useful, frameworks should be dealing with cross cutting infrastructure concerns like security, data marshaling, or error handling. At some point, frameworks have to have some way to call <em>your</em> application code.</p>
+<p data-adtags-visited="true">Since generics were introduced way back in .Net 3.5, many .Net frameworks have used what I call the “IHandler of T” approach where you are almost inevitably asked to implement a common <a href="https://www.martinfowler.com/eaaCatalog/layerSupertype.html">layer supertype</a> interface like this:</p>
+<pre>public interface IHandler
+{
+    Task Handle(T message, IContext context);
+{</pre>
+<p data-adtags-visited="true">From a framework author’s perspective, this is easy to implement, and most modern IoC frameworks have reasonably strong support for generic types (like <a href="https://jasperfx.github.io/lamar/documentation/ioc/generics/">Lamar generic types support</a> for example). Off the top of my head, NServiceBus, MassTransit, and MediatR are examples of this approach (my recollection is that NServiceBus did this first and I distinctly remember Udi Dahan describing this years ago at an <span>ALT.Net</span> event).</p>
+<p data-adtags-visited="true">The other general approach I’ve seen — and what Jasper itself uses — is to have a framework call your code through some kind of dynamic code that adapts the signature of your code to the shape or interface that the framework needs. <span>ASP.Net</span> MVC Core <code>Controller</code> methods are an example of this approach. Here’s a sample controller method to demonstrate this:</p>
+<pre>public class WithResponseController : ControllerBase
+{
+    private readonly ICommandBus _bus;
+
+    public WithResponseController(ICommandBus bus)
+    {
+        _bus = bus;
+    } 
+    
+    // MVC Core calls this method, and uses the signature
+    // and attributes like the [FromBody] to "know" how
+    // to call this code at runtime
+    [HttpPost("/items/create2")]
+    public Task Create([FromBody] CreateItemCommand command)
+    {
+        // Using Jasper as a Mediator, and receive the
+        // expected response from Jasper
+        return _bus.Invoke(command);
+    }
+}</pre>
+<p data-adtags-visited="true">To add some more complexity to designing frameworks, there’s also the issue of how you can <span>combine the basic handlers with some sort of </span><a href="http://codebetter.com/jeremymiller/2011/01/09/fubumvcs-internal-runtime-the-russian-doll-model-and-how-it-compares-to-asp-net-mvc-and-openrasta/">Russian Doll middleware</a><span> approach to handle cross cutting concerns. There’s a couple ways to handle this:</span></p>
+<ul>
+<li>If a framework uses the “IHandler of T” approach, folks often try to use the decorator pattern to wrap the inner “IHandler”. This approach can lead to folks crashing and burning by getting way too complex with generic constraints. It can also lead to some pretty severe levels of object allocations and garbage collection thrashing from the sheer number of objects being created and discarded. To add more fuel to the fire, this approach can easily lead to absurdly large stack trace exceptions that can be very intimidating to parse for the average developer.</li>
+<li><span>ASP.Net</span> Core’s middleware approach through functional composition. This can also lead to some dramatically bad stack traces and similar issues with object allocation.</li>
+<li>Do some runtime code generation to piece together the middleware. I believe that NServiceBus does this internally with its version of <a href="https://docs.particular.net/nservicebus/pipeline/manipulate-with-behaviors">Behaviors</a>.</li>
+</ul>
+<p data-adtags-visited="true">Lastly, most .Net web, service bus, or command execution frameworks use some sort of <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection?view=aspnetcore-3.1">scoped IoC container</a> (<a href="https://jasperfx.github.io/lamar/documentation/ioc/nested-containers/">nested container</a> in Lamar or StructureMap parlance) per request or command execution to deal with object scoping and cleanup or disposal in their execution pipelines.</p>
+<h3>Jasper’s Unique Approach</h3>
+<p data-adtags-visited="true">Jasper was originally conceived and planned as a replacement to the older <a href="https://fubumvc.github.io/">FubuMVC</a> project (but it’s gone off in different directions later of course). As a framework, some of FubuMVC’s design goals were to:</p>
+<ol>
+<li>Minimize the amount of framework artifacts (interfaces, base classes, attributes, et al) in your application code — and it generally succeeded at that</li>
+<li>Provide a very strong model for composable middleware (what we called Behaviors) in the runtime pipeline — which also succeeded in terms of capability, but at runtime it was extremely inefficient, object allocations were off the charts, the IoC integration was complex, and the exception stack traces when things went wrong were epically big.</li>
+</ol>
+<p data-adtags-visited="true">With Jasper, the initial goals were to recreate the “cleanliness” of the application code and the flexibility of FubuMVC’s “Russian Doll” approach, but do so in a way that was much more efficient at runtime. And because this actually matters quite a bit, make sure that any exceptions thrown out of application code while running within Jasper have minimal exception stack traces for easier troubleshooting.</p>
+<p data-adtags-visited="true">Roslyn introduced support for <a href="https://jeremydmiller.com/2015/11/11/using-roslyn-for-runtime-code-generation-in-marten/">compiling C# code at runtime</a>. Some time in 2015 I was in the office with some of the old FubuMVC core contributors and drew up on the whiteboard a new approach where we’d generate C# code at application bootstrapping time to weave in both the calls to the application code and designated middleware.</p>
+<p data-adtags-visited="true">Later on, I expanded that vision to try to also encompass the object construction and cleanup functionality of an IoC container in the same generated code. The result of that initial envisioning has become the combination of <a href="https://jasperfx.github.io/">Jasper</a> and <a href="https://jasperfx.github.io/lamar">Lamar</a>, where Jasper actually uses Lamar’s registration model to try to generate and inline the functionality that would normally be done at runtime through an IoC container. The theory here being that the fasted IoC container is no IoC container.</p>
+<p data-adtags-visited="true">Alright, to make this concrete, let’s see how this plays out in real usage. In my last post, <a href="https://jeremydmiller.com/2020/04/21/introducing-jasper-as-an-in-process-command-bus-for-net/">Introducing Jasper as an In Process Command Bus for&nbsp;.Net</a>, I demonstrated a small message handler in <a href="https://github.com/JasperFx/JasperSamples/tree/master/InMemoryMediator">a sample Jasper application</a> with this code (I’ve stripped out the original comments to make it smaller):</p>
+<pre>public class ItemHandler
+{
+    [Transactional]
+    public static ItemCreated Handle(
+        CreateItemCommand command,
+        ItemsDbContext db)
+    {
+        var item = new Item
+        {
+            Name = <span>command.Name</span>
+        };
+
+        <span>db.Items.Add(item</span>);
+
+        return new ItemCreated
+        {
+            Id = <span>item.Id</span>
+        };
+    }
+}</pre>
+<p data-adtags-visited="true">The code above is meant to:</p>
+<ol>
+<li>Create a new <code>Item</code> entity based on the incoming <code>CreateItemCommand</code></li>
+<li>Persist that new <code>Item</code> with Entity Framework Core</li>
+<li>Publish a new <code>ItemCreated</code> event message to be handled somewhere else (how that happens isn’t terribly important for this blog post)</li>
+</ol>
+<p data-adtags-visited="true">And lastly, the [Transactional] attribute tells Jasper to apply its transactional middleware and outbox support to the message handler, such that a single database commit will save both the new <code>Item</code> entity and do the “store” part of a “<a href="https://en.wikipedia.org/wiki/Store_and_forward">store and forward</a>” operation to send out the <a href="http://jasperfx.github.io/documentation/execution/cascading/">cascading</a> <code>ItemCreated</code> event.</p>
+<p data-adtags-visited="true">Internally, Jasper is going to generate a new class that inherits from this base class (slightly simplified):</p>
+<pre>public abstract class MessageHandler
+{
+    public abstract Task Handle(
+        IMessageContext context, 
+        CancellationToken cancellation
+    );
+}</pre>
+<p data-adtags-visited="true">For that <code>ItemHandler</code> class shown up above in the sample application, Jasper is generating and compiling through Roslyn this (butt ugly, but remember that it’s generated) class:</p>
+<pre>    public class InMemoryMediator_Items_CreateItemCommand : Jasper.Runtime.Handlers.MessageHandler
+    {
+        private readonly Microsoft.EntityFrameworkCore.DbContextOptions _dbContextOptions;
+
+        public InMemoryMediator_Items_CreateItemCommand(Microsoft.EntityFrameworkCore.DbContextOptions dbContextOptions)
+        {
+            _dbContextOptions = dbContextOptions;
+        }
+
+
+
+        public override async Task Handle(Jasper.IMessageContext context, System.Threading.CancellationToken cancellation)
+        {
+            var createItemCommand = (<span>InMemoryMediator.Items.CreateItemCommand)context.Envelope.Message</span>;
+            using (var itemsDbContext = new <span>InMemoryMediator.Items.ItemsDbContext(_dbContextOptions</span>))
+            {
+                // Enroll the DbContext &amp; IMessagingContext in the outgoing Jasper outbox transaction
+                await Jasper.Persistence.EntityFrameworkCore.JasperEnvelopeEntityFrameworkCoreExtensions.EnlistInTransaction(context, itemsDbContext);
+                var itemCreated = <span>InMemoryMediator.Items.ItemHandler.Handle(createItemCommand</span>, itemsDbContext);
+                // Outgoing, cascaded message
+                await context.EnqueueCascading(itemCreated);
+                // Added by EF Core Transaction Middleware
+                var result_of_SaveChangesAsync = await itemsDbContext.SaveChangesAsync(cancellation);
+            }
+
+        }
+
+    }
+
+</pre>
+<p data-adtags-visited="true"><em>If you want, you can see the raw code at any time by executing the <code>dotnet run -- codegen</code> command from the <a href="https://github.com/JasperFx/JasperSamples/tree/master/InMemoryMediator">root of the sample project</a>.</em></p>
+<p data-adtags-visited="true">So here’s what I’m claiming is the advantage of Jasper’s approach:</p>
+<ul>
+<li>Allows your application code to be “clean” of framework artifacts and much more decoupled from Jasper than you can achieve with many other application frameworks like MVC Core</li>
+<li>Using the diagnostic commands to dump out the generated source code in the application, <strong>Jasper can tell you exactly how it’s handling a message at runtime</strong></li>
+<li>By just generating Poor Man’s Dependency Injection code to build up the EF Core dependency and also to deal with disposing it later, the generated code eliminates any need to use the IoC container at runtime. And even for the very fastest IoC container in the world — and Lamar isn’t a slouch on the performance side of things — pure dependency injection is faster. Do mote that Jasper + Lamar can’t do this for every possible message handler and will have to revert to a scoped container per message with service location in some circumstances, usually because of a scoped or transient Lambda service registration or <code>internal</code>&nbsp;types.</li>
+<li>The generated code minimizes the number of object allocations compared to a typical .Net framework that depends on adapter types</li>
+<li>Jasper will allow you to use either synchronous or asynchronous handlers as appropriate for your use case, so no wasted keystrokes typing out <code>return Task.CompletedTask;</code> littering up your code.</li>
+<li>The stack traces are pretty clean and you’ll see effectively nothing related to Jasper in logged exceptions except for the outermost frame where the generated <code>MessageHandler.Handle()</code> method is called.</li>
+<li>Some other .Net frameworks try to do what Jasper does conceptually by trying to generate <code>Expression</code> trees and compile those down to <code>Func</code> objects. I’ve certainly done that in other tools (Lamar, StructureMap, <a href="https://martendb.io/">Marten</a>), but that’s rarified air that most developers can’t deal with. It’s also batshit insane for async heavy code like you’ll inevitably hit with anything that involves IO these days. My theory, yet to be proven, is that by relying on C#, Jasper’s middleware approach will be much more approachable to whatever community Jasper attracts down the line.</li>
+</ul>
+
+<p data-adtags-visited="true">For some follow up reading if you’re interested:</p>
+<ul>
+<li><a href="https://jasperfx.github.io/lamar/documentation/compilation/">LamarCodeGeneration</a> is the library Jasper uses to generate the C# code at runtime. <a href="https://jasperfx.github.io/lamar/documentation/compilation/assemblygenerator/">LamarCompiler</a> is a separate library that wraps up the Roslyn runtime compilation and makes it easy to use and to load the resulting generated assemblies and types.</li>
+<li>
+<p><a href="https://jeremydmiller.com/2018/05/16/roslyn-powered-code-weaving-middleware/">Roslyn Powered Code Weaving Middleware</a> — another older version of this post</p>
+</li>
+</ul>
+			
+			
+								</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

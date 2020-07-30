@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Inigo Quilez :: fractals, computer graphics, mathematics, shaders, demoscene and more - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Inigo Quilez :: fractals, computer graphics, mathematics, shaders, demoscene and more - linksfor.dev(s)"/>
+    <meta property="article:author" content="Inigo Quilez"/>
+    <meta property="og:description" content="Tutorials and articles of Inigo Quilez on computer graphics, fractals, demoscene, shaders and more."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://iquilezles.org/www/articles/sdfbounding/sdfbounding.htm"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Inigo Quilez :: fractals, computer graphics, mathematics, shaders, demoscene and more</title>
+<div class="readable">
+        <h1>Inigo Quilez :: fractals, computer graphics, mathematics, shaders, demoscene and more</h1>
+            <div>by Inigo Quilez</div>
+            <div>Reading time: 14-17 minutes</div>
+        <div>Posted here: 27 Aug 2019</div>
+        <p><a href="http://iquilezles.org/www/articles/sdfbounding/sdfbounding.htm">http://iquilezles.org/www/articles/sdfbounding/sdfbounding.htm</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="content">
+
+<h3>Intro</h3><hr>
+<p>
+When <a href="http://iquilezles.org/www/articles/raymarchingdf/raymarchingdf.htm">raymarching SDFs</a>, or when combining regular GL/DX/VK rasterization with SDF for shadows, occlusion or collision, often times one finds that the SDF evaluation is too expensive. That can be even more true for SDFs that are fully made of <a href="http://iquilezles.org/www/articles/distfunctions/distfunctions.htm">procedural primitives</a> or when they are evaluated for a 3D mesh with lots of triangles.</p><p>
+
+In my Shadertoy experiments, often times I embrace the limitation and design my scenes and world accordingly, which means I often create simple shapes rather than the complex ones I'd love to do. However, it is not a bad idea to use simple Bounding Volumes around complex SDF objects in order to avoid evaluating the full SDF when it's not needed. This reduces complexity of the overall SDF evaluation and works pretty well in most platforms (specially those in which branching is not too expensive).</p><p>
+
+This article describes a couple simple techniques I have used in the past that work well, and some quick experiments on more advanced ones involving acceleration structures that can inspire you to build more sophisticated ones perhaps.</p><center>
+<div>
+<p><img src="http://iquilezles.org/www/articles/sdfbounding/gfx00a.jpg"><br>Simple Bounding Volume for raymarching</p>
+<p><img src="http://iquilezles.org/www/articles/sdfbounding/gfx00b.jpg"><br>Bounding Volume Hierarchy for raymarching</p>
+<p><img src="http://iquilezles.org/www/articles/sdfbounding/gfx00c.jpg"><br>KD-Tree for raymarching</p>
+</div>
+</center>
+
+<h3>Basic Bounding Volumes</h3><hr>
+<p>
+So, lets take a complex object (say, a character), which could be defined as follows:</p><p>float sdCharacter( in vec3 pos, in float minDist )
+{
+    float d1 = sdHead( pos ); 
+    float d2 = sdBody( pos ); 
+    float d3 = sdLegs( pos ); 
+    float d4 = sdArms( pos ); 
+	
+    float dT = min(min(d1,d2),min(d3,d4));
+	
+    if( dT&lt;minDist ) minDist = dT;
+	
+    return minDist;
+}
+</p>
+<p>
+First, note I have used a branch in the last distance comparison to exemplify that actually often times you want to track not only proximity but material id and surfacing properties, which needs a branch and cannot be done with the simple union operator min().</p><p>
+
+Now we are going to doing the simplest thing we can imagine: define a sphere that completely bounds the character, and check the distance to that sphere first before we evaluate any of the character parts. If the current closest distance to the global SDF before evaluating the character, minDist, is already smaller than the distance to the bounding sphere, there's no need to evaluate any of the character's SDF parts at all, since none of the partial distances d1 to d4 can possibly be smaller than minDist. Let's see what it'd looks like in code:</p><p>float sdCharacter( in vec3 pos, in float minDist )
+{
+    
+    float dB = sdSphere( pos, boundingSphereRadious );
+    if( dB&gt;minDist ) return minDist;
+	
+    
+    float d1 = sdHead( pos ); 
+    float d2 = sdBody( pos ); 
+    float d3 = sdLegs( pos ); 
+    float d4 = sdArms( pos ); 
+	
+    float dT = min(min(d1,d2),min(d3,d4));
+	
+    if( dT&lt;minDist ) minDist = dT;
+	
+    return minDist;
+}
+</p>
+<p>
+
+A trick I want to share for those hacking Shadertoy SDFs, but not worth doing in other contexts, is the following: probably some primitive of some of the character parts can be repurposed as the actual bounding volume, after expansion. Say sdBody() had a big sphere evaluation inside of it that defines the shape of the belly, or torso, or something. Then, we could evaluate that sdSphere right-away as first thig in sdCharacter(), and then add a fixed distance that would inflate the sphere's radius to match our bounding needs. The addition would be done only for the bounding volume evaluation, the actual sdSphere() call inside sdBody() would stay unchanged since otherwise we'd naturally be changing the shape of the character. This of course works best when the SDF we are bounding is not very modularized into different sub-SDFs as this one example above is, since that optimization would break quite a good deal of code modularity. But sometimes it can be helpful, and I have actually used this technique to get a 8x speed up in the rendering of the expensive character in the video below (which you can also find live and with full source code in Shadertoy: <a href="https://www.shadertoy.com/view/3lsSzf">https://www.shadertoy.com/view/3lsSzf</a>).</p><div>
+<p><iframe src="https://www.youtube.com/embed/s_UOFo2IULQ" frameborder="0" allowfullscreen=""></iframe></p>
+<p><i>Using a Bounding Volume to speed up the evaluation of a character</i>
+</p></div>
+<p>
+
+
+Of course, the bound volumes don't need to be closed shapes like spheres and boxes, they can also be half spaces. That can be especially handy if the SDF to be bound is infinite, such as ground geometries. In that case, a horizontal plane right above the highest feature of the ground (pebble, rock, bush) can serve as a very effective bounding volume to prevent evaluation of the complex ground SDF when the evaluation is happening a few meters above it and we've already found some close geometry such as a tree or a character.</p><h3>Recursive Bounding Volumes</h3><hr>
+<p>
+Naturally, like many things in computer graphics, a problem can be split into smaller problems, allowing it to scale to bigger datasets. In this case, nothing stops us from going beyond adding a bounding volume to sdCharacter() and adding bounding volumes as well to sdHead(), sdBody() and all other sub-parts.</p><p>
+
+Of course, evaluating bounding volumes does add some performance cost in the cases where the SDF it bounds ends up needing to be evaluated. So one has to balance the cost of doing the bounding volume evaluation relative to the raw cost of the SDF it is trying to optimize.</p><p>
+
+Also, even if a considerable amount of computation was being saved on average, the cost of taking branches (if statements) and the extra fetching and storing the data needed to describe the bounding volume can be very expensive on some platforms (for example, on the web with WebGL or on mobile). So there's a platform dependent limit to how deep in recursion one should go with the bounding volumes and how granular the bounding strategy needs to be.</p><h3>Bounding Volumes Hierarchies</h3><hr>
+<p>
+One extreme case of recursive bounding volumes is when the complexity of the SDF is so high that no matter what, a really deep recursive bounding volume system is needed. There are multiple and well understood Bounding Volume Hierarchy algorithms that one can pick from, both using a stack() to implement automatic recursion, without a stack by using a restart-from-root approach, and without stack and by using skip pointers or parent pointers. These are probably outside the scope of this article, but they are not difficult to implement, and can make some otherwise complex SDFs run at full framerate and full screen, such as this (tiny) triangle mesh. This is an example of a simply BVH applied to the Standford Bunny mesh used for raw raymarching, noise free <a href="http://iquilezles.org/www/articles/rmshadows/rmshadows.htm">single-ray soft shadows</a>, inexpensive occlusion (Shadertoy style rendering, basically), <a href="http://iquilezles.org/www/articles/distfunctions/distfunctions.htm">displacement</a> and <a href="http://iquilezles.org/www/articles/smin/smin.htm">soft blending operators</a></p><a>. It runs full framerate in my GeForce 1070 based latpop, using a single fragment shader to do all rendering (again, Shadertoy style). The mesh and BVH data is stored in a Shader Storage Buffer, so I couldn't share it as an actual Shadertoy example.<center>
+<div>
+<p><img src="http://iquilezles.org/www/articles/sdfbounding/gfx02.jpg"><br>Soft shadows produced by an exact SDF</p>
+<p><img src="http://iquilezles.org/www/articles/sdfbounding/gfx03.jpg"><br>Displacement</p>
+<p><img src="http://iquilezles.org/www/articles/sdfbounding/gfx04.jpg"><br>Smooth minimum</p>
+</div>
+</center>
+Besides the nice shading and lighting tricks, one advantage of an SDF representation for a mesh is that one can do easy edge antialiasing and more importantly, it opens the doors for research in geometric filtering for analytic LOD, since the SDF of a mesh provides a volumetric representation.<p>
+
+The code wasn't particularly optimized, I wrote the whole demo in a night, but in run well enough as a simple fragment shader as I said (no compute):</p><p>float sdMesh( in vec3 pos, in float minDist )
+{
+    stack_reset();
+    int currentNode = 0;
+    for( ;; )
+    {
+        Node n = data.node[ currentNode ];
+        
+        
+        if( sdBox( pos, n.bbox ) &lt; minDist )
+        {
+            
+            if( n.numTriangles&gt;0 )
+            {
+                minDist = sdTriangles( pos, n.trianglesOffset, n.numTriangles, minDist );
+            }
+			
+            
+            int closest = (pos[n.splitAxis] &lt; center(n.bbox)[n.splitAxis]) ? 0 : 1;
+            stack_push( Data(n.childOffset+1-closest) );
+            stack_push( Data(n.childOffset+  closest) );
+        }
+
+        
+        if( stack_is_empty() ) break;
+        currentNode = stack_pop();
+    }
+
+    return minDist;
+}</p>
+<br>
+Please note this code is just given as a basic reference to give you an idea of the kind of algorithm used, and it's by no means optimized. For example, in practice one can traverse big parts of the hierarchy without ever pushing and popping nodes into the stack by rearranging the traversal in a nested loop. Also, all the node data such as numTriangles and splitAxis are just bits in a shared integer field, and trianglesOffset and childOffset are of course a shared integer as well. And of course the bounding boxes can be quantized. Lastly, you can perform the whole mesh SDF evaluation with a single square root, since both the sdBox() and sdTriangle() functions allow for taking it as a common factor. Note however how in this implementation the tree is binary and the children are allocated in pairs in order to save on pointer/offsets.<p>
+
+In practice, much of the performance is determined by the tree construction algorithm and considerations such as the SAH (Surface Area Heuristic) that determines how to split a node into children, amount of children overlap that is allowed on encouraged, the maximum number of triangles allowed in a node, etc.</p><h3>Spatial Subdivision</h3><hr>
+<br>
+One problem with BVH is that each node needs to store its bounding volume, which can be very memory consuming even when quantized heavily. One way to improve that situation is to use Spatial Subdivision schemas instead, which don't partition the data-set but space. So, technically they don't belong in an article called "Bounding Volumes", but since they are relevant and I used a second night to experiment with them, I'll talk quickly about it now, if only as an introduction.<p>
+
+Grids, Octrees and KD-Trees are the best known Spatial Subdivision structures. From these, only Octrees and KD-Trees are hierarchical, which we need. KD-Tres are binary trees, so their traversal logic is simpler than that for Octrees. While in an Octree traversal one needs to decide the order priority of the 8 children, in a KD-tree there's only two and usually a simple comparison or sign bit extraction suffices to determine the best children to proceed with.</p><p>
+
+The advantage of Spatial Subdivision structures over Bounding Volume Hierarchies is that they offer a smaller memory footprint and bandwidth. The cons, however, are that they are more expensive to build, AND require a thicker stack in the shader code during runtime traversal. A thicker stack consumes more registers and can kill parallelism in the thread group, if implemented in the GPU. Techniques can be used to amortize the cost of traversal among tiles of pixels by using compute shaders, but at that point we are asking for problems when rays are shot randomly instead of in right packets (unless, again, an even more sophisticated layer of point evaluation sorting is added on top, again outside the scope of this article).</p><p>
+
+The following is a simplified comparison between the trade-offs in the Node and Stack structures for both methods:</p><table>
+<tbody><tr>
+ <td></td>
+ <td>Node Data</td>
+ <td>Stack Data</td>
+ </tr>
+<tr>
+ <td>BVH</td>
+ <td>BBox, PointerOffset, Flags</td>
+ <td>PointerOffset, Flags</td>
+</tr>
+<tr>
+ <td>KD-Tree</td>
+ <td>NodeID</td>
+ <td>BBox, NodeID</td>
+</tr>
+</tbody></table>
+<br>
+Of course there are hybrid acceleration structures such as BIH, but that night I came up with an interesting way for using KD-Trees without having to pay the cost of the BBox (or split plane location) storage in the stack. The idea was to sacrifice tree quality and use a simple procedural space splitting criteria instead of sophisticated SAH during tree construction. This should allow, from the Node ID/address alone to reconstruct its bounding box completely in the shader. Meaning all that I'd need to push to the stack would be an integer, not a whole bbox. The cons and pros of this method are:<p>
+
+Cons:</p><ul>
+<li>Lower quality tree</li>
+<li>More compute during traversal (need to build the bounding boxes procedurally)</li>
+</ul>
+Pros:<br>
+<ul>
+<li>Think stack like BVH, less register pressure</li>
+<li>Faster build times (no SAH!)</li>
+</ul>
+In my experiment I was able to build the bounding boxes from the address of each node  by interpreting it a binary string where each bit indicates a left or right branch taken down the tree. I implemented this by using GLSL's findMSB() call and some branchless bit manipulations (as many as levels of depth were allowed in my tree).<p>
+
+I coded the procedural KD-tree in a second night of work and this time I implemented a more proper KD-tree traversal loop, which I had experience with from (now 15 years old!) past </p></a><p><a href="http://iquilezles.org/www/articles/raytracing/raytracing.htm">real-time SIMD packet ratracing</a> work. Of course traversing and looking for intersections is different than traversing looking for closest distance, but the code is similar enough so these were not unkown waters this time.</p><p>
+
+For a single night of work, the technique was not a failure, but it wasn't also super successful, I think I'd need to spend more time in this problem space in order to get a good traversal implementation, and maybe do it as a compute shader rather than a fragment shader. But, it did work to some degree, at least I was able to raymarch primary rays and soft shadows for some models like the Sponza atrium (downloaded from Morgan McGuire's Computer Graphics Archive <a href="https://casual-effects.com/data">https://casual-effects.com/data</a>)
+</p><div><p>
+<iframe src="https://www.youtube.com/embed/bOJvpyL3UsA" frameborder="0" allow="autoplay; picture-in-picture" allowfullscreen=""></iframe>
+</p><p>KD-Tree driven raymarched SDF, with soft shadows, object blending, occlusion and distance driven moss</p></div><p>
+
+
+The performance was pretty bad though, on the single digit framerate in my laptop computer + GeForce 1070. Still, you can see nice soft shadows, some contact shadowing/occlusion and a sphere that I added to the scene to show this was an SDF, so for a quick experiment I think this was a good outcome.</p><center>
+<img src="http://iquilezles.org/www/articles/sdfbounding/gfx06.jpg"><br>Hit map (triange+box sdf evaluations per mesh SDF evaluation)</center><p>
+
+
+Overall, I think there's lots of potential for SDF evaluation using the same acceleration structures used for regular raycasting, and the benefit is that one can evaluate proximity to geometry easily, which has multiple purposes beyond shadowing tricks - for example, you can use it to drive vegetation growth and wetness or snow, just to name a few shading ideas, as shown in the image above where the proximity to other geometry drives the green surface coloring. I was told that the acceleration structures for HW raytracing in current GPUs wouldn't be efficient for SDF evaluation, but I think they don't need to be - you can get a lot of global proximity information with one or two queries per pixel and do lots of cool things with them that would require dozens of regular rays. So I feel we have a 10x performance hit we can take for SDF evaluation and still be competitive with raycast based methods?</p><!-- ----------------------------------------------------------------- -->
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

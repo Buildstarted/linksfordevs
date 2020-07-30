@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Introducing IHostLifetime and untangling the Generic Host startup interactions: Exploring ASP.NET Core 3.0 - Part 5 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Introducing IHostLifetime and untangling the Generic Host startup interactions: Exploring ASP.NET Core 3.0 - Part 5 - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I introduce the new IHostLifetime interface and look at the interactions involved in the ASP.NET Core generic host startup and shutdown"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/introducing-ihostlifetime-and-untangling-the-generic-host-startup-interactions/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Introducing IHostLifetime and untangling the Generic Host startup interactions: Exploring ASP.NET Core 3.0 - Part 5</title>
+<div class="readable">
+        <h1>Introducing IHostLifetime and untangling the Generic Host startup interactions: Exploring ASP.NET Core 3.0 - Part 5</h1>
+            <div>Reading time: 13-16 minutes</div>
+        <div>Posted here: 26 Sep 2019</div>
+        <p><a href="https://andrewlock.net/introducing-ihostlifetime-and-untangling-the-generic-host-startup-interactions/">https://andrewlock.net/introducing-ihostlifetime-and-untangling-the-generic-host-startup-interactions/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>In this post I describe how ASP.NET Core 3.0 has been re-platformed on top of the generic host, and some of the benefits that brings. I show a new abstraction introduced in 3.0, <code>IHostLifetime</code> and describe its role for managing the lifecycle of applications, especially worker services. </p>
+<p>In the second half of the post I look in detail at the interactions between classes and their roles during application startup and shutdown. I go into quite a bit of detail about things you <em>generally</em> shouldn't have to deal with, but I found it useful for my own understanding even if no one else cares! 🙂</p>
+<h2 id="background-re-platforming-asp-net-core-onto-the-generic-host">Background: Re-platforming ASP.NET Core onto the Generic Host<a href="#background-re-platforming-asp-net-core-onto-the-generic-host"></a></h2>
+<p>One of the key features of ASP.NET Core 3.0 is that the whole stack has been re-written to sit on top of <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/host/generic-host?view=aspnetcore-3.0">the .NET Generic Host</a>. The .NET Generic Host was introduced in ASP.NET Core 2.1, as a "non-web" version of the existing <code>WebHost</code> used by ASP.NET Core. The generic host allowed you to re-use many of the DI, configuration, and logging abstractions of <em>Microsoft.Extensions</em> in non-web scenarios. </p>
+<p>While this was definitely an enviable goal, it had some issues in the implementation. The generic host essentially duplicated many of the abstractions required by ASP.NET Core, creating direct equivalents, but in a <em>different</em> namespace. A good example of the problem is <code>IHostingEnvironment</code> - this has existed in ASP.NET Core in the <em>Microsoft.AspNetCore.Hosting</em> since version 1.0. But in version 2.1, a new <code>IHostingEnvironment</code> was added in the <em>Microsoft.Extensions.Hosting</em> namespace. Even though the interfaces are identical, having both <a href="https://andrewlock.net/the-asp-net-core-generic-host-namespace-clashes-and-extension-methods/">causes issues for generic libraries trying to use the abstractions</a>.</p>
+<p>With 3.0, the ASP.NET Core team were able to make significant changes that directly address this issue. Instead of having two separate Hosts/Stacks, they were able to re-write the ASP.NET Core stack so that it <em>sits on top</em> of the .NET generic host. That means it can truly re-use the same abstractions, resolving the issue described above. This move was also partly motivated by the desire to build additional non-HTTP stacks on top of the generic host, such as <a href="https://docs.microsoft.com/en-us/aspnet/core/tutorials/grpc/grpc-start?view=aspnetcore-3.0&amp;tabs=visual-studio">the gRPC features</a> introduced in ASP.NET Core 3.0.</p>
+<p>But what does it really mean for ASP.NET Core 3 to have been "re-built" or "re-platformed" on top of the generic host? Fundamentally, it means that the Kestrel web server (that handles HTTP requests and calls into your middleware pipeline) now runs as an <code>IHostedService</code>. I've written a lot about creating hosted services on my blog, and Kestrel is now just one more service running in the background when your app starts up.</p>
+<blockquote>
+<p>One point that's worth highlighting - the existing <code>WebHost</code> and <code>WebHostBuilder</code> implementations that you're using in ASP.NET Core 2.x apps are <strong>not</strong> going away in 3.0. They're no longer the <strong>recommended</strong> approach, but they're not being removed, or even marked obsolete (yet). I expect they'll be marked obsolete in the next major release however, so it's worth considering the switch.</p>
+</blockquote>
+<p>So that covers the background. We have a generic host, and Kestrel is run as an <code>IHostedService</code>. However, another feature introduced in ASP.NET Core 3.0 is the <code>IHostLifetime</code> interface, which allows for alternative hosting models.</p>
+<h2 id="worker-services-and-the-new-ihostlifetime-interface">Worker services and the new IHostLifetime interface<a href="#worker-services-and-the-new-ihostlifetime-interface"></a></h2>
+<p>ASP.NET Core 3.0 introduced the concept of <a href="https://devblogs.microsoft.com/aspnet/net-core-workers-as-windows-services/">"worker services"</a> and an associated new application template. Worker services are intended to give you long-running applications that you can install as a Windows Service or as a systemd service. There are two main features to these services:</p>
+<ul>
+<li>They use <code>IHostedService</code> implementations to do the "work" of the application.</li>
+<li>They manage the lifetime of the app using an <code>IHostLifetime</code> implementation.</li>
+</ul>
+<p><code>IHostedService</code> has been around for a long time, and allows you to run background services. It is the second point which is the interesting one here. The <code>IHostLifetime</code> interface is new for .NET Core 3.0, and <a href="https://github.com/aspnet/Extensions/blob/d656c4f7e22d1c0b84cab1b453c50ce73c89a071/src/Hosting/Abstractions/src/IHostLifetime.cs">has two methods</a>:</p>
+<pre><code><span>public</span> <span>interface</span> <span>IHostLifetime</span>
+<span>{</span>
+    <span>Task</span> <span>WaitForStartAsync</span><span>(</span><span>CancellationToken</span> cancellationToken<span>)</span><span>;</span>
+    <span>Task</span> <span>StopAsync</span><span>(</span><span>CancellationToken</span> cancellationToken<span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>We'll be looking in detail at exactly where <code>IHostLifetime</code> comes in to play in later sections, but in summary:</p>
+<ul>
+<li><code>WaitForStartAsync</code> is called when the generic host is starting, and can be used to start listening for shutdown events, or to delay the start of the application until some event occurs. </li>
+<li><code>StopAsync</code> is called when the generic host is stopping.</li>
+</ul>
+<p>There are currently three different <code>IHostLifetime</code> implementations in .NET Core 3.0:</p>
+<ul>
+<li><a href="https://github.com/aspnet/Extensions/blob/2875a1ad56073d98cf0856fa72620d6fdfca588d/src/Hosting/Hosting/src/Internal/ConsoleLifetime.cs"><code>ConsoleLifetime</code></a> – Listens for <code>SIGTERM</code> or Ctrl+C and stops the host application.</li>
+<li><a href="https://github.com/aspnet/Extensions/blob/531db4e313e577192cdbca3931c4298b6db1e611/src/Hosting/Systemd/src/SystemdLifetime.cs"><code>SystemdLifetime</code></a> – Listens for <code>SIGTERM</code> and stops the host application, and notifies <code>systemd</code> about state changes (<code>Ready</code> and <code>Stopping</code>)</li>
+<li><a href="https://github.com/aspnet/Extensions/blob/14c02660827dab4706b3db0a938d923d24fa6d0f/src/Hosting/WindowsServices/src/WindowsServiceLifetime.cs"><code>WindowsServiceLifetime</code></a> – Hooks into the Windows Service events for lifetime management</li>
+</ul>
+<p>By default the generic host uses the <code>ConsoleLifetime</code>, which provides the behaviour you're used to in ASP.NET Core 2.x, where the application stops when it receives the <code>SIGTERM</code> signal or a Ctrl+C from the console. When you create a Worker Service (Windows or systemd service) then you're primarily configuring the <code>IHostLifetime</code> for the app.</p>
+<h2 id="understanding-application-start-up">Understanding application start up<a href="#understanding-application-start-up"></a></h2>
+<p>It was while I was digging into this new abstraction that I started to get very confused. When does this get called? How does it relate to the <code>ApplicationLifetime</code>? Who calls the <code>IHostLifetime</code> in the first place? To get things straight in my mind, I spent some time tracing out the interactions between the key players in a default ASP.NET Core 3.0 application.</p>
+<p>In this post, we're starting from a default ASP.NET Core 3.0 <em>Program.cs</em> file, such as the one I examined in <a href="https://andrewlock.net/exploring-the-new-project-file-program-and-the-generic-host-in-asp-net-core-3/">the first post in this series</a>: </p>
+<pre><code><span>public</span> <span>class</span> <span>Program</span>
+<span>{</span>
+    <span>public</span> <span>static</span> <span>void</span> <span>Main</span><span>(</span><span>string</span><span>[</span><span>]</span> args<span>)</span>
+    <span>{</span>
+        <span>CreateHostBuilder</span><span>(</span>args<span>)</span><span>.</span><span>Build</span><span>(</span><span>)</span><span>.</span><span>Run</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>static</span> <span>IHostBuilder</span> <span>CreateHostBuilder</span><span>(</span><span>string</span><span>[</span><span>]</span> args<span>)</span> <span>=</span><span>&gt;</span>
+        Host<span>.</span><span>CreateDefaultBuilder</span><span>(</span>args<span>)</span>
+            <span>.</span><span>ConfigureWebHostDefaults</span><span>(</span>webBuilder <span>=</span><span>&gt;</span>
+            <span>{</span>
+                webBuilder<span>.</span><span><span>UseStartup</span><span>&lt;</span><span>Startup</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>}</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>In particular, I'm interested in what that <code>Run()</code> call does, once you've built your generic <code>Host</code> object.</p>
+<blockquote>
+<p>Note that I'm not going to give an exhaustive description of the code - I'll be skipping anything that I consider uninteresting or tangential. My aim is to get an overall feel for the interactions. Luckily, <a href="https://github.com/aspnet/AspNetCore">the source code is always available</a> if you want to go deeper!</p>
+</blockquote>
+<p><code>Run()</code> is an <a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/Abstractions/src/HostingAbstractionsHostExtensions.cs#L49">extension method on <code>HostingAbstractionsHostExtensions</code> that calls <code>RunAsync()</code></a> and blocks until the method exits. When that method exits, the application exits, so everything interesting happens in there! The diagram below gives an overview of what happens in <code>RunAsync()</code>, I'll discuss the details below:</p>
+<picture>
+<source srcset="/content/images/2019/program_startup.svg" type="image/svg+xml">
+<img src="https://andrewlock.net/content/images/2019/program_startup.png" alt="Sequence diagram for program startup">
+</picture>
+<p><em>Program.cs</em> invokes the <code>Run()</code> extension method, which invokes the <code>RunAsync()</code> extension method. This in turn calls <code>StartAsync()</code> on the <code>IHost</code> instance. The <code>StartAsync</code> method does a whole bunch of things like starting the <code>IHostingService</code>s (which we'll come to later), but the method <em>returns</em> relatively quickly after being called. </p>
+<p>Next, the <code>RunAsync()</code> method calls <em>another</em> extension method called <code>WaitForShutdownAsync()</code>. This extension method does everything else shown in the diagram. The name is pretty descriptive; this method configures itself so that it will pause until the <code>ApplicationStopping</code> cancellation token on <code>IHostApplicationLifetime</code> is triggered (we'll look at <em>how</em> that token gets triggered shortly).</p>
+<p>The extension method achieves this using a <code>TaskCompletionSource</code>, and <code>await</code>-ing the associated <code>Task</code>. This isn't a pattern I've needed to use before and it looked interesting, so I've added it below (adapted from <a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/Abstractions/src/HostingAbstractionsHostExtensions.cs#L86-L107">HostingAbstractionsHostExtensions</a>)</p>
+<pre><code><span>public</span> <span>static</span> <span>async</span> <span>Task</span> <span>WaitForShutdownAsync</span><span>(</span><span>this</span> <span>IHost</span> host<span>)</span>
+<span>{</span>
+    
+    <span>var</span> applicationLifetime <span>=</span> host<span>.</span>Services<span>.</span><span><span>GetService</span><span>&lt;</span><span>IHostApplicationLifetime</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+    
+    <span>var</span> waitForStop <span>=</span> <span>new</span> <span><span>TaskCompletionSource</span><span>&lt;</span><span>object</span><span>&gt;</span></span><span>(</span>TaskCreationOptions<span>.</span>RunContinuationsAsynchronously<span>)</span><span>;</span>
+
+    
+    applicationLifetime<span>.</span>ApplicationStopping<span>.</span><span>Register</span><span>(</span>obj <span>=</span><span>&gt;</span>
+    <span>{</span>
+        <span>var</span> tcs <span>=</span> <span>(</span>TaskCompletionSource<span>&lt;</span><span>object</span><span>&gt;</span><span>)</span>obj<span>;</span>
+
+        
+        
+        tcs<span>.</span><span>TrySetResult</span><span>(</span><span>null</span><span>)</span><span>;</span>
+    <span>}</span><span>,</span> waitForStop<span>)</span><span>;</span>
+
+    
+    
+    <span>await</span> waitForStop<span>.</span>Task<span>;</span>
+
+    
+    <span>await</span> host<span>.</span><span>StopAsync</span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>This extension method explains how the application is able to "pause" in a running state, with everything running in background tasks. Lets look in more depth at the <code>IHost.StartAsync()</code> method call at the top of the previous diagram.</p>
+<h2 id="the-startup-process-in-host-startasync-">The startup process in Host.StartAsync()<a href="#the-startup-process-in-host-startasync-"></a></h2>
+<p>In the previous diagram we were looking at the <code>HostingAbstractionsHostExtensions</code> extension methods which operate on the interface <code>IHost</code>. If we want to know what typically happens when we call <code>IHost.StartAsync()</code> then we need to look at a concrete implementation. The diagram below shows the <code>StartAsync()</code> method for <a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/Hosting/src/Internal/Host.cs#L35">the generic <code>Host</code> implementation</a> that is used in practice. Again, we'll walk through the interesting parts below.</p>
+<picture>
+<source srcset="/content/images/2019/hosting_startup.svg" type="image/svg+xml">
+<img src="https://andrewlock.net/content/images/2019/hosting_startup.png" alt="Sequence diagram for Host.StartAsync()">
+</picture>
+<p>As you can see from the diagram above, there's a lot more moving parts here! The call to <code>Host.StartAsync()</code> starts by calling <code>WaitForStartAsync()</code> on the <code>IHostLifetime</code> instance I <a href="#worker-services-and-the-new-ihostlifetime-interface">described earlier in this post</a>. The behaviour at this point depends on which <code>IHostLifetime</code> you're using, but I'm going to assume we're <a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/Hosting/src/Internal/ConsoleLifetime.cs">using the <code>ConsoleLifetime</code></a> for this post, (the default for ASP.NET Core apps). </p>
+<blockquote>
+<p><a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/Systemd/src/SystemdLifetime.cs">The <code>SystemdLifetime</code> behaves very similarly</a> to the <code>ConsoleLifetime</code>, with a couple of extra features. <a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/WindowsServices/src/WindowsServiceLifetime.cs">The <code>WindowsServiceLifetime</code> is quite different</a>, and derives from <code>System.ServiceProcess.ServiceBase</code>.</p>
+</blockquote>
+<p><a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/Hosting/src/Internal/ConsoleLifetime.cs#L44">The <code>ConsoleLifetime.WaitForStartAsync()</code> method</a> (shown below) does one important thing: it adds event listeners for <code>SIGTERM</code> requests and for Ctrl+C in the console. It is these events that are fired when application shutdown is requested. So it's the <code>IHostLifetime</code> that is typically responsible for controlling <em>when</em> the application shuts down.</p>
+<pre><code><span>public</span> <span>Task</span> <span>WaitForStartAsync</span><span>(</span><span>CancellationToken</span> cancellationToken<span>)</span>
+<span>{</span>
+    
+
+    
+    AppDomain<span>.</span>CurrentDomain<span>.</span>ProcessExit <span>+</span><span>=</span> OnProcessExit<span>;</span>
+    Console<span>.</span>CancelKeyPress <span>+</span><span>=</span> OnCancelKeyPress<span>;</span>
+
+    
+    <span>return</span> Task<span>.</span>CompletedTask<span>;</span>
+<span>}</span>
+</code></pre>
+<p>As shown in the code above, this method completes immediately and returns control to <code>Host.StartAsync()</code>. At this point, the Host loads all the <code>IHostedService</code> instances and calls <code>StartAsync()</code> on each of them. This includes <a href="https://github.com/aspnet/AspNetCore/blob/v3.0.0-rc1.19457.4/src/Hosting/Hosting/src/GenericHost/GenericWebHostedService.cs">the <code>GenericWebHostService</code> that starts the Kestrel web server</a> (which is started <em>last</em>, <a href="https://andrewlock.net/running-async-tasks-on-app-startup-in-asp-net-core-3/">hence my previous post on async startup tasks</a>).</p>
+<p>Once all the <code>IHostedService</code>s have been started, <code>Host.StartAsync()</code> calls <code>IHostApplicationLifetime.NotifyStarted()</code> to trigger any registered callbacks (typically just logging) and exits. </p>
+<blockquote>
+<p>Note that <code>IHostLifetime</code> is <strong>different</strong> to <code>IHostApplicationLifetime</code>. The former contains the logic for controlling <em>when</em> the application starts. The latter (<a href="https://github.com/aspnet/Extensions/blob/494e2c53cd/src/Hosting/Hosting/src/Internal/ApplicationLifetime.cs">implemented by <code>ApplicationLifetime</code></a>) contains <code>CancellationTokens</code> against which you can register callbacks to run at various points in the application lifecycle.</p>
+</blockquote>
+<p>At this point the application is in a "running" state, with all background services running, Kestrel handling requests, and the original <code>WaitForShutdownAsync()</code> extension method waiting for the <code>ApplicationStopping</code> event to fire. Finally, let's take a look at what happens when you type Ctrl+C in the console.</p>
+<h2 id="the-shutdown-process">The shutdown process<a href="#the-shutdown-process"></a></h2>
+<p>The shutdown process occurs when the <code>ConsoleLifetime</code> receives a <code>SIGTERM</code> signal or a Ctrl+C (cancel key press) from the console. The diagram below shows the interaction between all the key players in the shutdown process:</p>
+<picture>
+<source srcset="/content/images/2019/hosting_shutdown.svg" type="image/svg+xml">
+<img src="https://andrewlock.net/content/images/2019/hosting_shutdown.png" alt="Sequence diagram for application shut down when Ctrl+C is clicked">
+</picture>
+<p>When the Ctrl+C termination event is triggered the <code>ConsoleLifetime</code> invokes the <code>IHostApplicationLifetime.StopApplication()</code> method. This triggers all the callbacks that were registered with the <code>ApplicationStopping</code> cancellation token. If you refer back to the <a href="#understanding-application-start-up">program overview</a>, you'll see that trigger is what the original <code>RunAsync()</code> extension method was waiting for, so the <code>await</code>ed task completes, and <code>Host.StopAsync()</code> is invoked.</p>
+<p><code>Host.StopAsync()</code> starts by calling <code>IHostApplicationLifetime.StopApplication()</code> <em>again</em>. This second call is a noop when run for a second time, but is necessary because technically there are other ways <code>Host.StopAsync()</code> could be triggered.</p>
+<p>Next, <code>Host</code> shuts down all the <code>IHostedService</code>s in <em>reverse</em> order. Services that started first will be stopped last, so the <code>GenericWebHostedService</code> is shut down <em>first</em>. </p>
+<p>After shutting down the services, <code>IHostLifetime.StopAsync</code> is called, which is a noop for the <code>ConsoleLifetime</code> (and also for <code>SystemdLifetime</code>, but does work for <code>WindowsServiceLifetime</code>). Finally, <code>Host.StopAsync()</code> calls <code>IHostApplicationLifetime.NotifyStopped()</code> to run any associated handlers (again, mostly logging) before exiting. </p>
+<p>At this point, everything is shutdown, the <code>Program.Main</code> function exits, and the application exits.</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I provided some background on how ASP.NET Core 3.0 has been re-platformed on top of generic host, and introduced the new <code>IHostLifetime</code> interface. I then described in detail the interactions between the various classes and interfaces involved in application startup and shutdown for a typical ASP.NET Core 3.0 application using the generic host.</p>
+<p>This was obviously a long one, and goes in to more detail than you'll need generally. Personally I found it useful looking through the code to understand what's going on, so hopefully it'll help someone else too!</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

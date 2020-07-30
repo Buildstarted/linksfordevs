@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Immutable types in C# with Roslyn - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Immutable types in C# with Roslyn - linksfor.dev(s)"/>
+    <meta property="og:description" content="How to create immutable types without writing large amount of boilerplate code."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Immutable types in C# with Roslyn</title>
+<div class="readable">
+        <h1>Immutable types in C# with Roslyn</h1>
+            <div>Reading time: 5-6 minutes</div>
+        <div>Posted here: 15 Mar 2020</div>
+        <p><a href="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/">https://cezarypiatek.github.io/post/immutable-types-with-roslyn/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+	<div>
+		
+
+		<div id="content">
+			<div>
+				<div id="post">
+
+<main>
+	<article>
+		<header>
+			
+			  
+			<p><i></i> <time>15 March 2020</time></p>
+			<hr>
+			
+		</header>
+		
+			<img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/splashscreen.jpg" width="100%">
+			
+		
+		
+
+<p>Some time ago I came across Jimmy Bogard’s article <a href="https://jimmybogard.com/immutability-in-dtos/" target="_blank">“Immutability in DTOs?”</a> about the pros and cons of using immutable type pattern/approach. I fully agree with the author - the idea of immutable types is great but without the proper support from the language syntax it might not be worth applying. C# allows creating immutable types by adding <code>readonly</code> keyword to fields or by removing setter from properties. We are obligated then to initialize those readonly members from the constructor or directly in the member’s definition. This results in a large amount of boilerplate code, causes problems with ORMs and serializers which require a default constructor, and makes the object instantiation cumbersome (or at least less readable). I’m a huge fan of <code>Roslyn</code> so I’ve started thinking about how to utilize Roslyn’s API to avoid all those problems with immutable types and improve coding experience while working with them. In this article, I’m going to present the results of my experiments with Roslyn analyzers that simulate types immutability.</p>
+
+<h2 id="convenient-initialization">Convenient initialization<a href="#convenient-initialization" arialabel="Anchor"> 🔗︎</a> </h2>
+
+<p>As I’ve mentioned before, in order to make a class immutable we need to remove setters, add a dedicated constructor for initializing those properties and then always use this constructor to instantiate our immutable class. A sample code snippet just to remind you how cumbersome it is:</p>
+
+<pre><code><span>public</span> <span>class</span> <span>UserDTO</span>
+{
+    <span>public</span> <span>string</span> FirstName { <span>get</span>;}
+    <span>public</span> <span>string</span> LastName { <span>get</span>;}
+    <span>public</span> <span>int</span> Age { <span>get</span>; }
+
+    <span><span>public</span> <span>UserDTO</span>(<span><span>string</span> firstName, <span>string</span> lastName, <span>int</span> age</span>)</span>
+    {
+        FirstName = firstName;
+        LastName = lastName;
+        Age = age;
+    }
+}
+
+<span>class</span> <span>Program</span>
+{
+    <span><span>static</span> <span>void</span> <span>Main</span>(<span><span>string</span>[] args</span>)</span>
+    {
+        <span>var</span> user = <span>new</span> UserDTO(<span>"John"</span>, <span>"Doe"</span>, <span>20</span>);
+    }
+}
+</code></pre>
+
+<p>It would be more convenient if we didn’t need to define a constructor and initialize members using the initialization block. However, there’s no mechanism that allows enforcing mandatory initialization in the init block. So, let’s introduce <code>[InitRequired]</code> attribute inspired by <code>initonly</code> keyword from <a href="https://github.com/dotnet/csharplang/blob/master/proposals/recordsv2.md#mutability" target="_blank">C# records proposal</a>:</p>
+
+<p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/init_required.jpg" alt=""></p>
+
+<p>If we want to enforce mandatory initialization via initialization block for all members, we can mark our type with <code>[InitRequired]</code> attribute.</p>
+
+<p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/full_init_required.jpg" alt=""></p>
+
+<p>Of course, the property to be able to initialize via init block it must meet certain conditions:</p>
+
+<ul>
+<li>must have a setter</li>
+<li>the setter needs to be available in a given context (accessibility)</li>
+<li>cannot be a part of explicit interface implementation.</li>
+</ul>
+
+<p>In order to avoid missing initialization caused by the conditions mentioned above, I would recommend always keeping those properties on the same accessibility level as the containing type.</p>
+
+<blockquote>
+<p><strong>Pro Tip:</strong> You can use <a href="https://marketplace.visualstudio.com/items?itemName=54748ff9-45fc-43c2-8ec5-cf7912bc3b84.mappinggenerator" target="_blank">MappingGenerator</a> to complete initialization block with local accessible values
+<div><p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/emptyInitialization_animated.png" alt=""></p><p><ins>▶</ins></p></div>
+or to scaffold this initialization with sample values
+<div><p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/object_scaffolding_animated.png" alt=""></p><p><ins>▶</ins></p></div></p>
+</blockquote>
+
+<p>If you don’t have access to the source code or you want to enforce full initialization only for given instance, you can do that by adding <code>/*FullInitRequired*/</code> comment marker:</p>
+
+<p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/full_init_comment.jpg" alt=""></p>
+
+<p>To ensure that full object graph is initialized, use <code>/*FullInitRequired:recursive*/</code> comment marker. I think this may be especially useful for methods performing mapping or deep clone. I got the idea of those comment markers from a discussion about <a href="https://github.com/dotnet/csharplang/issues/2796#issuecomment-530525044" target="_blank">String Hints
+#2796</a>. This kind of annotation is already used for marking string literals with regex pattern:</p>
+
+<p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/regex_hint.jpg" alt=""></p>
+
+<h2 id="full-immutability">Full immutability<a href="#full-immutability" arialabel="Anchor"> 🔗︎</a> </h2>
+
+<p><code>[InitRequired]</code> attribute enforces only mandatory initialization via initialization block. To achieve immutability, we need to forbid modification outside the init block. For that purpose, I’ve introduced <code>[InitOnly]</code> attribute. Basically, it works in the same way as <code>[InitRequired]</code> but additionally it verifies if members decorated with it are not modified after initialization.</p>
+
+<p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/init_only.jpg" alt=""></p>
+
+<p>You can enforce immutability for all members by putting <code>[InitOnly]</code> attribute on the type level.</p>
+
+<p><img src="https://cezarypiatek.github.io/post/immutable-types-with-roslyn/full_init_only.jpg" alt=""></p>
+
+<p>Thanks to <code>[InitOnly]</code> attribute and corresponding analyzer we can achieve full immutability without writing redundant boilerplate code.</p>
+
+<blockquote>
+<p><strong>Important:</strong> If you like the idea of <code>[InitRequire]</code> and <code>[InitOnly]</code> attributes and you are going to use them in your project, please make sure that all your teammates know about it.</p>
+</blockquote>
+
+<h2 id="summary">Summary<a href="#summary" arialabel="Anchor"> 🔗︎</a> </h2>
+
+<p>All attributes and analyzers described here are available as a single Nuget package <a href="https://www.nuget.org/packages/SmartAnalyzers.CSharpExtensions.Annotations/" target="_blank">SmartAnalyzers.CSharpExtensions.Annotations</a>. The source code is published on <code>Github</code> under <a href="https://github.com/cezarypiatek/CSharpExtensions" target="_blank">CSharpExtensions</a> project. Please let me know what you think about those extensions to C# language and if you encounter any problems with using it, feel free to report an issue on Github page.</p>
+    
+		
+		<hr>  
+		<p>If you find this blog post useful and you think it's worth to share this idea with others, please don't hesitate to use these buttons below:</p>	
+		
+		
+	</article>
+	
+	
+	<h3>See Also</h3>
+	
+	<br>
+	
+</main>
+
+
+  
+	
+	  
+
+
+
+	
+
+						  </div>
+					</div>
+				</div>
+			</div>
+		</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

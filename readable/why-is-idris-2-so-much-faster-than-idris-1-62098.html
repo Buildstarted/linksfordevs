@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Why is Idris 2 so much faster than Idris 1? - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Why is Idris 2 so much faster than Idris 1? - linksfor.dev(s)"/>
+    <meta property="article:author" content="Edwin Brady"/>
+    <meta property="og:description" content="I&#x27;ve just released a new version of Idris 2, which is a&#xA;significant release in that it&#x27;s the first one which is able to compile itself.&#xA;Thus, it&#x27;s the first one where we can really see how the performance of Idris 2&#xA;improves on the performance of Idris 1."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.type-driven.org.uk/edwinb/why-is-idris-2-so-much-faster-than-idris-1.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Why is Idris 2 so much faster than Idris 1?</title>
+<div class="readable">
+        <h1>Why is Idris 2 so much faster than Idris 1?</h1>
+            <div>by Edwin Brady</div>
+            <div>Reading time: 8-11 minutes</div>
+        <div>Posted here: 26 May 2020</div>
+        <p><a href="https://www.type-driven.org.uk/edwinb/why-is-idris-2-so-much-faster-than-idris-1.html">https://www.type-driven.org.uk/edwinb/why-is-idris-2-so-much-faster-than-idris-1.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+	<p>I've just released a new version of <a href="https://www.idris-lang.org/idris-2-version-020-released.html">Idris 2</a>, which is a
+significant release in that it's the first one which is able to compile itself.
+Thus, it's the first one where we can really see how the performance of Idris 2
+improves on the performance of Idris 1.</p>
+<p>A question people sometimes ask when discussing Idris on various parts of
+the Internet is "Why is Idris 2 so much faster than Idris 1?" Sometimes
+it involves the phrase "the author claims that..." so here are some
+numbers, as measured today on my Dell XPS 13:</p>
+<ul>
+<li>Idris 1 building Idris 2 (bootstrap version): 743s</li>
+<li>Idris 2 building Idris 2 (with the Chez Scheme runtime): 76s</li>
+</ul>
+<p>This is for type checking and generating/optimising intermediate code only, and
+doesn't include generating and compiling the C/Chez Scheme output.
+The bootstrap version is a slightly earlier version, and a little bit
+smaller, but they are similar enough to be able to make a useful comparison,
+and certainly give you a feel of how much of an improvement Idris 2 is. That's
+nearly an order of magnitude!</p>
+<p>I wouldn't necessarily say the result is
+<em>fast</em> in an absolute sense <a href="#id4" id="id1">[1]</a> and there are no doubt many improvements
+still to be found, but it is still interesting to try to understand why
+the difference. Idris 1 is implemented in Haskell, but that has
+little (if anything) to do with the difference. Rather, it's a combination
+of:</p>
+<ul>
+<li>my improved understanding of what it takes to implement a dependently
+typed language (or, indeed, any language)</li>
+<li>insights gained from other people's experiments, most notably
+Andras Kovacs' work on <a href="https://github.com/AndrasKovacs/smalltt">smalltt</a></li>
+<li>Lots of profiling, via <a href="http://sourceware.org/binutils/docs/gprof/index.html">gprof</a> while bootstrapping,
+and the <a href="https://cisco.github.io/ChezScheme/csug9.5/system.html#./system:h7">Chez Scheme profiling tools</a>.</li>
+</ul>
+<p>A lot of the improvements are down to avoiding make bad decisions in the
+first place! This is easy to say in hindsight, but Idris 1 was originally a
+vehicle for experimenting with some ideas in dependently typed language
+design that were hard to do just by modifying other systems and so I was
+more interested in having a system sooner, rather than having a better
+system. Unfortunately, some of those early decisions proved hard to undo
+as the system grew and as it gained users.</p>
+<p>The rest of this post summarises some of the most significant internal
+differences.</p>
+<div id="the-global-context">
+<h2>The global context</h2>
+<p>The global context stores all of the information that might be needed
+for typechecking: function and data types and definitions, among other
+things. We need function definitions as well as types, even for imported
+modules, since we may need to do evaluation at the type level during
+type checking.</p>
+<p>The big difference between Idris 1 and Idris 2 is that Idris 2 represents
+the context as an array, with constant time access and update. Yes, it's
+mutable! We recognise that there's going to be a lot of updates: mainly
+solving unification problems as type checking proceeds, but also during
+interface resolution. And, we only ever have one context (ignoring
+ambiguity resolution, but I won't go into that here). So, having a single
+mutable context with constant time access has been valuable. Yes, it's
+a bit ugly to a pure functional programmer, but I'm not going to let that
+get in the way of performance! At least the types are precise about where
+updates might happen.</p>
+<p>This turns out to have another benefit, which is that on loading an
+imported module, we don't need to add definitions to the context until
+they are actually referenced. Most names from imports are never referenced
+- at least not all in the same file - so Idris 2 lazily decodes definitions
+and mutates the context when they are needed. In fact profiling Idris 1
+suggests that it spends a huge amount of time unnecessarily loading
+definitions.</p>
+</div>
+<div id="unification">
+<h2>Unification</h2>
+<p><a href="https://en.wikipedia.org/wiki/Unification_(computer_science)">Unification</a>
+is an important part of type checking a dependently typed language, to
+resolve implicit arguments. For example, if you have a function</p>
+<pre>append : Vect n a -&gt; Vect m a -&gt; Vect (n + m) a
+</pre>
+<p>and an application</p>
+<pre>append [1,2,3] [4,5,6,7]
+</pre>
+<p>...then the typechecker needs to infer that <tt>n = 3</tt>, <tt>m = 4</tt> and
+<tt>a = Integer</tt>.  Idris 2 implements
+<a href="http://adam.gundry.co.uk/pub/pattern-unify/">dynamic pattern unification</a>.
+In Idris 1, metavariables (that is, the implicits that need to be solved)
+are stored locally to a term, so solving them requires searching through
+the term and substituting the definition, which can be expensive. Idris 2,
+on the other hand, stores metavariables globally, in the mutable global
+context, following roughly the scheme
+described in <a href="http://www.cse.chalmers.se/~ulfn/papers/thesis.html">Ulf Norell's thesis</a>.</p>
+<p>Furthermore, we don't substitute the solution of a metavariable in a term
+unless we <em>really really need to</em> (in practice, that's only while checking
+linear binders are used appropriately, so fairly rare). This preserves
+sharing as far as possible, which can be important in terms with
+dependent types. For example (with apologies for using a vector again):</p>
+<pre>[1,2,3]
+</pre>
+<p>elaborates into</p>
+<pre>((::) {a=Integer} {n=S (S Z))} 1
+  ((::) {a = Integer} {n=S Z} 2
+    ((::3) {a = Integer} {n=Z} (Nil {a = Integer})))
+</pre>
+<p>That <tt>Z</tt> appears three times, the subexpression <tt>S Z</tt> appears twice, and
+this gets worse as the vector grows. So sharing is important! This is the main
+insight gained from Andras Kovacs' work on <a href="https://github.com/AndrasKovacs/smalltt">smalltt</a>.</p>
+</div>
+<div id="compile-time-evaluation">
+<h2>Compile-time evaluation</h2>
+<p>Type checking a dependently typed language involves evaluating expressions,
+possibly in the presence of unknown variables, to check whether two terms
+are equal or to infer values for metavariables.
+For example, we might need to solve for <tt><span>?meta</span></tt> in the following:</p>
+<pre>plus (S (S x)) (S (S y)) = S ?meta
+</pre>
+<p>Idris 1 does this by evaluating the terms, leading to the equation</p>
+<pre>S (S (plus x (S (S y)))
+</pre>
+<p>...then deciding <tt><span>?meta</span> = S (plus (x (S (S <span>y))))</span></tt>. This is fine for small
+terms, but what if the expression is</p>
+<pre>plus 100 100 = S ?meta
+</pre>
+<p>...or something even larger? We don't need to evaluate fully to normal form to
+establish that <tt><span>?meta</span> = plus 99 100</tt>. Idris 2 therefore reduces to
+<a href="http://foldoc.org/Head+Normal+Form">head normal form</a> during type checking,
+which it probably should have done all along!
+<a href="https://help.luddy.indiana.edu/techreports/TRNNN.cgi?trnum=TR44">Cons should not evaluate its arguments</a>.</p>
+<p>Normally, you won't notice this. But, sometimes, in Idris 1, compile time
+evaluation really hurts performance, and a dependently typed language needs
+to recognise that compile time evaluation is going to happen a lot!</p>
+</div>
+<div id="chez-scheme-runtime">
+<h2>Chez Scheme runtime</h2>
+<p>Idris 2 benefits from a robust, well-engineered and optimised run time
+system, by compiling to Chez Scheme. One might expect that Chez Scheme would
+be slower than the C code generated by Idris 1, since it is dynamically
+typed, but this ignores two important points:</p>
+<ul>
+<li>It is possible to turn off the dynamic type checks in Chez Scheme.
+So, the run time never checks if a constructor argument is within bounds of
+the vector where we store it, and never checks whether a primitive is the
+right type.</li>
+<li>Even more importantly, there has never been significant effort put into the
+Idris 1 run time. Generating good C code corresponding to a functional
+program which might have lots of small (and higher order) definitions is
+extremely challenging, so it is better to take advantage of someone
+else's work here.</li>
+</ul>
+</div>
+<div id="abandoning-tactic-based-elaboration">
+<h2>Abandoning tactic-based elaboration</h2>
+<p>Idris 1 used a tactic-based elaborator, much as you'd see in
+<a href="https://coq.inria.fr/refman/proof-engine/tactics.html">Coq proofs</a>. This
+made implementing new high level features relatively easy, using an
+elaboration monad which was, in a sense, an embedded domain specific
+language for writing new tactics. This is usable directly by
+<a href="http://docs.idris-lang.org/en/latest/elaboratorReflection/elaborator-reflection.html">elaborator reflection</a>
+meaning that users could try extending Idris in Idris itself. While this
+is a fun way to work on the language, it took a lot of effort to get it
+to perform even as well as it did (which, as you see above, is not that
+well). Idris 2 takes a much simpler approach, elaborating syntax directly
+into the core representation.</p>
+</div>
+<div id="non-reasons">
+<h2>Non-reasons</h2>
+<p>One performance problem in Idris 1 was due to space leaks in the Haskell
+caused by using lazy data structures where they weren't needed.
+Despite our best efforts, we were never able to resolve these fully.
+No doubt it would have been better to consider where strict data structures
+would have been better. But, we didn't. This isn't to say that Idris has
+proved a better implementation choice because it's strict, just to say that
+we needed to put more thought, earlier, into where we needed strict data
+in Haskell.</p>
+<table id="id4">
+<colgroup><col><col></colgroup>
+<tbody>
+<tr><td><a href="#id1">[1]</a></td><td>It's about 45,000 lines of Idris 2 code. No doubt a Go programmer, or
+even a Pascal programmer in the 1970s, would scoff at the idea that a mere
+45,000 lines would take 76 seconds to type check. But, those 45,000 lines are
+pulling a lot of weight, and the type checker is doing a lot of work!  For
+example, the fact that it typechecks means that all of the functions cover all
+possible inputs, and all expressions throughout all phases are guaranteed
+to be scope correct, as is unification. This is a major source of bugs in a
+type checker and compiler.</td></tr>
+</tbody>
+</table>
+</div>
+
+	<hr>
+      </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

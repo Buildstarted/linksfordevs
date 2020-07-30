@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Handling SPA Fallback Paths in a Generic ASP.NET Core Server - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Handling SPA Fallback Paths in a Generic ASP.NET Core Server - linksfor.dev(s)"/>
+    <meta property="article:author" content="https://facebook.com/rickstrahl"/>
+    <meta property="og:description" content="When building ASP.NET Core backends for SPA applications one thing that you have to worry about is how to handle client side routes that end up being fired against the server through external or reloaded links. While ASp.NET Core has built-in support for this if you build a generic Web server, you might need a little more control on how to handle the Fallback routing functionality. Here&#x27;s how."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://weblog.west-wind.com/posts/2020/Jul/12/Handling-SPA-Fallback-Paths-in-a-Generic-ASPNET-Core-Server"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Handling SPA Fallback Paths in a Generic ASP.NET Core Server</title>
+<div class="readable">
+        <h1>Handling SPA Fallback Paths in a Generic ASP.NET Core Server</h1>
+            <div>by https://facebook.com/rickstrahl</div>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 14 Jul 2020</div>
+        <p><a href="https://weblog.west-wind.com/posts/2020/Jul/12/Handling-SPA-Fallback-Paths-in-a-Generic-ASPNET-Core-Server">https://weblog.west-wind.com/posts/2020/Jul/12/Handling-SPA-Fallback-Paths-in-a-Generic-ASPNET-Core-Server</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="ArticleBody" itemprop="articleBody">
+        
+        
+
+
+        <p><a href="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/FallbackBanner.jpg"><img src="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/FallbackBanner.jpg" alt=""></a></p>
+<p>In a  <a href="https://weblog.west-wind.com/posts/2020/Jun/12/Adding-Additional-Mime-Mappings-to-the-Static-File-Provider">recent post</a> I talked about adding support for custom mime maps in my generic Live Reload Web Server that is a generic Web Server implementation in ASP.NET Core. Point it at a folder and go... When building a generic server like this you find out that there are all sorts of edge cases - like the <code>.dll</code> file extensions not being served that I covered in the last post for example.</p>
+<p>In this post I deal with another application specific scenario:  Handling client side routed URL handling when the client side routes fall through to the server when a the client route is externally navigated to, or a page is hard refreshed in the browser.</p>
+<p>If you're running a full ASP.NET Core application there are middleware components for this using <code>routes.MapFallbackXXX()</code> methods. While that works in an MVC or Razor Page application in a generic server there may not be any explicit routing beyond static file serving. So in this post I'll describe a simple middleware handler that generically and application specifically handles similar logic.</p>
+<h2 id="client-side-route-fallback"><a name="client-side-route-fallback" href="#client-side-route-fallback"></a>Client Side Route Fallback?</h2>
+<p>What is client side route fallback and why does a site need it?</p>
+<p>When you run a client side application that includes client side routing, you're relying on client side routes - or extensionless URLs typically - to specify which component/page to load.</p>
+<p>A route like:</p>
+<pre><code>https://site.com/albums/1
+</code></pre>
+<p>can be interpreted <strong>either as a client side route or as a server side route</strong>.</p>
+<h3 id="client-side-navigation"><a name="client-side-navigation" href="#client-side-navigation"></a>Client Side Navigation</h3>
+<p>In a client side SPA application this route triggers the client side router that knows how go to a specific album page <a href="https://albumviewer.west-wind.com/album/1">like this</a>. Behind the scenes this route is handled <strong>entirely on the client side</strong> by - in this case - the Angular router that intercepts the Browser client side navigation APIs to recognize that the URL has changed and tries to map the new URL to a pre-configured client side route. Effectively this code is all part of the single page - <code>index.html</code> - that is running the entire client side application.</p>
+<p>This works just fine - as long as the user stays within the application and doesn't hard refresh the page. IOW, clicking through the application using app internal links will all trigger client side route navigation.</p>
+<h3 id="server-side-navigation-of-client-side-routes"><a name="server-side-navigation-of-client-side-routes" href="#server-side-navigation-of-client-side-routes"></a>Server Side Navigation of Client Side Routes?</h3>
+<p>But client side routes can fall apart if links are:</p>
+<ul>
+<li>Accessed from outside of the Client Application</li>
+<li>A page is hard refreshed</li>
+</ul>
+<p>In both of those scenarios the client application <strong>does not have control of the routing</strong> process which results in navigation that goes back to the server.</p>
+<p>So this route:</p>
+<pre><code>https://site.com/albums/1
+</code></pre>
+<p>now goes all the way back to the server, which typically is not supposed to handle this URL. The result of that is usually a <strong>404 - Not Found</strong> server error. Hrrmmph - not what you want!</p>
+<h2 id="fixing-route-fallbacks"><a name="fixing-route-fallbacks" href="#fixing-route-fallbacks"></a>Fixing Route Fallbacks</h2>
+<p>So, my LiveReloadServer application is a generic Web server which primarily allows you to serve static files. By default it doesn't know anything about routes of any kind and since it is a generic Web server that you simply point at a folder to start serving requests, it also <strong>knows nothing about a client side application</strong>.</p>
+<p>I can point the Live Reload Server at the above mentioned Angular AlbumViewer application local folder like this:</p>
+<pre><code>LiveReloadServer --webroot /projects/albumviewer/albumviewerserver/wwwroot
+</code></pre>
+<p>and it will serve that application from index.html and that works fine.</p>
+<p>Notice that the default <strong>client side route</strong> is albums and it works:</p>
+<p><a href="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/NowItWorksClientSide.png"><img src="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/NowItWorksClientSide.png" alt=""></a></p>
+<p>But if I now navigate explicitly <strong>to the very same URL</strong> or hard refresh the previous page I get:</p>
+<p><a href="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/NowItDoesntServerSide.png"><img src="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/NowItDoesntServerSide.png" alt=""></a></p>
+<p>Now it <strong>doesn't work!</strong>.</p>
+<p><strong>Same URL - very different results!</strong></p>
+<p>The first is a client side handled route. The second a server side failed route because the server has no idea how to process the client side route.</p>
+<p>The reason for this is that the hard refresh or external browser address bar or external site link access is not getting routed at the client; it's getting routed through to the server. The only way the client gets involved is if somehow <code>index.html</code> is accessed and bootstraps the client side application and with it the client side router. But when I directly go to <code>/albums</code> from the address bar for example, that is not the case.</p>
+<p>Unless the server has some special handling of these invalid client routes, it will try to serve these client routes and because nothing is mapped to these URLs it fails with a <code>404 - Not found</code>. In this case in my Live Reload server, that's the 404 error page in the second screen shot.</p>
+<h3 id="handling-fallbacks-with-built-in-endpoints-and-route-processing"><a name="handling-fallbacks-with-built-in-endpoints-and-route-processing" href="#handling-fallbacks-with-built-in-endpoints-and-route-processing"></a>Handling Fallbacks with built-in EndPoints and Route Processing</h3>
+<p>If you're using a full ASP.NET Core MVC or Razor Pages application you can use the Spa Fallback endpoint mappings (in Core 3.x) to handle this for you. Basically any URL that falls through the standard routing automatically gets routed back to a URL you specify - which typically is <code>index.html</code>:</p>
+<pre><code>
+<span>if</span> (ServerConfig.UseRazor || ServerConfig.UseMarkdown ||
+    !<span>string</span>.IsNullOrEmpty(ServerConfig.FolderNotFoundFallbackPath))
+    app.UseRouting();  
+
+...
+
+<span>if</span> (!<span>string</span>.IsNullOrEmpty(ServerConfig.FolderNotFoundFallbackPath))
+{
+    app.UseEndpoints(endpoints =&gt;
+    {
+        endpoints.MapFallbackToFile(<span>"/index.html"</span>);
+    });
+}
+</code></pre>
+<p><strong>And this works.</strong> Basically <strong>any unknown extensionless URL</strong> now re-routes back to the <code>index.html</code> which is what we'd want here.</p>
+<p>But when routing to a missing extension link you get browser 'Page not Found' error page:</p>
+<p><a href="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/BrokenLinkwithMiddleware.png"><img src="https://weblog.west-wind.com/images/2020/Handling-SPA-Fallback-Paths-in-a-Generic-ASP.NET-Core-Server/BrokenLinkwithMiddleware.png" alt=""></a></p>
+<p>Which in my case of the LiveReloadServer is not quite what I want, but in the scope of a full MVC/Razor application is probably handled with error page handling.</p>
+<p>So while this works this engages a bunch of ASP.NET Core infrastructure that otherwise is not needed in my generic server. To make this work I now would have to add error pages and routing to error pages etc.</p>
+<h3 id="custom-fallback-handling"><a name="custom-fallback-handling" href="#custom-fallback-handling"></a>Custom Fallback Handling</h3>
+<p>There are simple alternatives though that offer more control. So to make this simpler and more generic, I chose to just implement a simpler, application specific fallback middleware handler which selectively handles the fallback processing depending on whether a fallback page is defined in the configuration, and then displays a custom 404 error page.</p>
+<pre><code>
+
+
+
+
+
+
+<span><span>private</span> <span>async</span> Task <span>FallbackMiddlewareHandler</span>(<span>HttpContext context, Func&lt;Task&gt; next</span>)</span>
+{
+    
+    <span>if</span> (<span>string</span>.IsNullOrEmpty(ServerConfig.FolderNotFoundFallbackPath))
+    {
+        <span>await</span> Status404Page(context);
+        <span>return</span>;
+    }
+
+    
+    <span>var</span> path = context.Request.Path;
+    <span>if</span> (<span>string</span>.IsNullOrEmpty(Path.GetExtension(path)))
+    {
+        <span>var</span> file = Path.Combine(ServerConfig.WebRoot,
+            ServerConfig.FolderNotFoundFallbackPath.Trim(<span>'/'</span>, <span>''</span>));
+        <span>var</span> fi = <span>new</span> FileInfo(file);
+        <span>if</span> (fi.Exists)
+        {
+            <span>if</span> (!context.Response.HasStarted)
+            {
+                context.Response.ContentType = <span>"text/html"</span>;
+                context.Response.StatusCode = <span>200</span>;
+            }
+
+            <span>await</span> context.Response.SendFileAsync(<span>new</span> PhysicalFileInfo(fi));
+            <span>await</span> context.Response.CompleteAsync();
+        }
+        <span>else</span>
+        {
+            <span>await</span> Status404Page(context,isFallback: <span>true</span>);
+        }
+    }
+
+}
+</code></pre>
+<p>This code hooks up in <code>Configure()</code> the same way as the endpoint routes at the end of the middleware pipeline:</p>
+<pre><code>app.Use(FallbackMiddlewareHandler);
+</code></pre>
+<p>which now catches <strong>any request that didn't get handled by another processor</strong>. If I have a fallback route configured and if the URL is extensionless it goes to the fallback route - otherwise it falls back to my custom 404 error 'page' which is just a <code>Response.WriteAsync()</code> output bit that is generic and doesn't require pulling in MVC or Razor pages (the latter of which are only pulled into the LiveReloadServer when explicitly enabling Razor or Markdown features which are optional).</p>
+<p>The behavior is similar to the built-in functionality but it gives me in this very generic server implementation a little more control over how I handle fall through requests. As a bonus it doesn't require (but works with) the overhead of the ASP.NET Core routing framework which is not needed when only serving static files or handling live reload processing which is the primary use case for this application.</p>
+<h2 id="summary"><a name="summary" href="#summary"></a>Summary</h2>
+<p>When it comes to running SPA applications in ASP.NET Core there are lots of little things you need to think about to make sure it works with edge case scenarios like Client Side Route Fallbacks. It's good to see that for the most part these scenarios are easily addressed with existing middleware that's provided out of the box by the ASP.NET Core framework. For most ASP.NET Core MVC, Razor or plain API applications, the <code> endpoints.MapFallbackXXX()</code> are probably sufficient to provide fallback route handling.</p>
+<p>But when you need more control it's easy enough to create a custom middleware handler that performs the exact logic you need to. This is the beauty of a clean middleware pipeline as ASP.NET Core provides now that allows you hook even into fairly low level operations and provide custom behavior. Which is exactly what the doctor ordered for my LiveReloadServer... Sweet.</p>
+<h2 id="resources"><a name="resources" href="#resources"></a>Resources</h2>
+<ul>
+<li><a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/tree/master/LiveReloadServer">Live Reload Server Project</a></li>
+<li><a href="https://github.com/RickStrahl/AlbumViewerVNext">Album Viewer Angular Project</a></li>
+</ul>
+
+
+
+
+
+        
+        
+        
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

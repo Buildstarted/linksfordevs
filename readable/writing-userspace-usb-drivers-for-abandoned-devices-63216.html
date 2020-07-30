@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Writing userspace USB drivers for abandoned devices - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Writing userspace USB drivers for abandoned devices - linksfor.dev(s)"/>
+    <meta property="og:description" content="Translations are available in: &#x440;&#x443;&#x441;&#x441;&#x43A;&#x438;&#x439;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.benjojo.co.uk/post/userspace-usb-drivers"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Writing userspace USB drivers for abandoned devices</title>
+<div class="readable">
+        <h1>Writing userspace USB drivers for abandoned devices</h1>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 21 Jun 2020</div>
+        <p><a href="https://blog.benjojo.co.uk/post/userspace-usb-drivers">https://blog.benjojo.co.uk/post/userspace-usb-drivers</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<h3>Nov 17 2019</h3>
+
+<p>Translations are available in: <a href="https://m.habr.com/en/post/476434/">русский</a></p>
+<p><img src="https://blog.benjojo.co.uk/asset/HxOiDPsE83" alt="A picture of some Epiphan VGA2USB LR"></p>
+<p>I recently found some USB devices on eBay (Epiphan VGA2USB LR) that could take VGA as input and present the output as a webcam. Given that I was keen on the idea of not needing to lug out a VGA monitor ever again and there was claimed Linux support I took the risk and bought the whole job lot for about £20 (25 USD).</p>
+<p>When they arrived, I plugged one in under the expectation that it would come up as <a href="https://en.wikipedia.org/wiki/USB_video_device_class">USB UVC Devices</a> but they did not. Was I missing something?</p>
+<p>After looking through the vendors site I discovered there was a custom driver required for them to work. As I normally live the easy life on Linux of never needing to pull in drivers because the distribution kernel I am using has them already, this was a reasonably novel concept.</p>
+<p>Sadly, it seems like driver support for the devices in question ended at Linux 4.9. Meaning none of my systems would run this device anymore (Debian 10 [Linux 4.19] or latest LTS Ubuntu [Linux 5.0])</p>
+<p>But surely this was something I could patch myself right? Surely the package files where actually just a <a href="https://en.wikipedia.org/wiki/Dynamic_Kernel_Module_Support">DKMS package</a> that built the driver from source code on demand like a lot of the out of tree drivers out there…</p>
+<p>Sadly. This was not the case.</p>
+<p>Inside the package is just a pre-compiled binary called <code>vga2usb.o</code>. I started doing some basic investigations on how hard it might be to reverse engineer and found some interesting string table entries:</p>
+<pre><code>$ strings vga2usb.ko | grep 'v2uco' | sort | uniq
+v2ucom_autofirmware
+v2ucom_autofirmware_ezusb
+v2ucom_autofirmware_fpga
+</code></pre>
+<p>Is this device actually an <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>-on-a-stick? What would the process be to get something like that running even look like?</p>
+<p>Another both amusing and mildly alarming find was the strings for DSA private key parameters. This made me wonder if there was private key material inside this driver and what could be protected with it:</p>
+<pre><code>$ strings vga2usb.ko | grep 'epiphan' | sort | uniq
+epiphan_dsa_G
+epiphan_dsa_P
+epiphan_dsa_Q
+</code></pre>
+<p>To observe the driver in its normal operating environment, I made a Debian 9 (the last supported release) VM, and did a <a href="https://www.linux-kvm.org/page/USB_Host_Device_Assigned_to_Guest">KVM USB Passthrough</a> to give it direct access to the device. I then installed the driver and confirmed that it worked.</p>
+<p>After that, I wanted to see what the wire protocol looked like. I was hoping that the device sent raw (or close to raw frames) over the wire as this would make the task of writing a user space version of the driver easier.</p>
+<p>To do this, I loaded the <code>usbmon</code> module on the VM’s host machine and used Wireshark to take a packet capture of the USB traffic to and from the device during startup and whilst capturing video.</p>
+<p><img src="https://blog.benjojo.co.uk/asset/b4DO78cWI0" alt="Wireshark IO graph of USB traffic over time"></p>
+<p>I found that on device startup there was a large number of small packets to the device before the device could capture data. I assumed that this meant that the device was in fact as described above an FPGA based platform that had no persistent storage. Every time the device was plugged in the devices firmware would have to be “<a href="https://web.archive.org/web/20191109230917/https://www.xilinx.com/html_docs/xilinx2018_1/SDK_Doc/SDK_concepts/concept_fpgabitstream.html">bitstreamed</a>” from the driver itself.</p>
+<p>I confirmed this by opening one of the units up:</p>
+<p><img src="https://blog.benjojo.co.uk/asset/nZzz9nqMWu" alt="The inside of a Epiphan VGA2USB LR"></p>
+
+<table><tbody><tr><td colspan="1" rowspan="1"></td><td colspan="1" rowspan="1"><p><span>ISL98002CRZ-170 - Acting as an Analog to Digital Converter for the VGA signals</span></p></td></tr><tr><td colspan="1" rowspan="1"></td><td colspan="1" rowspan="1"><p><span>XC6SLX16 - Xilinx Spartan 6 FPGA </span></p></td></tr><tr><td colspan="1" rowspan="1"></td><td colspan="1" rowspan="1"><p><span>64 MB of DDR3 RAM</span></p></td></tr><tr><td colspan="1" rowspan="1"></td><td colspan="1" rowspan="1"><p><span>CY7C68013A - USB Controller / Frontend for the device</span></p></td></tr></tbody></table>
+<p>Given that to “boot” this device I needed the bitstream to send to it, I got to work on the pre-compiled binaries to try to extract the bitstream/firmware. After running <code>binwalk -x</code> and watching it find a few (zlib) compressed objects. I wrote a script that would search them for a known hex sequence and picked 3 bytes from the pcap that I knew were from the bitstreaming process to search for</p>
+<pre><code>$ bash scan.sh "03 3f 55"
+trying 0.elf
+trying 30020
+trying 30020.zlib
+trying 30020.zlib.decompressed
+...
+trying 84BB0
+trying 84BB0.zlib
+trying 84BB0.zlib.decompressed
+trying AA240
+trying AA240.zlib
+trying AA240.zlib.decompressed
+000288d0  07 2f 03 3f 55 50 7d 7c  00 00 00 00 00 00 00 00  |./.?UP}|........|
+trying C6860
+trying C6860.zlib
+</code></pre>
+<p>After decompressing the AA240.zlib file. I found that there was not enough data there to be the full bitstream. So I instead went down the route of extracting the firmware out of the USB packet capture.</p>
+<p>I found that while both <a href="https://linux.die.net/man/1/tshark">tshark</a> and <a href="https://linux.die.net/man/8/tcpdump">tcpdump</a> can read USB packets inside pcap files, they both would only dump bits of information in the capture. Since that each program had different parts of the puzzle, I wrote a <a href="https://github.com/benjojo/userspace-vga2usb/blob/master/utils/tcpdump-to-arrays/main.go">small program that would unify the output of both programs</a> into <a href="https://github.com/benjojo/userspace-vga2usb/blob/master/driver/usb-init.go">go structs so they could be replayed back to the device</a>.</p>
+<p>At this point I noticed that bootstrapping comes in two stages, first the USB controller and then for the FPGA itself.</p>
+<p>For at least a few days I was stuck on an issue where it would appear the whole bitstream would upload. But the device would not start up, despite it seeming like the packet captures between the real driver and userspace one looking identical.</p>
+<p>This was eventually solved by combing through the pcap paying attention to the time it took to respond to each packet and noticing a large difference in one particular packet’s timing:</p>
+<p><img src="https://blog.benjojo.co.uk/asset/HH2MDBUaag" alt="Timing difference shown between two pcaps in wireshark"></p>
+<p>It turned out a manually entered <a href="https://github.com/benjojo/userspace-vga2usb/commit/3cbadd1de1a376f057495335276aa0f54d662ab8">typo</a> caused an USB control write to go to the wrong area of a device. Serves me right for manually entering a value in…</p>
+<p>Regardless, I now had a green blinking led on the device! A massive achievement!</p>
+<video id="video1" autoplay="true" muted="true" loop="" controls=""><source src="https://blog.benjojo.co.uk/asset/hwDmbj53li" type="video/mp4">Your browser does not support H.264 HTML5 video.</video>
+<p>Since it was relatively trivial to replicate the same packets that seemed to start the data streaming, I was able to write up a USB Bulk transfer endpoint and have data being dumped to disk in no time!</p>
+<p>This is where the real challenge started. Because after analysis it appeared that the data was not obviously encoded in any way.</p>
+<p>To start with, I used <a href="https://perf.wiki.kernel.org/index.php/Main_Page">perf</a> to get a general view of what the driver stack traces looked like while it was running:</p>
+<p><img src="https://blog.benjojo.co.uk/asset/E1SquxvWDr" alt="perf stack trace from inside the driver"></p>
+<p>Whilst I made progress with being able to hook functions that had frame data in them, I still didn’t get any closer to figuring out the encoding of the image data
+itself.</p>
+<p><img src="https://blog.benjojo.co.uk/asset/vCCff3iKXC" alt="ffmpeg running while showing a kprobe trace running at the same rate"></p>
+<p>I did try the <a href="https://ghidra-sre.org/">NSA’s Ghidra</a> to get a better idea of what was going on inside of the real driver:</p>
+<p><img src="https://blog.benjojo.co.uk/asset/1UXf46dMDW" alt="a sample of some of the decompiled C from ghidra"></p>
+<p>While Ghidra is incredible (this was my first time using it compared to IDA Pro) it still wasn’t quite good enough to reasonably help me understand the driver. I needed another path of investigation if I was going to reverse engineer this.</p>
+<p>I decided to provision a Windows 7 VM and check if the Windows driver was doing anything different, I also noticed during that time that there was a SDK for the devices. One of the tools ended up being of particular interest:</p>
+<pre><code>PS&gt; ls
+
+    Directory: epiphan_sdk-3.30.3.0007piphanin
+
+Mode                LastWriteTime     Length Name
+----                -------------     ------ ----
+-a---        10/26/2019  10:57 AM     528384 frmgrab.dll
+-a---        10/27/2019   5:41 PM    1449548 out.aw
+-a---        10/26/2019  10:57 AM     245760 v2u.exe
+-a---        10/26/2019  10:57 AM      94208 v2u_avi.exe
+-a---        10/26/2019  10:57 AM     102400 v2u_dec.exe
+-a---        10/26/2019  10:57 AM     106496 v2u_dshow.exe
+-a---        10/26/2019  10:57 AM     176128 v2u_ds_decoder.ax
+-a---        10/26/2019  10:57 AM      90112 v2u_edid.exe
+-a---        10/26/2019  10:57 AM      73728 v2u_kvm.exe
+-a---        10/26/2019  10:57 AM      77824 v2u_libdec.dll
+
+PS&gt; .2u_dec.exe
+Usage:
+      v2u_dec &lt;number of frames&gt; [format] [compression level] &lt;filename&gt;
+               - sets compression level [1..5],
+               - captures and saves compressed frames to a file
+      v2u_dec x [format] &lt;filename&gt;
+               - decompresses frames from the file to separate BMP files
+
+</code></pre>
+<p>This tool let you fire “one shot” captures, noting that in the source it didn’t apply compression to the frames so that the output can be processed on a faster machine later. This was practically perfect, and I replicated the USB packet sequence to obtain these uncompressed blobs, and looking at the byte counts, it matched with getting around 3 bytes (RGB) per pixel!</p>
+<p>Initial processing of these images (just taking the output and writing it as RGB pixels) resulted in something roughly inspired by the input I was giving to the device over VGA:</p>
+<p><img src="https://blog.benjojo.co.uk/asset/b906ft5sko" alt="The mess that has some resembalnce to the input"></p>
+<p>After some more debugging with a hex editor, I discovered there was some kind of marker every 1028 bytes, it took a slightly embarrassing amount of time to write a watertight filter for that, On the other hand I ended up producing some modern art in the process.</p>
+<p><img src="https://blog.benjojo.co.uk/asset/rFq7xsP1mG" alt="Is it a programming error or modern brand art, who knows"></p>
+<p>After realising that the tilt/sheer in the image was caused by me skipping and carrying over a pixel on every line (x=799 != x=800), I finally ended up with an image that was almost spot on apart from the colour:</p>
+<p><img src="https://blog.benjojo.co.uk/asset/TDJA6sSD2r" alt="A very orange or pink AB test pattern"></p>
+<p>Initially I thought this might have been a calibration thing, caused because I took some sample data when the VGA input was stuck on a solid colour, in order to fix this I built a new test image that would try to smoke these issues out, in hindsight I should have used something like a <a href="https://en.wikipedia.org/wiki/Philips_PM5544">Philips PM5544 test card</a></p>
+<p><img src="https://blog.benjojo.co.uk/asset/gkkoEwa84M" alt="The test card I made"></p>
+<p>After loading this image on to the VGA producing laptop, I ended up with an output of:</p>
+<p><img src="https://blog.benjojo.co.uk/asset/Hheephm37g" alt="The test card before correction"></p>
+<p>At this point I had a flashback to some 3d rendering/shader work I did long ago. This looked a lot like <a href="https://en.wikipedia.org/wiki/YUV">YUV colour</a>.</p>
+<p>I ended up reading up on YUV and remembered during my reverse engineering of the official kernel driver I’d found if I set a breakpoint on a function called <code>v2ucom_convertI420toBGR24</code> the system would hang without the ability to resume. So maybe the input was in I420 encoding (of <code>-pix_fmt yuv420p</code> fame) and the expected output was Blue Green and Red as 8 bit bytes?</p>
+<p>After using Go’s built in <a href="https://golang.org/pkg/image/color/#YCbCrToRGB">YCbCrToRGB</a> the image suddenly looked much closer to the original.</p>
+<p><img src="https://blog.benjojo.co.uk/asset/Wph3BCuLLY" alt="yay, a perfectly coded test card"></p>
+<p>We did it! Despite the “WIP” quality we were able to do 7 FPS. Honestly, for me that was good enough, since my use for these are as an emergency VGA screen rather than anything else.</p>
+<p>So now we know this device well enough to explain how to operate it from a cold boot:</p>
+<ol>
+<li>You need to <a href="https://github.com/benjojo/userspace-vga2usb/blob/78951fb0131b0dec4c1cec42d31007693f813adf/driver/main.go#L65-L91">initialise the USB controller</a>. I assume based on the size of information, this is actually uploading code to the USB controller</li>
+<li>When you’ve done the USB upload, the device will disconnect from the USB bus, and come back a moment later, with only a single USB endpoint.</li>
+<li>You can then start <a href="https://github.com/benjojo/userspace-vga2usb/blob/78951fb0131b0dec4c1cec42d31007693f813adf/driver/main.go#L105-L128">sending the FPGA bitstream</a>, one 64 byte USB control packet at a time.</li>
+<li>Once you are finished, the LED on the device will start blinking green. At this point you can send what appears to be a <a href="https://github.com/benjojo/userspace-vga2usb/blob/78951fb0131b0dec4c1cec42d31007693f813adf/driver/main.go#L145-L166">parameter sequence</a> (overscan and other properties)</li>
+<li>You can then <a href="https://github.com/benjojo/userspace-vga2usb/blob/a747a9cde3c00b317c58a5d08d41322c6381894c/driver/main.go#L208-L218">fire a single control packet to get a frame</a>, the control packet has the resolution embedded in it. If you use a 4:3 request packet on a widescreen input you will often end up with a corrupted input.</li>
+</ol>
+<p>To make use as easy as possible, I ended up rigging up a small web server inside the driver to make it super easy to use in a rush. Thanks to the <a href="https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder">MediaRecorder API</a> in browsers, it also allows for an easy way to record the output of the screen to a video file.</p>
+<p><img src="https://blog.benjojo.co.uk/asset/F8IH6iBgxA" alt="Example liveview page"></p>
+<p>As I’m sure a lot of people can relate regarding experimental code; I can’t say I’m proud of the code quality. But it’s likely in the state where it works well enough for me to use.</p>
+<p>You can find the code for this (and pre-built versions for Linux and OSX) on github: <a href="https://github.com/benjojo/userspace-vga2usb/">https://github.com/benjojo/userspace-vga2usb/</a></p>
+<p>Even if this is never used by anyone else, this was a hell of a roller coaster in USB protocol details, kernel debugging/module reverse engineering, and general video format decoding! If you liked this kind of stuff, you may like <a href="https://blog.benjojo.co.uk/">the rest of the blog</a>. If you want to stay up to date with what I do next you can use my blog’s <a href="https://blog.benjojo.co.uk/rss.xml">RSS Feed</a> or you can follow me on <a href="https://twitter.com/benjojo12">twitter</a></p>
+<p>Until next time!</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

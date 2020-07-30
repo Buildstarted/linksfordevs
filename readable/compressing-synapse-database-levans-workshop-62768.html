@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Compressing Synapse database | Levans&#x27; workshop - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Compressing Synapse database | Levans&#x27; workshop - linksfor.dev(s)"/>
+    <meta property="og:description" content="Anyone running a federating instance of the Matrix homeserver Synapse will likely have seen this: synapse is database-hungry. It tends to take a lot of space. In this post, I&#x27;m documenting how I shrunk my homeserver database from 100GB to a little under 8GB, during a long maintenance cleanup. There &#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://levans.fr/shrink-synapse-database.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Compressing Synapse database | Levans&#x27; workshop</title>
+<div class="readable">
+        <h1>Compressing Synapse database | Levans&#x27; workshop</h1>
+            <div>Reading time: 7-8 minutes</div>
+        <div>Posted here: 11 Jun 2020</div>
+        <p><a href="https://levans.fr/shrink-synapse-database.html">https://levans.fr/shrink-synapse-database.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+      <p>Anyone running a federating instance of the <a href="https://matrix.org/">Matrix</a> homeserver
+<a href="https://github.com/matrix-org/synapse">Synapse</a> will likely have seen this: synapse is database-hungry. It
+tends to take a lot of space. In this post, I'm documenting how I shrunk my homeserver database from 100GB
+to a little under 8GB, during a long maintenance cleanup.</p>
+<p>There are mostly three reasons the synapse database tends to get large over time:</p>
+<ul>
+<li>Stuff that no longer needs to be kept around and should be deleted</li>
+<li>Synapse is extremely cache-happy, and this takes a lot of space</li>
+<li>Table bloat &amp; Index bloat in PostgreSQL</li>
+</ul>
+<p>Lets tackle all 3 of them, one after the other</p>
+<h2>Stuff that no longer needs to be kept around</h2>
+<h4>Forgotten rooms</h4>
+<p>The first and immediate thing that can be deleted are rooms which no longer contain any of your local users.
+These rooms take space in your database, and no longer serve any purpose. At some point synapse may
+<a href="https://github.com/matrix-org/synapse/issues/4720">learn to garbage-collect them</a>, but for now we need to do
+this by hand using the admin synapse APIs.</p>
+<p>First of all we need to identify these rooms. We can retrieve the roomlist using the
+<a href="https://github.com/matrix-org/synapse/blob/develop/docs/admin_api/rooms.md">rooms API</a>, like so:</p>
+<div><pre><span></span>curl --header <span>"Authorization: Bearer &lt;your access token&gt;"</span> <span>\</span>
+    <span>'https://matrix.my.home/_synapse/admin/v1/rooms?limit=300'</span> &gt; roomlist.json
+</pre></div>
+
+
+<p>You'll need to replace <code>&lt;your access token&gt;</code> by an access token of
+<a href="https://github.com/matrix-org/synapse/blob/develop/docs/admin_api/README.rst">an admin account</a>, and you can
+set <code>limit=XXX</code> to some value higher than your number of rooms, to ensure you get the whole list. If you are
+unsure of the total amount of rooms your HS has, the returned JSON contains a <code>"total_rooms"</code> key with that
+count.</p>
+<p>Then, we can extract from that list the rooms with no local users:</p>
+<div><pre><span></span>jq <span>'.rooms[] | select(.joined_local_members == 0) | .room_id'</span> &lt; roomlist.json &gt; to_purge.txt
+</pre></div>
+
+
+<p>And then, we can purge these rooms one after the other using the
+<a href="https://github.com/matrix-org/synapse/blob/develop/docs/admin_api/purge_room.md">purge API</a>:</p>
+<div><pre><span></span>curl --header <span>"Authorization: Bearer &lt;your access token&gt;"</span> <span>\</span>
+    -X POST -H <span>"Content-Type: application/json"</span> -d <span>"{ \"room_id\": \"</span><span>$room_id</span><span>\" }"</span> <span>\</span>
+    <span>'https://matrix.my.home/_synapse/admin/v1/purge_room'</span>
+</pre></div>
+
+
+<p>Note that these last requests won't return until synapse effectively has purged the room, which may take a
+while. As such, if your synapse is behind a reverse proxy, you might want to run these directly from the
+server hosting it on the local socket, to avoid your reverse-proxy from time-out-ing synapse. You'll want to
+wait for one purge to have finished before starting the next, so as to not overload your synapse and database.</p>
+<h4>Old history of large rooms</h4>
+<p>Very large rooms such as <code>#matrix:matrix.org</code> tend to accumulate quite a lot of history, and you may want to
+get rid of it. You can do so using the
+<a href="https://github.com/matrix-org/synapse/blob/develop/docs/admin_api/purge_history_api.rst">purge history api</a>:</p>
+<div><pre><span></span>curl --header <span>"Authorization: Bearer &lt;your access token&gt;"</span> <span>\</span>
+    -X POST -H <span>"Content-Type: application/json"</span> <span>\</span>
+    -d <span>'{ "delete_local_events": false, "purge_up_to_ts": 1577836800000 }'</span> <span>\</span>
+    <span>"https://matrix.my.home/_synapse/admin/v1/purge_history/</span><span>$room_id</span><span>"</span>
+</pre></div>
+
+
+<p>Here, you can decide to also delete historical events from the users of your HS (for which you are the
+original source, meaning no-one will be able to retrieve them from you any more), and you can specify some
+timestamp <em>in milliseconds</em> up to which the history should be purged.</p>
+<h2>Optimizing synapse cache</h2>
+<p>Now that all the stuff to be removed has been removed, we can start tidying up the rest, and compressing
+Synapse cache. This step will need to be done on the server, as we'll directly access the PostgreSQL database.</p>
+<p>The main table responsible for database bloat is <code>state_groups_state</code>, which is inefficiently managed. But
+luckily, the matrix team have developed a tool that can be used to selectively compress the state of a room:
+<a href="https://github.com/matrix-org/rust-synapse-compress-state">synapse-compress-state</a>. You'll need to clone it
+and compile it (it's a rust program, just <code>cargo build --release</code> it and copy the resulting binary on your
+server).</p>
+<p>Now, this tool needs to be run individually on rooms, so lets first identify which rooms are in need of such a
+compression. They are generally very large rooms and rooms bridged to IRC, which encounter a lot of state
+changes due to the numerous leaves and joins.</p>
+<p>This SQL request will give you a list of your rooms and their number of group states:</p>
+<div><pre><span></span><span>SELECT</span> <span>room_id</span><span>,</span> <span>count</span><span>(</span><span>*</span><span>)</span> <span>AS</span> <span>count</span>
+    <span>FROM</span> <span>state_groups_state</span>
+    <span>GROUP</span> <span>BY</span> <span>room_id</span>
+    <span>ORDER</span> <span>BY</span> <span>count</span> <span>DESC</span><span>;</span>
+</pre></div>
+
+
+<p>Overall, I considered rooms with a count larger than 100.000 to be in need of being cleaned up.</p>
+<p>To analyze a room for compression, run the previously linked tool like so:</p>
+<div><pre><span></span>synapse-compress-state -t -o state-compressor.sql <span>\</span>
+    -p <span>"host=localhost user=&lt;synapse db user&gt; password=&lt;synapse db password&gt; dbname=&lt;synapse db&gt;"</span> <span>\</span>
+    -r <span>"</span><span>$room_id</span><span>"</span>
+</pre></div>
+
+
+<p>This command will not modify your database, but instead generate a file <code>state-compressor.sql</code> containing the
+changes that it would apply. It'll also give you a summary of how much it has compressed the state of the
+room (for some of my rooms it went down to 0.4% of the original size). If you are happy with the compression,
+you can then apply the changes:</p>
+<div><pre><span></span>psql -U <span>'&lt;synapse db user&gt;'</span> <span>'&lt;synapse db name&gt;'</span> &lt; state-compressor.sql
+</pre></div>
+
+
+<p>And repeat to compress all of your rooms that need it. You can do all of this while your synapse instance is
+running.</p>
+<h2>3. Table bloat &amp; Index bloat in PostgreSQL</h2>
+<p><em>NOTE: This last step will require that you stop your Synapse instance to be done.</em></p>
+<p>After all those steps, your database size as reported by PostgreSQL using <code>\d+</code> may not have changed much.
+This is because PostgreSQL does not automatically free all this space, but instead keeps it around to reuse it
+when needed. This is generally a good idea, but we are here to reclaim this space because it took too much!</p>
+<h4>Index bloat</h4>
+<p>The first part to handle is the <a href="https://www.postgresql.org/docs/current/routine-reindex.html">index bloat</a>.
+Basically, the B-Tree structure that PostgreSQL uses for its indexes can become very space inefficient if a
+lot of entries are removed in a table. To solve this the remedy is simple: rebuild all the indexes.</p>
+<p>To do so, run this in PostgreSQL as the <code>postgres</code> superuser:</p>
+<div><pre><span></span><span>REINDEX</span> <span>(</span><span>VERBOSE</span><span>)</span> <span>DATABASE</span> <span>&lt;</span><span>synapse</span> <span>db</span><span>&gt;</span><span>;</span>
+</pre></div>
+
+
+<p>This will lock a large part of the database while it runs, hence why Synapse needs to be shut down in the
+meantime.</p>
+<p>On my database, this <code>REINDEX</code> freed about 40GB of space.</p>
+<h4>Table bloat</h4>
+<p>Similarly, we can tell PostgreSQL to return to the operating system all the space it is no longer using, using
+the <code>VACUUM</code> command, again to be run as <code>postgres</code> superuser in the Synapse database:</p>
+
+
+
+<p>PostgreSQL have several kinds of vacuum routines. The <code>VACUUM FULL</code> will lock the database and copy each table
+into new storage, freeing the previous one. This frees up space and compacts back the tables, solving
+fragmentation issues.</p>
+<p>And voilà, with all this, your Synapse database should have significantly shrunk in size. If not, that means
+it was in a way better shape than mine. ;)</p>
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Discovering Hard Disk Physical Geometry through Microbenchmarking &#xAB; Blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Discovering Hard Disk Physical Geometry through Microbenchmarking &#xAB; Blog - linksfor.dev(s)"/>
+    <meta property="article:author" content="By Henry, on September 6th, 2019"/>
+    <meta property="og:description" content="Modern hard drives store an incredible amount of data in a small space, and are still the default choice for high-capacity (though not highest-performance) storage. While hard drives have been around since the 1950s, the current 3.5&#x2033; form factor (actually 4&#x2033; wide) appeared in the early 1980s. Since then, the capacity of a 3.5&#x2033; drive has increased by about 106 times (from 10 MB to about 10 TB), sequential throughput by about 103 times, and access times by about 101 times. Although the basic concept of spinning magnetic disks accessed by a movable stack of disk heads has not changed, hard drives have become much more complex to enable the increased density and performance. Early drives had tens of thousands of sectors arranged in hundreds of concentric tracks (sparse enough for a stepper motor to accurately position the disk head), while current drives have billions of sectors (with thousands of defects), packed into hundreds of thousands of tracks spaced tens of nanometers apart."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Discovering Hard Disk Physical Geometry through Microbenchmarking &#xAB; Blog</title>
+<div class="readable">
+        <h1>Discovering Hard Disk Physical Geometry through Microbenchmarking &#xAB; Blog</h1>
+            <div>by By Henry, on September 6th, 2019</div>
+            <div>Reading time: 82-104 minutes</div>
+        <div>Posted here: 07 Sep 2019</div>
+        <p><a href="http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/">http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>Modern hard drives store an incredible amount of data in a small space, and are still the default choice for high-capacity (though not highest-performance) storage. While hard drives have been around since the 1950s, the current 3.5″ form factor (actually 4″ wide) appeared in the early 1980s. Since then, the capacity of a 3.5″ drive has increased by about 10<sup>6</sup> times (from 10 MB to about 10 TB), sequential throughput by about 10<sup>3</sup> times, and access times by about 10<sup>1</sup> times. Although the basic concept of spinning magnetic disks accessed by a movable stack of disk heads has not changed, hard drives have become much more complex to enable the increased density and performance. Early drives had tens of thousands of sectors arranged in hundreds of concentric tracks (sparse enough for a stepper motor to accurately position the disk head), while current drives have billions of sectors (with thousands of defects), packed into hundreds of thousands of tracks spaced tens of nanometers apart.</p>
+<p>Beyond just the high-level performance (throughput and seek time) measurements, which drive characteristics can be characterized using microbenchmarks? I had initially set out to detect the number of platters in a disk without opening up a disk, but in modern disks this simple-sounding task requires measuring several other properties before inferring the count of recording surfaces. Characterizing disk drive geometry has been done in the past [<a href="#paperkey_0">1</a>, <a href="#paperkey_1">2</a>], and the algorithms I used aren’t very different. However, older algorithms often make assumptions that are no longer true on modern drives. For example, the Skippy [<a href="#paperkey_1">2</a>] algorithm (a fast algorithm to measure the number of surfaces, cylinder switch times, and head switch times) no longer works on modern drives because the algorithm assumes one particular ordering of tracks onto multiple platters that is no longer used on modern disks (that several head switches occur before a seek to the next cylinder).</p>
+<p>Hard disk drives store data on a stack of one or more rotating magnetic disks. Data is written in concentric tracks. A stack of read/write heads move (radially) across the disks to position the head over the desired track. There are typically two heads per platter (one for each side), and the entire stack of heads move together as a single unit. Reading data occurs by moving the disk head to the desired track (a seek), waiting until the beginning of the desired data passes under the disk head, and then continuing to read sequentially until either all of the requested data is read, or the end of the track, when the head needs to be moved to the next track. A hard drive’s “geometry” describes how data is arranged into platters, tracks, and sectors. Historically, this was described using three numbers: <strong>C</strong>ylinders (number of concentric rings from outside to inside), <strong>H</strong>eads (number of recording surfaces, or the number of tracks per cylinder), and <strong>S</strong>ectors per track, leading to the well-known acronym <strong>CHS</strong>. The capacity of a hard drive in sectors is simply C×H×S. Today, C and S are variable and only H is still constant. The number of tracks is not necessarily the same on each recording surface, and the number of sectors per track varies across the disk (more sectors in the longer outer tracks than the inner tracks).</p>
+<p>This article describes several microbenchmarks that try to extract the physical geometry of hard disk drives, and a few other related measurements. These measurements include rotation period, the physical location (angle and radius) of each sector, track boundaries, skew, seek time, and some observations of defective sectors. I use these microbenchmarks to characterize a variety of hard drives from 45 MB (1989) to 5 TB (2015). There is no attempt to characterize other important performance aspects such as caching. The remainder of this article begins with a background on hard drive geometry. It then describes the collection of microbenchmarks, starting with a basic read access time measurement and building towards increasingly complex algorithms. The second part of the article presents microbenchmark measurements for each of the 17 drives that were tested.</p>
+<div>
+<h3>Summary</h3>
+<ul>
+<li><a href="#background">Background</a>: Hard drives consist of spinning disks, and a stack of heads. Data is arranged on recording surfaces (2 sides per platter), tracks, and sectors. “Cylinders” no longer exist in drives newer than around 2000.</li>
+<li><a href="#measurements">What can be measured</a>: RPM, angular position of every sector, and seek times, by timing specific sequences of sector reads. These basic measurement methods can then be used to find track boundaries, how tracks are arranged on a surface, and the number of surfaces.</li>
+<li><a href="#accesstime">Access time</a>: Out of the drives I tested, it takes 1.3 to 3.6 revolutions to do a full-stroke seek.
+<ul>
+<li>Heads accelerate slowly: Very few tracks are accessible in the first revolution.</li>
+<li><a href="#shortstroke">Short stroking</a> offers limited reduction in seek times because even short seeks take a relatively long time.</li>
+</ul>
+</li>
+<li><a href="#seektime">Seek time</a> is non-trivial to measure.
+<ul>
+<li>A seek time plot can be used to observe <a href="#aam">acoustic management</a> (AAM). AAM slows down long-distance seeks to reduce noise, but not short-distance seeks.</li>
+</ul>
+</li>
+<li><a href="#trackbounds">Track boundaries</a> can be found by searching the disk for track skew. Newer disks use different densities (track size) on each surface.
+<ul>
+<li>Track density and bit density can be estimated by knowing track count and size. In the newest drive I have, average track pitch is 80 nm and an average bit is 17 nm in length.</li>
+</ul>
+</li>
+<li>Combining seek profile and track size together usually reveals the <a href="#tracklayout">track layout</a>.
+<ul>
+<li>There is a large diversity of track layouts. Old drives had “cylinders” (several head switches occurs before a seek to the next track), but new drives use groups of adjacent tracks before changing heads.</li>
+</ul>
+</li>
+<li><a href="#trackskew">Track skew</a> can be measured using track boundary information.
+<ul>
+<li>There is more than one type of skew. A cylinder, serpentine, or zone change usually uses a bigger skew than for adjacent tracks.</li>
+<li>Track skew is usually constant from beginning to end of the drive, but not on the Maxtor 7405AV. Track skew is usually the same on every recording surface, but not on the Seagate ST1.</li>
+</ul>
+</li>
+<li>Combining the above tools can find and visualize <a href="#defects">defective sectors</a>. Most disks have holes of defective sectors, while some skip over entire tracks.</li>
+<li><a href="#microbenchmarking">Microbenchmarking is hard</a>. Despite much effort, my algorithms do not work flawlessly.</li>
+<li><a href="http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/2/">Measurement results for 17 hard drive models</a> from 45 MB to 5 TB on Page 2.</li>
+</ul>
+</div>
+<h2 id="background">Background: Hard drive geometry</h2>
+<div id="attachment_2956"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/chs.svg"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/chs.svg" alt="" width="480"></a></p><p>Sectors, tracks, and cylinders. A cylinder is the collection of all tracks at the same radius (6 tracks per cylinder shown here, on two sides and three platters).</p></div>
+<p>As seen by software, a hard drive looks like a big block of sectors, traditionally 512 bytes each (now 4,096 bytes), with little knowledge of the physical location of the sectors. For example, a 300 GB drive might have 585,937,500 512-byte sectors, numbered 0 through 585,937,499. Some early hard drive interfaces required the drive controller on the host computer to know the physical layout of the disk (because the controller sent commands to move the disk head). IDE hard drives (Integrated Drive Electronics, mid 1980s) finally integrated the disk controller into the drive. The integrated disk controller translates <em>logical</em> (as seen by software) sector numbers into <em>physical</em> locations, which presents a simple block-of-sectors interface to the host computer while allowing much more complex physical layouts. Unfortunately, for software compatibility reasons, the sector number was still encoded as a CHS triplet (three numbers, but unrelated to the true number of cylinders, heads, or sectors/track of the drive) for many more years until LBA (logical block addressing, encoding a sector number as one number) became popular.</p>
+<p>While logically just a big block of sectors, sectors, tracks, and heads (or recording surfaces) still physically exist. There is just no easy way for software to know about them. This section gives some basic definitions for these physical features. Many readers may already be familiar with these.</p>
+<h3>Sector</h3>
+<p>Data is stored in blocks of equal size. A sector is the smallest unit of data that can be read or written to a disk. 512-byte sectors have been standard since the 1980s, while new drives (around 2011) use 4096-byte sectors (branded as <a href="https://en.wikipedia.org/wiki/Advanced_Format">Advanced Format</a>). </p>
+<p>Sectors have additional metadata that are also written to the disk surface (such as its sector number and error correction codes). On drives using embedded servo (all non-ancient drives), there are also servo patterns on the disk which are used to position the disk head. All of this occupies space on the disk surface but is invisible to the host.</p>
+<h3>Tracks</h3>
+<p>A track is a circle of consecutive sectors placed on one disk surface along one revolution of the disk. Reading sectors within a track is done by having the head follow the track while the disk rotates. Crossing a track boundary requires moving the disk head to the next track (a track-to-track seek) or switching to a different head to read a track from a different disk surface (a head switch). Prior to <a href="https://en.wikipedia.org/wiki/Zone_bit_recording">zone bit recording</a>, every track on a disk was the same size (number of sectors). Zone bit recording packs more sectors into physically-longer outside tracks and fewer in the shorter inner tracks. Because one track (regardless of length) is read per revolution, hard drives have higher throughput near the beginning of the drive. Track size can also vary between recording surfaces, because the recording surface and head quality varies even within a single drive.</p>
+<p>Hard drives (like floppy disks) use concentric circular tracks, unlike CDs and DVDs which use a single spiral track.</p>
+<h3>Cylinders</h3>
+<p>A cylinder is a collection of tracks on multiple surfaces that are located at the same radius (If a track is a circle, then a stack of circles of the same diameter forms a cylinder). On older drives, tracks on different surfaces were aligned so that accessing tracks within the same cylinder only required switching heads (a faster electrical operation) but not moving the heads (a slower mechanical operation). Cylinders are no longer meaningful on modern drives. With increased track density, tracks on different recording surfaces aren’t aligned well enough to form cylinders and a head switch requires a larger head movement than moving to an adjacent track on the same surface, which makes a head switch <em>slower</em> than moving to an adjacent track.</p>
+<h3>Zones</h3>
+<div id="attachment_2964"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench.png" data-slb-active="1" data-slb-asset="2039854265" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench-360x256.png" alt="" width="360" height="256"></a></p><p>Disk throughput benchmark. About 20 zones are visible. Outer tracks have higher throughput than inner tracks, and throughput is constant within a zone.</p></div>
+<p>Because the outer tracks are physically longer, more sectors can be packed into outer tracks than the inner tracks. For simplicity, adjacent tracks are grouped into zones where every track within a zone has the same track size (number of sectors per track). Zone bit recording gives the familiar throughput curve where outer tracks have higher throughput than inner tracks, with throughput decreasing in discrete steps.</p>
+<p>Traditionally, zones were thought of as groups of cylinders, where all tracks on all surfaces in the zone had the same size. Because track size on modern drives can differ between recording surfaces, it only makes sense to think of a zone as a group of adjacent tracks on the same recording surface on modern drives.</p>
+<h3>Track Skew</h3>
+<div id="attachment_2872"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew.jpg" data-slb-active="1" data-slb-asset="1720839344" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew-1024x403.jpg" alt="" width="640" height="252" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew-1024x403.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew-360x142.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew-768x302.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew-150x59.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew-400x158.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/skew.jpg 1201w" sizes="(max-width: 640px) 100vw, 640px"></a></p><p><b>Left:</b> No skew. Every track starts at the same angular position. There is one wasted revolution after every track because it takes non-zero time to move to the next track. <b>Right:</b> Skew of 72° (1/5 revolution). After finishing a track, only 1/5 of a revolution is wasted if the head can move to the next track within that time.</p></div>
+<p>Sequential accesses read a track over one complete revolution, moves the head to the next track, then reads for another revolution. If all tracks started at the same angular position, the non-zero time to move to the next track would cause the head to miss the beginning of the next track by the time the head arrives, causing almost one complete revolution to be wasted. To mitigate this, each track is skewed so that it starts somewhat later than the previous track to give the disk head enough time to move from the end of the previous track to the start of the next track before the first sector of the next track appears under the head. With a proper choice of track skew, only a fraction of a rotation is wasted in between tracks. The drives I tested had skews from 6% to 36% of a rotation, implying that sequential accesses actually spend 74-94% of the time actually reading data.</p>
+<h3>Track layouts</h3>
+<div id="attachment_2966"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/layouts.svg"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/layouts.svg" alt="" width="420" height="475"></a></p><p>Track layouts. Traditional “head-first” layouts arrange tracks into cylinders so that sequential accesses will change heads and access all surfaces before moving the heads to the next cylinder. Newer “seek-first” layouts first move the head to the adjacent track for some distance before switching to the next surface. There are many more possible variations that are not shown.</p></div>
+<p>If a hard drive only has one recording surface, there are two reasonable ways to arrange tracks onto the surface: Outside to inside, or inside to outside. When a drive has multiple recording surfaces, there are many more ways to arrange the tracks onto surfaces. Prior work has given names to some of these arrangements [<a href="#paperkey_2">3</a>, <a href="#paperkey_0">1</a>], but there are more layouts in common use. I’ll attempt to extend the taxonomy to cover more of the common layouts.</p>
+<p>After placing the first track somewhere on (the outside diameter of) the disk, there are two obvious strategies for placing subsequent tracks. Subsequent tracks could be first placed on different recording surfaces at the same radius (cylinder) before seeking to the next radius, or a group of tracks could be first placed on the same recording surface before switching surfaces. Traditionally (old drives), switching heads was faster than moving the heads, so the first option was chosen (consecutive tracks would switch heads first before changing radius). In newer drives where head switches are slower than seeking to an adjacent track, groups of consecutive tracks are placed on the same surface before moving to the next surface.<br>
+This choice leads to two classes of track layouts, which I will call “head-first” (multiple head switches before a seek) and “seek-first” (multiple seeks before a head switch) layouts.</p>
+<p>There are two head-first layouts in common use. One layout cycles through all surfaces in the same order for each cylinder (forward, also called traditional), while the other is to reverse the order of surfaces for each cylinder (alternating, also called cylinder serpentine). By symmetry, there are two similar layouts that order cylinders from inside to outside, but I have not seen these used.</p>
+<p>The seek-first track layouts arrange groups of tracks on the same surface before switching heads. The group size is typically much smaller than the entire surface, usually hundreds to thousands of tracks, and the group size is usually fairly regular. This group of tracks is sometimes also called a serpentine, derived from the name given to one of these layouts (“surface serpentine”).</p>
+<p>Due to the use of serpentines (as opposed to filling an entire surface before changing surfaces), there are four common seek-first layouts. First, tracks within serpentines can always be ordered outside to inside (forward seek direction), or the order can be reversed on alterating surfaces (alternating seek direction: outside to inside on one surface, inside to outside on the next). There can also be layouts that use a reverse seek direction, but these were never observed. Second, similar to head-first layouts, the order in which surfaces are used can repeat for each group of serpentines (forward surface order), or the order can reverse after each group (alternating surface order). These two properties combine to create four options. Two of these four were given names in prior work: alternating-forward is also called surface serpentine, and forward-forward is also called hybrid serpentine.</p>
+<p>This classification is not exhaustive. For example, the Western Digital S25 uses a seek-first layout with forward seek direction, but the serpentine size and the sequence of surfaces does not follow a regular pattern. This layout cannot be classified into any of the six layouts described above.</p>
+<h3>Prior Work</h3>
+<p>There have been many previous attempts at characterizing the properties of hard drives using microbenchmarks. This article makes another attempt because hard drives have changed over the years and there hasn’t been an attempt to make detailed measurements of so many drives spanning so many years.</p>
+<p>Many of the prior works had practical applications in mind (as opposed to pure curiosity), and were willing to trade measurement speed for a small loss in accuracy. This article is the first I know of that attempts to make detailed measurements such as the angular position of every sector, or the size and skew of every track on a drive. Although the algorithms are not fundamentally different, prior work likely avoided exploring these because these measurements can take many hours and there is little practical benefit for applications such as performance modelling or improving data layouts in filesystems.</p>
+<p>Many of the earlier works relied on the SCSI command set to gather information [<a href="#paperkey_3">4</a>, <a href="#paperkey_4">5</a>]. This included using the SCSI Send Diagnostic command to translate logical block to physical locations, and the use of the Seek command to measure seek (not access) times. These methods do not generalize to ATA drives, and relies on drives to implement these commands, to implement them correctly, and provide information that is accurate. The existence and accuracy of these commands aren’t guaranteed because they’re not essential to the operation of a drive, which only needs to read and write. Microbenchmarks that only use reads or writes are more difficult to create, but avoid many of these limitations.</p>
+<p>Some attempts at “black-box” microbenchmarks resulted in algorithms that worked on disks of their time, but no longer work on modern drives [<a href="#paperkey_1">2</a>]. The Skippy algorithm in particular assumed that drives used a traditional head-first track layout.</p>
+<p>The algorithms used here are most similar to those by Gim and Won [<a href="#paperkey_0">1</a>]. They correctly pointed out that earlier algorithms often did not work with new seek-first track layouts, and described algorithms that did. However, their algorithms were optimized somewhat more for speed at the expense of accuracy, and not quite robust enough to handle the wide variety of odd behaviours in some drives. I saw more odd behaviour due to the wider assortment of drives tested: 17 drives from 1989 to 2015 vs. 4 drives from around 2006-2007.</p>
+
+<h2 id="measurements">What is measurable?</h2>
+<div id="attachment_2879"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/measure.png" data-slb-active="1" data-slb-asset="1924932978" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/measure-360x360.png" alt="" width="360" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/measure-360x360.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/measure-150x150.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/measure-400x399.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/measure-100x100.png 100w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/measure.png 600w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p><b>Access time measurement</b>: Starting at A and then reading B starts with a seek, settling time after reading B’s track, then waiting for sector B to rotate under the disk head. Access time from A to B is determined by the angle between the two sectors, plus zero or more full rotations. Measuring access time gives an accurate measurement of the angle between two sectors, but not a direct measurement of the seek time.</p></div>
+<p>Without internal access to the drive, measurements can only be made by sending commands and timing their response time. The basic tool I use is to measure the delay between two sector reads, with the disk cache disabled so the timings reflect the physical properties of the disk and not the cache. I did not use writes because writes destroy data on the drive, and there is less certainty on the exact time at which writes actually write to the disk media.</p>
+<p>The time between reading two sectors depends on the distance between the sectors. After completing the first sector read (A), the time until completing the second read is the time it takes to move the disk head to the second sector’s track, waiting until the second sector arrives under the disk head, then reading the sector (B). An important observation is that this access time is the time to rotate the disk by the angle between sectors A and B, plus zero or more complete revolutions. This means that if I know the disk’s revolution time (which is easily measured), I can get a high-accuracy measurement of the angle between any two sectors (to a few microseconds or about 0.1°). This also means that it is difficult to isolate out the seek time component of the access time, because seek time affects access time only by determining how many extra revolutions are needed.</p>
+<p>This fundamental tool of measuring the angular position of sectors can be used to build many other measurements.</p>
+<ul>
+<li><strong>RPM</strong>: Repeatedly read the same sector (The angle is exactly 360°). This takes exactly one revolution of the disk per read.</li>
+<li><strong>Angular position</strong>: By reading two sectors, the time between the two reads (modulo the revolution time) gives the angular position of the second sector relative to the first sector. This allows mapping the angular position of every sector on the disk, see where tracks start and end, and observe the amount of skew between tracks (difference in starting angular position of adjacent tracks).</li>
+<li><strong>Track size</strong>: Since we can observe skew to find track boundaries (track skew occurs at track boundaries), we can find the track size for each track and the location of zones (groups of tracks with the same size). Unexpected changes in track size can also indicate tracks that have defective sectors.</li>
+<li><strong>Seek time</strong>: The delay (access time) between reading one sector and another sector is the sum of the seek (including settling) time and the delay to wait until the desired sector appears under the head (rotational latency). To measure seek time, search nearby sectors to find the sector that gives a local minimum of access time. This sector is the one that appears under the head immediately after the head arrives at the target track (if the sector arrived any sooner, the head would miss the sector and would wait for one more full revolution). For this target sector, the rotational latency is near zero, making the access time roughly equal to the seek time.</li>
+<li><strong>Seek profile</strong>: A plot of the seek time from a reference point (usually sector 0) to each track on the disk is a seek profile or seek curve. If we assume that a larger head motion takes longer, a seek profile can reveal the arrangement of tracks onto the surface, and also the number of recording surfaces.</li>
+<li><strong>Number of surfaces</strong>: Finally! Inferring the number of surfaces essentially requires knowing the track layout.</li>
+</ul>
+
+<h2>Results Summary</h2>
+<p>The table below summarizes the measurements of the 17 hard drive models I tested. The later sections will go into more detail on each metric, how it’s measured, and general observations about each metric. Detailed results from each drive are presented on page 2.</p>
+<p>The Toshiba DT01ACA300 and P300 are likely identical drives with different branding, so measurements across these four give some sense of how much variability there is between drives of the same model.</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Capacity</th>
+<th>RPM</th>
+<th>Sector Size (bytes)</th>
+<th>Sectors/Track</th>
+<th>Tracks</th>
+<th>Surfaces</th>
+<th>Skew (°, rev.)</th>
+<th>Max. seek (ms)</th>
+<th>Avg. track pitch (nm)</th>
+<th>Track layout</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Seagate ST-157A<br>
+3.5″, stepper</td>
+<td>44.7 MB</td>
+<td>3602</td>
+<td>512</td>
+<td>26</td>
+<td>3,360</td>
+<td>6</td>
+<td>0</td>
+<td>63</td>
+<td>40,000</td>
+<td>F or A</td>
+</tr>
+<tr>
+<td>Maxtor 7405AV<br>
+3.5″</td>
+<td>405 MB</td>
+<td>3548</td>
+<td>512</td>
+<td>123 – 66</td>
+<td>7,998</td>
+<td>3</td>
+<td>93° – 100°</td>
+<td>30.5</td>
+<td>10,000</td>
+<td>AF or AA</td>
+</tr>
+<tr>
+<td>Seagate Medalist ST ST51270A<br>
+3.5″</td>
+<td>1.28 GB</td>
+<td>5371</td>
+<td>512</td>
+<td>145 – 76</td>
+<td>21,599</td>
+<td>4</td>
+<td>129°</td>
+<td>22.2</td>
+<td>5200</td>
+<td>F</td>
+</tr>
+<tr>
+<td>Seagate Medalist Pro ST39140A<br>
+3.5″</td>
+<td>9.1 GB</td>
+<td>7209</td>
+<td>512</td>
+<td>297 – 169</td>
+<td>72,048</td>
+<td>8</td>
+<td>85°</td>
+<td>18.3</td>
+<td>3100</td>
+<td>F or A</td>
+</tr>
+<tr>
+<td>Samsung SV0432D<br>
+3.5″</td>
+<td>4.3 GB</td>
+<td>5399</td>
+<td>512</td>
+<td>403 – 231</td>
+<td>24,460</td>
+<td>2</td>
+<td>60° (7/42 rev)</td>
+<td>19.4</td>
+<td>2300</td>
+<td>F</td>
+</tr>
+<tr>
+<td>Seagate ST1 ST650211CF<br>
+1″</td>
+<td>5 GB</td>
+<td>3606.5</td>
+<td>512</td>
+<td>335 – 183</td>
+<td>37,782</td>
+<td>2</td>
+<td>109.3° (17/56 rev)<br>
+116.7° (18/56 rev)</td>
+<td>26.3</td>
+<td>280<sup>(1)</sup></td>
+<td>AF</td>
+</tr>
+<tr>
+<td>Toshiba MK8034GSX 2.5″</td>
+<td>80 GB</td>
+<td>5399.8</td>
+<td>512</td>
+<td>891 – 429</td>
+<td>219,635</td>
+<td>3</td>
+<td>51.8° (19/132 rev)</td>
+<td>19.1</td>
+<td>230</td>
+<td>AF</td>
+</tr>
+<tr>
+<td>Hitachi Deskstar 7K80<br>
+3.5″</td>
+<td>82 GB</td>
+<td>7201</td>
+<td>512</td>
+<td>1170 – 573</td>
+<td>176,275</td>
+<td>2</td>
+<td>67.3° (3/16 -0.0004 rev)</td>
+<td>25.7</td>
+<td>310</td>
+<td>A</td>
+</tr>
+<tr>
+<td>Western Digital Caviar SE16 WD2500KS<br>
+3.5″</td>
+<td>250 GB</td>
+<td>7204</td>
+<td>512</td>
+<td>1116 – 630</td>
+<td>520,449</td>
+<td>6</td>
+<td>40° (2/18 rev)</td>
+<td>17.4</td>
+<td>320</td>
+<td>AF</td>
+</tr>
+<tr>
+<td>Seagate Barracuda 7200.9 ST3160811AS<br>
+3.5″</td>
+<td>160 GB</td>
+<td>7203</td>
+<td>512</td>
+<td>1452 – 638</td>
+<td>281,786</td>
+<td>2</td>
+<td>55.7°</td>
+<td>24.1</td>
+<td>200</td>
+<td>FA</td>
+</tr>
+<tr>
+<td>Seagate Barracuda 7200.11 ST3320613AS<br>
+3.5″</td>
+<td>320 GB</td>
+<td>7204</td>
+<td>512</td>
+<td>2464 – 1200</td>
+<td>329,853</td>
+<td>2</td>
+<td>61.3° (1/6  + 0.004 rev)</td>
+<td>19.9</td>
+<td>170</td>
+<td>AA</td>
+</tr>
+<tr>
+<td>Western Digital S25 WD3000BKHG<br>
+2.5″</td>
+<td>300 GB</td>
+<td>9999.6</td>
+<td>512</td>
+<td>1926 – 1117</td>
+<td>384,085</td>
+<td>3</td>
+<td>24.4° (1/15 + 0.0009 rev)</td>
+<td>8.1</td>
+<td>100</td>
+<td>F*</td>
+</tr>
+<tr>
+<td>Seagate Cheetah 15K.7 ST3450857SS<br>
+3.5″</td>
+<td>450 GB</td>
+<td>15047.7</td>
+<td>512</td>
+<td>1800 – 1028</td>
+<td>595,848</td>
+<td>6</td>
+<td>23.8° (1/15 – 0.0006 rev)</td>
+<td>7.3</td>
+<td>150<sup>(2)</sup></td>
+<td>AA</td>
+</tr>
+<tr>
+<td>Samsung SpinPoint F3 HD103SJ 3.5″</td>
+<td>1 TB</td>
+<td>7247.1</td>
+<td>512</td>
+<td>2937 – 1546</td>
+<td>854,135</td>
+<td>4</td>
+<td>72° (1/5 rev)</td>
+<td>17.3</td>
+<td>130<sup>(3)</sup></td>
+<td>FF</td>
+</tr>
+<tr>
+<td>Hitachi 7K1000.C 3.5″</td>
+<td>1 TB</td>
+<td>7199.8</td>
+<td>512</td>
+<td>2673 – 1350</td>
+<td>914,873</td>
+<td>4</td>
+<td>53.3° (4/27 rev)</td>
+<td>15.2</td>
+<td>120</td>
+<td>AF</td>
+</tr>
+<tr>
+<td>Toshiba DT01ACA300/P300 3.5″ <!--backup, box2, stuffedcow_sda, stuffedcow_sdb)--></td>
+<td>3 TB</td>
+<td>7219.1<br>
+7200.3<br>
+7200.0<br>
+7200.0</td>
+<td>4096</td>
+<td>473 – 211<br>
+464 – 204<br>
+485 – 207<br>
+464 – 216</td>
+<td>2,075,497<br>
+~2,098,859<br>
+2,070,465<br>
+2,076,586</td>
+<td>6</td>
+<td>37.2° (3/29 rev)</td>
+<td>21.0<br>
+21.1<br>
+20.9<br>
+20.9</td>
+<td>80</td>
+<td>e</td>
+</tr>
+<tr>
+<td>Toshiba X300 HDWE150 3.5″</td>
+<td>5 TB</td>
+<td>7199.6</td>
+<td>4096</td>
+<td>500 – 229</td>
+<td>3,279,583</td>
+<td>10</td>
+<td>22.5° (1/16 – 0.000008 rev)</td>
+<td>14.6</td>
+<td>85</td>
+<td>AF</td>
+</tr>
+</tbody>
+</table>
+<p><sup>1</sup> The Seagate ST1 series <a href="https://www.seagate.com/staticfiles/support/disc/manuals/ce/ST1%20Series/ST1%20Series/100325578h.pdf">manual</a> says 105,000 TPI (tracks per inch) max, which is 242 nm per track.<br>
+<sup>2</sup> The Seagate Cheetah 15K.7 <a href="https://www.seagate.com/files/staticfiles/support/docs/manual/enterprise/cheetah/15K.7/SAS/100516226h.pdf">manual</a> says 165,000 TPI, which is 154 nm per track.<br>
+<sup>3</sup> The HD103SJ <a href="http://blog.stuffedcow.net/wp-content/uploads/2019/02/ST1000DM005-manual.pdf">manual</a> says 245k TPI, which is 104 nm per track. HD103SJ was rebranded as ST1000DM005 after Seagate acquired Samsung’s hard drive business in 2011.</p>
+<h2>Rotational Speed (RPM)</h2>
+<p>The disk rotational speed is measured by repeatedly reading the same sector (sector 0). If the measurement is of a spinning hard disk, sector 0 will be read exactly once per revolution. This test is also used to verify that disk caching is disabled. If caching is enabled, the reads will hit in the cache and occur much more quickly.</p>
+<div>
+<h4>Implementation Details</h4>
+<p>The cache on the Maxtor 7405AV cannot be completely disabled, so repeated reads from the same sector are serviced by the cache. Fortunately, reading a different sector is not cached on this disk, even if the sector immediately follows the first read. To compensate for this, the algorithm actually alternates between reading sector 0 and sector 1.
+</p></div>
+<h2>Sector Angular Position</h2>
+<p>The angle between any two sectors can be measured by accessing the two sectors and measuring the time between the responses of the two requests. This method usually has an accuracy of a few microseconds (around 0.1°), but depends on the drive. Any seek time (or random variation in seek time) only affects whether the second sector can be read in the same revolution, or whether extra full revolutions are needed, so we can completely remove the impact of seek time by taking the remainder after dividing the time interval by the revolution time. A map of the angular position of every sector on (a region of) the disk can be made by using a fixed sector (sector 0) as a reference point. However, since it takes tens to hundreds of measurements per sector, it is only practical to do this for small regions of the disk. Angular position plots are a powerful tool for zooming in to examine other features (such as defect management).</p>
+<div>
+<div id="attachment_2890"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos.jpg" data-slb-active="1" data-slb-asset="1335284205" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-angpos.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Toshiba X300 5TB: Colour scheme chosen to highlight the beginning (dark blue) and end (yellow) of each track. This shows a 22.5° track skew. Also shows a zone change, from 500 sectors per track to 460 sectors per track, with an unusual track skew at the zone boundary.</p></div>
+</div>
+<div>
+<div id="attachment_2888"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos.jpg" data-slb-active="1" data-slb-asset="84583852" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-angpos.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Seagate ST1 5GB: Fairly large skew of 109.3°. There appears to be a one-sector gap at the end of each track.</p></div>
+</div>
+<div>
+<div id="attachment_2889"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st157a-angpos.jpg" data-slb-active="1" data-slb-asset="1293685773" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st157a-angpos-360x332.jpg" alt="" width="360" height="332"></a></p><p>Seagate ST-157A: Only 26 sectors per track and no skew. The gap between sector 25 and sector 0 seems slightly bigger than the other sectors.</p></div>
+</div>
+<p>The plots above are polar plots of the angular position (Time increases in the counterclockwise direction) and track number of each sector, with the colour of each point showing the sector’s position within the track (dark is the start of a track, while yellow is near the end of a track). The colour scheme was chosen to distinguish the beginning and end of each track, which makes the track skew clearly visible. The method to find the track number of each sector is discussed in the section on <a href="#trackbounds">finding track boundaries</a>. These plots use track boundary information and a hole in the center to make the plot look nicer, and aren’t strictly necessary. If track boundary information is unavailable, using sector number as the radial coordinate results in a similar-looking graph, but with one big spiral instead of concentric circles and a gap (the track skew) at the end of each track. The same data can be plotted on a cartesian axis, which can sometimes be easier to read than the polar plots here.</p>
+<p>The first plot shows tracks 824 to 844 on the Toshiba X300. It uses a 22.5° track skew: the beginning of each track is about 1/16th of a revolution later (counterclockwise) than the beginning of the previous track. This allows some time (1/16th of a rotation) to move the head and settle onto the next track after finishing reading one track before beginning to read the next track. For sequential accesses, the disk would read one track of data every  (1 + 1/16) revolutions. We look at track skew in more detail in a <a href="#trackskew">later section</a>.</p>
+<p>This plot also shows a head/surface change at track 834, which is visible here as an unusually large skew. This plot shows tracks 833 and 834 as adjacent in logical track numbers, but they are actually on different surfaces and likely requires a larger seek compared to moving to an adjacent track on the same surface, which motivates the larger skew at serpentine boundaries.</p>
+<p>The second plot is from a Seagate ST1, a 1″ hard drive in a CompactFlash form factor. Compared to the desktop and server hard drives, it has a slow 3600 RPM and still uses a large 109.3° track skew. The much larger skew gives a visually different pattern in the angular position plot. One interesting observation is that the ST1 seems to have exactly one sector of empty space at the end of every track. I don’t have any guesses on what this space is for.</p>
+<p>The third plot is from a Seagate ST-157A, a 44.7 MB hard drive from 1989 that uses a stepper motor actuator. It has zero track skew (or perhaps more accurately, 360° of skew)! Not using any track skew likely reduces the complexity of the drive controller (which was a larger concern in 1989). However, the adjacent-track seek time is fairly large (8 ms specification, measured to be 10.8 ms including &lt; 2.5 ms controller overhead), so the track skew would likely need to be more than 75% of a revolution (270°) anyway, and the potential performance improvement for using a non-zero skew is fairly small (10-15% sequential throughput). Also interesting is that the gap between sectors 25 and 0 appears slightly larger than between other adjacent sectors.</p>
+<div>
+<h4>Implementation Details</h4>
+<p><code>--angpos reference,start,step,end,error (e.g., --angpos 0,0,1,10000,10)</code></p>
+<p>Reference, start, step, and end are sector numbers. Error is the maximum standard error of the mean (standard deviation divided by the square-root of the number of samples), in microseconds. Use the specified reference sector, report the angular position of every <i>step</i> sectors from start (inclusive) to end (exclusive), and sample enough so the standard error of the mean is less than <i>error</i>.</p>
+<p>The algorithm takes the average of multiple samples to improve the accuracy of the measurement. It takes samples until the standard error is below a user-specified parameter. Accuracy and runtime can be traded by changing the desired precision. There is also a speed optimization. The basic algorithm would take at most one measurement every revolution, depending on how far away the two sectors are, by visiting the source and target sectors and returning back to the source sector in one revolution. This algorithm attempts to spend two revolutions per iteration, visiting the source sector, then attempting to take as many samples as possible (of the target and later sectors), and then returning back to the source sector <em>two</em> revolutions later, to begin the next iteration. This algorithm can often take 10-15 samples over two revolutions, giving 5-7× speed improvement over the basic algorithm. Allowing more revolutions per iteration would further increase efficiency (with diminishing returns), but the accuracy can drop because any error in the revolution time estimate is multiplied by the number of revolutions.</p>
+</div>
+<h2 id="accesstime">Access Time</h2>
+<p>Access time is the time to move the head and read a sector, including both seek time and rotational latency. This algorithm measures the access time between a pair of sectors. It is very similar to the algorithm to measure angular position, except that the measured time is not divided by the revolution time. I normally fix the sector 0 as a reference sector, then measure the access time from the reference sector to other sectors located around the disk. This algorithm isn’t particularly novel, but it generates interesting plots when this data is plotted in polar coordinates. These plots are very similar to the angular position plots (the data point locations are actually the same), but with a different colour scheme. These plots give a visualization of what fraction of the disk area is reachable within some amount of time.</p>
+<div>
+<div id="attachment_2924"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0.jpg" data-slb-active="1" data-slb-asset="1355086318" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-0.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Samsung HD103SJ: Furthest sector is just over 3 revolutions away.</p></div>
+<div id="attachment_2925"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle.jpg" data-slb-active="1" data-slb-asset="1095289265" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-access-middle.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Samsung HD103SJ, access time from the middle of the disk. Furthest sector is about 2.5 revolutions away.</p></div>
+</div>
+<p>Above are two access time plots from the same Samsung SpinPoint F3 1TB hard drive, showing the access time from a reference sector to other points over the entire drive (tracks 0 to 854133). This plot measured one data point every few thousand sectors of the 1.95-billion sector disk. In the first plot, the reference (start) sector is sector 0 at the beginning of the drive, which is located at angle = 0 (far right) of the plot. The second plot uses sector 976762583 (middle of the drive by sector count), and the reference sector is also plotted at angle 0.</p>
+<p>The colour swirl visually shows that the access time is mainly determined by the angular position of the target sector, while seek times determine the number of extra revolutions required to reach the target sector. Starting from the reference sector 0 (right (angle = 0), outside-most track (track 0)), the plot shows that the disk head can reach only a tiny group of outside tracks within half a rotation, about 19% of tracks after one full revolution, and reach the innermost track at just over two revolutions. In the worst case, some sectors on the innermost track need to wait one more revolution of rotational latency after the head arrives before being accessed, so the worst-case access time is ~3.09 revolutions.</p>
+<p>In the second plot where the seek starts from the middle of the disk (by sector number, not by diameter), we see a similar pattern. Starting from the middle of the disk, the furthest seek is roughly half the distance compared to the first plot, so the worst-case access time is lower. The access time to the innermost track is slightly longer (~2.47 revolutions) than to the outermost track (~2.42 revolutions) because the middle of the disk by sector count is closer to the outside by physical distance (track number). The outer tracks store more data due to zone bit recording.</p>
+<div>
+<h4>Implementation Details</h4>
+<p><code>--access reference,start,step,end,error (e.g., --access 0,0,1,-1,30)</code><br>
+Reference, start, step, and end are sector numbers. Error is the maximum standard error in microseconds. Using the specified reference sector, report the access time to every <i>step</i> sectors from start (inclusive) to end (exclusive), and sample enough so the standard error of the mean is less than <i>error</i>.</p>
+<p>The current implementation sends the second read request only after the first one is complete, so the measurement includes OS and disk controller latency. If the intent is to measure only the mechanical performance of the drive, to get a more accurate measurement of short-distance fast accesses, it may be worth trying to send both requests at the same time so both reads can be performed without first sending the read data back to the benchmark program. This would increase the benchmark complexity (requires using asynchronous I/O and tracking the response time of each request independently), and may need to account for reordering done by the OS scheduler or disk controller (SATA NCQ or SCSI TCQ).</p>
+<p>Because the absolute time (not modulo the revolution time) is measured, the algorithm cannot take multiple samples per revolution as done for the angular position measurement, and is limited to at most one sample per revolution. As a result, measuring access time takes several times longer than measuring angular position.</p>
+</div>
+<h3 id="shortstroke">Short stroking</h3>
+<p>Looking at the two access-time plots above illustrates why short stroking the disk only gives a modest reduction in access time. Short-stroking is the practice of using only a small portion of a hard drive to keep data confined to a small (usually outer) portion of the drive to reduce the worst-case seek distance and avoid using the inner tracks that have lower transfer rates (inner tracks have fewer sectors per revolution). A significant portion of the seek time is spent in the beginning and end portions of the seek even for short seeks, as the head needs time to accelerate, decelerate, and settle. Halving the seek distance only reduced the worst-case access time by 22% (from 3.09 to 2.42 revolutions, or 25.6ms to 20.0ms). Short-stroking does not actually change seek times, but removes some longer-distance seeks from being included in the average.</p>
+<p>For completeness, I measured the average access time for random accesses when those accesses are limited to some fraction of the disk. The graph below plots the number of reads per second (IOPS), which is the reciprocal of the access time when there are no parallel accesses (no queueing). IOPS increases when a smaller fraction of the disk is used.</p>
+<div id="attachment_3139"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-shortstroke.png" data-slb-active="1" data-slb-asset="163049353" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-shortstroke-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-shortstroke-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-shortstroke.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-shortstroke-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-shortstroke-400x300.png 400w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Short stroking a hard drive gives modest performance improvements by sacrificing a large amount of storage space.</p></div>
+<p>The plot shows two scenarios: One where the usable region is at the beginning of the disk (the usual case when short stroking because the beginning of the disk is faster), and the other where the usable region is at the end of the disk (the slowest region). Because seek time is highly non-linear with distance (short seeks still have a high cost), the improvement in random IOPS is small unless only a very tiny fraction of the disk is used. For example, when the beginning of the disk is used, IOPS improves by about 20% when half the disk is used, 55% when 10% of the disk is used, and doubles when only 0.07% of the disk is used.</p>
+<p>Now that flash-based solid-state drives are common, short stroking a hard drive for performance makes little sense. As of July 2019, a low-end SSD is about 3 to 4 times more expensive per capacity than hard drives, but offers 500 times higher random IOPS and double the sequential throughput.</p>
+<div>
+<h4>Implementation Details</h4>
+<p><code>--random-access start,end,iterations (e.g., --random-access 0,-1,5000)</code></p>
+<p>Start and end are sector numbers. This measures the average access time for doing <i>iterations</i> random accesses within the region between <i>start</i> (inclusive) and <i>end</i> (exclusive).</p>
+<p>The algorithm reads random sectors. It measures access time, not seek time. Access time includes seek time, rotational latency (on average half the rotation period), and controller/software overhead (typically a few hundred microseconds).</p>
+</div>
+<h2 id="seektime">Seek Time</h2>
+<div>
+<div id="attachment_2999"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-seek.png" data-slb-active="1" data-slb-asset="2086555239" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-seek-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-seek-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-seek-768x576.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-seek-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-seek-400x300.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-seek.png 960w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Toshiba P300 seek time vs. track number.</p></div>
+<div id="attachment_2923"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-access.jpg" data-slb-active="1" data-slb-asset="2046869867" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-access-150x150.jpg" alt="" width="150" height="150" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-access-150x150.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-access-100x100.jpg 100w" sizes="(max-width: 150px) 100vw, 150px"></a></p><p>Access time polar plot (Toshiba DT01ACA300)</p></div>
+<div id="attachment_3012"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-seekpolar.jpg" data-slb-active="1" data-slb-asset="500240636" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-seekpolar-150x150.jpg" alt="" width="150" height="150" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-seekpolar-150x150.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-seekpolar-100x100.jpg 100w" sizes="(max-width: 150px) 100vw, 150px"></a></p><p>Seek profile plotted on a polar axis. A seek profile is equivalent to finding the boundary between colour regions in the acess time plot.</p></div>
+</div>
+<p>The seek time is the time it takes for the disk head to move to the destination track, but <i>not</i> including the rotational latency to wait for the target sector to rotate under the disk head. I included head settling time in the seek time because settling is really just the final low-speed fine-tuning portion of the seek, and there is no way to measure settling time separately from the seek. Seek time provides information about the radial location of a given track on the disk. Seeks of a longer physical distance usually take longer than seeks of a shorter physical distance, so seek time can be used to determine which tracks are physically closer to a reference location. I usually use sector 0 on the outer edge as the reference sector.</p>
+<p>While it is straightforward to measure access time, seek time requires finding the sector on the target track that has the lowest access time (with near-zero rotational latency). Nisha et al. [<a href="#paperkey_1">2</a>] describe an algorithm that measures the access times between one sector and a number of sectors near the seek target, then chooses the minimum. My algorithm improves on speed by using a logarithmic search for the sector with the minimum access time starting with big steps that decrease exponentially (the runtime is logarithmic in the number of sectors per track rather than linear). This becomes particularly important when disks have many sectors per track. I tested disks with up to 2937 sectors per track, while Nisha et al. only tested up to 356.</p>
+<p>The seek time profile is usually plotted with seek time on the vertical axis and seek distance (number of tracks) on the horizontal axis. The diagram to the right shows an example from a Toshiba P300 3 TB drive. The seek time increases roughly linearly with distance for long seeks (when the seek time is dominated by the head moving at a high constant speed) and is non-linear for short seeks (dominated by acceleration, deceleration, and settling time).</p>
+<div><p>Another way to think of the seek time curve is that it is the boundary that separates colour regions in the access time plot. The seek time is the access time of the set of sectors that have near-zero rotational latency, which are those sectors that sit on the boundary between “arriving immediately after the head arrives” and “arriving slightly after the head arrives and needing an extra revolution”. To demonstrate this, the two polar plots to the right plots the seek profile and access time data points for the same drive on the same polar axis for comparison. The seek profile is usually more useful when plotted in cartesian coordinates.</p></div>
+<div id="attachment_3002"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-seek.png" data-slb-active="1" data-slb-asset="366861167" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-seek-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-seek-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-seek-768x576.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-seek-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-seek-400x300.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-seek.png 960w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Western Digital S25: The seek profile is unusual, indicating a strange mapping between track numbers and physical location. This mapping seems quite irregular.</p></div>
+<div id="attachment_2997"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seek.png" data-slb-active="1" data-slb-asset="119894333" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seek-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seek-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seek-768x576.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seek-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seek-400x300.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seek.png 960w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Samsung F3. Even when completely zoomed out, four recording surfaces are visible.</p></div>
+<p>The two plots on the right are examples of slightly more complicated seek time profiles. The seek time plots for the Samsung F3 (HD103SJ) and WD S25 (WD3000BKHG) are not smooth even when zoomed out. These patterns indicate that tracks are not strictly placed from outside diameter to inside diameter, but that there are some later logical tracks that are physically closer to the outside (lower seek time) than some earlier tracks (higher seek time). These patterns give information on the track layout, which we will look at in the <a href="#tracklayout">track layout</a> section.</p>
+
+<div>
+<h4>Implementation Details</h4>
+<div id="attachment_3212"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seeksearch.png" data-slb-active="1" data-slb-asset="1181346185" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seeksearch-360x240.png" alt="" width="360" height="240" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seeksearch-360x240.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seeksearch-150x100.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seeksearch-400x267.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-seeksearch.png 576w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>The access time of a sector depends on its angular position. The algorithm to find seek time searches nearby earlier sectors to find a local minimum sector with near-zero rotational latency.</p></div>
+<p><code>--seek-track reference,start,step,end (e.g., --seek-track 0,0,1,-1)</code><br>
+Reference, start, step, and end are sector numbers.</p>
+<p>The seek time is the access time for the sector on the target track that has the lowest access time (near-zero rotational latency). This algorithm starts by measuring the access time (including the rotational latency) to an arbitrary target sector. It then measures the access time for an earlier sector, chosen to be likely on the same track but with less rotational latency. This process is repeated until the access time suddenly increases, which occurs when the target sector arrives too soon under the head and we need to wait one more full revolution. The step size is then halved and the search repeated until the sector with minimum access time is found. There is one common case where this search fails: if the optimal sector actually falls within a track skew (This is labeled as “Not seek time” at sector 102345 in the diagram). When this happens, the search will then conclude that the current track’s first sector has the lowest access time, but it actually has non-zero rotational latency because there is a physical gap between the current track’s first sector and the previous track’s last sector (the track skew). This implementation tries to mitigate this by attempting to search two adjacent tracks before reporting the seek time.</p>
+<p>Like the access time measurement, the seek time measurement sends read requests serially and thus includes the OS and disk controller overhead.</p>
+<p>Both the SCSI and ATA command sets contain a Seek command that might give a more direct measurement of seek time. I have not attempted to use this. This command is “obsolete” for SCSI, and I don’t know its status for ATA, nor do I know how reliably these commands are implemented in various hard drives. (Example: The Cheetah 15K.7 manual claims that both the Seek and Seek Extended commands are implemented.)</p>
+</div>
+<h3 id="aam">Acoustic Management</h3>
+<div>
+<div id="attachment_3244"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-all.png" data-slb-active="1" data-slb-asset="635391705" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-all-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-all-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-all-768x576.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-all-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-all-400x300.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-all.png 960w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>WD S25: Full-stroke seek increases from 17.4 ms to 27.1 ms in quiet mode.</p></div><div id="attachment_3243"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-1600.png" data-slb-active="1" data-slb-asset="19700038" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-1600-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-1600-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-1600-768x576.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-1600-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-1600-400x300.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd2500ks-acoustic-1600.png 960w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>WD S25: Seek time for short-distance seeks (&lt; 2.2 ms) is not affected.</p></div><br>
+<div><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-all.png" data-slb-active="1" data-slb-asset="341440456" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-all-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-all-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-all-768x576.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-all-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-all-400x300.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-all.png 960w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Samsung F3: Full-stroke seek increases from 17.3 ms to 21.0 ms in quiet mode</p></div><div id="attachment_3265"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-400.png" data-slb-active="1" data-slb-asset="1615239978" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-400-360x270.png" alt="" width="360" height="270" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-400-360x270.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-400-768x576.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-400-150x113.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-400-400x300.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-acoustic-400.png 960w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Samsung F3: Seek time for short-distance (&lt; 2 ms) seeks is not affected.</p></div>
+</div>
+<p>Automatic Acoustic Management (AAM) is a method to allow the user to reduce audible noise from the hard drive in exchange for lower performance. Since most of the noise comes from moving the disk head during seeks, AAM essentially slows down seeks (increasing seek time) to reduce noise. This feature appeared in ATA-6 (2002) [<a href="#paperkey_5">6</a>], but doesn’t seem to be implemented in many (newer?) drives.</p>
+<div><p>Using the ability to measure seek time, we can see how AAM quiet mode affects seeks. The diagrams show a seek profile in both fast (default, in blue) and quiet (in orange) modes. For the WD SE16, quiet mode increased the maximum seek time by 55% from 17.4 ms to 27.1 ms. For the Samsung F3, the increase is 21% (17.3 ms to 21.0 ms). If we zoom in to the beginning of the disk, we see that the seek time of short seeks (below 2.2 ms for WD S25, 2.0 ms for Samsung F3) are unaffected. This makes sense: Short seeks are quiet even at full power, and adjacent-track seeks cannot be allowed to get slower because if an adjacent-track seek takes longer than the track skew, sequential throughput becomes halved.</p></div>
+<h2 id="trackbounds">Track Boundaries</h2>
+<p>Finding track boundaries means finding the sector number of the first sector of every track. Designing an algorithm to find them reliably is surprisingly difficult. A track is a group of consecutive sectors that spans around one revolution of the disk, separated by track skew. The algorithm identifies track boundaries by looking for the track skew (an unusually large change in angular position between two adjacent/nearby sectors). I’ll leave discussion of the many ways this algorithm can fail in the Implementation Details section below.</p>
+<div id="attachment_3036"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-tracksize.png" data-slb-active="1" data-slb-asset="1709637349" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-tracksize-343x360.png" alt="" width="343" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-tracksize-343x360.png 343w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-tracksize-768x806.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-tracksize-143x150.png 143w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-tracksize-400x420.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-tracksize.png 915w" sizes="(max-width: 343px) 100vw, 343px"></a></p><p>Toshiba MK8034GSX: track sizes</p></div>
+<div id="attachment_3031"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench.png" data-slb-active="1" data-slb-asset="2039854265" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench.png" alt="" width="576" height="410" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench.png 576w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench-360x256.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench-150x107.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-bench-400x285.png 400w" sizes="(max-width: 576px) 100vw, 576px"></a></p><p>Toshiba MK8034GSX disk throughput benchmark. Throughput is proportional to track size (if track skew is constant).</p></div>
+<p>The number of sectors per track is proportional to the sequential throughput of the disk. The drive spins at a constant angular speed, so sequential throughput varies with how much data is read per revolution. During sequential accesses, the drive reads one track of sectors every (1+skew) revolutions, so the sequential throughput can be calculated exactly from track size, RPM, and track skew. Previous work has even used this relation in reverse to compute approximate track sizes by measuring sequential throughput [<a href="#paperkey_0">1</a>, <a href="#paperkey_1">2</a>]. The two figures above show a comparison between track sizes and a throughput benchmark for the same disk (Toshiba MK8034GSX), showing that they look very similar.</p>
+<div id="attachment_3040"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-tracksize.png" data-slb-active="1" data-slb-asset="1074166447" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-tracksize-180x360.png" alt="" width="180" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-tracksize-180x360.png 180w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-tracksize-75x150.png 75w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-tracksize-400x800.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-tracksize.png 480w" sizes="(max-width: 180px) 100vw, 180px"></a></p><p>Western Digital S25 300GB. Track size monotonically decreases (except for defects).</p></div>
+<div id="attachment_3034"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-tracksize.png" data-slb-active="1" data-slb-asset="470010602" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-tracksize-299x360.png" alt="" width="299" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-tracksize-299x360.png 299w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-tracksize-768x924.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-tracksize-125x150.png 125w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-tracksize-400x481.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-tracksize.png 798w" sizes="(max-width: 299px) 100vw, 299px"></a></p><p>Samsung HD103SJ 1TB. This drive switches heads/surfaces infrequently.</p></div>
+<div id="attachment_3037"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-tracksize.png" data-slb-active="1" data-slb-asset="347344435" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-tracksize-180x360.png" alt="" width="180" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-tracksize-180x360.png 180w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-tracksize-75x150.png 75w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-tracksize-400x800.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-tracksize.png 480w" sizes="(max-width: 180px) 100vw, 180px"></a></p><p>Toshiba P300 3TB. The region near track 140,000 is a region with many defective sectors causing the track size to drop.</p></div>
+<div id="attachment_3041"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-tracksize.png" data-slb-active="1" data-slb-asset="2020275930" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-tracksize-227x360.png" alt="" width="227" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-tracksize-227x360.png 227w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-tracksize-95x150.png 95w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-tracksize-400x634.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-tracksize.png 606w" sizes="(max-width: 227px) 100vw, 227px"></a></p><p>Toshiba X300 5TB.</p></div>
+<p>All newer hard drives use zone bit recording, so earlier tracks have more sectors than later tracks. This sequence is usually not strictly monotonically decreasing because the number of sectors per track is often different on each recording surface, causing the track size to vary according to how tracks are arranged onto the surfaces. For the Toshiba P300 and X300, the plot looks shaded because the track size switches very frequently between several values according to which surface a track is placed on. The Samsung HD103SJ switches between surfaces much less frequently.</p>
+<p>Although track size decreases monotonically for both the MK8034GSX and WD S25, they are actually quite different. The MK8034GSX uses a surface serpentine layout (seek first type AF, with a head change every ~115 tracks), but the track size is the <i>same</i> on every surface, so the track size curve monotonically decreases. The WD S25, however, uses <i>different</i> track sizes on each surface, but tracks are ordered by decreasing size, not by physical location. The result is a monotonically-decreasing track size curve, but highly irregular serpentine sizes causing an irregular <a href="#seektime">seek profile</a>. We will discuss this further in the section on measuring <a href="#tracklayout">track layouts</a>.</p>
+<p>In the above plots, the x-axis is in units of track number (not sector number). If the track density were constant, then track number would be linearly related to the physical radius of the track. Also, if the linear bit density were constant across the disk, then the track size would be proportional to the length (and also radius) of the track. If the above two assumptions were true, I would expect to see the track size vs. track number plots to be a straight line. But almost all of the drives show a slight convex shape. <i>Why?</i> My guess is that this is related to the angle of the disk head relative to the track (confusingly called “skew angle”). In the (usually) middle tracks of the disk, the disk head is designed to be aligned with the track, but at the inner (ID) and outer (OD) diameter positions, the head is rotated relative to the track (because the head is mounted on a rotating arm), which causes the achievable bit density to be lower at the ID and OD. Cordle et al. [<a href="#paperkey_6">7</a>] report a decrease of 8-10% in areal density capability (ADC) at both ID and OD compared to the middle for a PMR (perpendicular magnetic recording) disk, which seems reasonably close to the shape of the track size curve seen here. (PMR has been used in most hard disk drives since around 2006 until today, with HAMR (heat assisted) coming “soon”.)</p>
+<div>
+<h4>Implementation Details</h4>
+<p><code>--track-bounds 0,-1</code><br>
+<code>--track-bounds-fast 0,-1</code></p>
+<p>In the simplest case, a track consists of a group of consecutive sectors, separated by a track skew. Thus, we can detect track boundaries by finding the location of the skew (an unusually large change in angular position between two nearby sectors). We can also assume that track sizes tend to be fairly similar (adjacent tracks differ in size by less than a few tens of percent). Unfortunately, none of these assumptions actually hold consistently across all drives and all tracks. I needed to manually fix some of the incorrectly-detected track boundaries.</p>
+<p>Although most drives have non-zero track skew, some old drives (ST-157A) have no (or 360°) skew. While an algorithm could attempt to detect 360° of skew and treat that as a track boundary, it would be extremely difficult to distinguish this from two adjacent sectors on the same track. My current implementation does not work on the ST-157A, but fortunately it is so small that it is feasible to manually determine the track size (26 sectors per track without zone bit recording). Even for drives with non-zero track skew, there are tracks with different skew. Most drives have unusual (sometimes near-zero) skew at serpentine or zone boundaries, and skew can be fairly random when a track boundary occurs along with track slipping (defect management) or in the middle of a block of defective sectors when using sector-slipping defect management.</p>
+<p>I implemented two algorithms. The first is a <i>O(lg tracksize)</i> algorithm to find a track boundary. A track boundary contains a track skew that increases the angular distance between two (logical) sectors if the two sectors cross a track boundary. The algorithm can then repeatedly split the region into two and test which half contains the track boundary (binary search) until the exact location is found. There are several speed optimizations on top of this basic algorithm. The algorithm also predicts the location of the next track boundary (track size tends to be constant within a serpentine and zone), and if the prediction is correct (which is the common case), the next track boundary can be confirmed without a binary search. Also, for large regions, it splits the region into more than two sub-regions because we can test multiple regions in the same revolution.</p>
+<p>The second “fast” algorithm is an extension of the first algorithm, and is largely based on the “MIMD” (multiplicative increase, multiplicative decrease) algorithm proposed by Gim and Won [<a href="#paperkey_0">1</a>], with improvements to improve robustness. Because track sizes tend to stay constant for relatively large regions, it may be profitable to not just predict the location of the next track boundary, but to predict that <i>multiple</i> upcoming tracks are all the same size. If the prediction is correct, we double the prediction for the next iteration, otherwise we halve the number of skipped tracks and try again. The algorithm is essentially binary-searching for <i>zone/serpentine</i> boundaries rather than track boundaries, so it does not need to visit every track.</p>
+<p>In my implementation, “fast” mode is restricted to predicting exact multiples of the previous track size (Gim and Won allow an error of ±5 sectors). If the prediction is not exactly correct even for one track ahead, it falls back to the <i>O(lg tracksize)</i> algorithm described above to handle the change in track size. To verify the prediction, I verify that track boundaries exist at both (n-1) and (n) tracks ahead (Gim and Won only checks (n) tracks ahead). This was necessary because when track size changes, the change in track size multiplied by the number of tracks the algorithm chose to skip can be exactly a multiple of the previous track size, leading to an incorrect result. For example, if the current track size is 1000 sectors and the algorithm wants to check whether 64 tracks (or 64000 sectors) ahead is still within the same zone, it would incorrectly conclude that the zone continues for 64 1000-sector tracks if the reality were that there were 80 800-sector tracks instead. The probability of this occurring is low, but with millions of tracks per disk, I routinely saw a few incorrectly-predicted blocks for this reason. Even doing two checks per prediction does not guarantee correctness. For example, if there were two consecutive tracks that were exactly half the size of its neighbours (this is unlikely, but not impossible), both algorithms would incorrectly identify it as a single normal-sized track.</p>
+<p>In the most extreme cases (namely, the blob of defects in one of my P300 drives), I had to resort to plotting an angular position plot of every sector in the region and identifying track boundaries manually. There were some tracks that had lost over 90% of its sectors, and the track boundary finding algorithms got hopelessly lost in those regions.</p>
+<p>Here are two examples where the track-finding algorithm fails. The first example illustrates difficulties when there are holes of missing sectors due to defects. The animation below shows the result of running the track boundary finding algorithm ten times on a region of the disk with one large hole and some small holes scattered around. The colour scheme is chosen to highlight the first few sectors of each track in dark blue. Every run produces a different result as the algorithm often mistakes the hole for track skew.</p>
+<div><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-trackbounds-hole.mp4"><video autoplay="autoplay" loop="loop" width="540" height="480"><source src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-trackbounds-hole.mp4" type="video/mp4"></video></a><p><span>The track boundary algorithm gets confused when there are big holes in the disk that it mistakes for track skew. This animation shows the results of running the track-finding algorithm ten times in a region with a missing wedge, showing that it returns different results each time.</span></p></div>
+<p>The second example does not involve defects. On the Samsung SV0432D, the last track of each zone may not be a complete track. In this example, track 8891 is in a zone with 392 sectors per track, but the final track of the zone (8892) is only 6 sectors long. The next zone has 386 sectors per track, which is <i>exactly 6 fewer</i> sectors than the previous zone. An algorithm that looks for track boundaries would find one at precisely the expected location (392 sectors past the end of track 8891), not realizing that it missed a track boundary in between. This case was found by manually inspecting all of the zone boundaries because I noticed very small tracks near some of the zone boundaries.<br>
+</p><div id="attachment_3474"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891.png" data-slb-active="1" data-slb-asset="501718943" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891-360x320.png" alt="" width="360" height="320" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891-360x320.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891-768x682.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891-1024x909.png 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891-150x133.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891-400x355.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/sv0432d-angpos-8891.png 1239w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>The last track of a 392-sector/track zone (6 sectors in size) plus the first track of the next zone (386 sectors) is exactly the same size as tracks in the zone (392 sectors).</p></div>
+</div>
+<h3 id="density">Track pitch and bit density</h3>
+<p>Now that we know the track boundaries (and thus, the number of tracks), it would be interesting to try to estimate the track pitch, which is usually measured in tracks per inch (TPI). Calculating the track pitch requires knowing the physical distance between the outer and inner tracks, which cannot be measured by timing alone. This, I use photographs of the hard drives to estimate the physical size of the platters.</p>
+<p>This table shows the approximate measurements. Using these measurements, we can calculate the <i>average</i> track pitch (track pitch can vary between the outer, middle, and inner tracks). For the drives I tested, track pitch ranges from 40 µm to 80 nm, or 650 TPI to 310,000 TPI.</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Capacity</th>
+<th>OD</th>
+<th>ID</th>
+<th>Avg. tracks per surface</th>
+<th>Sector Size</th>
+<th>OD track size</th>
+<th colspan="2">Avg. track pitch</th>
+<th colspan="2">OD linear density</th>
+</tr>
+<tr>
+<th></th>
+<th></th>
+<th>(mm)</th>
+<th>(mm)</th>
+<th></th>
+<th>(bytes)</th>
+<th>(sectors)</th>
+<th>(nm/track)</th>
+<th>(TPI)</th>
+<th>(nm/bit)</th>
+<th>(kbpi)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Seagate ST-157A<br>
+3.5″</td>
+<td>44.7 MB</td>
+<td>87</td>
+<td>43</td>
+<td>560</td>
+<td>512</td>
+<td>26</td>
+<td>40,000</td>
+<td>650</td>
+<td>2600</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Maxtor 7405AV</td>
+<td>405 MB</td>
+<td>91</td>
+<td>35</td>
+<td>2666</td>
+<td>512</td>
+<td>123</td>
+<td>10,500</td>
+<td>2400</td>
+<td>570</td>
+<td>48</td>
+</tr>
+<tr>
+<td>Seagate ST51270A</td>
+<td>1.28 GB</td>
+<td>91</td>
+<td>35</td>
+<td>5400</td>
+<td>512</td>
+<td>145</td>
+<td>5200</td>
+<td>4900</td>
+<td>480</td>
+<td>53</td>
+</tr>
+<tr>
+<td>Seagate ST39140A</td>
+<td>9.1 GB</td>
+<td>91</td>
+<td>35</td>
+<td>9006</td>
+<td>512</td>
+<td>297</td>
+<td>3100</td>
+<td>8.2k</td>
+<td>240</td>
+<td>100</td>
+</tr>
+<tr>
+<td>Samsung SV0432</td>
+<td>4.3 GB</td>
+<td>91</td>
+<td>35</td>
+<td>12230</td>
+<td>512</td>
+<td>403</td>
+<td>2300</td>
+<td>11k</td>
+<td>170</td>
+<td>150</td>
+</tr>
+<tr>
+<td>Seagate ST1 ST650211CF<br>
+1″</td>
+<td>5 GB</td>
+<td>23</td>
+<td>12.5</td>
+<td>18891</td>
+<td>512</td>
+<td>335</td>
+<td>280</td>
+<td>91k<sup>(1)</sup></td>
+<td>53</td>
+<td>480<sup>(1)</sup></td>
+</tr>
+<tr>
+<td>Toshiba MK8034GSX 2.5″</td>
+<td>80 GB</td>
+<td>62</td>
+<td>28</td>
+<td>73212</td>
+<td>512</td>
+<td>891</td>
+<td>230</td>
+<td>109k</td>
+<td>53</td>
+<td>480</td>
+</tr>
+<tr>
+<td>Hitachi Deskstar 7K80</td>
+<td>82 GB</td>
+<td>91</td>
+<td>35</td>
+<td>88138</td>
+<td>512</td>
+<td>1170</td>
+<td>310</td>
+<td>81k</td>
+<td>60</td>
+<td>430</td>
+</tr>
+<tr>
+<td>Western Digital SE16</td>
+<td>250 GB</td>
+<td>91</td>
+<td>35</td>
+<td>86742</td>
+<td>512</td>
+<td>1116</td>
+<td>323</td>
+<td>79k</td>
+<td>63</td>
+<td>410</td>
+</tr>
+<tr>
+<td>Seagate 7200.9</td>
+<td>160 GB</td>
+<td>91</td>
+<td>35</td>
+<td>140893</td>
+<td>512</td>
+<td>1452</td>
+<td>200</td>
+<td>128k</td>
+<td>48</td>
+<td>530</td>
+</tr>
+<tr>
+<td>Seagate 7200.11</td>
+<td>320 GB</td>
+<td>91</td>
+<td>35</td>
+<td>164927</td>
+<td>512</td>
+<td>2464</td>
+<td>170</td>
+<td>150k</td>
+<td>28</td>
+<td>900</td>
+</tr>
+<tr>
+<td>Western Digital S25 WD3000BKHG<br>
+2.5″</td>
+<td>300 GB</td>
+<td>62</td>
+<td>36</td>
+<td>128028</td>
+<td>512</td>
+<td>1926</td>
+<td>100</td>
+<td>250k</td>
+<td>25</td>
+<td>1000</td>
+</tr>
+<tr>
+<td>Seagate Cheetah 15K.7 ST3450857SS<br>
+3.5″</td>
+<td>450 GB</td>
+<td>66</td>
+<td>37</td>
+<td>99308</td>
+<td>512</td>
+<td>1800</td>
+<td>150</td>
+<td>174k<sup>(2)</sup></td>
+<td>28</td>
+<td>900<sup>(2)</sup></td>
+</tr>
+<tr>
+<td>Samsung SpinPoint F3 HD103SJ 3.5″</td>
+<td>1 TB</td>
+<td>91</td>
+<td>35</td>
+<td>213534</td>
+<td>512</td>
+<td>2937</td>
+<td>130</td>
+<td>194k<sup>(3)</sup></td>
+<td>24</td>
+<td>1100</td>
+</tr>
+<tr>
+<td>Hitachi 7K1000.C 3.5″</td>
+<td>1 TB</td>
+<td>91</td>
+<td>35</td>
+<td>228718</td>
+<td>512</td>
+<td>2673</td>
+<td>120</td>
+<td>207k</td>
+<td>26</td>
+<td>970</td>
+</tr>
+<tr>
+<td>Toshiba P300 HDWD130 3.5″</td>
+<td>3 TB</td>
+<td>91</td>
+<td>35</td>
+<td>345078</td>
+<td>4096</td>
+<td>485</td>
+<td>80</td>
+<td>313k</td>
+<td>18</td>
+<td>1400</td>
+</tr>
+<tr>
+<td>Toshiba X300 HDWE150 3.5″</td>
+<td>5 TB</td>
+<td>91</td>
+<td>35</td>
+<td>327958</td>
+<td>4096</td>
+<td>500</td>
+<td>85</td>
+<td>298k</td>
+<td>17</td>
+<td>1450</td>
+</tr>
+</tbody>
+</table>
+<p><sup>1</sup> The Seagate ST1 series <a href="https://www.seagate.com/staticfiles/support/disc/manuals/ce/ST1%20Series/ST1%20Series/100325578h.pdf">manual</a> says 105,000 TPI (tracks per inch) max. It also says linear density is 651 kbpi max.<br>
+<sup>2</sup> The Seagate Cheetah 15K.7 <a href="https://www.seagate.com/files/staticfiles/support/docs/manual/enterprise/cheetah/15K.7/SAS/100516226h.pdf">manual</a> says 165,000 TPI. It also says linear density is 1361 kbpi max.<br>
+<sup>3</sup> The HD103SJ <a href="http://blog.stuffedcow.net/wp-content/uploads/2019/02/ST1000DM005-manual.pdf">manual</a> says 245k TPI.</p>
+<p>For the three drives where the manual lists a track pitch number, two of my estimates show a significantly lower track density that the published number, by up to 20%. I do not know the reason for the difference, but possible causes include the manual publishing the maximum density of the densest region of the disk while I compute the average, or that I have over-estimated the physical area of the platter that is actually used for data (for example, if the platter were capable of more storage than what was productized).</p>
+<p>I can also use the same data to compute an estimate of the linear bit density for a particular track. Since we know the number of sectors per track, we can calculate the bit density of the outer track using the estimate for the outer diameter. For example, if the OD of the Toshiba X300 is 91mm and it has 500 sectors/track, this leads to about 57,300 <i>user data</i> bits per millimeter, or 1 user data bit per 17nm. The physical bit density is probably another 15-20% greater to account for space for the servo sectors, inter-sector gap, sync, data address marker, error correction code, and line coding of the user data.</p>
+<p>For the two cases where a linear density specification was listed, the specification is far higher (by up to 50%). I can’t explain most of this gap. Some possible explanations include the outer track not having the highest linear density, or something to do with average density vs. maximum, which is known to be significantly different [<a href="#paperkey_7">8</a>].</p>
+<h2 id="tracklayout">Track Layout and Number of Recording Surfaces</h2>
+<p>After all this work, we finally have enough information to determine the track layout and number of recording surfaces (and platters) of the disks. The simple question of how many platters a hard drive contains turned out to be surprisingly hard to measure.</p>
+<p>The graphs below plot both the <a href="#trackbounds">track size</a> and <a href="#seektime">seek profile</a> charts with a shared x-axis. The graphs show only the first few thousand tracks. The track size plot shows changes in the track size that indicate when head or zone changes occur, because a head change can also change the track size if the other recording surfaces has a different track size. Changes in track skew (not plotted here) can also be used to locate head changes, which is especially useful for drives that use the same track size on all surfaces. The seek profile gives an approximation of the radial location of the track. Tracks located nearest the outer edge have lower seek times. This is the same method used by Gim and Won to find track layouts [<a href="#paperkey_0">1</a>].</p>
+<div id="attachment_3091"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-layout.png" data-slb-active="1" data-slb-asset="1849638134" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-layout-360x360.png" alt="" width="360" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-layout-360x360.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-layout-150x150.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-layout-400x400.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-layout-100x100.png 100w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-layout.png 600w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Samsung HD103SJ: 4 recording surfaces. This disk switches surfaces infrequently (note the x-axis scale), and head switch coincides with zone boundaries.</p></div>
+<div id="attachment_3093"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-layout.png" data-slb-active="1" data-slb-asset="291804079" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-layout-360x360.png" alt="" width="360" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-layout-360x360.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-layout-150x150.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-layout-400x400.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-layout-100x100.png 100w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-layout.png 600w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Toshiba X300: 10 recording surfaces.</p></div>
+<div id="attachment_3090"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-layout.png" data-slb-active="1" data-slb-asset="1662490309" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-layout-360x360.png" alt="" width="360" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-layout-360x360.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-layout-150x150.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-layout-400x400.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-layout-100x100.png 100w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-layout.png 600w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Seagate 15K.7: 6 recording surfaces.</p></div>
+<div id="attachment_3092"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-layout.png" data-slb-active="1" data-slb-asset="664307311" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-layout-360x360.png" alt="" width="360" height="360"></a></p><p>Western Digital S25: 3 recording surfaces. Each surfaces is shown in a different colour in the seek profile.</p></div>
+<div id="attachment_3099"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-layout.png" data-slb-active="1" data-slb-asset="698645226" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-layout-360x360.png" alt="" width="360" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-layout-360x360.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-layout-150x150.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-layout-400x400.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-layout-100x100.png 100w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/mk8034gsx-layout.png 600w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Toshiba MK8034GSX: 3 recording surfaces.</p></div>
+<p>The graph for the Samsung HD103SJ is fairly easy to read. It shows four recording surfaces, each of which has a different track size. Starting at the beginning of the disk, tracks are filled on one surface from outside towards the inside (seek time increases from track 0 to track 9235), then moves to the outer track of the next surface. This pattern repeats four times (indicating four surfaces) before moving further inwards. The next group of four zones starts at track 36009. Looking at the track size (upper) subplot, we can see that the track layout cycles through the four surfaces in the same order: The third surface has the highest density. The assumption here is that the “quality” can differ between recording surfaces, but that the quality of the same surfaces changes slowly. Regions of the same size are more likely to be on the same surface and adjacent than zones that differ in track size. Also, all serpentines have tracks that are ordered from outside to inside. This drive thus uses a seek-first, forward seek order, forward surface order layout (“seek first, FF”).</p>
+<p>The Toshiba X300 5TB drive has 10 recording surfaces, each having different track density. The track layout is different than the HD103SJ. Tracks are filled from outside toward inside on the first surface, but filled in the reverse direction on the next surface (alternating seek order). The seek profile looks like groups of five upside-down U shapes. The 10 surfaces are cycled through in the same order (the fourth surface has the highest density). This drive uses a “seek first, AF” layout.</p>
+<p>The Seagate 15K.7 (with 6 recording surfaces) appears to use a similar track layout as the X300, showing upside-down U shapes in the seek profile. However, the track size plot shows that it cycles through the surfaces in a different order. Each group of 6 serpertines are mirrored, which indicates surfaces 1 to 6 are used for the first group of serpentines, followed by surfaces 6 to 1 in reverse order (alternating surface order). This drive uses a “seek first, AA” layout.</p>
+<p>The Western Digital S25 has three recording surfaces. For clarity, I coloured each recording surface with a different colour in the seek time profile. The seek profile looks irregular but the track size plot monotonically decreases. It appears the strategy used here is to always have a monotonically-decreasing track size by varying the order in which physical tracks are used. The few tracks that have slightly fewer sectors than its neighbouring tracks is caused by skipping over defective sectors. The surface with the highest track size is used first, with the first 16208 tracks all placed on this surface. The other two surfaces are used starting at logical track 16208, and returns to the first surface near track 39600. This drive uses a seek-first, forward seek direction layout, but no regular pattern in the surface order.</p>
+<p>As mentioned in the <a href="#trackbounds">track boundaries section</a>, the Toshiba MK8034GSX also has monotonically-decreasing track sizes. As shown here, the track layout is actually the same as the Toshiba X300, except with only 3 surfaces (seek-first, AF). The reason the track sizes decrease monotonically is because all surfaces use the same track sizes and zone boundaries. In contrast, the WD S25 uses surfaces with different track sizes, but the tracks are reordered to make <i>logical</i> track sizes monotonically decreasing.</p>
+<h2 id="trackalignment">Track alignment across surfaces</h2>
+<p>The seek profile shows an indirect measurement of the distance between a reference point (sector 0) and other tracks on the disk. On drives with multiple recording surfaces, the plot can be discontinuous due to a serpentine-type layout, where a non-adjacent track (hundreds of tracks away) is actually physically nearby (minimal head movement) on a different surface.</p>
+<p>One interesting way of interpreting this information is to ask the question: How well are tracks on one surface aligned to tracks on different surfaces? In classical track layouts, it was assumed that head switches (electrical) are faster than an adjacent-track seek (mechanical), so consecutive tracks are laid out in cylinders, switching heads multiple times before moving the head to the adjacent cylinder. But with increasing track density, tracks may have become too difficult to align on different surfaces.</p>
+<p>As an example, the seek profile for a 3 TB Toshiba P300 show that tracks can be poorly aligned between surfaces. Below is the seek profile for the first 1100 tracks the disk, which spans the first 8 serpentines (on 6 surfaces). In the seek profile plots above, I used sector 0 as the reference point. Here, I created an animation where I varied the reference point between track 0 through track 140 (spanning exery track in the first serpentine on the first surface). The reference location is indicated by the arrow. I also highlighted serpentine boundaries to make them easier to see. Because there are 6 surfaces, there are 6 minimum peaks, one per recording surface. The location of the peaks indicate which logical tracks are physically closest to the reference point. This allows seeing whether serpentines on different surfaces are aligned to each other, by seeing whether the peak in each serpentine is in the same relative location in every serpentine.</p>
+
+<p>On this disk, the serpentines are not well-aligned. Logical track 0 of the disk is physically closest to track 38 of the second serpentine, track 26 of the third, track 63 of the fourth, track 20 of the sixth, and is 20 tracks before the start of the fifth serpentine. This suggests that if we attempted to organize these serpentines into cylinders, a head switch would likely also come with a seek of several tens of tracks due to misalignment between surfaces. With an average track pitch on this drive of about 80 nm, this misalignment is somewhere around 2 µm. This data does not show what causes the misalignment. It could be variation in the radius of the servo track initially written to the disks, or it could be the heads in the head stack assembly being not perfectly aligned, or perhaps there simply was no attempt to closely align them because a seek-first track layout is less sensitive to head switch time.</p>
+<p>This plot also shows that a head switch alone (if minimal seek is needed) is still faster than an adjacent-track seek. The minimum peak located at the reference track involves no seek, while the two points immediately before and after it are single-track seeks. These single-track seeks take longer than the access time to the physically-nearest track on a different surface.</p>
+<p>In conclusion, while it is still true that a head switch is faster than an adjacent-track seek, track density has increased so much that it is impossible to align tracks into cylinders, so a head switch is necessarily accompanied by a seek much greater than one track away. This explains why all newer drives use some kind of seek-first layout.</p>
+<h2 id="trackskew">Track Skew</h2>
+<p>Track skew is traditionally defined as the angle between the starting sector of one track compared to the starting sector of the previous track. I chose to measure the starting sector of each track relative to sector 0. Knowing the <i>absolute</i> start position of each track can show whether the skew is exactly a fraction of a revolution or differs slightly. This is interesting because I think it gives some information about how the servo information was initially written to the blank surface, though I don’t know enough about servo writing to understand its significance.</p>
+<div id="attachment_3080"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-skew.png" data-slb-active="1" data-slb-asset="631495825" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-skew-270x360.png" alt="" width="270" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-skew-270x360.png 270w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-skew-113x150.png 113w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-skew-400x533.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/dt01aca300-skew.png 600w" sizes="(max-width: 270px) 100vw, 270px"></a></p><p>Toshiba DT01ACA300: Track skew is exactly 3/29 revolutions.</p></div>
+<div id="attachment_3078"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew.png" data-slb-active="1" data-slb-asset="1899021620" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew-270x360.png" alt="" width="270" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew-270x360.png 270w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew-113x150.png 113w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew-400x533.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew.png 600w" sizes="(max-width: 270px) 100vw, 270px"></a></p><p>Toshiba X300: Track skew is not exactly 1/16 revolution.</p></div>
+<div id="attachment_3079"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew10.png" data-slb-active="1" data-slb-asset="915221644" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew10-270x360.png" alt="" width="270" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew10-270x360.png 270w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew10-113x150.png 113w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew10-400x533.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/x300-skew10.png 600w" sizes="(max-width: 270px) 100vw, 270px"></a></p><p>Toshiba X300, zoomed in to first 10% of the disk. Track skew is slightly less than 1/16 revolution, drifting by about 28 revolutions over 3.28 million tracks (or about -0.003° per track).</p></div>
+<div id="attachment_3077"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-skew.png" data-slb-active="1" data-slb-asset="392720231" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-skew-270x360.png" alt="" width="270" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-skew-270x360.png 270w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-skew-113x150.png 113w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-skew-400x533.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/st1-skew.png 600w" sizes="(max-width: 270px) 100vw, 270px"></a></p><p>Seagate ST1: Different skew on each side of the disk (17/56 and 18/56 revolutions)</p></div>
+<p>Each of the plots above have two sub-plots. The top sub-plot shows the angular position of the beginning of each track on the disk, while the bottom shows the track skew of each track (the difference in start position between adjacent tracks). The two sub-plots are two views of the same data.</p>
+<p>The first plot above (Toshiba 3TB DT01ACA300) shows a drive that uses a skew of exactly 3/29 revolutions (~37.2°). The plot forms a set of near-horizontal lines, drifting by about 2° over the entire disk. But why are there 58 horizontal lines instead of 29? Adjacent surfaces have track start positions that are shifted by an odd multiple of 1/58 revolutions (29/58 = 180°). The bottom sub-plot shows that most of the track skews are 37.2°, but that 180° is also common. The 180° skews occur at serpentine boundaries when the next track moves to a different recording surface. There are also a small number of skews of different values. I think many of these are due to track or sector slipping, where the track start positions still follow the sequence of the real physical tracks, but some tracks are unused and skipped over.</p>
+<p>The next plot (Toshiba X300 5TB) shows no horizontal bands in the track skew plot because its skew is not exactly a small fraction of a revolution. The bottom sub-plot shows that 22.5° (1/16 rev) and 202.5° (9/16 rev) are common skews. The third plot zooms in further, showing the first 10% of the disk. Now it is clear that the skew is slightly less than 1/16 revolutions. We can also see that the track start positions drifts by about 45/16 revolutions in this plot, or 28 revolutions over the disk. I don’t have a plausible explanation for what causes this slight drift, nor what advantages/disadvantages it might have. I suspect it depends on the method used to write the servo information [<a href="#paperkey_8">9</a>], but I know very little about servo writing.</p>
+<p>The fourth plot shows the Seagate ST1 5 GB microdrive. It is a 1-platter, 2-head drive, and uses a different skew on each side! One side uses 17/56 revolutions (109.3°) while the other uses 18/56 (115.7°).</p>
+<div>
+<h4>Implementation Details</h4>
+<p><code>--access-list 0,30 &lt; track_boundaries.txt</code></p>
+<p>To measure track skew, we need to know the start sector of each track. The start sector of each track uses the output of the track bounds algorithm (<a href="#trackbounds">previous section</a>).<br>
+Although track skew is often defined as the start of a track relative to the end of the previous track, this algorithm measures the absolute angular position (i.e., relative to sector 0) of the starting sector of every track.</p>
+</div>
+<h2 id="defects">Defective Sectors</h2>
+<p>With hard drives having millions to billions of sectors, each only tens of nanometers in size, it is inevitable that there will be defects on the disk surface at manufacture time. Different drives take different approaches to manage these defects.</p>
+<p>In some early drives, defects were “managed” by notifying the user. For example, the ST-157A manual says “A label is fixed to the drive listing the location of any media defects by cylinder, head and bytes from index”. The stickers that would be needed for a modern drive with hundreds of thousands of defects would be too expensive. With larger disks and more defects, the disk controller needs to silently skip over defective sectors (at a tiny impact to performance). Two common methods to skip over defects are sector slipping and track slipping. Sector slipping allows mapping consecutive logical sector numbers to non-consecutive physical sectors when skipping over defective physical sectors. When reading sequential logical sectors, defective sectors causes a small delay of a few sectors, but does not require extra seeks. Track slipping is similar, except that whole tracks are skipped.</p>
+<p>How can the defect management method used by each hard drive be detected? Sector slipping causes the track length to be reduced by the size of the number of defective sectors skipped over. These can be fairly easily noticed when looking at the track size plot. In a defect-free drive, all tracks in a zone are the same size (straight horizontal line), but tracks with holes tend to show up as a group of smaller tracks within a zone. The region of interest can then be more closely examined by plotting the physical angular position of every logical sector in the region. Defective sectors that are skipped over appear as holes, and are especially visible if the hole spans multiple tracks at the same angular position. Because media defects are a physical (not logical) phenomenon, they cause holes in groups of sectors located physically near each other, ignoring logical effects such as track skew.</p>
+<h3>Sector slipping</h3>
+<p>The figures below show example sector-slipping holes for several drives. I have observed sector slipping holes in a majority of the drives. On most disks, holes are infrequent (10s to 100s per disk?) and small (a few sectors), but the Toshiba 3TB (P300 and DT01ACA300) drives seem to have more holes and much bigger holes with some holes spanning more than 90% of a track. These manufacturing defects don’t seem to have affected reliability, as none of my four drives have developed any <em>new</em> defective sectors during use (between 13,000 and 30,000 power-on hours so far). The only real effect is in reduced performance in the regions with holes, and that amounts to no more than hundreds of thousands of sectors out of 733 million.</p>
+<div>
+<div id="attachment_2894"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1.jpg" data-slb-active="1" data-slb-asset="1682329243" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300-angpos-hole1.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Toshiba P300: There is a big hole and a scattering of smaller holes spanning many tracks. The hole may look big, but 35 tracks is only about 2.8 µm.</p></div>
+</div>
+<div>
+<div id="attachment_2917"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole.jpg" data-slb-active="1" data-slb-asset="441256692" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/p300b-angpos-hole.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>A second Toshiba P300: There is a big hole here too, but overall there are fewer holes on this disk than the first P300.</p></div>
+</div>
+<div>
+<div id="attachment_2896"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole.jpg" data-slb-active="1" data-slb-asset="1384860836" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/wd3000-angpos-hole.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Western Digital S25: There is a 27-sector hole spanning roughly the same angular positions over 8 tracks (~0.8 µm).</p></div>
+</div>
+<div>
+<div id="attachment_2912"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole.jpg" data-slb-active="1" data-slb-asset="1791994647" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole-360x332.jpg" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole-360x332.jpg 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole-768x709.jpg 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole-1024x945.jpg 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole-150x138.jpg 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole-400x369.jpg 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/hd103sj-angpos-hole.jpg 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Samsung F3: There are a few holes here, the biggest of which is in tracks 231-233 (~0.4 µm).</p></div>
+</div>
+<div id="attachment_3104"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole.png" data-slb-active="1" data-slb-asset="1459030573" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole-360x332.png" alt="" width="360" height="332" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole-360x332.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole-768x709.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole-1024x945.png 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole-150x138.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole-400x369.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/15k7-angpos-hole.png 1300w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Seagate 15K.7: There is a 2-sector hole spanning 11 tracks (~1.6 µm).</p></div>
+<h3>Track slipping</h3>
+<p>Track slipping is harder to find and even more difficult to verify. If a drive uses only track slipping, then all tracks in each zone contains the expected number of sectors with no exceptions. However, track slipping can cause the size of a <i>serpentine</i> to be smaller than expected. The easiest way to notice track skipping is the existence of an unusual track skew <i>within</i> a serpentine. Track skew between adjacent tracks within a serpentine tends to be constant, with larger skews occurring only at zone/serpentine boundaries (to accommodate a head switch or a larger seek). An unusual skew within a serpentine often indicates some skipped tracks. Verifying that the unusual skew is actually caused by skipped tracks is difficult. Skipped tracks cause a hole in the radial direction only (so measuring angular position doesn’t work). Radial distances can be measured using seek time (further seek → longer time), but because the seek distance to seek time relation is highly non-linear and varies for each drive model, it is difficult to accurately count the number of skipped tracks.</p>
+<div id="attachment_2940"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hdwe150-hole.png" data-slb-active="1" data-slb-asset="1487332283" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/hdwe150-hole-345x360.png" alt="" width="345" height="360"></a></p><p>Toshiba X300 track slipping. This diagram shows three physically-adjacent serpentines on the same surface side by side (thus, the x-axis is discontinuous). There appears to be around 263 missing tracks (~22 µm) at track number 514148, causing an unusually small serpentine (52 tracks instead of 315) and an unusual track skew (177°) at the location of the skipped tracks. The seek time profile is asymmetric because of the missing tracks.</p></div>
+<div id="attachment_2939"><p><a href="https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole.png" data-slb-active="1" data-slb-asset="681345040" data-slb-internal="0" data-slb-group="2834"><img src="https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole-360x360.png" alt="" width="360" height="360" srcset="https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole-360x360.png 360w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole-150x150.png 150w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole-768x769.png 768w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole-1024x1024.png 1024w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole-400x400.png 400w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole-100x100.png 100w, https://blog.stuffedcow.net/wp-content/uploads/2019/02/cheetah-hole.png 1501w" sizes="(max-width: 360px) 100vw, 360px"></a></p><p>Seagate Cheetah 15K.7 track slipping. Around 28 slipped tracks (~4 µm) between tracks 42033 and 42034. Trying to measure the number of skipped tracks using an adjacent defect-free surface suggests 27 slipped tracks, but looking at the pattern of track starting positions (skew) suggests 28 missing tracks.</p></div>
+<p>The figures above show two examples of track slipping and my attempt at counting the number of skipped tracks. In the first plot (Toshiba X300), there appears to be around 263 skipped tracks between logical tracks 514147 and 514148. The second plot (Seagate 15K.7) shows around 28 skipped tracks between (logical) tracks 42033 and 42034 (on “Surface B”).</p>
+<p>The X300 plot shows three physically-adjacent serpentines on the same surface, with the middle one shaded blue. The logical track numbers are discontinuous because serpentines on the other 9 surfaces are omitted from the plot. In the top pane, track size is a constant 440 sectors, which indicates that there is no zone change. The middle serpentine size is much smaller than the usual 315-track serpentines in this region of the disk. The two spikes are left over from the unedited plot where track size changes when moving to a logically-adjacent serpentine on a different surface, which has been cut out. The second pane shows a seek profile with a reference sector somewhere inside the middle serpentine. If these three serpentines contained only physically-adjacent tracks, one would expect that the seek profile would be symmetric, but there appears to be a big section of the seek profile curve cut out between tracks 514147-514148. The third and fourth panes show track skew (angular position of the starting sector of each track, and skew relative to the previous track), showing that there is a discontinuity to the skew pattern at the same location. All three observations point to a discontinuity after track 514147, containing (315-52 = 263) physical tracks that are hidden.</p>
+<p>The Seagate 15K.7 plot shows a different method for detecting missing physical tracks. We’ve already seen <a href="#trackalignment">above</a> that the seek profile plot can be used to compare radial positions between recording surfaces, which was used to observe the alignment of tracks between different surfaces. Here, I use the same method for a different purpose: I can measure physical radial distances on one surface by counting tracks on a <i>different</i> surface, by assuming track densities at the same radius are the same on different surfaces. In this plot, I show two adjacent serpentines on different surfaces (labeled Surface A and B in the plot), along with some suspected skipped tracks between track number 42303 and 42304. The second and third panes of the plot show seek profiles with the reference sector set to track 42034 and track 42033, respectively. The first clue that there are missing tracks is that both seek profiles are asymmetric and appear to have been cut off at tracks 42033-42034.</p>
+<p>We can use seek profiles to measure radial distances between different surfaces. The two seek profiles show that track 42034 on Surface B is physically closest to track 41964 on Surface A, while track 42033 is closest to track 41992. If there were no skipped tracks, we would expect that moving the head a distance of one track on Surface B would also move the head by approximately one track on Surface A. Instead, a “one track” distance on Surface B was actually a 28-track distance on Surface A, which suggests 27 missing tracks on Surface B. Surface A (assumed defect-free) is being used as a ruler to measure physical distances on Surface B. Following the discontinuity of the skew pattern (bottom pane) between tracks 42033 and 42034 actually suggests there may be 28 tracks missing. In this particular example, I trust the skew pattern more, so I think 28 missing tracks is more likely than 27, but I have no way of proving it.</p>
+<p>Missing physical tracks are difficult to detect and verify, but I’ve used two examples to show that it is possible to identify missing physical tracks and the approximate number of tracks missing. Using four independent observations increases confidence in the result: serpentine size change compared to neighbours, asymmetric or cut-off seek profile, using another recording surface as a ruler, and looking at discontinuities in the track skew pattern.</p>
+<h2 id="microbenchmarking">Microbenchmarking Challenges</h2>
+<p>This section is a short discussion of some of the challenges I encountered while designing this set of microbenchmarks.</p>
+<h3>Disk cache and lookahead must be disabled</h3>
+<p>My microbenchmarks assume that read commands will actually be serviced by reading the disk, and not the cache. Some previous work [<a href="#paperkey_1">2</a>] tried to get around this by using writes instead of reads and assuming writes must wait until data reaches the disk (for safety against power loss). There are standard commands to disable caches on both ATA and SCSI disks, and these commands were functional on all but one of the drives I tested. The Maxtor 7405AV has a cache that cannot be disabled, but it appears that the cache only caches repeated reads to the same sector, so it was easy to work around this behaviour. Thus, I could use reads and avoid many of the other problems with writes (avoiding higher settling times for writes, losing the data on the disk, and never being completely certain of the exact time when data reaches the disk media).</p>
+<h3>SAS controllers come in two types: HBA and RAID. Only HBA will work.</h3>
+<p>A SAS RAID controller allows the OS to see the RAID array, but does not allow sending SCSI commands directly to the disk drives. That means it is impossible to turn off the disk cache. A simpler HBA (Host Bus Adapter) is required. A HBA simply attaches the disk to the system, much like I’m used to with IDE and SATA drives.</p>
+<h3>All microbenchmarks make assumptions about the thing being measured. These assumptions don’t always hold.</h3>
+<p>These assumptions are especially likely to be wrong if the thing you’re measuring is newer than your algorithm. The algorithms from previous work [<a href="#paperkey_0">1</a>, <a href="#paperkey_1">2</a>] generally did not work unmodified on all of the wide variety of drives I tested. Indeed, even my algorithms do not work flawlessly on all of the drives, despite a lot of tuning effort, and I expect my algorithms to work even less well for drives I haven’t seen before.</p>
+<p>The “Skippy” algorithm proposed by Nisha et al. (from 1999) [<a href="#paperkey_1">2</a>] assumed that tracks are laid out in cylinders using one of the head-first track layouts. As we’ve seen, nearly all disks after around 2000 no longer used this style of track layout. The newer algorithms from Gim and Won (2010) [<a href="#paperkey_0">1</a>] generally still work, but some of their optimizations do not work reliably. Their zone-finding algorithm assumes that tracks within a zone or serpentine are all the same size and change infrequently, but in modern disks with sector slipping, track sizes can change very frequently, which can produce an occasional incorrect result. Their zone-finding algorithm skips over large groups of tracks at a time, assuming the track size doesn’t change and then verifies whether the target is still a track boundary, and concluding that the entire group of tracks still have the same size. This fails when the total number of missing sectors (e.g., due to sector slipping) in a group of tracks is exactly a multiple of the assumed track size. This becomes more common with bigger drives (I tested up to 5 TB, they tested up to 320 GB) and drives with more track size variation.</p>
+<p>My algorithms also make assumptions, and these can also fail:</p>
+<ul>
+<li>I assume a hard drive contains a stack of spinning disks, data is stored in concentric tracks (not spirals) and sectors, and that there is one head stack assembly where one head can be used at a time. I have yet to see a hard drive that is a counter-example, but there have been the occasional suggestion (and I think real products) of drives with two head stacks [<a href="#paperkey_9">10</a>, <a href="#paperkey_10">11</a>, <a href="#paperkey_11">12</a>].</li>
+<li>My track boundary algorithm assumes that tracks have track skew, and that the track skew is greater than a few percent of a revolution and somewhat less than a full revolution. This assumption does not hold on the ST-157A I tested: it has no skew (or 360° skew). Since this drive only uses one track size over the entire disk, it was easier to manually compute the track boundaries than to invent a new algorithm to work with zero skew. However, even on the other disks, this assumption does not always hold. Most disks have some tracks with near-zero skew, usually as a result of zone changes or track or sector slipping causing a few instances of unusual skew. There are also assumptions that read times do not have much random variation, or that disks do not have too many missing sectors. As a result, I needed to manually clean up errors in the track bounds discovered by the algorithm on all of the drives.</li>
+<li>Disks that significantly deviate from the idealized behaviour cause problems. For example, my Seagate 7200.11 has many regions of the disk that take one extra revolution to perform a seek (seek error?), while my Seagate ST1 has seek errors at random.</li>
+<li>Similarly, it is difficult to find track boundaries in disk regions with tracks that have lost many of its sectors due to defects (two of the P300 drives), or where there are large changes in track size (Samsung SV0432D).</li>
+</ul>
+<h2>Conclusions</h2>
+<p>This article discussed microbenchmarks for discovering some physical characteristics of how data is stored on hard drives. The ability to measure angular position of sectors and seek time between tracks can be used to build more complex measurements that allow determining the layout of sectors and tracks onto the disk platters. In addition to the track size and seek profile used in previous work, I also found that track skews are useful in determining the track layout.</p>
+<p>I tested hard drives from 45 MB to 5 TB, spanning 25 years of progress. This showed a wider variety of track layouts and odd behaviours than seen in previous work. The wide variety of designs and corner cases also made the design of microbenchmark algorithms more challenging.</p>
+<p>The original question I set out to answer was whether one could measure the number of platters (or surfaces) in a hard drive. It turns out it is generally possible, but there is no straightforward algorithm to do so. Knowing the number of surfaces requires knowing the track layout, and the many different track layouts require combining different measurements to infer the result.</p>
+<h2>Detailed Results</h2>
+<p>This article got too long for one page. <a href="http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/2/">Measurement results for each drive are on Page 2</a>.</p>
+<h2>Source Code</h2>
+<ul>
+<li><a href="http://blog.stuffedcow.net/wp-content/uploads/2019/02/hdubench.cc">hdubench.cc</a></li>
+</ul>
+<h2>References</h2>
+<div id="paperkey_0"><p>[1]        J. Gim and Y. Won, “<a href="http://www.esos.hanyang.ac.kr/files/publication/journals/international/a6-gim.pdf">Extract and Infer Quickly: Obtaining Sector Geometry of Modern Hard Disk Drives</a>,” <span>ACM Transactions on Storage</span>, vol. 6, iss. 2, p. 6:1–6:26, 2010.            <a href="http://dx.doi.org/10.1145/1807060.1807063" title="View document in publisher site"><img src="https://blog.stuffedcow.net/wp-content/plugins/papercite/img/external.png" width="10" height="10" alt="[doi]"></a>   </p></div>
+<div id="paperkey_1"><p>[2]        N. Talagala, R. H. Arpaci-Dusseau, and D. Patterson, “<a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/1999/6275.html">Microbenchmark-based Extraction of Local and Global Disk Characteristics</a>,” EECS Department, University of California, Berkeley, 1999.               </p></div>
+<p>[3]        S. W. Schlosser, J. Schindler, S. Papadomanolakis, M. Shao, A. Ailamaki, C. Faloutsos, C. Faloutsos, and G. R. Ganger, “<a href="https://www.usenix.org/legacy/event/fast05/tech/schlosser/schlosser.pdf">On Multidimensional Data and Modern Disks</a>,” <span>Proc. FAST 2005: 4th USENIX Conference on File and Storage Technologies</span>, 2005.               </p>
+<p>[4]        B. L. Worthington, G. R. Ganger, Y. N. Patt, and J. Wilkes, “<a href="https://www.archive.ece.cmu.edu/~ganger/papers/sigmetrics95.pdf">On-line Extraction of SCSI Disk Drive Parameters</a>,” <span>Proc. 1995 ACM SIGMETRICS Conference on Measurement and Modeling of Computer Systems</span>, 1995.               </p>
+<div id="paperkey_4"><p>[5]        J. Schindler and G. R. Ganger, “<a href="https://www.pdl.cmu.edu/PDL-FTP/DriveChar/cs-99-176.pdf">Automated Disk Drive Characterization</a>,” <span>CMU-CS-99-176</span>, 1999.               </p></div>
+
+<div id="paperkey_6"><p>[7]        M. Cordle, C. Rea, J. Jury, T. Rausch, C. Hardie, E. Gage, and R. H. Victora, “<a href="https://doi.org/10.1063/1.5007725">Impact of radius and skew angle on areal density in heat assisted magnetic recording hard disk drives</a>,” <span>AIP Advances</span>, vol. 8, iss. 5, 2018.            <a href="http://dx.doi.org/10.1063/1.5007725" title="View document in publisher site"><img src="https://blog.stuffedcow.net/wp-content/plugins/papercite/img/external.png" width="10" height="10" alt="[doi]"></a>   </p></div>
+
+<div id="paperkey_8"><p>[9]        J. Nie and R. Horowitz, “<a href="https://horowitz.me.berkeley.edu/Publications_files/All_papers_numbered/186c_Nie_ACC10_TutorialonSSTW.pdf">A Tutorial on Control Design of Hard Disk Drive Self-Servo Track Writing</a>,” <span>Proc. American Control Conference</span>, 2010.               </p></div>
+<div id="paperkey_9"><p>[10]        T. A. Nguyen, “<a href="https://www.tomshardware.com/news/seagate-hdd-harddrive,8279.html">The Dual Actuator/Head Hard Drive</a>,” <span>Tom’s Hardware</span>.               </p></div>
+
+
+<h3>Cite</h3>
+<ul>
+<li>                   H. Wong, <span>Discovering Hard Disk Physical Geometry through Microbenchmarking</span>, Sept., 2019. [Online]. Available: <a href="http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/">http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/</a> <br>    [Bibtex]
+<div id="papercite_12_block">
+<pre><code>@misc{disk-microbenchmarking,
+author={Henry Wong},
+title={Discovering Hard Disk Physical Geometry through Microbenchmarking},
+month={sep},
+year=2019,
+url={http://blog.stuffedcow.net/2019/09/hard-disk-geometry-microbenchmarking/}
+}</code></pre>
+</div>
+</li>
+</ul>
+
+<p>(Visited 12,717 times, 22 visits today)</p></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

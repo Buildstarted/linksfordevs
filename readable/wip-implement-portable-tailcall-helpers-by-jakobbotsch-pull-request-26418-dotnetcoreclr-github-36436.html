@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+[WIP] Implement portable tailcall helpers by jakobbotsch &#xB7; Pull Request #26418 &#xB7; dotnet/coreclr - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="[WIP] Implement portable tailcall helpers by jakobbotsch &#xB7; Pull Request #26418 &#xB7; dotnet/coreclr - linksfor.dev(s)"/>
+    <meta property="article:author" content="jakobbotsch"/>
+    <meta property="og:description" content="Implement the portable tailcall helpers described in https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/tailcalls-with-helpers.md with a few variations.&#xA;&#xA; Stubs&#xA;&#xA; EH clause&#xA;&#xA;&#xA; ..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/dotnet/coreclr/pull/26418"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - [WIP] Implement portable tailcall helpers by jakobbotsch &#xB7; Pull Request #26418 &#xB7; dotnet/coreclr</title>
+<div class="readable">
+        <h1>[WIP] Implement portable tailcall helpers by jakobbotsch &#xB7; Pull Request #26418 &#xB7; dotnet/coreclr</h1>
+            <div>by jakobbotsch</div>
+            <div>Reading time: 15-19 minutes</div>
+        <div>Posted here: 18 Sep 2019</div>
+        <p><a href="https://github.com/dotnet/coreclr/pull/26418">https://github.com/dotnet/coreclr/pull/26418</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>FYI <a data-hovercard-type="user" data-hovercard-url="/users/janvorli/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/janvorli">@janvorli</a> <a data-error-text="Failed to load team members" data-id="1874006" data-permission-text="Team members are private" data-url="/orgs/dotnet/teams/jit-contrib/members" data-hovercard-type="team" data-hovercard-url="/orgs/dotnet/teams/jit-contrib/hovercard" href="https://github.com/orgs/dotnet/teams/jit-contrib">@dotnet/jit-contrib</a></p>
+<p>This now works for some very basic examples on unix x64 (using <a href="https://github.com/ltrzesniewski/InlineIL.Fody">InlineIL.Fody</a>):</p>
+<div><pre><span>using</span> <span>InlineIL</span>;
+<span>using</span> <span>System</span>;
+<span>using</span> <span>System</span>.<span>Diagnostics</span>;
+<span>using</span> <span>System</span>.<span>Runtime</span>.<span>Intrinsics</span>;
+<span>using</span> <span>System</span>.<span>Threading</span>.<span>Tasks</span>;
+
+<span>internal</span> <span>class</span> <span>Program</span>
+{
+    <span>private</span> <span>static</span> <span>int</span> <span>Main</span>()
+    {
+        <span>s_prev</span> <span>=</span> <span>10000001</span>;
+        <span>Stopwatch</span> <span>timer</span> <span>=</span> <span>Stopwatch</span>.<span>StartNew</span>();
+        <span>bool</span> <span>result</span> <span>=</span> <span>IsOddNewHelper</span>(<span>10000000</span>);
+        <span>Console</span>.<span>WriteLine</span>(<span><span>"</span>Time: {0}ms<span>"</span></span>, <span>timer</span>.<span>ElapsedMilliseconds</span>);
+        <span>return</span> <span>result</span> <span>?</span> <span>100</span> <span>:</span> <span>0</span>;
+    }
+
+    <span>private</span> <span>static</span> <span>readonly</span> <span>S32</span> <span>s_s32</span> <span>=</span> <span>new</span> <span>S32</span>
+    { <span>A</span> <span>=</span> <span>1</span>, <span>B</span> <span>=</span> <span>2</span>, <span>C</span> <span>=</span> <span>3</span>, <span>D</span> <span>=</span> <span>4</span>, };
+    <span>private</span> <span>static</span> <span>int</span> <span>s_prev</span>;
+    <span>static</span> <span>unsafe</span> <span>bool</span> <span>IsEvenNewHelper</span>(<span>int</span> <span>x</span>, <span>S32</span> <span>onStack</span>)
+    {
+        <span>Trace</span>.<span>Assert</span>(<span>x</span> <span>==</span> <span>s_prev</span> <span>-</span> <span>1</span>);
+        <span>s_prev</span> <span>=</span> <span>x</span>;
+        <span>if</span> (<span>x</span> <span>==</span> <span>0</span>)
+            <span>return</span> <span>true</span>;
+
+        <span>IL</span>.<span>Push</span>(<span>x</span> <span>-</span> <span>1</span>);
+        <span>IL</span>.<span>Emit</span>.<span>Tail</span>();
+        <span>IL</span>.<span>Emit</span>.<span>Call</span>(<span>new</span> <span>MethodRef</span>(<span>typeof</span>(<span>Program</span>), <span>nameof</span>(<span>IsOddNewHelper</span>)));
+        <span>return</span> <span>IL</span>.<span>Return</span>&lt;<span>bool</span>&gt;();
+    }
+
+    <span>static</span> <span>unsafe</span> <span>bool</span> <span>IsOddNewHelper</span>(<span>int</span> <span>x</span>)
+    {
+        <span>Trace</span>.<span>Assert</span>(<span>x</span> <span>==</span> <span>s_prev</span> <span>-</span> <span>1</span>);
+        <span>s_prev</span> <span>=</span> <span>x</span>;
+        <span>if</span> (<span>x</span> <span>==</span> <span>0</span>)
+            <span>return</span> <span>false</span>;
+
+        <span>IL</span>.<span>Push</span>(<span>x</span> <span>-</span> <span>1</span>);
+        <span>IL</span>.<span>Push</span>(<span>s_s32</span>);
+        <span>IL</span>.<span>Emit</span>.<span>Tail</span>();
+        <span>IL</span>.<span>Emit</span>.<span>Call</span>(<span>new</span> <span>MethodRef</span>(<span>typeof</span>(<span>Program</span>), <span>nameof</span>(<span>IsEvenNewHelper</span>)));
+        <span>return</span> <span>IL</span>.<span>Return</span>&lt;<span>bool</span>&gt;();
+    }
+
+    <span>struct</span> <span>S32</span> { <span>public</span> <span>long</span> <span>A</span>, <span>B</span>, <span>C</span>, <span>D</span>; }
+
+}</pre></div>
+<p>builds and runs successfully. The following IL stubs are generated for the call to <code>IsEvenNewHelper</code> in <code>IsOddNewHelper</code> since there is not enough incoming arg space:</p>
+<pre lang="cil"><code>Incoming sig: Boolean (Int32, S32)
+StoreArgs sig: Void (IntPtr, System.Int32, S32)
+// CallMethod {
+         /*( 0)*/ ldc.i4.s        0x30 
+         /*( 1)*/ ldc.i4.0         
+         /*( 2)*/ conv.i           
+         /*( 2)*/ call            native int [System.Private.CoreLib] System.Runtime.CompilerServices.RuntimeHelpers::AllocTailCallArgBuffer(int32,native int) 
+         /*( 1)*/ stloc.0          
+         /*( 0)*/ ldloc.0          
+         /*( 1)*/ ldarg.0          
+         /*( 2)*/ stind.i          
+         /*( 0)*/ ldloc.0          
+         /*( 1)*/ ldc.i4.8         
+         /*( 2)*/ add              
+         /*( 1)*/ ldarg.1          
+         /*( 2)*/ stobj           System.Int32 
+         /*( 0)*/ ldloc.0          
+         /*( 1)*/ ldc.i4.s        0x10 
+         /*( 2)*/ add              
+         /*( 1)*/ ldarg.2          
+         /*( 2)*/ stobj           Program+S32 
+         /*( 0)*/ ret              
+// } CallMethod 
+
+CallTarget sig: System.Boolean ()
+// CallMethod {
+         /*( 0)*/ call            native int [System.Private.CoreLib] System.Runtime.CompilerServices.RuntimeHelpers::GetTailCallTls() 
+         /*( 1)*/ stloc.1          
+         /*( 0)*/ ldloc.1          
+         /*( 1)*/ ldfld           System.Runtime.CompilerServices.TailCallTls::Frame 
+         /*( 1)*/ stloc.2          
+         /*( 0)*/ ldloc.2          
+         /*( 1)*/ ldfld           System.Runtime.CompilerServices.TailCallFrame::ReturnAddress 
+         /*( 1)*/ call            native int [System.Private.CoreLib] System.StubHelpers.StubHelpers::ReturnAddress() 
+         /*( 2)*/ bne.un          IL_002c 
+         /*( 0)*/ ldloc.2          
+         /*( 1)*/ ldftn           System.Boolean /* MT: 0x00007FFF7CFADAF8 */ [example1] dynamicClass::IL_STUB_CallTailCallTarget() 
+         /*( 2)*/ conv.i           
+         /*( 2)*/ stfld           System.Runtime.CompilerServices.TailCallFrame::NextCall 
+         /*( 0)*/ ldloc.0          
+         /*( 1)*/ ret              
+IL_002c: /*( 0)*/ ldloca.s        0x3 
+         /*( 1)*/ ldloc.2          
+         /*( 2)*/ stfld           System.Runtime.CompilerServices.TailCallFrame::Prev 
+         /*( 0)*/ ldloca.s        0x3 
+         /*( 1)*/ ldc.i4.0         
+         /*( 2)*/ conv.i           
+         /*( 2)*/ stfld           System.Runtime.CompilerServices.TailCallFrame::NextCall 
+         /*( 0)*/ ldloc.1          
+         /*( 1)*/ ldloca.s        0x3 
+         /*( 2)*/ stfld           System.Runtime.CompilerServices.TailCallTls::Frame 
+         /*( 0)*/ ldloc.1          
+         /*( 1)*/ ldfld           System.Runtime.CompilerServices.TailCallTls::ArgBuffer 
+         /*( 1)*/ stloc.s         0x4 
+         /*( 0)*/ ldloc.s         0x4 
+         /*( 1)*/ ldind.i          
+         /*( 1)*/ stloc.s         0x5 
+         /*( 0)*/ ldloc.s         0x4 
+         /*( 1)*/ ldc.i4.8         
+         /*( 2)*/ add              
+         /*( 1)*/ ldobj           System.Int32 
+         /*( 1)*/ stloc.s         0x6 
+         /*( 0)*/ ldloc.s         0x4 
+         /*( 1)*/ ldc.i4.s        0x10 
+         /*( 2)*/ add              
+         /*( 1)*/ ldobj           Program+S32 
+         /*( 1)*/ stloc.s         0x7 
+         /*( 0)*/ call            void [System.Private.CoreLib] System.Runtime.CompilerServices.RuntimeHelpers::FreeTailCallArgBuffer() 
+         /*( 0)*/ ldloca.s        0x3 
+         /*( 1)*/ call            native int [System.Private.CoreLib] System.StubHelpers.StubHelpers::NextCallReturnAddress() 
+         /*( 2)*/ stfld           System.Runtime.CompilerServices.TailCallFrame::ReturnAddress 
+         /*( 0)*/ ldloc.s         0x6 
+         /*( 1)*/ ldloc.s         0x7 
+         /*( 2)*/ ldloc.s         0x5 
+         /*( 3)*/ calli           System.Boolean /* MT: 0x00007FFF7CFADAF8 */(System.Int32 /* MT: 0x00007FFF7CFD6090 */,Program/S32 /* MT: 0x00007FFF7D133DF0 */) 
+         /*( 1)*/ stloc.0          
+         /*( 0)*/ ldloc.1          
+         /*( 1)*/ ldloc.3          
+         /*( 2)*/ ldfld           System.Runtime.CompilerServices.TailCallFrame::Prev 
+         /*( 2)*/ stfld           System.Runtime.CompilerServices.TailCallTls::Frame 
+         /*( 0)*/ ldloc.3          
+         /*( 1)*/ ldfld           System.Runtime.CompilerServices.TailCallFrame::NextCall 
+         /*( 1)*/ brfalse         IL_00ab 
+         /*( 0)*/ ldloc.3          
+         /*( 1)*/ ldfld           System.Runtime.CompilerServices.TailCallFrame::NextCall 
+         /*( 1)*/ tail.            
+         /*( 1)*/ calli           System.Boolean /* MT: 0x00007FFF7CFADAF8 */() 
+         /*( 1)*/ ret              
+IL_00ab: /*( 0)*/ ldloc.0          
+         /*( 1)*/ ret              
+// } CallMethod 
+</code></pre>
+<p>generating respectively</p>
+<div><pre><span>; Assembly listing for method ILStubClass:IL_STUB_StoreTailCallArgs(long,int,struct)</span>
+<span>; Emitting BLENDED_CODE for X64 CPU with AVX - Unix</span>
+<span>; optimized code</span>
+<span>; rsp based frame</span>
+<span>; partially interruptible</span>
+<span>; Final local variable assignments</span>
+<span>;</span>
+<span>;  V00 arg0         [V00,T00] (  3,  3   )    long  -&gt;  rbx        </span>
+<span>;  V01 arg1         [V01,T01] (  3,  3   )     int  -&gt;  r14        </span>
+<span>;  V02 arg2         [V02,T03] (  1,  1   )  struct (32) [rsp+0x20]   do-not-enreg[SB]</span>
+<span>;  V03 loc0         [V03,T02] (  4,  4   )    long  -&gt;  rax        </span>
+<span>;# V04 OutArgs      [V04    ] (  1,  1   )  lclBlk ( 0) [rsp+0x00]   "OutgoingArgSpace"</span>
+<span>;</span>
+<span>; Lcl frame size = 8</span>
+
+<span>G_M9479_IG01:</span>
+<span>       </span><span>4156</span><span>                 </span><span>push</span><span>     </span><span>r14</span>
+<span>       </span><span>53</span><span>                   </span><span>push</span><span>     </span><span>rbx</span>
+<span>       </span><span>50</span><span>                   </span><span>push</span><span>     </span><span>rax</span>
+<span>       C5F877               </span><span>vzeroupper</span><span> </span>
+<span>       488BDF               </span><span>mov</span><span>      </span><span>rbx</span><span>,</span><span> </span><span>rdi</span>
+<span>       448BF6               </span><span>mov</span><span>      </span><span>r14d</span><span>,</span><span> </span><span>esi</span>
+
+<span>G_M9479_IG02:</span>
+<span>       BF30000000           </span><span>mov</span><span>      </span><span>edi</span><span>,</span><span> </span><span>48</span>
+<span>       33F6                 </span><span>xor</span><span>      </span><span>rsi</span><span>,</span><span> </span><span>rsi</span>
+<span>       E857671479           </span><span>call</span><span>     System.Runtime.CompilerServices.RuntimeHelpers:AllocTailCallArgBuffer(</span><span>int</span><span>,</span><span>long):long</span>
+<span>       </span><span>488918</span><span>               </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rax</span><span>],</span><span> </span><span>rbx</span>
+<span>       </span><span>44897008</span><span>             </span><span>mov</span><span>      dword ptr </span><span>[</span><span>rax</span><span>+</span><span>8</span><span>],</span><span> </span><span>r14d</span>
+<span>       4883C010             </span><span>add</span><span>      </span><span>rax</span><span>,</span><span> </span><span>16</span>
+<span>       C5FA6F442420         </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>20H</span><span>]</span>
+<span>       C5FA7F00             </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rax</span><span>],</span><span> </span><span>xmm0</span>
+<span>       C5FA6F442430         </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>30H</span><span>]</span>
+<span>       C5FA7F4010           </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rax</span><span>+</span><span>16</span><span>],</span><span> </span><span>xmm0</span>
+
+<span>G_M9479_IG03:</span>
+<span>       4883C408             </span><span>add</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>8</span>
+<span>       5B                   </span><span>pop</span><span>      </span><span>rbx</span>
+<span>       415E                 </span><span>pop</span><span>      </span><span>r14</span>
+<span>       C3                   </span><span>ret</span><span>      </span>
+
+<span>; Total bytes of code 65, prolog size 7 for method ILStubClass:IL_STUB_StoreTailCallArgs(long,int,struct)</span>
+<span>; ============================================================</span></pre></div>
+<p>and</p>
+<div><pre><span>; Assembly listing for method ILStubClass:IL_STUB_CallTailCallTarget():bool</span>
+<span>; Emitting BLENDED_CODE for X64 CPU with AVX - Unix</span>
+<span>; optimized code</span>
+<span>; rbp based frame</span>
+<span>; partially interruptible</span>
+<span>; Final local variable assignments</span>
+<span>;</span>
+<span>;  V00 loc0         [V00,T04] (  3,  1.50)    bool  -&gt;  [rbp-0x1C]  </span>
+<span>;  V01 loc1         [V01,T00] (  5,  3.50)    long  -&gt;  rbx        </span>
+<span>;  V02 loc2         [V02,T01] (  4,  3   )    long  -&gt;  rdi        </span>
+<span>;  V03 loc3         [V03    ] (  7,  3.50)  struct (24) [rbp-0x38]   do-not-enreg[XS] addr-exposed ld-addr-op</span>
+<span>;  V04 loc4         [V04,T02] (  4,  2   )    long  -&gt;  rax        </span>
+<span>;  V05 loc5         [V05,T05] (  2,  1   )    long  -&gt;  r14        </span>
+<span>;  V06 loc6         [V06,T06] (  2,  1   )     int  -&gt;  r15        </span>
+<span>;  V07 loc7         [V07,T07] (  2,  1   )  struct (32) [rbp-0x58]   do-not-enreg[SB]</span>
+<span>;  V08 OutArgs      [V08    ] (  1,  1   )  lclBlk (32) [rsp+0x00]   "OutgoingArgSpace"</span>
+<span>;  V09 tmp1         [V09,T08] (  1,  1   )    long  -&gt;  [rbp+0x08]   "Return address"</span>
+<span>;  V10 tmp2         [V10,T03] (  2,  2   )    long  -&gt;  rax         "impImportIndirectCall"</span>
+<span>;  V11 tmp3         [V11    ] (  3,  1.50)    long  -&gt;  [rbp-0x38]   do-not-enreg[X] addr-exposed V03.Prev(offs=0x00) P-DEP "field V03.Prev (fldOffset=0x0)"</span>
+<span>;  V12 tmp4         [V12    ] (  2,  1   )    long  -&gt;  [rbp-0x30]   do-not-enreg[X] addr-exposed V03.ReturnAddress(offs=0x08) P-DEP "field V03.ReturnAddress (fldOffset=0x8)"</span>
+<span>;  V13 tmp5         [V13    ] (  4,  2   )    long  -&gt;  [rbp-0x28]   do-not-enreg[X] addr-exposed V03.NextCall(offs=0x10) P-DEP "field V03.NextCall (fldOffset=0x10)"</span>
+<span>;</span>
+<span>; Lcl frame size = 104</span>
+
+<span>G_M31660_IG01:</span>
+<span>       </span><span>55</span><span>                   </span><span>push</span><span>     </span><span>rbp</span>
+<span>       </span><span>4157</span><span>                 </span><span>push</span><span>     </span><span>r15</span>
+<span>       </span><span>4156</span><span>                 </span><span>push</span><span>     </span><span>r14</span>
+<span>       </span><span>53</span><span>                   </span><span>push</span><span>     </span><span>rbx</span>
+<span>       4883EC68             </span><span>sub</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>104</span>
+<span>       C5F877               </span><span>vzeroupper</span><span> </span>
+<span>       488DAC2480000000     </span><span>lea</span><span>      </span><span>rbp</span><span>,</span><span> </span><span>[</span><span>rsp</span><span>+</span><span>80H</span><span>]</span>
+
+<span>G_M31660_IG02:</span>
+<span>       E806681479           </span><span>call</span><span>     System.Runtime.CompilerServices.RuntimeHelpers:GetTailCallTls():long</span>
+<span>       488BD8               </span><span>mov</span><span>      </span><span>rbx</span><span>,</span><span> </span><span>rax</span>
+<span>       488B3B               </span><span>mov</span><span>      </span><span>rdi</span><span>,</span><span> qword ptr </span><span>[</span><span>rbx</span><span>]</span>
+<span>       4C8B7508             </span><span>mov</span><span>      </span><span>r14</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>+</span><span>08H</span><span>]</span>
+<span>       4C397708             </span><span>cmp</span><span>      qword ptr </span><span>[</span><span>rdi</span><span>+</span><span>8</span><span>],</span><span> </span><span>r14</span>
+<span>       751C                 </span><span>jne</span><span>      SHORT G_M31660_IG04</span>
+<span>       48B89858F27CFF7F0000 </span><span>mov</span><span>      </span><span>rax</span><span>,</span><span> </span><span>0x7FFF7CF25898</span>
+<span>       </span><span>48894710</span><span>             </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rdi</span><span>+</span><span>16</span><span>],</span><span> </span><span>rax</span>
+<span>       8B45E4               </span><span>mov</span><span>      </span><span>eax</span><span>,</span><span> dword ptr </span><span>[</span><span>rbp</span><span>-</span><span>1CH</span><span>]</span>
+
+<span>G_M31660_IG03:</span>
+<span>       488D65E8             </span><span>lea</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>[</span><span>rbp</span><span>-</span><span>18H</span><span>]</span>
+<span>       5B                   </span><span>pop</span><span>      </span><span>rbx</span>
+<span>       415E                 </span><span>pop</span><span>      </span><span>r14</span>
+<span>       415F                 </span><span>pop</span><span>      </span><span>r15</span>
+<span>       5D                   </span><span>pop</span><span>      </span><span>rbp</span>
+<span>       C3                   </span><span>ret</span><span>      </span>
+
+<span>G_M31660_IG04:</span>
+<span>       48897DC8             </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>38H</span><span>],</span><span> </span><span>rdi</span>
+<span>       33C0                 </span><span>xor</span><span>      </span><span>rax</span><span>,</span><span> </span><span>rax</span>
+<span>       488945D8             </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>28H</span><span>],</span><span> </span><span>rax</span>
+<span>       488D45C8             </span><span>lea</span><span>      </span><span>rax</span><span>,</span><span> bword ptr </span><span>[</span><span>rbp</span><span>-</span><span>38H</span><span>]</span>
+<span>       </span><span>488903</span><span>               </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rbx</span><span>],</span><span> </span><span>rax</span>
+<span>       488B4308             </span><span>mov</span><span>      </span><span>rax</span><span>,</span><span> qword ptr </span><span>[</span><span>rbx</span><span>+</span><span>8</span><span>]</span>
+<span>       4C8B30               </span><span>mov</span><span>      </span><span>r14</span><span>,</span><span> qword ptr </span><span>[</span><span>rax</span><span>]</span>
+<span>       448B7808             </span><span>mov</span><span>      </span><span>r15d</span><span>,</span><span> dword ptr </span><span>[</span><span>rax</span><span>+</span><span>8</span><span>]</span>
+<span>       4883C010             </span><span>add</span><span>      </span><span>rax</span><span>,</span><span> </span><span>16</span>
+<span>       C5FA6F00             </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rax</span><span>]</span>
+<span>       C5FA7F45A8           </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>58H</span><span>],</span><span> </span><span>xmm0</span>
+<span>       C5FA6F4010           </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rax</span><span>+</span><span>16</span><span>]</span>
+<span>       C5FA7F45B8           </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>48H</span><span>],</span><span> </span><span>xmm0</span>
+<span>       E872671479           </span><span>call</span><span>     System.Runtime.CompilerServices.RuntimeHelpers:FreeTailCallArgBuffer()</span>
+<span>       488D3D27000000       </span><span>lea</span><span>      </span><span>rdi</span><span>,</span><span> G_M31660_IG05</span>
+<span>       48897DD0             </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>30H</span><span>],</span><span> </span><span>rdi</span>
+<span>       C5FA6F45A8           </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>58H</span><span>]</span>
+<span>       C5FA7F0424           </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rsp</span><span>],</span><span> </span><span>xmm0</span>
+<span>       C5FA6F45B8           </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>48H</span><span>]</span>
+<span>       C5FA7F442410         </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>10H</span><span>],</span><span> </span><span>xmm0</span>
+<span>       418BFF               </span><span>mov</span><span>      </span><span>edi</span><span>,</span><span> </span><span>r15d</span>
+<span>       41FFD6               </span><span>call</span><span>     </span><span>r14</span>
+
+<span>G_M31660_IG05:</span>
+<span>       448BF0               </span><span>mov</span><span>      </span><span>r14d</span><span>,</span><span> </span><span>eax</span>
+<span>       488B45C8             </span><span>mov</span><span>      </span><span>rax</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>38H</span><span>]</span>
+<span>       </span><span>488903</span><span>               </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rbx</span><span>],</span><span> </span><span>rax</span>
+<span>       48837DD800           </span><span>cmp</span><span>      qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>28H</span><span>],</span><span> </span><span>0</span>
+<span>       </span><span>7411</span><span>                 </span><span>je</span><span>       SHORT G_M31660_IG07</span>
+<span>       488B45D8             </span><span>mov</span><span>      </span><span>rax</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>28H</span><span>]</span>
+
+<span>G_M31660_IG06:</span>
+<span>       488D65E8             </span><span>lea</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>[</span><span>rbp</span><span>-</span><span>18H</span><span>]</span>
+<span>       5B                   </span><span>pop</span><span>      </span><span>rbx</span>
+<span>       415E                 </span><span>pop</span><span>      </span><span>r14</span>
+<span>       415F                 </span><span>pop</span><span>      </span><span>r15</span>
+<span>       5D                   </span><span>pop</span><span>      </span><span>rbp</span>
+<span>       48FFE0               rex.</span><span>jmp</span><span>  </span><span>rax</span>
+
+<span>G_M31660_IG07:</span>
+<span>       418BC6               </span><span>mov</span><span>      </span><span>eax</span><span>,</span><span> </span><span>r14d</span>
+
+<span>G_M31660_IG08:</span>
+<span>       488D65E8             </span><span>lea</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>[</span><span>rbp</span><span>-</span><span>18H</span><span>]</span>
+<span>       5B                   </span><span>pop</span><span>      </span><span>rbx</span>
+<span>       415E                 </span><span>pop</span><span>      </span><span>r14</span>
+<span>       415F                 </span><span>pop</span><span>      </span><span>r15</span>
+<span>       5D                   </span><span>pop</span><span>      </span><span>rbp</span>
+<span>       C3                   </span><span>ret</span><span>      </span>
+
+<span>; Total bytes of code 212, prolog size 21 for method ILStubClass:IL_STUB_CallTailCallTarget():bool</span>
+<span>; ============================================================</span></pre></div>
+<p>In the JIT the most interesting changes were to expose two new intrinsics <code>StubHelpers.ReturnAddress</code> and <code>StubHelpers.NextCallReturnAddress</code>. These allow us to efficiently detect whether our caller is a "call target" stub which will allow us to unwind. They show up in the above functions here:</p>
+<div><pre><span>;  V09 tmp1         [V09,T08] (  1,  1   )    long  -&gt;  [rbp+0x08]   "Return address"</span>
+
+<span>G_M31660_IG02:</span>
+<span>       E806681479           </span><span>call</span><span>     System.Runtime.CompilerServices.RuntimeHelpers:GetTailCallTls():long</span>
+<span>       488BD8               </span><span>mov</span><span>      </span><span>rbx</span><span>,</span><span> </span><span>rax</span>
+<span>       488B3B               </span><span>mov</span><span>      </span><span>rdi</span><span>,</span><span> qword ptr </span><span>[</span><span>rbx</span><span>]</span>
+<span>       4C8B7508             </span><span>mov</span><span>      </span><span>r14</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>+</span><span>08H</span><span>]</span>
+<span>       4C397708             </span><span>cmp</span><span>      qword ptr </span><span>[</span><span>rdi</span><span>+</span><span>8</span><span>],</span><span> </span><span>r14</span></pre></div>
+<p>and here:</p>
+<div><pre><span>       E872671479           </span><span>call</span><span>     System.Runtime.CompilerServices.RuntimeHelpers:FreeTailCallArgBuffer()</span>
+<span>       488D3D27000000       </span><span>lea</span><span>      </span><span>rdi</span><span>,</span><span> G_M31660_IG05</span>
+<span>       48897DD0             </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>30H</span><span>],</span><span> </span><span>rdi</span>
+<span>       C5FA6F45A8           </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>58H</span><span>]</span>
+<span>       C5FA7F0424           </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rsp</span><span>],</span><span> </span><span>xmm0</span>
+<span>       C5FA6F45B8           </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rbp</span><span>-</span><span>48H</span><span>]</span>
+<span>       C5FA7F442410         </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>10H</span><span>],</span><span> </span><span>xmm0</span>
+<span>       418BFF               </span><span>mov</span><span>      </span><span>edi</span><span>,</span><span> </span><span>r15d</span>
+<span>       41FFD6               </span><span>call</span><span>     </span><span>r14</span>
+
+<span>G_M31660_IG05:</span></pre></div>
+<p>Other than that the JIT basically just does some different morphing than before (the diff looks large because this is rebased on top of <a data-error-text="Failed to load issue title" data-id="480412287" data-permission-text="Issue title is private" data-url="https://github.com/dotnet/coreclr/issues/26158" data-hovercard-type="pull_request" data-hovercard-url="/dotnet/coreclr/pull/26158/hovercard" href="https://github.com/dotnet/coreclr/pull/26158">#26158</a>). It morphs the end of <code>IsOddNewHelper</code> into a call to the store args stub and a tailcall to the call-target stub:</p>
+<div><pre><span>IN0014: </span><span>000068</span><span> </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rsi</span><span>]</span>
+<span>IN0015: 00006C </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>V01 </span><span>rsp</span><span>],</span><span> </span><span>xmm0</span>
+<span>IN0016: </span><span>000071</span><span> </span><span>vmovdqu</span><span>  </span><span>xmm0</span><span>,</span><span> qword ptr </span><span>[</span><span>rsi</span><span>+</span><span>16</span><span>]</span>
+<span>IN0017: </span><span>000076</span><span> </span><span>vmovdqu</span><span>  qword ptr </span><span>[</span><span>V01</span><span>+</span><span>0x10</span><span> </span><span>rsp</span><span>+</span><span>10H</span><span>],</span><span> </span><span>xmm0</span>
+<span>IN0018: 00007C </span><span>lea</span><span>      </span><span>esi</span><span>,</span><span> </span><span>[</span><span>rbx</span><span>-</span><span>1</span><span>]</span>
+<span>IN0019: 00007F </span><span>mov</span><span>      </span><span>rdi</span><span>,</span><span> </span><span>0x7FFF7CF0EF90</span>
+<span>IN001a: </span><span>000089</span><span> </span><span>call</span><span>     ILStubClass:IL_STUB_StoreTailCallArgs(long</span><span>,</span><span>int</span><span>,</span><span>struct)</span>
+<span>IN001b: 00008E </span><span>nop</span><span>      </span>
+
+<span>G_M31660_IG07:</span><span>        ; offs=00008FH, size=000BH, epilog, nogc, emitadd</span>
+
+<span>IN0026: 00008F </span><span>lea</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>[</span><span>rbp</span><span>-</span><span>08H</span><span>]</span>
+<span>IN0027: </span><span>000093</span><span> </span><span>pop</span><span>      </span><span>rbx</span>
+<span>IN0028: </span><span>000094</span><span> </span><span>pop</span><span>      </span><span>rbp</span>
+<span>IN0029: </span><span>000095</span><span> </span><span>jmp</span><span>      ILStubClass:IL_STUB_CallTailCallTarget():bool</span></pre></div>
+<p>EDIT: Note that this is now outdated and not completely how it looks anymore.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

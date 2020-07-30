@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Adding host filtering to Kestrel in ASP.NET Core - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Adding host filtering to Kestrel in ASP.NET Core - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I describe how to add host filtering to an ASP.NET Core application, and show why not filtering could allow attackers to exploit your app"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/adding-host-filtering-to-kestrel-in-aspnetcore/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Adding host filtering to Kestrel in ASP.NET Core</title>
+<div class="readable">
+        <h1>Adding host filtering to Kestrel in ASP.NET Core</h1>
+            <div>Reading time: 7-9 minutes</div>
+        <div>Posted here: 16 Jun 2020</div>
+        <p><a href="https://andrewlock.net/adding-host-filtering-to-kestrel-in-aspnetcore/">https://andrewlock.net/adding-host-filtering-to-kestrel-in-aspnetcore/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+<div>
+<p>Host filtering, restricting the hostnames that your app responds to, is recommended whenever you're running in production for security reasons. In this post, I describe how to add host filtering to an ASP.NET Core application.</p>
+<h2 id="what-is-host-filtering-">What is host filtering?<a href="#what-is-host-filtering-"></a></h2>
+<p>When you run an ASP.NET Core application using Kestrel, you can choose the <em>ports</em> it binds to, <a href="https://andrewlock.net/5-ways-to-set-the-urls-for-an-aspnetcore-app/">as I described in a previous post</a>. You have a few options: </p>
+<ul>
+<li>Bind to a port on the loopback (localhost) address</li>
+<li>Bind to a port on a specific IP address</li>
+<li>Bind to a port on any IP address on the machine.</li>
+</ul>
+<p>Note that we didn't mention a hostname (e.g. example.org) at any point here - and that's because Kestrel <em>doesn't</em> bind to a specific host name, it just listens on a given port. </p>
+<blockquote>
+<p>Note that <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/servers/httpsys?view=aspnetcore-3.1">HTTP.sys <em>can</em> be used to bind to a specific hostname</a>.</p>
+</blockquote>
+<p>DNS is used to convert the hostname you type in your address bar to an IP address, and typically port 80, or (443 for HTTPS). You can simulate configuring DNS with a provider locally be editing the <em>hosts</em> file on your local machine, as I'll show in the remainder of this section</p>
+<p>On Linux, you can run <code>sudo nano /etc/hosts</code> to edit the hosts file. On Windows, open an administrative command prompt, and run <code>notepad C:\Windows\System32\drivers\etc\hosts</code>. At the bottom of the file, add entries for <code>site-a.local</code> and <code>site-b.local</code> that point to your local machine:</p>
+<pre><code>
+
+
+
+
+
+127.0.0.1  site-a.local
+127.0.0.1  site-b.local
+</code></pre>
+<p>Now create a simple ASP.NET Core app, for example using <code>dotnet new webapi</code>. By default, if you run <code>dotnet run</code>, your application will listen on ports 5000 (HTTP) and 5001 (HTTPS), on all IP addresses. If you navigate to <a href="https://localhost:5001/weatherforecast">https://localhost:5001/weatherforecast</a>, you'll see the results from the standard default <code>WeatherForecastController</code>.</p>
+<p>Thanks to your additions to the <em>hosts</em> file, you can now <em>also</em> access the site at <em>site-a.local</em> and <em>site-b.local</em>, for example, <a href="https://site-a.local:5001/weatherforecast">https://site-a.local:5001/weatherforecast</a>:</p>
+<p><img src="https://andrewlock.net/content/images/2020/host_filtering_01.png" alt="Image of accessing the site using the site-a.local domain"></p>
+<blockquote>
+<p>You'll need to click through some SSL warnings to view the example above, as the development SSL is only valid for localhost, not our custom domain.</p>
+</blockquote>
+<p>By default, there's no host filtering, so you can access the ASP.NET Core app via localhost, or any other hostname that maps to your IP address, such as our custom <code>site-a.local</code> domain. But why does that matter? </p>
+<h2 id="why-should-you-use-host-filtering-">Why should you use host filtering?<a href="#why-should-you-use-host-filtering-"></a></h2>
+<p>The Microsoft documentation points out that you should use host filtering for a couple of reasons:</p>
+<ul>
+<li><a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/routing?view=aspnetcore-3.1#url-generation-concepts">When doing URL generation</a>.</li>
+<li><a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel?view=aspnetcore-3.1#host-filtering">When hosting behind a reverse proxy and the <code>Host</code> header is forwarded correctly</a></li>
+</ul>
+<p>There are several attacks which rely on an apps responding to requests, regardless of the host name:</p>
+<ul>
+<li><a href="https://benmmurphy.github.io/blog/2016/07/11/rails-webconsole-dns-rebinding/">A DNS rebinding attack</a>, that allows attackers to execute code on your machine if you're running a server on localhost.</li>
+<li><a href="http://carlos.bueno.org/2008/06/host-header-injection.html">Cache poisoning attacks</a></li>
+<li><a href="https://www.skeletonscribe.net/2013/05/practical-http-host-header-attacks.html">Password reset hijacking</a></li>
+</ul>
+<p>The latter two attacks essentially rely on an application "echoing" the hostname used to access the website when generating URLs. </p>
+<p>You can easily see this vulnerability in an ASP.NET Core app if you generate an absolute URL, for use in a password reset email for example. As a simple example, consider the controller below: this generates an absolute link to the WeatherForecast action (shown in the previous image):</p>
+<blockquote>
+<p>Specifying the protocol means an absolute URL is generated instead of a relative link. There are various other methods that generate absolute links, as well <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/routing?view=aspnetcore-3.1#url-generation-concepts">as others on the <code>LinkGenerator</code></a>.</p>
+</blockquote>
+<pre><code><span>[</span><span>ApiController</span><span>]</span>
+<span>[</span><span>Route</span><span>(</span><span>"[controller]"</span><span>)</span><span>]</span>
+<span>public</span> <span>class</span> <span>ValuesController</span> <span>:</span> <span>Controller</span>
+<span>{</span>
+    <span>[</span><span>HttpGet</span><span>]</span>
+    <span>public</span> <span>string</span> <span>GetPasswordReset</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>return</span> Url<span>.</span><span>Action</span><span>(</span><span>"Get"</span><span>,</span> <span>"WeatherForecast"</span><span>,</span> values<span>:</span> <span>null</span><span>,</span> protocol<span>:</span> <span>"https"</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Depending on the hostname you access the site with, a different link is generated. By leveraging "forgot your password" functionality, an attacker could send an email from your system to any of your users with a link to a malicious domain under the attacker's control!</p>
+<p><img src="https://andrewlock.net/content/images/2020/host_filtering_02.png" alt="Image of generating links based on the hostname"></p>
+<p>Hopefully we can all agree that's bad… luckily the fix isn't hard.</p>
+<h2 id="enabling-host-filtering-for-kestrel">Enabling host filtering for Kestrel<a href="#enabling-host-filtering-for-kestrel"></a></h2>
+<p>Host filtering is added by default in the <code>ConfigureWebHostDefaults()</code> method, but it's disabled by default. If you're using this method, you can enable the middleware by setting the <code>"AllowedHosts"</code> value in the app's <code>IConfiguration</code>. </p>
+<p>In the default templates, this value is set to <code>*</code> in <em>appsettings.json</em>, which disables the middleware. To add host filtering, add a semicolon delimited list of hostnames:</p>
+<pre><code><span>{</span>
+  <span>"AllowedHosts"</span><span>:</span> <span>"site-a.local;localhost"</span>
+<span>}</span>
+</code></pre>
+<blockquote>
+<p>You can set the configuration value using any enabled configuration provider, for example using an environment variable.</p>
+</blockquote>
+<p>With this value set, you can still access the allowed host names, but all other requests to other hosts will return a 400 response, stating the hostname is invalid:</p>
+<p><img src="https://andrewlock.net/content/images/2020/host_filtering_03.png" alt="Hostnames not included in the AllowedHosts setting will return a 400"></p>
+<p>If you're not using the <code>ConfigureWebHostDefaults()</code> method, you need to configure the <code>HostFilteringOptions</code> yourself, and add the <code>HostFilteringMiddleware</code> manually to your middleware pipeline. You can configure these in <code>Startup.ConfigureServices()</code>. For example, the following uses the <code>"AllowedHosts"</code> configuration setting, in a similar way to the defaults:</p>
+<pre><code><span>public</span> <span>class</span> <span>Startup</span>
+<span>{</span>
+    <span>public</span> <span>Startup</span><span>(</span><span>IConfiguration</span> configuration<span>)</span>
+    <span>{</span>
+        Configuration <span>=</span> configuration<span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+    <span>{</span>
+        
+
+        
+        <span>var</span> hosts <span>=</span> Configuration<span>[</span><span>"AllowedHosts"</span><span>]</span><span>?</span>
+                        <span>.</span><span>Split</span><span>(</span><span>new</span><span>[</span><span>]</span> <span>{</span> <span>';'</span> <span>}</span><span>,</span> StringSplitOptions<span>.</span>RemoveEmptyEntries<span>)</span><span>;</span>
+        <span>if</span><span>(</span>hosts<span>?</span><span>.</span>Length <span>&gt;</span> <span>0</span><span>)</span>
+        <span>{</span>
+            services<span>.</span><span><span>Configure</span><span>&lt;</span><span>HostFilteringOptions</span><span>&gt;</span></span><span>(</span>
+                options <span>=</span><span>&gt;</span> options<span>.</span>AllowedHosts <span>=</span> hosts<span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>Configure</span><span>(</span><span>IApplicationBuilder</span> app<span>)</span>
+    <span>{</span>
+        
+        app<span>.</span><span>UseHostFiltering</span><span>(</span><span>)</span><span>;</span>
+
+        
+
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>This is very similar to the default configuration used by <code>ConfigureWebHostDefaults()</code>, though it doesn't allow changing the configured hosts at runtime. <a href="https://github.com/dotnet/aspnetcore/blob/5f7e1a0004/src/DefaultBuilder/src/WebHost.cs">See the default implementation</a> if that's something you need.</p>
+<blockquote>
+<p>The default configuration uses an <code>IStartupFilter</code>, <code>HostFilteringStartupFilter</code>, to add the hosting middleware, but it's <code>internal</code>, so you'll have to make do with the approach above.</p>
+</blockquote>
+<p>Host filtering is especially important when you're running Kestrel on the edge, without a reverse proxy, as in most cases a reverse proxy will manage the host filtering for you. Depending on the reverse proxy you use, you may need to set the <code>ForwardedHeadersOptions.AllowedHosts</code> value, to restrict the allowed values of the <code>X-Forwarded-Host</code> header. You can read more about configuring the forwarded headers and a reverse proxy <a href="https://docs.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer">in the documentation</a>.</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I described Kestrel's default behaviour, of binding to a <em>port</em> not a domain. I then showed how this behaviour can be used as an attack vector by generating malicious links, if you don't filter requests to only a limited number of hosts. Finally, I showed how to enable host filtering by setting the <code>AllowedHosts</code> value in configuration, or by manually adding the <code>HostFilteringMiddleware</code>.</p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

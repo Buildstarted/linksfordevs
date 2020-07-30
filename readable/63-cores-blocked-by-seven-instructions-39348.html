@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+63 Cores Blocked by Seven Instructions - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="63 Cores Blocked by Seven Instructions - linksfor.dev(s)"/>
+    <meta property="article:author" content="Posted on"/>
+    <meta property="og:description" content="I seem to have a habit of writing about super powerful machines whose many cores are laid low by misuse of locks. So. Yeah. It&#x2019;s that again.But this one seems particularly impressive. I mean, how o&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://randomascii.wordpress.com/2019/10/20/63-cores-blocked-by-seven-instructions/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - 63 Cores Blocked by Seven Instructions</title>
+<div class="readable">
+        <h1>63 Cores Blocked by Seven Instructions</h1>
+            <div>by Posted on</div>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 23 Oct 2019</div>
+        <p><a href="https://randomascii.wordpress.com/2019/10/20/63-cores-blocked-by-seven-instructions/">https://randomascii.wordpress.com/2019/10/20/63-cores-blocked-by-seven-instructions/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+						<p data-adtags-visited="true">I seem to have a habit of writing about <a href="https://randomascii.wordpress.com/2017/07/09/24-core-cpu-and-i-cant-move-my-mouse/">super powerful machines</a> whose many cores are <a href="https://randomascii.wordpress.com/2018/08/16/24-core-cpu-and-i-cant-type-an-email-part-one/">laid low</a> by misuse of locks. So. Yeah. It’s that again.</p>
+<p data-adtags-visited="true">But this one seems particularly impressive. I mean, how often do you have one thread spinning for several seconds in a seven-instruction loop while holding a lock that stops sixty-three other processors from running. That’s just awesome, in a horrible sort of way.</p>
+<p data-adtags-visited="true">Contrary to popular belief I don’t actually have a machine with 64 logical processors, and I’ve never seen this particular problem. But a friend hit this problem, <a href="https://xkcd.com/356/"><strike>nerd-sniped me</strike></a> asked for help, and I decided it was interesting enough to look at. They sent me an <a href="https://randomascii.wordpress.com/2015/09/24/etw-central/">ETW trace</a> that contained enough information for me to craft a tweet-for-help which resolved the issue swiftly.</p>
+
+<p data-adtags-visited="true">The complaint was simple enough: the friend was using <a href="https://ninja-build.org/">ninja</a> to do a build. Normally ninja does an excellent job of saturating the system, keeping n+2 processes running at all times so that there is little idle time. Instead, the CPU usage for the first seventeen seconds of the build looked like this:</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image.png"><img width="627" height="200" title="CPU usage, showing big drops" alt="CPU usage, showing big drops" src="https://randomascii.files.wordpress.com/2019/10/image_thumb.png?w=627&amp;h=200"></a></p>
+<p data-adtags-visited="true">It’s subtle (no, it’s not) but if you look <em>really</em> closely you can see where the total CPU usage drops from 100% to close to 0%, for seconds at a time. CPU usage goes from 64-threads busy one moment to two or three busy just half a second later. Here is a zoomed-in view of one of the drops – numbers on the bottom of the timeline are seconds:</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image-1.png"><img width="636" height="205" title="Zoomed in on CPU usage drop" alt="Zoomed in on CPU usage drop" src="https://randomascii.files.wordpress.com/2019/10/image_thumb-1.png?w=636&amp;h=205"></a></p>
+<p data-adtags-visited="true">My first thought was that ninja was failing to create processes quickly enough. I’ve seen that many times before, usually due to anti-virus software interfering. However when I looked at the processes graph, sorting by end time, I found that no processes were ending during the CPU usage downslope, so there wasn’t anything for ninja to do.</p>
+<p data-adtags-visited="true">When figuring out why a system is idle the CPU Usage (Precise) table is ideal. It contains a record of every context switch on the computer so it is a precise record of every time that a thread starts running, including data about where it was waiting and for how long.</p>
+<p data-adtags-visited="true">The tricky thing is that there is nothing wrong with a thread going idle. The problem occurs when we really wish a thread was doing work and instead it is idle, so we need to focus on the right idle moments.</p>
+<p data-adtags-visited="true">When doing wait analysis it is important to understand that the context-switch of interest happens when the thread resumes running. If we focus our ETW analysis on when CPU usage started dropping then we will find nothing. Instead we need to focus on when the system started working again. That phase of the trace was even more dramatic. Whereas it took half a second for CPU usage to ramp down, the reverse process from one thread in use to fully loaded took just twelve milliseconds! The graph below is zoomed in quite far, and yet the transition from idle to busy is almost a vertical line:</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image31.png"><img width="635" height="205" title="CPU usage ramping up in 12 ms" alt="CPU usage ramping up in 12 ms" src="https://randomascii.files.wordpress.com/2019/10/image31_thumb.png?w=635&amp;h=205"></a></p>
+<p data-adtags-visited="true">I zoomed in on the twelve milliseconds of truth and found that there were 500 context switches so I knew I’d need to be use the data wisely to find the culprit.</p>
+<p data-adtags-visited="true">The context switch table has a lot of columns, which I have <a href="https://randomascii.wordpress.com/2012/05/11/the-lost-xperf-documentationcpu-scheduling/">documented here</a>. When a single process hangs then I group by New Process, New Thread, New Thread Stack and so on in order to find why the thread is stalled (<a href="https://randomascii.wordpress.com/2012/05/05/xperf-wait-analysisfinding-idle-time/">discussed here</a>), but that doesn’t work as well when a hundred processes are stalled. If I investigated the wrong process then it would say it was readied by the previous process which was readied by the previous process and I’d be scanning a long chain to find the prime mover who (presumably) held an important lock for a long time.</p>
+<p data-adtags-visited="true">So, I tried a different column arrangement:</p>
+<ul>
+<li>Switch-In Time (when the context switch happened)</li>
+<li>Readying Process (who released the lock being waited on)</li>
+<li>New Process (who started running)</li>
+<li>Time Since Last (how long the new process was waiting)</li>
+</ul>
+<p data-adtags-visited="true">That gives me a list of context switches, ordered by time, showing who readied whom and how long the readied processes had been waiting.</p>
+<p data-adtags-visited="true">It turns out that’s all that I needed. The table below is a thing of beauty once you know how to read it. The first few context switches aren’t of interest because Time Since Last (how long the thread was idle) is quite small, but on the highlighted line (#4) things start moving:</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image47.png"><img width="668" height="351" title="Wait chain, each process readying the next" alt="Wait chain, each process readying the next" src="https://randomascii.files.wordpress.com/2019/10/image47_thumb.png?w=668&amp;h=351"></a></p>
+<p data-adtags-visited="true">That line says that <em>System (4)</em> readied <em>cl.exe (3032)</em> which had been waiting for <em>3.368 seconds</em>. The next line says that less than 0.1 ms later <em>cl.exe (3032)</em> readied <em>cl.exe (16232) </em>which had been waiting for 3.367 seconds. And so on.</p>
+<p data-adtags-visited="true">A few context switches such as the one on line #7 are not part of the wait chain and just represent the machine doing other work simultaneously, but the wait chain continued on for many dozens of links.</p>
+<p data-adtags-visited="true">What this means is that all of these processes were waiting on the same lock. Once the <em>System (4)</em> process released the lock (after holding it for at least 3.368 seconds!) the waiting processes in turn grabbed the lock, did the little bit of work they needed to proceed, and then passed the lock down the chain. This chain of waiters continued for about a hundred processes, showing the extent of the backlog caused by this one lock.</p>
+<p data-adtags-visited="true">A bit of exploration of the <em>Ready Thread Stacks</em> showed that most of the waits were going through <em>KernelBase.dllWriteFile</em>. I asked <em>WPA</em> to display the callers of that function, which also groups them. I could then see that during that 12 ms of catharsis there were 174 threads that were released from waits on <em>WriteFile</em> and they had waited an average of 1.184 seconds:</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image67.png"><img width="662" height="90" title="174 threads waiting on WriteFile, average 1.184 second wait" alt="174 threads waiting on WriteFile, average 1.184 second wait" src="https://randomascii.files.wordpress.com/2019/10/image67_thumb.png?w=662&amp;h=90"></a></p>
+<p data-adtags-visited="true">That is an amazing backlog, and it is actually understates the problem because many threads were waiting on the same lock from other functions such as <em>KernelBase.dll!GetQueuedCompletionStatus</em>.</p>
+<h2>What is System (4) doing</h2>
+<p data-adtags-visited="true">At this point I knew that build progress stopped because all of the compiler processes and others were waiting on <em>WriteFile</em> because <em>System (4)</em> was holding a lock. Adding the <em>Ready Thread Id</em> column showed that thread 3276 in the system process was the one that released the lock.</p>
+<p data-adtags-visited="true">Thread 3276 was 100% busy during all of the build-system slowdowns so it is clear that it was doing some CPU work while holding a lock. Figuring out where CPU time is spent is the job of the <em>CPU Usage (Sampled)</em> graph so I pulled that up and drilled down into the sampled stacks for thread 3276. The CPU usage data was remarkably clear, showing essentially all of the time being spent in just one function, <em>ntoskrnl.exe!RtlFindNextForwardRunClear</em> (the numeric column is the count of samples):</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image-2.png"><img width="638" height="690" title="Call stack leading to ntoskrnl.exe!RtlFindNextForwardRunClear" alt="Call stack leading to ntoskrnl.exe!RtlFindNextForwardRunClear" src="https://randomascii.files.wordpress.com/2019/10/image_thumb-2.png?w=638&amp;h=690"></a></p>
+<p data-adtags-visited="true">Looking at the readying thread stack confirms that <em>NtfsCheckpointVolume</em> released the lock after 3.368 s:</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image-3.png"><img width="549" height="273" title="Call stack from NtfsCheckpointVolume to ExReleaseResourceLite" alt="Call stack from NtfsCheckpointVolume to ExReleaseResourceLite" src="https://randomascii.files.wordpress.com/2019/10/image_thumb-3.png?w=549&amp;h=273"></a></p>
+<p data-adtags-visited="true">At this point I felt it was time to pull in the vast and generous knowledge of my twitter followers so I posted <a href="https://twitter.com/BruceDawson0xB/status/1182772872600834049">this question</a>. My follow-up question showed the full call stack. Tweets for help can give remarkable results when you supply enough information.</p>
+<p data-adtags-visited="true">In this case the <a href="https://twitter.com/antumbral/status/1182775810828034048">correct answer</a> appeared very quickly, courtesy of <a href="https://twitter.com/antumbral">Katelyn Gadd</a>, along with lots of other great suggestions. The original reporter disabled system restore and suddenly their builds started running 2x to 3x as fast!</p>
+<h2>But wait, it gets better</h2>
+<p data-adtags-visited="true">Blocking forward progress on the entire system for 3+ seconds is pretty impressive, but it gets even better when you add the address column to the CPU Usage (Sampled) table and sort by it. This shows exactly where in <em>RtlFindNextForwardRunClear</em> the samples hit – 99% of them are on one instruction!</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image-4.png"><img width="638" height="324" title="CPU samples clustered around one instruction" alt="CPU samples clustered around one instruction" src="https://randomascii.files.wordpress.com/2019/10/image_thumb-4.png?w=638&amp;h=324"></a></p>
+<p data-adtags-visited="true">I grabbed <em>ntoskrnl.exe</em> and <em>ntkrnlmp.pdb</em> from my machine (they were the same version as on the affected machine) and used dumpbin /disasm to get the assembly language for the function of interest. The first digits of the addresses are different because the code is relocated on load, but the correspondence of the last four hex-digits (preserved over ASLR) is clear:</p>
+<blockquote>
+<p><span face="Courier New">RtlFindNextForwardRunClear:<br>
+…<br>
+14006464F: 4C 3B C3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cmp r8,rbx<br>
+140064652: 73 0F&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jae 0000000140064663<br>
+140064654: 41 39 28&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cmp dword ptr [r8],ebp<br>
+140064657: 75 0A&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jne 0000000140064663<br>
+140064659: 49 83 C0 04&nbsp;&nbsp; add r8,4<br>
+14006465D: 41 83 C1 20&nbsp;&nbsp; add r9d,20h<br>
+140064661: EB EC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jmp 000000014006464F<br>
+…</span></p>
+</blockquote>
+<p data-adtags-visited="true">We can see that the instruction at …4657 is part of a seven instruction loop that accumulates a few other samples. Adding the sample counts we get this:</p>
+<blockquote>
+<p><span face="Courier New">RtlFindNextForwardRunClear:<br>
+…<br>
+14006464F: 4C 3B C3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cmp r8,rbx&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 4<br>
+140064652: 73 0F&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jae 0000000140064663&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 41<br>
+140064654: 41 39 28&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; cmp dword ptr [r8],ebp&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <br>
+140064657: 75 0A&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jne 0000000140064663&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 7498<br>
+140064659: 49 83 C0 04&nbsp;&nbsp; add r8,4&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 2<br>
+14006465D: 41 83 C1 20&nbsp;&nbsp; add r9d,20h&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 1<br>
+140064661: EB EC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; jmp 000000014006464F&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 1<br>
+…</span>
+</p>
+</blockquote>
+<p data-adtags-visited="true">Interpreting the sample counts on an out-of-order super-scalar processor is left as an exercise for the reader, with <a href="https://travisdowns.github.io/blog/2019/08/20/interrupts.html">this article</a> providing some good thoughts. In this case the processor was an AMD Ryzen Threadripper 2990WX 32-Core Processor. Apparently with micro-up fusion and its ability to retire five instructions per cycle it is actually possible that the entire loop completes every cycle with the jne, as the instruction after the most expensive instruction, being hit by most of the sampling interrupts.</p>
+<p data-adtags-visited="true">And there we have it – a 64-logical-processor machine laid low by a seven-instruction loop running in the system process while holding a vital NTFS lock, fixed by disabling System Restore.</p>
+<h2>Coda</h2>
+<p data-adtags-visited="true">It is unclear why this code misbehaved so badly on this particular machine. I assume that it is something to do with the layout of the almost-empty 2 TB disk. When the original reporter re-enabled system restore the problem came back but with reduced ferocity. Maybe there is a pathological case for a disk with huge swathes of empty space? Maybe the memory being scanned was accidentally allocated as uncached? I don’t know.</p>
+<p data-adtags-visited="true">Another twitter follower mentioned a Volume Shadow Copy bug from Windows 7 that could have <a href="https://twitter.com/mdriley25519/status/1182905727175647232">O(n^2) performance</a>. That bug was supposedly fixed in Windows 8, but maybe remains in a different form. The stack traces I have clearly show <em>VspUpperFindNextForwardRunClearLimited</em> (find a used bit in this 16MB region) calling <em>VspUpperFindNextForwardRunClear</em> (find the next used bit anywhere, but don’t return it if it’s past 16MB) which sure sounds like history repeating itself. As I said <a href="https://twitter.com/BruceDawson0xB/status/1120381406700429312">earlier this year</a>, O(n^2) is the sweet spot of badly scaling algorithms: fast enough to make it into production, but slow enough to make things fall down once it gets there.</p>
+<p data-adtags-visited="true">There have been some reports of this type of problem when doing <a href="https://social.technet.microsoft.com/Forums/en-US/54837f0a-0e17-40bc-9645-a63ba7a4c811/why-does-file-operations-hangs-after-deleting-folder-on-large-ntfs-volume?forum=winserverfiles">many large deletes</a>, but this trace showed few files being deleted so that appears to be yet another variant.</p>
+<p data-adtags-visited="true">I’ll close with the system-wide CPU usage graph that I opened the post with, with the CPU usage of the problematic system process thread shown by itself in green in the bottom graph. The problem is deliciously obvious once you look at it this way. The system process is technically visible in the top graph, but when scaled to 1.5625% of the graph height it’s significance is easy to overlook.</p>
+<p data-adtags-visited="true"><a href="https://randomascii.files.wordpress.com/2019/10/image-5.png"><img width="631" height="465" title="System thread CPU time correlating with build-system grinding to a halt" alt="System thread CPU time correlating with build-system grinding to a halt" src="https://randomascii.files.wordpress.com/2019/10/image_thumb-5.png?w=631&amp;h=465"></a></p>
+<p data-adtags-visited="true">While the picture above shows the problem well, it doesn’t actually prove anything. Correlation is not causation, <a href="https://xkcd.com/552/">as they say</a>. Only by using the context switch events to show that the busy thread was also the one holding the critical lock could I be sure that I’d found the actual cause rather than an innocent bystander.</p>
+<h2>Requests</h2>
+<p data-adtags-visited="true">I’m going to close this investigation the way I usually do, with a <a href="https://randomascii.wordpress.com/2015/10/26/thread-naming-in-windows-time-for-something-better/">plea for thread names</a>. The system process has dozens of threads, many of which are special purpose, and none of which are named. The busiest system thread in this trace was the <em>MiZeroPageThread</em> and I had to repeatedly drill down into its stack in order to remind myself that this thread was not of interest. The VC++ compiler also doesn’t name its threads. Thread names are cheap and awesome. Use them. <a href="https://codereview.chromium.org/2692213003">It’s easy.</a> Chromium even includes a tool to <a href="https://codereview.chromium.org/2713773002">list thread names in a process</a>.</p>
+<p data-adtags-visited="true">If anybody from the NTFS team at Microsoft wants to follow-up then contact me and I can connect you with the original reporter and the ETW trace.</p>
+<h2>References</h2>
+<ul>
+<li>Original <a href="https://twitter.com/BruceDawson0xB/status/1182772872600834049">twitter thread</a></li>
+<li>Blog post announced <a href="https://twitter.com/BruceDawson0xB/status/1186169578956570625">on twitter</a></li>
+<li>Hacker news discussion is <a href="https://news.ycombinator.com/item?id=21309949">here</a></li>
+<li>Reddit discussion is <a href="https://www.reddit.com/r/programming/comments/dkx83n/63_cores_blocked_by_seven_instructions/">here</a></li>
+<li>Possibly related <a href="http://blog.zorinaq.com/i-contribute-to-the-windows-kernel-we-are-slower-than-other-oper/">Windows/NTFS rant</a></li>
+</ul>
+											</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

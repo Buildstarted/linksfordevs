@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+SSH Agent Explained - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="SSH Agent Explained - linksfor.dev(s)"/>
+    <meta property="og:description" content="The SSH agent acts behind the scenes to keep you safe. Here&#x27;s how it works."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://smallstep.com/blog/ssh-agent-explained/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - SSH Agent Explained</title>
+<div class="readable">
+        <h1>SSH Agent Explained</h1>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 20 May 2020</div>
+        <p><a href="https://smallstep.com/blog/ssh-agent-explained/">https://smallstep.com/blog/ssh-agent-explained/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><section><p><strong>TL;DR</strong> The SSH agent is a central part of OpenSSH. In this post, I'll explain what the agent is, how to use it, and how it works to keep your keys safe. I'll also describe <em>agent forwarding</em> and how it works. I'll help you reduce your risk when using agent forwarding, and I'll share an alternative to agent forwarding that you can use when accessing your internal hosts through bastions.</p><h2 id="what-is-the-ssh-agent">What is the SSH agent?</h2><p><code>ssh-agent</code> is a key manager for SSH. It holds your keys and certificates in memory, unencrypted, and ready for use by <code>ssh</code>. It saves you from typing a passphrase every time you connect to a server. It runs in the background on your system, separately from <code>ssh</code>, and it usually starts up the first time you run <code>ssh</code> after a reboot.</p><p>The SSH agent keeps private keys safe because of what it <em>doesn't</em> do:</p><ul><li>It doesn't write any key material to disk.</li><li>It doesn't allow your private keys to be exported.</li></ul><p>Private keys stored in the agent can only be used for one purpose: signing a message.</p><h4 id="but-if-the-agent-can-only-sign-messages-how-does-ssh-encrypt-and-decrypt-traffic">But if the agent can only sign messages, how does SSH encrypt and decrypt traffic?</h4><p>When first learning about public and private SSH keys, it's natural to assume that SSH uses these key pairs to encrypt and decrypt traffic. That's what I thought. But it's not the case. An SSH key pair is only used for authentication during the initial handshake.</p><p>For example, here's how a user's key is verified during the SSH handshake, from the server's perspective:</p><ol><li>The client presents a public key to the server.</li><li>The server generates and sends a brief, random message, asking the client to sign it using the private key.</li><li>The client asks the SSH agent to sign the message and forwards the result back to the server.</li><li>The server checks the signature using the client's public key.</li><li>The server now has proof that the client is in possession of their private key.</li></ol><p>Later in the handshake process, a set of new, ephemeral and symmetric keys are generated and used to encrypt the SSH session traffic. These keys may not even last the entire session; a “rekey” event happens at regular intervals.</p><h2 id="the-agent-protocol">The agent protocol</h2><p>SSH uses a Unix domain socket to talk to the agent via the <a href="https://tools.ietf.org/html/draft-miller-ssh-agent-04" target="_blank">SSH agent protocol</a>. Most people use the <code>ssh-agent</code> that comes with OpenSSH, but there's a variety of open-source alternatives.</p><p>The agent protocol is so simple that one could write a basic SSH agent in a day or two. It only has a few primary operations:</p><ul><li>Add a regular key pair (public and decrypted private keys)</li><li>Add a constrained key pair (public and decrypted private keys)</li><li>Add a key (regular or constrained) from a smart card (public key only)</li><li>Remove a key</li><li>List keys stored in the agent</li><li>Sign a message with a key stored in the agent</li><li>Lock or unlock the entire agent with a passphrase</li></ul><blockquote><p>🤔 What's a constrained key? It's usually a key that either has a limited lifetime or one that demands explicit user confirmation when it is used.</p></blockquote><p>The <code>ssh-add</code> command is your gateway to the SSH agent. It performs all of these operations except for signing. When you run <code>ssh-add</code> without any parameters, it will scan your home directory for some standard keys and add them to your agent. By default, it looks for:</p><ul><li><code>~/.ssh/id_rsa</code></li><li><code>~/.ssh/id_ed25519</code></li><li><code>~/.ssh/id_dsa</code></li><li><code>~/.ssh/id_ecdsa</code></li></ul><p>Once you add keys to the keychain, they will be used automatically by <code>ssh</code>.</p><h4 id="ssh-agent-and-the-macos-keychain"><code>ssh-agent</code> and the macOS Keychain</h4><p>The <code>ssh-agent</code> that ships with macOS can store the passphrase for keys in the macOS Keychain, which makes it even easier to re-add keys to the agent after a reboot. Depending on your Keychain settings, you still may need to unlock the keychain after a reboot. To store key passphrases in the Keychain, run <code>ssh-add -K [key filename]</code>. Passphrases are usually stored in the “Local Items” keychain. <code>ssh-agent</code> will use these stored passphrases automatically as needed.</p><h2 id="what-is-agent-forwarding">What is agent forwarding?</h2><p>SSH's agent forwarding feature allows your local SSH agent to <em>reach</em> <em>through</em> an existing SSH connection and transparently authenticate on a more distant server. For example, say you SSH into an EC2 instance, and you want to clone a private GitHub repository from there. Without agent forwarding, you'd have to store a copy of your GitHub private key on the EC2 host. With agent forwarding, the SSH client on EC2 can use the keys on your local computer to authenticate to GitHub.</p><h2 id="how-agent-forwarding-works">How agent forwarding works</h2><p>First, a little background. SSH connections can have multiple <em>channels</em>. Here's a common example: an interactive connection to a bastion host (jump box) runs on one channel. When agent forwarding is enabled for a connection (usually using <code>ssh -A</code>), a second channel is opened up in the background to forward any agent requests back to your local machine.</p><p>From <code>ssh</code>'s perspective, there is no difference between a remote and a local <code>ssh-agent</code>. SSH always looks at the <code>$SSH_AUTH_SOCK</code> environment variable to find the Unix domain socket for the agent. When you connect to a remote host with agent forwarding enabled, SSHD will create a remote Unix domain socket linked to the agent forwarding channel, and export an <code>$SSH_AUTH_SOCK</code> pointing to it.</p><p><img src="https://smallstep.com/blog/ssh-agent-explained/agent-forwarding-in-action.png" alt="SSH agent forwarding in action"></p><h2 id="agent-forwarding-comes-with-a-risk">Agent forwarding comes with a risk</h2><p>When you forward <code>ssh-agent</code>'s Unix domain socket to a remote host, it creates a security risk: anyone with root access on the remote host can discreetly access your local SSH agent through the socket. They can use your keys to impersonate you on other machines on the network.</p><p>Here's an example of how that might look:</p><p><img src="https://smallstep.com/blog/ssh-agent-explained/agent-hijack.png" alt="SSH agent forwarding key hijacking"></p><h2 id="how-to-reduce-your-risk-when-agent-forwarding">How to reduce your risk when agent forwarding</h2><p>Here are a few ways to make agent forwarding safer:</p><ul><li><p>Don't turn on <code>ForwardAgent</code> by default.</p><p>Many guides on agent forwarding will suggest turning on <code>ForwardAgent</code> using the following configuration:</p><pre><code>Host example.com
+  ForwardAgent yes
+</code></pre><p>We suggest <em>not doing that</em>. Instead, only use agent forwarding in circumstances where you need it. <code>ssh -A</code> turns on agent forwarding for a single session.</p></li><li><p>Lock your ssh agent when you use agent forwarding. <code>ssh-add -x</code> locks the agent with a password, and <code>ssh-add -X</code> unlocks it. When you're connected to a remote host with agent forwarding, no one will be able to snake their way into your agent without the password.</p></li><li><p>Or use an alternative SSH agent that prompts you when it's being used. <a href="https://github.com/sekey/sekey" target="_blank">Sekey</a> uses Touch ID on macOS to store keys in the MacBook Pro's security enclave.</p></li><li><p>Or don't use agent forwarding at all. If you're trying to access internal hosts through a bastion, <code>ProxyJump</code> is a much safer alternative for this use case. (see below)</p></li></ul><h2 id="use-proxyjump-a-safer-alternative">Use <code>ProxyJump</code>: a safer alternative</h2><p>When you want to go through a bastion host (jumpbox), you really don't need agent forwarding. A better approach is to use the <code>ProxyJump</code> directive.</p><p>Instead of forwarding the agent through a separate channel, <code>ProxyJump</code> forwards the standard input and output of your local SSH client through the bastion and on to the remote host. Here's how that works:</p><ol><li>Run <code>ssh -J bastion.example.com cloud.computer.internal</code> to connect to <code>cloud.computer.internal</code> via your <code>bastion.example.com</code> bastion host. <code>cloud.computer.internal</code> is a hostname that can be looked up using DNS lookup on <code>bastion.example.com</code>.</li><li>Your SSH client uses keys from your agent to connect to <code>bastion.example.com</code>.</li><li>Once connected, SSHD on the bastion connects to <code>cloud.computer.internal</code> and hands that connection off to your local SSH client.</li><li>Your local SSH client runs through the handshake again, this time with <code>cloud.computer.internal</code>.</li></ol><p>You can think of it as SSHing within an SSH session; except the <code>ssh</code> program never runs on the bastion. Instead, <code>sshd</code> connects to <code>cloud.computer.internal</code> and gives control of that connection (standard in and out) back to your local SSH, which then performs a second handshake.</p><h4 id="setting-up-proxyjump">Setting up <code>ProxyJump</code></h4><p>Let's say my bastion host is <code>bastion.example.com</code>. I could set up my <code>~/.ssh/config</code> file like this:</p><div><pre><code data-lang="bash">Host bastion.example.com
+	User carl
+
+Host *.computer.internal
+	ProxyJump bastion.example.com
+	User carl
+</code></pre></div><p>Then I just run <code>ssh cloud.computer.internal</code> to connect to an internal destination through the bastion—without agent forwarding.</p><h4 id="if-proxyjump-doesnt-work">If <code>ProxyJump</code> doesn't work…</h4><p>Older versions of SSH and SSHD (prior to 7.2, released in 2016) don't support <code>ProxyJump</code>. But you can do an equivalent operation using <code>ProxyCommand</code> and <a href="https://nc110.sourceforge.io/" target="_blank">netcat</a>. Here's an example:</p><pre><code>ssh -o ProxyCommand="ssh bastion.example.com nc %h %p" cloud.computer.internal
+</code></pre><p>The magic here is that SSH itself is the proxy you're using for SSH. The <code>nc %h %p</code> part simply opens up a raw socket connection to <code>cloud.computer.internal</code> on port 22. The standard I/O of the parent ssh command is piped right into the <code>ProxyCommand</code> so that the parent ssh can authenticate to the internal host through the proxy connection.</p><p>We love talking about all things SSH. <a href="https://twitter.com/smallsteplabs" target="_blank">Hit us up on Twitter</a> if you have questions or feedback!</p></section></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

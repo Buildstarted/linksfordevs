@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+wasm: support Generic Virtual Method Calls &amp; Shared Generics (was: some linq methods fail to compile) &#xB7; Issue #7248 &#xB7; dotnet/corert - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="wasm: support Generic Virtual Method Calls &amp; Shared Generics (was: some linq methods fail to compile) &#xB7; Issue #7248 &#xB7; dotnet/corert - linksfor.dev(s)"/>
+    <meta property="article:author" content="yowl"/>
+    <meta property="og:description" content="When attempting to build an Uno Platform project, it fails on a method {[System.Linq]System.Linq.Enumerable&#x2B;Iterator`1&amp;lt;Windows.UI.Xaml.Documents.Inline&amp;gt;.Select&amp;lt;string&amp;gt;(Func``2&amp;lt;Inline..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/dotnet/corert/issues/7248"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - wasm: support Generic Virtual Method Calls &amp; Shared Generics (was: some linq methods fail to compile) &#xB7; Issue #7248 &#xB7; dotnet/corert</title>
+<div class="readable">
+        <h1>wasm: support Generic Virtual Method Calls &amp; Shared Generics (was: some linq methods fail to compile) &#xB7; Issue #7248 &#xB7; dotnet/corert</h1>
+            <div>by yowl</div>
+            <div>Reading time: 6-8 minutes</div>
+        <div>Posted here: 09 Jul 2019</div>
+        <p><a href="https://github.com/dotnet/corert/issues/7248">https://github.com/dotnet/corert/issues/7248</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+      
+<task-lists disabled="" sortable="">
+<div>
+          <p>The reason why we disallow GC static bases for canonical types is because it doesn't make sense to have them.</p>
+<p>There is never an instance of a canonical type allocated. Only code can be canonical.</p>
+<p>The gist of shared generics is basically about finding a way to save space when generating generic code - try to find a way how we could share the same code for different instantions of the same generic type definition.</p>
+<p>If I have a class with this method:</p>
+<div><pre><span>class</span> <span>Generic</span>&lt;<span>T</span>&gt;
+{
+    <span>public</span> <span>void</span> <span>Frob</span>(<span>T</span> <span>x</span>)
+    {
+        <span>x</span>.<span>ToString</span>();
+    }
+}</pre></div>
+<p>And I would like to compile method <code>Generic&lt;object&gt;.Frob()</code> and <code>Generic&lt;string&gt;.Frob()</code>. The generated code for both of them would be this:</p>
+<div><pre><span>G_M37205_IG01:</span>
+<span>       4883EC28             </span><span>sub</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>40</span>
+
+<span>G_M37205_IG02:</span>
+<span>       488BCA               </span><span>mov</span><span>      </span><span>rcx</span><span>,</span><span> </span><span>rdx</span>
+<span>       488B02               </span><span>mov</span><span>      </span><span>rax</span><span>,</span><span> qword ptr </span><span>[</span><span>rdx</span><span>]</span>
+<span>       FF5028               </span><span>call</span><span>     gword ptr </span><span>[</span><span>rax</span><span>+</span><span>40</span><span>]</span><span>System.Object:ToString():ref:this</span>
+<span>       </span><span>90</span><span>                   </span><span>nop</span>
+
+<span>G_M37205_IG03:</span>
+<span>       4883C428             </span><span>add</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>40</span>
+<span>       C3                   </span><span>ret</span></pre></div>
+<p>It seems wasteful to generate this code twice, so we would like to find a way to share it. The easiest is to figure out the sharing scheme for all reference types. The reason why we restrict ourselves to reference types is basically that if T is substituted with a value type, a lot of thigs become different. E.g. here's <code>Generic&lt;double&gt;.Frob()</code></p>
+<div><pre><span>G_M60901_IG01:</span>
+<span>       4883EC28             </span><span>sub</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>40</span>
+<span>       F20F114C2438         </span><span>movsd</span><span>    qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>38H</span><span>],</span><span> </span><span>xmm1</span>
+
+<span>G_M60901_IG02:</span>
+<span>       488D4C2438           </span><span>lea</span><span>      </span><span>rcx</span><span>,</span><span> bword ptr </span><span>[</span><span>rsp</span><span>+</span><span>38H</span><span>]</span>
+<span>       E800000000           </span><span>call</span><span>     System.Double:ToString():ref:this</span>
+<span>       </span><span>90</span><span>                   </span><span>nop</span>
+
+<span>G_M60901_IG03:</span>
+<span>       4883C428             </span><span>add</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>40</span>
+<span>       C3                   </span><span>ret</span></pre></div>
+<p>As you can see, the immediate (huge) difference is that the calling convention is different - the argument was passed in the floating point xmm1 register instead of rdx.</p>
+<p>But reference types are sufficiently the same - all of them are a single pointer, and they need to be reported to the GC.</p>
+<p>We call code that can be shared by different instantiations "canonical code". The code is canonical because it's not tied to a specific T. The specific T can be subsituted at runtime and the code will do the right thing for it. In the type system, this is represented by a special type <code>System.__Canon</code> that is a reference type and can stand in for any other reference type. We could use <code>System.Object</code>, but then it would be difficult to figure out whether something is actually instantiated over object or represents this special thing that will only have an identity at runtime. Also, <code>System.__Canon</code> can be made to meet all generic constraints. <code>Object</code> wouldn't.</p>
+<p>We could just use the same code for everything but the trouble is that whenever we use the <code>T</code>, the code gets a tiny bit different:</p>
+<div><pre><span>class</span> <span>Generic</span>&lt;<span>T</span>&gt;
+{
+    <span>static</span> <span>T</span> <span>s_field</span>;
+
+    <span>public</span> <span>void</span> <span>Frob</span>(<span>T</span> <span>x</span>)
+    {
+        <span>Generic</span>&lt;<span>T</span>&gt;.<span>s_field</span> <span>=</span> <span>x</span>;
+    }
+}</pre></div>
+<div><pre><span>G_M37205_IG01:</span>
+<span>       </span><span>57</span><span>                   </span><span>push</span><span>     </span><span>rdi</span>
+<span>       </span><span>56</span><span>                   </span><span>push</span><span>     </span><span>rsi</span>
+<span>       4883EC28             </span><span>sub</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>40</span>
+<span>       48894C2420           </span><span>mov</span><span>      qword ptr </span><span>[</span><span>rsp</span><span>+</span><span>20H</span><span>],</span><span> </span><span>rcx</span>
+<span>       488BF1               </span><span>mov</span><span>      </span><span>rsi</span><span>,</span><span> </span><span>rcx</span>
+<span>       488BFA               </span><span>mov</span><span>      </span><span>rdi</span><span>,</span><span> </span><span>rdx</span>
+
+<span>G_M37205_IG02:</span>
+<span>       // </span><span>*****</span><span> Difference! </span><span>-</span><span> accessing static base of a particular instantiation </span><span>*****</span>
+<span>       </span><span>4800000000</span><span>           </span><span>lea</span><span>      </span><span>eax</span><span>,</span><span> Static_Base_Of_Generic&lt;object&gt;</span>
+<span>       488D4808             </span><span>lea</span><span>      </span><span>rcx</span><span>,</span><span> bword ptr </span><span>[</span><span>rax</span><span>+</span><span>8</span><span>]</span>
+<span>       488BD7               </span><span>mov</span><span>      </span><span>rdx</span><span>,</span><span> </span><span>rdi</span>
+<span>       E800000000           </span><span>call</span><span>     CORINFO_HELP_ASSIGN_REF</span>
+<span>       </span><span>90</span><span>                   </span><span>nop</span>
+
+<span>G_M37205_IG03:</span>
+<span>       4883C428             </span><span>add</span><span>      </span><span>rsp</span><span>,</span><span> </span><span>40</span>
+<span>       5E                   </span><span>pop</span><span>      </span><span>rsi</span>
+<span>       5F                   </span><span>pop</span><span>      </span><span>rdi</span>
+<span>       C3                   </span><span>ret</span></pre></div>
+<p>As you can see, the static base we access will be different depending on whether we access <code>Generic&lt;object&gt;</code> or <code>Generic&lt;string&gt;</code></p>
+<p>The way to fix this and make the method canonical again (without a specific identity at compile time) is by adding an indirection. Whenever the canonical code would like to do something with its T (be it a cast, static base access, generic method call, etc.), the codegen will perform an indirection instead of doing a direct access. The indirection will use the runtime identity of the type and substitute the T with the specific thing.</p>
+<p>There are 3 ways to supply identity to canonical code:</p>
+<ul>
+<li>For instance methods on generic reference types, we have <code>this</code>, from which we can figure out the specific instance at runtime. (<code>AcquiresInstMethodTableFromThis</code>)</li>
+<li>For generic methods, we inject a hidden argument to the method that supplies the identity (<code>RequiresInstMethodDescArg</code>)</li>
+<li>For static methods on generic types and instance method on generic value types, we inject a hidden argument that supplies the EEType of the owning type (<code>RequiresInstMethodTableArg</code>)</li>
+</ul>
+<p>Once we have the identity (also called "generic context"), we can pass it to a helper to retrieve the right thing.</p>
+<div><pre><span>G_M37205_IG01</span>:
+       <span>57</span>                   <span>push</span>     <span>rdi</span>
+       <span>56</span>                   <span>push</span>     <span>rsi</span>
+       4883<span>EC28</span>             <span>sub</span>      <span>rsp</span>, 40
+       48894<span>C2420</span>           <span>mov</span>      <span>qword</span> <span>ptr</span> [<span>rsp</span>+20<span>H</span>], <span>rcx</span>
+       488<span>BF1</span>               <span>mov</span>      <span>rsi</span>, <span>rcx</span>
+       488<span>BFA</span>               <span>mov</span>      <span>rdi</span>, <span>rdx</span>
+
+<span>G_M37205_IG02</span>:
+       <span><span>//</span> Loading `this` into RCX so that the helper can figure out what specific generic instantiation this is</span>
+       488<span>B0E</span>               <span>mov</span>      <span>rcx</span>, <span>qword</span> <span>ptr</span> [<span>rsi</span>]
+       <span>E800000000</span>           <span>call</span>     <span>CORINFO_HELP_READYTORUN_GENERIC_STATIC_BASE</span>
+       488<span>D4808</span>             <span>lea</span>      <span>rcx</span>, <span>bword</span> <span>ptr</span> [<span>rax</span>+8]
+       488<span>BD7</span>               <span>mov</span>      <span>rdx</span>, <span>rdi</span>
+       <span>E800000000</span>           <span>call</span>     <span>CORINFO_HELP_ASSIGN_REF</span>
+       90                   <span>nop</span>
+
+<span>G_M37205_IG03</span>:
+       4883<span>C428</span>             <span>add</span>      <span>rsp</span>, 40
+       5<span>E</span>                   <span>pop</span>      <span>rsi</span>
+       5<span>F</span>                   <span>pop</span>      <span>rdi</span>
+       <span>C3</span>                   <span>ret</span></pre></div>
+<p>If we didn't add this indirection, the canonical code would try to retrieve the static base of <code>Generic&lt;__Canon&gt;</code>, but that's incorrect, because we need the static base of the concrete thing.</p>
+<p>Static base of <code>Generic&lt;__Canon&gt;</code> doesn't really exist.</p>
+      </div>
+</task-lists>
+
+
+        
+
+
+
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

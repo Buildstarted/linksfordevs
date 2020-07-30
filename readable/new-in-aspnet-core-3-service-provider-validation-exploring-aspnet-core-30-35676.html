@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+New in ASP.NET Core 3: Service provider validation: Exploring ASP.NET Core 3.0 - Part 3 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="New in ASP.NET Core 3: Service provider validation: Exploring ASP.NET Core 3.0 - Part 3 - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I describe the ValidateOnBuild feature that is new to .NET Core 3.0. I also show five gotchas to look out for that the DI validator will miss."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/new-in-asp-net-core-3-service-provider-validation/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - New in ASP.NET Core 3: Service provider validation: Exploring ASP.NET Core 3.0 - Part 3</title>
+<div class="readable">
+        <h1>New in ASP.NET Core 3: Service provider validation: Exploring ASP.NET Core 3.0 - Part 3</h1>
+            <div>Reading time: 16-20 minutes</div>
+        <div>Posted here: 10 Sep 2019</div>
+        <p><a href="https://andrewlock.net/new-in-asp-net-core-3-service-provider-validation/">https://andrewlock.net/new-in-asp-net-core-3-service-provider-validation/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>In this post I describe the new "validate on build" feature that has been added to ASP.NET Core 3.0. This can be used to detect when your DI service provider is misconfigured. Specifically, the feature detects where you have a dependency on a service that you haven't registered in the DI container. </p>
+<p>I'll start by showing how the feature works, and then show some situations where you can have a <em>misconfigured</em> DI container that the feature <em>won't</em> identify as faulty.</p>
+<blockquote>
+<p>It's worth pointing out that validating your DI configuration is not a new idea - this was a feature of StructureMap I used regularly, and <a href="https://jasperfx.github.io/lamar/documentation/ioc/diagnostics/validating-container-configuration/">it's spiritual successor, Lamar, has a similar feature.</a></p>
+</blockquote>
+<h2 id="the-sample-app">The sample app<a href="#the-sample-app"></a></h2>
+<p>For this post, I'm going to use an app based on the default <code>dotnet new webapi</code> template. This consists of a single controller, the <code>WeatherForecastService</code>, that returns a randomly generated forecast based on some static data.</p>
+<p>To exercise the DI container a little, I'm going to extract a couple of services. First, the controller is refactored to: </p>
+<pre><code><span>[</span><span>ApiController</span><span>]</span>
+<span>[</span><span>Route</span><span>(</span><span>"[controller]"</span><span>)</span><span>]</span>
+<span>public</span> <span>class</span> <span>WeatherForecastController</span> <span>:</span> <span>ControllerBase</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>WeatherForecastService</span> _service<span>;</span>
+    <span>public</span> <span>WeatherForecastController</span><span>(</span><span>WeatherForecastService</span> service<span>)</span>
+    <span>{</span>
+        _service <span>=</span> service<span>;</span>
+    <span>}</span>
+
+    <span>[</span><span>HttpGet</span><span>]</span>
+    <span>public</span> IEnumerable<span>&lt;</span>WeatherForecast<span>&gt;</span> <span>Get</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>return</span> _service<span>.</span><span>GetForecasts</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>So the controller depends on the <code>WeatherForecastService</code>. This is shown below (I've elided the actual implementation as it's not important for this post):</p>
+<pre><code><span>public</span> <span>class</span> <span>WeatherForecastService</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>DataService</span> _dataService<span>;</span>
+    <span>public</span> <span>WeatherForecastService</span><span>(</span><span>DataService</span> dataService<span>)</span>
+    <span>{</span>
+        _dataService <span>=</span> dataService<span>;</span>
+    <span>}</span>
+
+    <span>public</span> IEnumerable<span>&lt;</span>WeatherForecast<span>&gt;</span> <span>GetForecasts</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>var</span> data <span>=</span> _dataService<span>.</span><span>GetData</span><span>(</span><span>)</span><span>;</span>
+
+        
+
+        <span>return</span> <span>new</span> <span><span>List</span><span>&lt;</span><span>WeatherForecast</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>This service depends on another, the <code>DataService</code>, shown below:</p>
+<pre><code><span>public</span> <span>class</span> <span>DataService</span>
+<span>{</span>
+    <span>public</span> <span>string</span><span>[</span><span>]</span> <span>GetData</span><span>(</span><span>)</span> <span>=</span><span>&gt;</span> <span>new</span><span>[</span><span>]</span>
+    <span>{</span>
+        <span>"Freezing"</span><span>,</span> <span>"Bracing"</span><span>,</span> <span>"Chilly"</span><span>,</span> <span>"Cool"</span><span>,</span> <span>"Mild"</span><span>,</span> <span>"Warm"</span><span>,</span> <span>"Balmy"</span><span>,</span> <span>"Hot"</span><span>,</span> <span>"Sweltering"</span><span>,</span> <span>"Scorching"</span>
+    <span>}</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>That's all of the services we need, so all that remains is to register them in the DI container in <code>Startup.ConfigureServices</code>:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>WeatherForecastService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>DataService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>I've registered them as singletons for this example, but that's not important for this feature. With everything set up correctly, sending a request to <code>/WeatherForecast</code> returns a forecast:</p>
+<pre><code><span>[</span><span>{</span>
+    <span>"date"</span><span>:</span><span>"2019-09-07T22:29:31.5545422+00:00"</span><span>,</span>
+    <span>"temperatureC"</span><span>:</span><span>31</span><span>,</span>
+    <span>"temperatureF"</span><span>:</span><span>87</span><span>,</span>
+    <span>"summary"</span><span>:</span><span>"Sweltering"</span>
+<span>}</span><span>]</span>
+</code></pre>
+<p>Everything looks good here, so let's see what happens if we mess up the DI registration.</p>
+<h2 id="detecting-unregistered-dependencies-on-startup">Detecting unregistered dependencies on startup<a href="#detecting-unregistered-dependencies-on-startup"></a></h2>
+<p>Let's mess things up a bit, and "forget" to register the <code>DataService</code> dependency in the DI container: </p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>WeatherForecastService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    
+<span>}</span>
+</code></pre>
+<p>If we run the app again with <code>dotnet run</code>, we get an exception, a giant stack trace, and the app fails to start. I've truncated and formatted the result below:</p>
+<pre><code>Unhandled exception. System.AggregateException: Some services are not able to be constructed
+<span>(</span>Error <span>while</span> validating the <span>service</span> descriptor 
+    <span>'ServiceType: TestApp.WeatherForecastService Lifetime: Scoped ImplementationType:
+     TestApp.WeatherForecastService'</span><span>:</span> Unable to resolve <span>service</span> <span>for</span> <span>type</span>
+    <span>'TestApp.DataService'</span> <span>while</span> attempting to activate <span>'TestApp.WeatherForecastService'</span>.<span>)</span>     
+</code></pre>
+<p>This error makes it clear what the problem is - "Unable to resolve service for type 'TestApp.DataService' while attempting to activate 'TestApp.WeatherForecastService'". This is the DI validation feature doing it's job! It should help reduce the number of DI errors you discover during normal operation of your app, by throwing as soon as possible on app startup. It's not as useful as an error at compile-time, but that's the price of the flexibility a DI container provides.</p>
+<p>What if we forget to register the <code>WeatherForecastService</code> instead:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+    
+    services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>DataService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>In this case the app starts up fine, and we don't get any error until we hit the API, at which point it blows up! </p>
+<p>Oh dear, time for the gotchas…</p>
+<h2 id="1-controller-constructor-dependencies-aren-t-checked">1. Controller constructor dependencies aren't checked<a href="#1-controller-constructor-dependencies-aren-t-checked"></a></h2>
+<p>The reason the validation feature doesn't catch this problem is that controllers aren't created using the DI container. As I described <a href="https://andrewlock.net/controller-activation-and-dependency-injection-in-asp-net-core-mvc/">in a previous post</a>, the <code>DefaultControllerActivator</code> sources a controller's <em>dependencies</em> from the DI container, but not the controller itself. Consequently, the DI container doesn't know anything about the controllers, and so can't check their dependencies are registered.</p>
+<p>Luckily, there's a way around this. You can change the controller activator so that controllers <em>are</em> added to the DI container by using the <code>AddControllersAsServices()</code> method on <code>IMvcBuilder</code>:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span>
+        <span>.</span><span>AddControllersAsServices</span><span>(</span><span>)</span><span>;</span> 
+
+    
+    services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>DataService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>This enables the <code>ServiceBasedControllerActivator</code> (<a href="https://andrewlock.net/controller-activation-and-dependency-injection-in-asp-net-core-mvc/#the-servicebasedcontrolleractivator">see my previous post for a detailed explanation</a>) and registers the controllers in the DI container as services. If we run the app now, the validation detects the missing controller dependency on app startup, and throws an exception:</p>
+<pre><code>Unhandled exception. System.AggregateException: Some services are not able to be constructed
+<span>(</span>Error <span>while</span> validating the <span>service</span> descriptor 
+    <span>'ServiceType: TestApp.Controllers.WeatherForecastController Lifetime: Transient
+    ImplementationType: TestApp.Controllers.WeatherForecastController'</span><span>:</span> Unable to 
+    resolve <span>service</span> <span>for</span> <span>type</span> <span>'TestApp.WeatherForecastService'</span> <span>while</span> attempting to
+    activate<span>'TestApp.Controllers.WeatherForecastController'</span>.<span>)</span>
+</code></pre>
+<p>This seems like a handy solution, but I'm not <em>entirely</em> sure what the trade offs are, but it <em>should</em> be fine (it's a supported scenario after all).</p>
+<p>We're not out of the woods yet though, as constructor injection isn't the only way to inject dependencies into controllers…</p>
+<h2 id="2-fromservices-injected-dependencies-aren-t-checked">2. [FromServices] injected dependencies aren't checked<a href="#2-fromservices-injected-dependencies-aren-t-checked"></a></h2>
+<p><a href="https://docs.microsoft.com/en-us/aspnet/core/mvc/models/model-binding?view=aspnetcore-2.2">Model binding is used in MVC actions</a> to control how an action method's parameters are created, based on the incoming request, using attributes such as <code>[FromBody]</code> and <code>[FromQuery]</code>. </p>
+<p>In a similar vein, the <code>[FromServices]</code> attribute can be applied to action method parameters, and those parameters will be created by sourcing them from the DI container. This can be useful if you have a dependency which is only required by a single action method. Instead of injecting the service into the constructor (and therefore creating it for <em>every</em> action on that controller) you can inject it into the specific action instead.</p>
+<p>For example, we could rewrite the <code>WeatherForecastController</code> to use <code>[FromServices]</code> injection as follows:</p>
+<pre><code><span>[</span><span>ApiController</span><span>]</span>
+    <span>[</span><span>Route</span><span>(</span><span>"[controller]"</span><span>)</span><span>]</span>
+    <span>public</span> <span>class</span> <span>WeatherForecastController</span> <span>:</span> <span>ControllerBase</span>
+    <span>{</span>
+        <span>[</span><span>HttpGet</span><span>]</span>
+        <span>public</span> IEnumerable<span>&lt;</span>WeatherForecast<span>&gt;</span> <span>Get</span><span>(</span>
+            <span>[</span><span>FromServices</span><span>]</span> <span>WeatherForecastService</span> service<span>)</span> 
+        <span>{</span>
+            <span>return</span> service<span>.</span><span>GetForecasts</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+</code></pre>
+<p>There's obviously no reason to do that here, but it makes the point. Unfortunately, the DI validation won't be able to detect this use of an unregistered service. The app will start just fun, but will throw an Exception when you attempt to call the action. </p>
+<p>The obvious solution to this one is to avoid the <code>[FromServices]</code> attribute where possible, which shouldn't be difficult to achieve, as you can always inject into the constructor if needs be.</p>
+<p>There's one more way to source services from the DI container - using service location.</p>
+<h2 id="3-services-sourced-directly-from-iserviceprovider-aren-t-checked">3. Services sourced directly from IServiceProvider aren't checked<a href="#3-services-sourced-directly-from-iserviceprovider-aren-t-checked"></a></h2>
+<p>Let's rewrite the <code>WeatherForecastController</code> one more time. Instead of directly injecting the <code>WeatherForecastService</code>, we'll inject an <code>IServiceProvider</code>, and use the <a href="https://blog.ploeh.dk/2010/02/03/ServiceLocatorisanAnti-Pattern/">service location anti-pattern</a> to retrieve the dependency.</p>
+<pre><code><span>[</span><span>ApiController</span><span>]</span>
+<span>[</span><span>Route</span><span>(</span><span>"[controller]"</span><span>)</span><span>]</span>
+<span>public</span> <span>class</span> <span>WeatherForecastController</span> <span>:</span> <span>ControllerBase</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>WeatherForecastService</span> _service<span>;</span>
+    <span>public</span> <span>WeatherForecastController</span><span>(</span><span>IServiceProvider</span> provider<span>)</span>
+    <span>{</span>
+        _service <span>=</span> provider<span>.</span><span><span>GetRequiredService</span><span>&lt;</span><span>WeatherForecastService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>[</span><span>HttpGet</span><span>]</span>
+    <span>public</span> IEnumerable<span>&lt;</span>WeatherForecast<span>&gt;</span> <span>Get</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>return</span> _service<span>.</span><span>GetForecasts</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Code like this, where you're injecting the <code>IServiceProvider</code>, is generally a bad idea. Instead of being <em>explicit</em> about it's dependencies, this controller has an <em>implicit</em> dependency on <code>WeatherForecastController</code>. As well as being harder for developers to reason about, it also means the DI validator doesn't know about the dependency. Consequently, this app will start up fine, and throw on first use.</p>
+<p>Unfortunately, you can't <em>always</em> avoid leveraging <code>IServiceProvider</code>. One case is where you have a singleton object that needs scoped dependencies <a href="https://andrewlock.net/the-dangers-and-gotchas-of-using-scoped-services-when-configuring-options-in-asp-net-core/#3-creating-a-new-scope-in-iconfigureoptions">as I described here</a>. Another is where you have a singleton object that can't have constructor dependencies, like validation attributes (<a href="https://andrewlock.net/injecting-services-into-validationattributes-in-asp-net-core/">as I described here</a>). Unfortunately there's no way around those situations, and you just have to be aware that the guard rails are off.</p>
+<p>A similar gotcha that's not immediately obvious is when you're using a factory function to create your dependencies.</p>
+<h2 id="4-services-registered-using-factory-functions-aren-t-checked">4. Services registered using factory functions aren't checked<a href="#4-services-registered-using-factory-functions-aren-t-checked"></a></h2>
+<p>Let's go back to our original controller, injecting <code>WeatherForecastService</code> into the constructor, and registering the controllers with the DI container using <code>AddControllersAsServices()</code>. But we'll make two changes:</p>
+<ol>
+<li>Forget to register the <code>DataService</code>.</li>
+<li>Use a factory function to create <code>WeatherForecastService</code>.</li>
+</ol>
+<p>When I say a factory function, I mean a lambda that's provided at service registration time, that describes how to create the service. For example:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span>
+        <span>.</span><span>AddControllersAsServices</span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>WeatherForecastService</span><span>&gt;</span></span><span>(</span>provider <span>=</span><span>&gt;</span> 
+    <span>{</span>
+        <span>var</span> dataService <span>=</span> <span>new</span> <span>DataService</span><span>(</span><span>)</span><span>;</span>
+        <span>return</span> <span>new</span> <span>WeatherForecastService</span><span>(</span>dataService<span>)</span><span>;</span>
+    <span>}</span><span>)</span><span>;</span>
+    
+
+<span>}</span>
+</code></pre>
+<p>In the above example, we provided a lambda for the <code>WeatherForecastService</code> that describes how to create the service. Inside the lambda we manually construct the <code>DataService</code> and <code>WeatherForecastService</code>. </p>
+<p>This won't cause any problems in our app, as we are able to resolve the <code>WeatherForecastService</code> from the DI container using the above factory method. We never have to resolve the <code>DataService</code> directly from the DI container. We only need it in the <code>WeatherForecastService</code>, and we're manually constructing it, so there's no problems.</p>
+<p>The difficulties arise if we use the injected <code>IServiceProvider provider</code> in the factory function:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span>
+        <span>.</span><span>AddControllersAsServices</span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>WeatherForecastService</span><span>&gt;</span></span><span>(</span>provider <span>=</span><span>&gt;</span> 
+    <span>{</span>
+        <span>var</span> dataService <span>=</span> provider<span>.</span><span><span>GetRequiredService</span><span>&lt;</span><span>DataService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+        <span>return</span> <span>new</span> <span>WeatherForecastService</span><span>(</span>dataService<span>)</span><span>;</span>
+    <span>}</span><span>)</span><span>;</span>
+    
+<span>}</span>
+</code></pre>
+<p>As far as the DI validation is concerned, this factory function is exactly the same as the previous one, but actually there's a problem. We're using the <code>IServiceProvider</code> to resolve the <code>DataService</code> at runtime using the service locator pattern; so we have an implicit dependency. This is essentially the same as gotcha 3 — the service provider validator can't detect cases where services are obtained directly from the service provider. </p>
+<p>As with the previous gotcha, code like this is sometimes necessary, and there's no easy way to work around it. If that's the case, just be extra careful that the dependencies you request are definitely registered correctly.</p>
+<blockquote>
+<p>An idea I toyed with is registering a "dummy" class in dev only, that takes all of these "hidden" classes as constructor dependencies. That may help catch registration issues using the service provider validator, but is probably more effort and error prone than it's worth.</p>
+</blockquote>
+<h2 id="5-open-generic-types-aren-t-checked">5. Open generic types aren't checked<a href="#5-open-generic-types-aren-t-checked"></a></h2>
+<p>The final gotcha is <a href="https://github.com/aspnet/Extensions/blob/fb7fdf5550614f6d73c87f46cbcd0d2409a46095/src/DependencyInjection/DI/src/ServiceProviderOptions.cs#L23">called out in the ASP.NET Core source code itself</a>: <code>ValidateOnBuild</code> does not validate open generic types.</p>
+<p>As an example, imagine we have a generic <code>ForcastService&lt;T&gt;</code>, that can generate multiple <em>types</em> of forecast, <code>T</code>.</p>
+<pre><code><span>public</span> <span>class</span> <span>ForecastService</span><span>&lt;</span>T<span>&gt;</span> <span>where</span> T<span>:</span> <span>new</span><span>(</span><span>)</span><span>;</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>DataService</span> _dataService<span>;</span>
+    <span>public</span> <span>ForecastService</span><span>(</span><span>DataService</span> dataService<span>)</span>
+    <span>{</span>
+        _dataService <span>=</span> dataService<span>;</span>
+    <span>}</span>
+
+    <span>public</span> IEnumerable<span>&lt;</span>T<span>&gt;</span> <span>GetForecasts</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>var</span> data <span>=</span> _dataService<span>.</span><span>GetData</span><span>(</span><span>)</span><span>;</span>
+
+        
+
+        <span>return</span> <span>new</span> <span><span>List</span><span>&lt;</span><span>T</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>In <em>Startup.cs</em> we register the open generic, but again forget to register the <code>DataService</code>: </p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span>
+        <span>AddControllersAsServices</span><span>(</span><span>)</span><span>;</span>
+
+    
+    services<span>.</span><span>AddSingleton</span><span>(</span><span>typeof</span><span>(</span>ForecastService<span>&lt;</span><span>&gt;</span><span>)</span><span>)</span><span>;</span>
+    
+<span>}</span>
+</code></pre>
+<p>The service provider validation completely skips over the open generic registration, so it never detects the missing <code>DataService</code> dependency. The app starts up without errors, and will throw a runtime exception if you try to request a <code>ForecastService&lt;T&gt;</code>.</p>
+<p>However, if you take a <em>closed</em> version of this dependency in your app anywhere (which is probably quite likely), the validation <em>will</em> detect the problem. For example, we can update the <code>WeatherForecastController</code> to use the generic service, by closing the generic with <code>T</code> as <code>WeatherForecast</code>:</p>
+<pre><code><span>[</span><span>ApiController</span><span>]</span>
+<span>[</span><span>Route</span><span>(</span><span>"[controller]"</span><span>)</span><span>]</span>
+<span>public</span> <span>class</span> <span>WeatherForecastController</span> <span>:</span> <span>ControllerBase</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> ForecastService<span>&lt;</span>WeatherForecast<span>&gt;</span> _service<span>;</span>
+    <span>public</span> <span>WeatherForecastController</span><span>(</span>ForecastService<span>&lt;</span>WeatherForecast<span>&gt;</span> service<span>)</span>
+    <span>{</span>
+        _service <span>=</span> service<span>;</span>
+    <span>}</span>
+
+    <span>[</span><span>HttpGet</span><span>]</span>
+    <span>public</span> IEnumerable<span>&lt;</span>WeatherForecast<span>&gt;</span> <span>Get</span><span>(</span><span>)</span>
+    <span>{</span>
+        <span>return</span> _service<span>.</span><span>GetForecasts</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>The service provider validation <em>does</em> detect this! So in reality, the lack of open generic testing is probably not going to be as big a deal as the service locator and factory function gotchas. You always need to close a generic to inject it into a service (unless that service <em>itself</em> is an open generic), so hopefully you should pick up many cases. The exception to this is if you're sourcing open generics using the service locator <code>IServiceProvider</code>, but then you're really back to gotchas 3 and 4 anyway!</p>
+<h2 id="enabling-service-validation-in-other-environments">Enabling service validation in other environments<a href="#enabling-service-validation-in-other-environments"></a></h2>
+<p>That's the last of the gotchas I'm aware of, but as a final note, it's worth remembering that service provider validation is only enabled in the Development environment by default. That's because there's a startup cost to it, the same as for <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection?view=aspnetcore-2.2#scope-validation">scope validation</a>. </p>
+<p>However, if you have any sort of "conditional service registration", where a different service is registered in Development than in other environments, you <em>may</em> want to enable validation in other environments too. You can do this by adding an additional <code>UseDefaultServiceProvider</code> call to your default host builder, in <em>Program.cs</em>. In the example below I've enabled <code>ValidateOnBuild</code> in all environments, but kept scope validation in Development only:</p>
+<pre><code><span>public</span> <span>class</span> <span>Program</span>
+<span>{</span>
+    <span>public</span> <span>static</span> <span>void</span> <span>Main</span><span>(</span><span>string</span><span>[</span><span>]</span> args<span>)</span>
+    <span>{</span>
+        <span>CreateHostBuilder</span><span>(</span>args<span>)</span><span>.</span><span>Build</span><span>(</span><span>)</span><span>.</span><span>Run</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>static</span> <span>IHostBuilder</span> <span>CreateHostBuilder</span><span>(</span><span>string</span><span>[</span><span>]</span> args<span>)</span> <span>=</span><span>&gt;</span>
+        Host<span>.</span><span>CreateDefaultBuilder</span><span>(</span>args<span>)</span>
+            <span>.</span><span>ConfigureWebHostDefaults</span><span>(</span>webBuilder <span>=</span><span>&gt;</span>
+            <span>{</span>
+                webBuilder<span>.</span><span><span>UseStartup</span><span>&lt;</span><span>Startup</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+            <span>}</span><span>)</span>
+            
+            <span>.</span><span>UseDefaultServiceProvider</span><span>(</span><span>(</span>context<span>,</span> options<span>)</span> <span>=</span><span>&gt;</span>
+            <span>{</span>
+                options<span>.</span>ValidateScopes <span>=</span> context<span>.</span>HostingEnvironment<span>.</span><span>IsDevelopment</span><span>(</span><span>)</span><span>;</span>
+                options<span>.</span>ValidateOnBuild <span>=</span> <span>true</span><span>;</span>
+            <span>}</span><span>)</span><span>;</span>
+</code></pre>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I described the <code>ValidateOnBuild</code> feature which is new in .NET Core 3.0. This allows the <em>Microsoft.Extensions</em> DI container to check for errors in your service configuration when a service provider is first built. This can be used to detect issues on application startup, instead of at runtime when the misconfigured service is requested.</p>
+<p>While useful, there are a number of cases that the validation won't catch, such as injection into MVC controllers, using the <code>IServiceProvider</code> service locator, and open generics. You can work around some of these, but even if you can't, it's worth keeping them in mind, and not relying on your app to catch 100% of your DI problems!</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

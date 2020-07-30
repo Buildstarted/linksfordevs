@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Implementing a Thread Safe Message Queue in C# - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Implementing a Thread Safe Message Queue in C# - linksfor.dev(s)"/>
+    <meta property="article:author" content="honey the codewitch"/>
+    <meta property="og:description" content="This article explores a message passing mechanism for safe thread to thread communication"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.codeproject.com/Articles/5273783/Implementing-a-Thread-Safe-Message-Queue-in-Csharp"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Implementing a Thread Safe Message Queue in C#</title>
+<div class="readable">
+        <h1>Implementing a Thread Safe Message Queue in C#</h1>
+            <div>by honey the codewitch</div>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 16 Jul 2020</div>
+        <p><a href="https://www.codeproject.com/Articles/5273783/Implementing-a-Thread-Safe-Message-Queue-in-Csharp">https://www.codeproject.com/Articles/5273783/Implementing-a-Thread-Safe-Message-Queue-in-Csharp</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><p>In this article we explore a thread safe mechanism for communicating between two or more threads in a running process.</p><div id="contentdiv">
+						
+
+
+
+<ul>
+	<li><a href="https://www.codeproject.com/KB/threads/5273783/ThreadMessaging.zip">Download ThreadMessaging.zip - 11.4&nbsp;KB</a></li></ul>
+
+<h2>Introduction</h2>
+
+<p>Multi-threading is difficult. There's no way around it. However, there are certain techniques that are solid and make it easier to work with multi-threaded applications. One technique for communicating between two or more threads safely is a message queue. Another is to use the Windows message queue that all windows have available. We'll be diving into both techniques here.</p>
+
+<p><strong>Update:</strong>&nbsp;Added windowed receiver technique</p>
+
+<h2>Conceptualizing this Mess</h2>
+
+<p>Thread to thread communication is tricky because you can't safely access data shared between threads without some sort of synchronization mechanism. There are plenty of options available to choose from, and one such option is a message queue.</p>
+
+<p>A message queue allows a sender to post messages which another thread then picks up and responds to. The posting of the message and the reading of the message is thread safe. This way you can communicate with other threads by sending messages to the queue.</p>
+
+<p>The sender's job is to pass command messages to other threads. This is a relatively simple operation. We add a message to a thread safe queue (represented by <code>ConcurrentQueue&lt;T&gt;</code>) and a mechanism for efficiently notifying the other thread&nbsp;when messages become available. The latter facility is provided by a <code>SemaphoreSlim</code>. It is possible to run the thread without using a semaphore at all, but this will increase CPU usage. However, it might be appropriate for your needs depending on what sort of work you're doing in the thread.</p>
+
+<p>The receiver's job is to spin a loop looking for messages. Inside the loop we wait on the semaphore, and then <code>switch</code>/<code>case</code> over the messages, performing the appropriate action.</p>
+
+<p>The message queue will keep storing&nbsp;messages until a thread wakes up and receives them. Consequently the queue allows for a backlog of messages. This is important in case a thread can't respond to messages fast enough. Luckily our concurrent queue easily enables this.</p>
+
+<p>If you need bidirectional communication you'll have to create an additional queue and an additional semaphore and use it going the other direction. In this situation each thread acts as both sender and receiver.</p>
+
+<p>One caveat to this is the receiver really can't be the main application thread in a Windows Forms app using this technique. The reason being is that Windows Forms already spins an application loop on the main thread, and you don't have direct access to it. That's what <code>Application.Run()</code>&nbsp;does.</p>
+
+<p>There's another way to do communication with a windowed thread by passing window messages. In doing so it works a lot like this method, but you must subclass a native window. It's a bit limited, admittedly, in terms of accepting paramters as it only takes two integer values but you can always use <code>Control.Invoke()</code>&nbsp;to do something similar. Basically you process custom window messages and rely on Windows to keep a synchronized message queue. We can access it via a <code>NativeWindow</code>'s <code>WndProc()</code> callback and the <code>PostMessage()</code> method which we must use P/Invoke for.</p>
+
+<h2>Coding this Mess</h2>
+
+<h3>The Windowless&nbsp;Receiver</h3>
+
+<p>As multi-threaded applications go, this one is pretty easy. First we'll cover the relevant member variables:</p>
+
+<p><span id="prehide849279" onclick="processCodeBlocks.togglePre(849279);">Hide</span>  &nbsp; <span id="copycode849279" onclick="return processCodeBlocks.copyCode(849279);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre849279">
+ConcurrentQueue&lt;Message&gt; _messages = <span>new</span> ConcurrentQueue&lt;Message&gt;();
+SemaphoreSlim _messagesAvailable = <span>new</span> SemaphoreSlim(<span>0</span>);</pre>
+
+<p>The <code>_messages</code> queue holds our pending messages, and the <code>_messagesAvailable</code> semaphore is used to signal when one or more messages are waiting to be processed.</p>
+
+<p>We've also defined constants for the various messages:</p>
+
+<p><span id="prehide191052" onclick="processCodeBlocks.togglePre(191052);">Hide</span>  &nbsp; <span id="copycode191052" onclick="return processCodeBlocks.copyCode(191052);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre191052"><span>const</span> <span>int</span> MSG_STOP = <span>0</span>;
+<span>const</span> <span>int</span> MSG_RESET = <span>1</span>;
+<span>const</span> <span>int</span> MSG_INCREMENT = <span>2</span>;
+<span>const</span> <span>int</span> MSG_DECREMENT = <span>3</span>;</pre>
+
+<p>Next let's look at how we pass a message from a transmitting thread:</p>
+
+<p><span id="prehide813511" onclick="processCodeBlocks.togglePre(813511);">Hide</span>  &nbsp; <span id="copycode813511" onclick="return processCodeBlocks.copyCode(813511);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre813511">
+_messages.Enqueue(<span>new</span> Message(MSG_INCREMENT, <span>null</span>));
+
+_messagesAvailable.Release(<span>1</span>);</pre>
+
+<p>Here we have two steps. The first is to enqueue the message. The first parameter to <code>Message</code> (an alias for <code>KeyValuePair&lt;int,object[]&gt;</code>)&nbsp;is&nbsp;the message id, and the second parameter is an array&nbsp;of arguments for the message. We don't use the second parameter - the argument list - in the demo. The second step is to call <code>Release()</code> on the semaphore to signal a message is available.</p>
+
+<p>Now let's take a look at the receiver thread:</p>
+
+<p><span id="prehide772154" onclick="processCodeBlocks.togglePre(772154);">Hide</span>  &nbsp; <span id="preShrink772154" onclick="processCodeBlocks.shrinkExpand(772154);">Shrink</span> <img id="preimg772154" src="https://www.codeproject.com/images/arrow-up-16.png" onclick="processCodeBlocks.shrinkExpand(772154);">  &nbsp; <span id="copycode772154" onclick="return processCodeBlocks.copyCode(772154);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre772154" processed="true"><span>var</span> thread = <span>new</span> Thread(() =<span>&gt;</span> {
+&nbsp;&nbsp; &nbsp;var done = <span>false</span>;
+&nbsp;&nbsp; &nbsp;while(!done)
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;_messagesAvailable.Wait();
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;Message msg;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;if (_messages.TryDequeue(<span>out</span> msg))
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;switch(msg.Key)
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;case MSG_STOP: 
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;done = <span>true</span>;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;break;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;case MSG_RESET: 
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;_counter = <span>0</span>;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;break;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;case MSG_INCREMENT: 
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;++_counter;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;break;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;case MSG_DECREMENT: 
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;--_counter;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;break;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;}
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;PostMessage(_uiReceiver.Handle,WM_USER,_counter,<span>0</span>);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;}
+&nbsp;&nbsp; &nbsp;}
+});
+
+
+_receiver = thread;
+thread.Start();</pre>
+
+<p>Note that we could have&nbsp;used&nbsp;<code>Control.Invoke()</code>&nbsp;to safely update the display. That's just a quick and dirty way to pass something back down to the main thread. However, we're using our windowed message passing technique accessed through <code>PostMessage()</code>. We'll explore that in a bit.</p>
+
+<p>Notice the key here is spinning a loop, waiting on the semaphore and then trying to dequeue a message before switching on the message id to figure out what to do.</p>
+
+<p>That's all there is to it! Now you can safely communicate between threads using this technique. There's one more technique to explore though.</p>
+
+<h3>The Windowed Receiver</h3>
+
+<p>This method is necessary if you're trying to get messages on the main UI thread in a Windows Forms app, for the reasons explained before. What we do is we subclass a <code>NativeWindow</code> and then use <code>PostMessage()</code> to communicate with it, letting Windows itself handle the synchronization.</p>
+
+<p>Here is the P/Invoke declaration and constant we need</p>
+
+<p><span id="prehide156586" onclick="processCodeBlocks.togglePre(156586);">Hide</span>  &nbsp; <span id="copycode156586" onclick="return processCodeBlocks.copyCode(156586);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre156586">[DllImport(<span>"</span><span>user32.dll"</span>)]
+<span>static</span> <span>extern</span> <span>bool</span> PostMessage(<span>IntPtr</span> hWnd, <span>uint</span> Msg, <span>int</span> wParam, <span>int</span> lParam);
+<span>const</span> <span>int</span> WM_USER = 0x0400;</pre>
+
+<p>The <code>WM_USER</code> constant is what we must use for custom window messages to avoid collision with system message ids. You can use <code>WM_USER</code>,&nbsp;<code>WM_USER</code>+1, <code>WM_USER</code>+2, all the way up to <code>WM_USER</code>+0x7FFF. Meanwhile, <code>PostMessage()</code> allows us to asynchronously send a message to a window.</p>
+
+<p>Here is the <code>NativeWindow</code> subclasser:</p>
+
+<p><span id="prehide123172" onclick="processCodeBlocks.togglePre(123172);">Hide</span>  &nbsp; <span id="copycode123172" onclick="return processCodeBlocks.copyCode(123172);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre123172">
+
+<span>private</span> <span>class</span> _NativeReceiver : NativeWindow
+{
+&nbsp;&nbsp; &nbsp;Main _main;
+&nbsp;&nbsp; &nbsp;public _NativeReceiver(Main main)
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;_main = main;
+&nbsp;&nbsp; &nbsp;}
+&nbsp;&nbsp; &nbsp;protected <span>override</span> <span>void</span> WndProc(<span>ref</span> System.Windows.Forms.Message m)
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;switch(m.Msg)
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;case WM_USER:
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;_main.CounterLabel.Text = <span>"</span><span>Count: "</span>+ m.WParam.ToInt32();
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;break;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;}
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;base.WndProc(<span>ref</span> m);
+&nbsp;&nbsp; &nbsp;}
+}</pre>
+
+<p>All we're doing is waiting for the <code>WM_USER</code> message and then setting the counter label to the value of the message parameter <code>WParam</code>. All of this happens on the UI thread. Note that <code>WParam</code> and <code>LParam</code> are <code>IntPtr</code>s here but in <code>PostMessage()</code> they're <code>int</code>s. That's okay, just convert the <code>IntPtr</code>s to <code>int</code>s.</p>
+
+<p>One more thing to cover is the setup of the receiver which we perform in the main form's constructor:</p>
+
+<p><span id="prehide422908" onclick="processCodeBlocks.togglePre(422908);">Hide</span>  &nbsp; <span id="copycode422908" onclick="return processCodeBlocks.copyCode(422908);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre422908">
+
+
+
+
+_uiReceiver = <span>new</span> _NativeReceiver(<span>this</span>);
+
+
+<span>var</span> p = <span>new</span> CreateParams();
+_uiReceiver.CreateHandle(p);</pre>
+
+<p>Finally, the calls to <code>PostMessage()</code> are quite simple, but the downside is that they only take two integer parameters. Fortunately, we don't need more than that, but if you did, you'd have to get clever. Anyway, here's the <code>PostMessage()</code> call:</p>
+
+<p><span id="prehide359470" onclick="processCodeBlocks.togglePre(359470);">Hide</span>  &nbsp; <span id="copycode359470" onclick="return processCodeBlocks.copyCode(359470);">Copy Code</span></p><pre lang="cs" data-lang-orig="cs" id="pre359470">
+PostMessage(_uiReceiver.Handle,WM_USER,_counter,<span>0</span>);</pre>
+
+<p>You probably noticed it earler being called from our windowless receiver. You can see we're using the first integer parameter and that's it. This is what sends the message to <code>_NativeReceiver.WndProc()</code>.</p>
+
+<p>There you have it! You now have two techniques for inter thread communication.</p>
+
+<h2>The Demo Application</h2>
+
+<p>The demo has 4&nbsp;buttons: Start/Stop, Reset, Increment (+), and Decrement (-). The processing of messages doesn't happen until Start is clicked. Reset resets the counter. Increment (+) and Decrement (-) increase or decrease the counter by one, respectively. You can queue up messages by stopping the processing, and then start it with Start at which point all pending messages are processed. Each of these requires bidirectional thread to thread communication to perform.</p>
+
+<h2>History</h2>
+
+<ul>
+	<li>14<sup>th</sup> July, 2020 - Initial submission</li>	<li>14<sup>th</sup> July, 2020 - Added windowed receiver</li></ul>
+
+
+						</div><p>This article, along with any associated source code and files, is licensed under <a href="http://www.opensource.org/licenses/mit-license.php" rel="license">The MIT License</a></p></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

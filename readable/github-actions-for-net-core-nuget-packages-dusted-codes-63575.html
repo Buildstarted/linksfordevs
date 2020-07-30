@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+GitHub Actions for .NET Core NuGet packages - Dusted Codes - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="GitHub Actions for .NET Core NuGet packages - Dusted Codes - linksfor.dev(s)"/>
+    <meta property="og:description" content="&#xA;Last weekend I migrated the [Giraffe web framework](https://github.com/giraffe-fsharp/Giraffe) from..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://dusted.codes/github-actions-for-dotnet-core-nuget-packages"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - GitHub Actions for .NET Core NuGet packages - Dusted Codes</title>
+<div class="readable">
+        <h1>GitHub Actions for .NET Core NuGet packages - Dusted Codes</h1>
+            <div>Reading time: 25-32 minutes</div>
+        <div>Posted here: 01 Jul 2020</div>
+        <p><a href="https://dusted.codes/github-actions-for-dotnet-core-nuget-packages">https://dusted.codes/github-actions-for-dotnet-core-nuget-packages</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>Last weekend I migrated the <a href="https://github.com/giraffe-fsharp/Giraffe">Giraffe web framework</a> from <a href="https://www.appveyor.com/">AppVeyor</a> to <a href="https://github.com/features/actions">GitHub Actions</a>. It proved to be incredibly easy to do so despite me having some very specific requirements on how I wanted the final solution to work and that it should be flexible enough to apply to all my other projects too. Even though it was mostly a very straight forward job, there were a few things which I learned along the way which I thought would be worth sharing!</p>
+<p>Here's a quick summary of what I did, why I did it and most importantly how you can apply the same GitHub workflow to your own .NET Core NuGet project as well!</p>
+<h2 id="overview">Overview</h2>
+<ul>
+<li><a href="#cicd-pipeline-for-net-core-nuget-packages">CI/CD pipeline for .NET Core NuGet packages</a>
+<ul>
+<li><a href="#branch-and-pull-request-trigger">Branch and pull request trigger</a></li>
+<li><a href="#test-on-linux-macos-and-windows">Test on Linux, macOS and Windows</a></li>
+<li><a href="#create-build-artifacts">Create build artifacts</a></li>
+<li><a href="#push-nightly-releases-to-github-packages">Push nightly releases to GitHub packages</a></li>
+<li><a href="#github-release-trigger-for-official-nuget-release">GitHub release trigger for official NuGet release</a></li>
+<li><a href="#drive-nuget-version-from-git-tags">Drive NuGet version from Git Tags</a></li>
+<li><a href="#speed">Speed</a></li>
+</ul>
+</li>
+<li><a href="#environment-variables">Environment Variables</a></li>
+<li><a href="#the-end-result">The End Result</a>
+<ul>
+<li><a href="#four-stages-of-a-release">Four stages of a release</a></li>
+<li><a href="#workflow-yaml">Workflow YAML</a></li>
+</ul>
+</li>
+</ul>
+<h2 id="cicd-pipeline-for-net-core-nuget-packages">CI/CD pipeline for .NET Core NuGet packages</h2>
+<p>First, let's look at the requirements which I set out for my final CI/CD pipeline to meet. Each of these points has a specific purpose which I think is applicable to most .NET Core NuGet projects and therefore explaining in more detail.</p>
+<h3 id="branch-and-pull-request-trigger">Branch and pull request trigger</h3>
+<p>CI builds are the first formal check as part of the software development feedback loop which don't come from a developer's machine itself. They are reproducible and reliable feedback and arguably cheap to run in the cloud. As such CI builds should run as frequently as possible so that new errors can be flagged up as soon as they occur.</p>
+<p>On this premise I decided that each commit, regardless if it happened on a <code>feature/*</code>, <code>hotfix/*</code> or other branch, should trigger a CI build. Pull requests should trigger a CI build as well. It's a great way of validating the changes of a PR before deciding whether to merge. As a matter of fact, it's highly recommended to enforce this rule through GitHub itself.</p>
+<p>In GitHub, under <strong>Settings</strong> and then <strong>Branches</strong>, one can set up <a href="https://help.github.com/en/github/administering-a-repository/configuring-protected-branches">branch protection rules</a> for a repository:</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-branch-protection-rules.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-branch-protection-rules.png" alt="GitHub Branch Protection Rules"></a></p>
+<p><em>Note that the available CI options get automatically updated whenever a CI pipeline is executed and therefore might not show up before the first workflow run has completed.</em></p>
+<p>We can configure a GitHub Action to trigger builds for commits and pull requests on all branches by providing the <code>push</code> and <code>pull_request</code> option and leaving the branch definitions blank:</p>
+<pre><code>on:
+  push:
+  pull_request:
+</code></pre>
+<h3 id="test-on-linux-macos-and-windows">Test on Linux, macOS and Windows</h3>
+<p>.NET Core is cross platform compatible and so it's not a surprise that a NuGet library is expected work on Linux, macOS and Windows as well.</p>
+<p>Running a CI job against multiple OS versions can be configured via a build matrix:</p>
+<pre><code>jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+</code></pre>
+<p>In this example I've named the "build" job <code>build</code>, which is an arbitrary value and can be changed to anything a user wants.</p>
+<h3 id="create-build-artifacts">Create build artifacts</h3>
+<p>A build artifact is downloadable output which can be created and collected on each CI run. It can be anything from a single file to an entire folder full of binaries. In the case of a .NET Core NuGet library it is a very useful feature to create a super early version of a NuGet package as soon as a build has finished:</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-build-artifacts.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-build-artifacts.png" alt="GitHub Action Build Artifacts"></a></p>
+<p>In combination with pull request triggers this is a super handy way of giving OSS contributors and OSS maintainers an easy way of downloading and testing a NuGet package as part of a PR.</p>
+<p>It is also a nice way of letting users download and consume a "super early semi official" NuGet package which came from the project's official CI pipeline when someone is in absolute desperate need of applying a fix before an official release or pre-release has been created.</p>
+<p>In GitHub a NuGet artifact can be easily created by first running the <code>dotnet pack</code> command as part of an earlier build step and subsequently using the <code>upload-artifact@v2</code> action to upload the newly created <code>*.nupkg</code> as an artifact:</p>
+<pre><code>jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    steps:
+      ...
+      ...
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet pack -v normal -c Release --no-restore --include-symbols --include-source -p:PackageVersion=$GITHUB_RUN_ID src/$PROJECT_NAME/$PROJECT_NAME.*proj
+      - name: Upload Artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v2
+        with:
+          name: nupkg
+          path: ./src/${{ env.PROJECT_NAME }}/bin/Release/*.nupkg
+</code></pre>
+<p>In the example above I'm using the pre-defined <code>GITHUB_RUN_ID</code> environment variable to specify the NuGet package version and a custom defined environment variable called <code>PROJECT_NAME</code> to specify which .NET Core project to pack and publish as an artifact. This has the benefit that the same GitHub workflow definition can be used across multiple projects with very minimal initial setup.</p>
+<p>One might have also noticed that I used a wildcard definition for the project file extension <code>.*proj</code>. This has the additional benefit that the <code>dotnet pack</code> command will work for all types of .NET Core projects, which are <code>.vbproj</code>, <code>.csproj</code> and <code>.fsproj</code>.</p>
+<p>Lastly I had to use the version 2 (<code>@v2</code>) of the <code>upload-artifact</code> action in order to use wildcard definitions in the artifact's <code>path</code> specification. If you run into a "missing file" error when trying to upload an artifact then make sure that you're using the latest version of this action. Before version 2 wildcards were not supported yet.</p>
+<p>On another note, the <code>if: matrix.os == 'ubuntu-latest'</code> condition as part of the <code>Pack</code> and <code>Upload Artifact</code> steps has no special purpose except limiting the artifact upload to a single run from the previously defined build matrix. A single artifact upload is sufficient (the NuGet package doesn't change based on the environment where it has been packed) and therefore I simply chose <code>ubuntu-latest</code> because Ubuntu happens to be the fastest executing environment and therefore helps to keep the overall build time as low as possible. Windows workers seem to take generally longer to start than macOS or Ubuntu.</p>
+<h3 id="push-nightly-releases-to-github-packages">Push nightly releases to GitHub packages</h3>
+<p>You might have heard of the term "Nightly Build" before. A nightly build (or what I like to call a bleeding edge pre-release build) is a proper (formal) deployment of a build artifact to a place which makes general consumption almost as intuitive as an official release.</p>
+<p>In the context of a NuGet package a "nightly release" is a NuGet library which normally gets pushed to a public NuGet feed which is just like the official <a href="https://www.nuget.org/">NuGet Gallery</a>, but not the gallery itself. This is a common pattern amongst .NET Core libraries because developers can configure more than one NuGet feed in their project via a <code>NuGet.config</code> file (see the <a href="https://docs.microsoft.com/en-us/nuget/reference/nuget-config-file">NuGet.config reference</a> for more information) and therefore consume a nightly build package the same way as an official release. Most commonly I've seen self hosted <a href="https://inedo.com/proget">ProGet</a> feeds or cloud hosted <a href="https://www.myget.org/">MyGet</a> feeds to distribute "nightly builds" alongside the official NuGet gallery. However, GitHub's relatively new <a href="https://github.com/features/packages">Packages</a> feature makes an attractive alternative.</p>
+<p>Setting up a nightly build pipeline to <a href="https://github.com/features/packages">GitHub packages</a> is fairly easy:</p>
+<pre><code>jobs:
+  build:
+    ...
+    ...
+  prerelease:
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: nupkg
+      - name: Push to GitHub Feed
+        run: |
+          for f in ./nupkg/*.nupkg
+          do
+            curl -vX PUT -u "$GITHUB_USER:$GITHUB_TOKEN" -F package=@$f $GITHUB_FEED
+          done
+</code></pre>
+<p>Unlike build artifacts nightly releases are not something which one would want to do on every build run. It makes sense to limit the creation of a pre-release/nightly deployment to a trigger which is at least one step closer to an official release than a casual git commit or a random pull request. If one uses <a href="https://nvie.com/posts/a-successful-git-branching-model/">Git flow</a> or another similar branching strategy then the <code>develop</code> branch can be a natural gate keeper for a nightly release:</p>
+<pre><code>if: github.ref == 'refs/heads/develop'
+</code></pre>
+<p>Anything which gets pushed into the <code>develop</code> branch is per definition on the road map for the next official release and therefore a good trigger for a nightly build.</p>
+<p>I've created a complete separate job called <code>prerelease</code> for this purpose alone. Just like the <code>build</code> job before, this name is completely random and can be changed to something entirely else. In addition the <code>prerelease</code> job should only execute after a successful <code>build</code> run:</p>
+<pre><code>needs: build
+</code></pre>
+<p>If I hadn't specified this then GitHub would try to run multiple jobs in parallel which is not desired in this case.</p>
+<p>The following two <code>steps</code> are fairly self explanatory:</p>
+<pre><code>steps:
+  - name: Download Artifact
+    uses: actions/download-artifact@v1
+    with:
+      name: nupkg
+  - name: Push to GitHub Feed
+    run: |
+      for f in ./nupkg/*.nupkg
+      do
+        curl -vX PUT -u "$GITHUB_USER:$GITHUB_TOKEN" -F package=@$f $GITHUB_FEED
+      done
+</code></pre>
+<p>First I'm using the <code>download-artifact@v1</code> action to obtain the artifact which has been uploaded under the name <code>nupkg</code> by the previous job. Then I use cURL to make a HTTP PUT request directly to GitHub's HTTP API in order to upload the downloaded <code>*.nupkg</code> package to the specified feed.</p>
+<p>The name of the feed is determined through the <code>GITHUB_FEED</code> environment variable (more on this later). The <code>GITHUB_TOKEN</code> is a pre-defined environment variable which every GitHub Action has automatically created for. The <code>GITHUB_USER</code> variable is another global setting where I've set my GitHub username in one place.</p>
+<h4 id="github-packages-issue-with-nuget">GitHub packages issue with NuGet</h4>
+<p>Now one might wonder why I used a <code>curl</code> command to interact with GitHub's HTTP API if I could have used <code>dotnet nuget push</code> or <code>nuget push</code> instead? The short answer is because both of these CLI commands don't work with GitHub's packages feed today.</p>
+<p><em>The <code>dotnet nuget push</code> command only works if the worker image is set to <code>windows-latest</code>, however, because the start-up time of a Windows worker is significantly longer than <code>ubuntu-latest</code> I rather trade a little bit of "cURL complexity" for an overall faster CI/CD pipeline. It is a personal choice and a trade off which I'm happy to make in this particular case (more on the benefit of speed later).</em></p>
+<h4 id="github-packages-feed">GitHub Packages Feed</h4>
+<p>If everything went to plan then the NuGet packages will get uploaded to the user's or organisation's own GitHub packages feed:</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-packages-feed.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-packages-feed.png" alt="GitHub Packages Feed"></a></p>
+<p>The packages are tagged with the <code>GITHUB_RUN_ID</code> (unless it was a GitHub release):</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-package-versions.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-package-versions.png" alt="GitHub package versions"></a></p>
+<p>This is by design. It makes it very easy to associate a certain package version to a specific nightly run. It also makes it very obvious that a package version is a nightly build and not an official release and it's easy to know when a newer version is available since the <code>GITHUB_RUN_ID</code> is an incremental counter.</p>
+<h3 id="github-release-trigger-for-official-nuget-release">GitHub release trigger for official NuGet release</h3>
+<p>GitHub has a wonderful <a href="https://help.github.com/en/github/administering-a-repository/about-releases">concept of releases</a>, which is an extra layer on top of git tags and which provide a nice UI to create, manage and view a release:</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-view-release.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-view-release.png" alt="GitHub Release"></a></p>
+<p>Personally I like to use GitHub releases as a formal and conscious step to create, document and publish a NuGet package. For that reason I've added the <code>release</code> option as an additional CI trigger:</p>
+<pre><code>on:
+  push:
+  pull_request:
+  release:
+    types:
+      - published
+</code></pre>
+<p>A GitHub release can have multiple trigger types such as a draft (e.g. <code>created</code>) or an edit (<code>edited</code>), a delete (<code>deleted</code>) and many more. A deployment should only get kicked off when an actual release has been published and therefore the <code>published</code> type has to be specified explicitly.</p>
+<p>If a repository doesn't use GitHub releases then one can add normal git tags as a CI trigger instead. Git tag triggers would also invoke for a GitHub release (which uses git tags behind the scene), but they would also run whenever a developer pushes a git tag manually from their client.</p>
+<p>In order to kick off a deployment for a GitHub release I created a job called <code>deploy</code>:</p>
+<pre><code>deploy:
+  needs: build
+  if: github.event_name == 'release'
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v2
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 3.1.301
+    - name: Create Release NuGet package
+      run: |
+        ...
+        ...
+        dotnet pack -v normal -c Release --include-symbols --include-source -p:PackageVersion=$VERSION -o nupkg src/$PROJECT_NAME/$PROJECT_NAME.*proj
+    - name: Push to GitHub Feed
+      run: |
+        for f in ./nupkg/*.nupkg
+        do
+          curl -vX PUT -u "$GITHUB_USER:$GITHUB_TOKEN" -F package=@$f $GITHUB_FEED
+        done
+    - name: Push to NuGet Feed
+      run: dotnet nuget push ./nupkg/*.nupkg --source $NUGET_FEED --skip-duplicate --api-key $NUGET_KEY
+</code></pre>
+<p>Similar to the <code>prerelease</code> job the <code>deploy</code> job also requires the <code>build</code> job to finish first and additionally checks if the CI run was triggered by a GitHub release event:</p>
+<pre><code>deploy:
+  needs: build
+  if: github.event_name == 'release'
+</code></pre>
+<p>The actual <code>deploy</code> steps are very similar to everything else we've done so far. First it pulls the latest changes via the <code>checkout@v2</code> action, then it installs the .NET Core SDK version <code>3.1.301</code> with the help of <code>setup-dotnet@v1</code> and finally it runs a <code>dotnet pack</code> command with the official release version which is specified via the <code>VERSION</code> variable (more on this in the next section).</p>
+<p>At last I'm using cURL to push to the GitHub packages feed again and the normal <code>dotnet nuget push</code> command to publish the final release to the official NuGet feed too.</p>
+<h3 id="drive-nuget-version-from-git-tags">Drive NuGet version from Git Tags</h3>
+<p>As mentioned above, the final NuGet version is determined through the <code>VERSION</code> variable. This variable doesn't exist and has to be created manually. Most .NET Core projects specify the package version in their <code>*.csproj</code>/<code>*.fsproj</code> file through the <code>&lt;Version&gt;</code>, <code>&lt;VersionSuffix&gt;</code> or <code>&lt;PackageVersion&gt;</code> property (if you don't know the differences check out <a href="https://andrewlock.net/version-vs-versionsuffix-vs-packageversion-what-do-they-all-mean/">Andrew Lock's blog post</a> for further information). The downside of this is that the project's version has to be kept manually in sync with the GitHub release or git tag version and that it's mostly just meaningless metadata carried along in the project file which is not required until a new release is being published.</p>
+<p>In my opinion a much better approach is to entirely remove all version properties from a .NET Core project file and derive the final package version from the submitted git tag during deployment. This is mostly better because there is never a risk of the NuGet package version being out of sync with the provided git tag version. As a developer you probably know that any manual sync is deemed to fail, so why put that strain on ourselves if we can do without it!</p>
+<p>Luckily obtaining the git tag version from within a GitHub action is fairly easy. Assuming that a release is being tagged in the format of <code>vX.X.X</code> this bash script will extract the actual version from the <code>GITHUB_REF</code> variable:</p>
+<pre><code>- name: Create Release NuGet package
+  run: |
+    arrTag=(${GITHUB_REF//// })
+    VERSION="${arrTag[2]}"
+    VERSION="${VERSION//v}"
+    dotnet pack -v normal -c Release --include-symbols --include-source -p:PackageVersion=$VERSION -o nupkg src/$PROJECT_NAME/$PROJECT_NAME.*proj
+</code></pre>
+<p>For example, if I tagged a commit with <code>v1.2.3</code>, then the <code>GITHUB_REF</code> variable would contain <code>refs/tags/v1.2.3</code>.</p>
+<p>The code <code>arrTag=(${GITHUB_REF//// })</code> converts all forward slash <code>/</code> characters into a whitespace and subsequently splits the <code>GITHUB_REF</code> variable by the whitespace character into an array called <code>arrTag</code>:</p>
+<pre><code>arrTag[0]: refs
+arrTag[1]: tags
+arrTag[2]: v1.2.3
+</code></pre>
+<p>The next couple lines grab the version tag from the third array element (second index) and later strip the leading <code>v</code> character from the value:</p>
+<pre><code>VERSION="${arrTag[2]}"
+VERSION="${VERSION//v}"
+</code></pre>
+<p>If the git tag didn't include the <code>v</code> character (e.g. just <code>1.2.3</code>) then the second line can be removed.</p>
+<p>In the end the <code>VERSION</code> variable holds the correct release version of the imminent deployment and can be used to tag the final NuGet package as part of the <code>dotnet nuget pack</code> command:</p>
+<pre><code>dotnet pack -c Release --include-symbols --include-source -p:PackageVersion=$VERSION -o nupkg src/$PROJECT_NAME/$PROJECT_NAME.*proj
+</code></pre>
+<p>This is a very effective way of correctly versioning NuGet releases and keeping them automatically synced with GitHub releases (or manual git tags). It also enforces that a release can only happen when a proper git tag has been created.</p>
+<h3 id="speed">Speed</h3>
+<p>Speed is paramount in a good CI/CD pipeline. The longer a single run takes, the more likely it is that multiple triggers will result in long queues of individual CI runs stacking up and therefore preventing developers from getting a fast developer feedback loop.</p>
+<p>There's a few things which can be done to speed up a .NET Core NuGet pipeline.</p>
+<h4 id="ubuntu-over-windows">Ubuntu over Windows</h4>
+<p>All jobs use the <code>ubuntu-latest</code> worker image except the first <code>build</code> job which uses a build matrix of three different OS versions to build and test against all major environments. Ubuntu workers start faster than others and therefore should be preferred over Windows images.</p>
+<h4 id="avoid-redundant-dotnet-restores">Avoid redundant dotnet restores</h4>
+<p>The <code>build</code> job has been optimised to not repeat the <code>dotnet restore</code> step unnecessarily by making use of the <code>--no-restore</code> and <code>--no-build</code> flags where possible:</p>
+<pre><code>- name: Checkout
+  uses: actions/checkout@v2
+- name: Setup .NET Core
+  uses: actions/setup-dotnet@v1
+  with:
+    dotnet-version: 3.1.301
+- name: Restore
+  run: dotnet restore
+- name: Build
+  run: dotnet build -c Release --no-restore
+- name: Test
+  run: dotnet test -c Release --no-build
+</code></pre>
+<h4 id="avoid-redundant-nuget-caching">Avoid redundant NuGet caching</h4>
+<p>Setting the environment variable <code>DOTNET_SKIP_FIRST_TIME_EXPERIENCE</code> to <code>true</code> means that we can prevent the .NET CLI from wasting time on redundant package caching.</p>
+<h4 id="turn-off-telemetry">Turn off telemetry</h4>
+<p>Maybe not a huge gain, but surely turning off the .NET telemetry by setting the <code>DOTNET_CLI_TELEMETRY_OPTOUT</code> environment variable to <code>true</code> will shave off another few (milli)seconds.</p>
+
+<p>Not having to install extra utilities on a worker image means that the CI run doesn't have to waste extra time setting up additional tools. For example, instead of installing the standalone NuGet CLI one can use <code>dotnet nuget</code> which comes out of the box when .NET Core is set up as a dependency. Another example is to use <code>curl</code> when it already exists instead of pulling in another HTTP client for negligent benefits.</p>
+<h4 id="bash-over-powershell">Bash over PowerShell</h4>
+<p>Running <code>bash</code> scripts is significantly faster than running PowerShell (<code>pwsh</code>), because PowerShell takes longer to load. Luckily all script blocks in GitHub actions are set to <code>bash</code> by default unless specified otherwise. Try to avoid using PowerShell scripts if not necessarily required (e.g. using a little bit more <code>bash</code> instead of fancier <code>pwsh</code> Cmdlets for establishing the NuGet release version as seen above).</p>
+<p>Overall these micro improvements mean that an incoming pull request takes approximately two minutes to successfully build against the entire build matrix and produce a NuGet artifact as well:</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-action-run-time.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-action-run-time.png" alt="GitHub Action Build time for Giraffe"></a></p>
+<h2 id="environment-variables">Environment Variables</h2>
+<p>Now that the majority of the GitHub Action has been explained in detail we're just missing one final piece to complete the puzzle. Throughout this blog post I've been frequently referring to various environment variables which the script assumes to exist so that it is not specifically tied to a single project but rather applicable to many.</p>
+<p>Some of those environment variables get created automatically by GitHub itself, but others have to be set up manually, which can be done either at the job level or globally at the top of the file:</p>
+<pre><code>env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+  # Project name to pack and publish
+  PROJECT_NAME: Giraffe
+
+  # GitHub Packages Feed settings
+  GITHUB_FEED: https://nuget.pkg.github.com/giraffe-fsharp/
+  GITHUB_USER: dustinmoris
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Official NuGet Feed settings
+  NUGET_FEED: https://api.nuget.org/v3/index.json
+  NUGET_KEY: ${{ secrets.NUGET_KEY }}
+</code></pre>
+<p>The <code>PROJECT_NAME</code> variable is set to the .NET Core project name which is meant to get packed and published by this script. The script assumes that the solution follows the widely adopted folder structure of:</p>
+<pre><code>src/
++-- MyProject/
+    +-- MyProject.csproj
+tests/
++-- MyProject.Tests/
+    +-- MyProject.Tests.csproj
+MySolution.sln
+</code></pre>
+<p>In this example the <code>PROJECT_NAME</code> variable must be set to <code>MyProject</code>. Don't worry, if the solution contains more helper projects. Everything will get built and tested by the script. The <code>build</code> job executes a <code>dotnet build</code> and <code>dotnet test</code> from the root level of the repository, which means that it will pick up all projects from the repo's <code>.sln</code> file.</p>
+<p>The <code>GITHUB_FEED</code> variable is a convenience pointer to the user's or organisation's GitHub feed. The <code>GITHUB_USER</code> variable requires a username of someone who has sufficient permissions to publish to the feed. As mentioned before, the <code>GITHUB_TOKEN</code> variable is auto-created by GitHub, which is why it's being assigned directly from <code>${{ secrets.GITHUB_TOKEN }}</code>.</p>
+<p>Finally the <code>NUGET_FEED</code> variable points towards the official NuGet gallery and the <code>NUGET_KEY</code> variable receives a private secret which must be set up manually either at the project or organisation level of the GitHub repository:</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-secrets.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/github-secrets.png" alt="GitHub Secrets"></a></p>
+<p>I configured the <code>NUGET_KEY</code> as an organisation wide secret, which means I don't have to set up any additional secrets for each repository any more.</p>
+<p>If this rings your security bells then you are not entirely wrong. If you wonder if a malicious attacker could modify the GitHub workflow yaml file as part of a pull request and force bad code into the public domain then let me assure you that this won't be possible. GitHub makes it very clear that <strong>it doesn't pass</strong> secrets to workflows which were triggered by a pull request from a fork:</p>
+<blockquote>
+<p>Secrets are not passed to workflows that are triggered by a pull request from a fork</p>
+</blockquote>
+<p>The value for the <code>NUGET_KEY</code> secret has to be generated on <a href="https://www.nuget.org/">www.nuget.org</a>:</p>
+<p><a href="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/nuget-key.png"><img src="https://storage.googleapis.com/dusted-codes/images/blog-posts/2020-06-28/nuget-key.png" alt="NuGet API Key"></a></p>
+<h2 id="the-end-result">The End Result</h2>
+<p>The end result is a pretty elaborate CI/CD pipeline. All commits and pull requests will trigger a new run against a Linux, macOS and Windows environment and build and test the code across all these platforms. Additionally each build will produce a NuGet package as an artifact which can be downloaded and added to a local NuGet feed for test purposes or urgent matters. When features and bug fixes get eventually merged into the <code>develop</code> branch it will kick off a nightly build and publish an early pre-release version into the organisation's own GitHub packages feed. Finally when a release is being published an official NuGet package will be produced and not only pushed to the Github packages feed, but also to the official NuGet gallery. Nightly build packages are tagged with the workflow run ID and official packages with the associated git tag version. Everything is optimised for speed.</p>
+<h3 id="four-stages-of-a-release">Four stages of a release</h3>
+<p>In total this set up supports the four stages of a release:</p>
+<h4 id="1-yolo-release">1. YOLO Release</h4>
+<p>Builds create a NuGet artifact, which is what I like to call the YOLO (you only live once) release. It's meant for super early testing or people who just don't give a damn :).</p>
+<h4 id="2-nightly-builds">2. Nightly Builds</h4>
+<p>Merges into the <code>develop</code> branch will create an official nightly build which gets pushed into GitHub packages. It's still bleeding edge, but slightly more mature than the YOLO release.</p>
+<h4 id="3-official-pre-release-packages">3. Official pre-release packages</h4>
+<p>The next step in the release pipeline is an official pre-release package. It is basically the same as an official release package except that the git version tag follows the pre-release convention (e.g. <code>v2.0.0-beta-23</code>). Those packages are being released into the public NuGet gallery, but clearly marked as not a proper release candidate.</p>
+<h4 id="4-official-release-packages">4. Official release packages</h4>
+<p>Finally the last release stage is a proper stable release. Same as before, it's triggered by a git tag, but this time with a stable release version (e.g. <code>v2.0.0</code>).</p>
+<h3 id="workflow-yaml">Workflow YAML</h3>
+<p>The final GitHub Action file where all the individual pieces are put together can be viewed on the official <a href="https://github.com/giraffe-fsharp/Giraffe/blob/master/.github/workflows/build.yml">Giraffe repository</a>.</p>
+<p>Anyone is free to copy the <code>build.yml</code> file, apply custom changes to the environment variables at the top of the file and deploy it to their own .NET Core NuGet repository (it should just work)!</p>
+<p>If the link above doesn't work or cannot tbe viewed then the entire <code>build.yml</code> file can also be seen in the script below:</p>
+<h6 id="buildyml">build.yml</h6>
+<pre><code>name: .NET Core
+on:
+  push:
+  pull_request:
+  release:
+    types:
+      - published
+env:
+  # Stop wasting time caching packages
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  # Disable sending usage data to Microsoft
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  # Project name to pack and publish
+  PROJECT_NAME: Giraffe
+  # GitHub Packages Feed settings
+  GITHUB_FEED: https://nuget.pkg.github.com/giraffe-fsharp/
+  GITHUB_USER: dustinmoris
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Official NuGet Feed settings
+  NUGET_FEED: https://api.nuget.org/v3/index.json
+  NUGET_KEY: ${{ secrets.NUGET_KEY }}
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: 3.1.301
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build -c Release --no-restore
+      - name: Test
+        run: dotnet test -c Release
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet pack -v normal -c Release --no-restore --include-symbols --include-source -p:PackageVersion=$GITHUB_RUN_ID src/$PROJECT_NAME/$PROJECT_NAME.*proj
+      - name: Upload Artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v2
+        with:
+          name: nupkg
+          path: ./src/${{ env.PROJECT_NAME }}/bin/Release/*.nupkg
+  prerelease:
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: nupkg
+      - name: Push to GitHub Feed
+        run: |
+          for f in ./nupkg/*.nupkg
+          do
+            curl -vX PUT -u "$GITHUB_USER:$GITHUB_TOKEN" -F package=@$f $GITHUB_FEED
+          done
+  deploy:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v1
+        with:
+          dotnet-version: 3.1.301
+      - name: Create Release NuGet package
+        run: |
+          arrTag=(${GITHUB_REF//// })
+          VERSION="${arrTag[2]}"
+          echo Version: $VERSION
+          VERSION="${VERSION//v}"
+          echo Clean Version: $VERSION
+          dotnet pack -v normal -c Release --include-symbols --include-source -p:PackageVersion=$VERSION -o nupkg src/$PROJECT_NAME/$PROJECT_NAME.*proj
+      - name: Push to GitHub Feed
+        run: |
+          for f in ./nupkg/*.nupkg
+          do
+            curl -vX PUT -u "$GITHUB_USER:$GITHUB_TOKEN" -F package=@$f $GITHUB_FEED
+          done
+      - name: Push to NuGet Feed
+        run: dotnet nuget push ./nupkg/*.nupkg --source $NUGET_FEED --skip-duplicate --api-key $NUGET_KEY
+</code></pre>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

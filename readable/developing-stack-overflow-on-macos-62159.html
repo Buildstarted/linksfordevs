@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Developing Stack Overflow on MacOS - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Developing Stack Overflow on MacOS - linksfor.dev(s)"/>
+    <meta property="article:author" content="Dean Ward"/>
+    <meta property="og:description" content="Technical blog covering all things .NET and goings on at Stack Overflow"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://bakedbean.org.uk/posts/2020-05-stack-overflow-on-macos/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Developing Stack Overflow on MacOS</title>
+<div class="readable">
+        <h1>Developing Stack Overflow on MacOS</h1>
+            <div>by Dean Ward</div>
+            <div>Reading time: 17-22 minutes</div>
+        <div>Posted here: 27 May 2020</div>
+        <p><a href="https://bakedbean.org.uk/posts/2020-05-stack-overflow-on-macos/">https://bakedbean.org.uk/posts/2020-05-stack-overflow-on-macos/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article><p>After a whole lot of months in the making we finally finished porting Stack Overflow to .NET Core 3.1 🎉! When you hit any part of Stack Overflow or the wider Stack Exchange network you’re now hitting our main application running on .NET Core behind IIS using the in-process execution model. We plan to have a whole series of blog posts about the port - the good, the bad &amp; the ugly, but today I’m going to focus on how the move to .NET Core has allowed us to have greater flexibility in our local development environments</p><p>Generally speaking our developers and designers use the following environment to build and run the Q&amp;A application:</p><ul><li>Windows 10</li><li>IIS</li><li>Visual Studio 2019</li><li>Redis 4.x</li><li>Elastic 5.x</li><li>SQL Server 2019</li></ul><p>All of this is installed on bare metal or a VM running under Parallels on MacOS. As I’ve mentioned <a href="https://bakedbean.org.uk/posts/2020-01-powershell-oauth">before</a> we have a set of scripts called Dev-Local-Setup that we use to make this installation process easy and repeatable - but those scripts only work on Windows… until now! This post is about the journey to running on MacOS for day-to-day development; from making sure our application runs well there to inventing viable replacements for things like IIS.</p><h2 id="building-on-macos--linux">Building on MacOS &amp; Linux</h2><p>Before we could get our setup scripts running on non-Windows platforms we figured it would be helpful if the application we were trying to run worked on those systems too!</p><h3 id="dont-be-so-sensitive">Don’t be so sensitive!</h3><p>One of the first things to overcome was the <em>many</em> places that we had incorrect casing or path separator assumptions in our code, tests, build scripts or DB.</p><p>It’s probably worth mentioning that, depending on the file system you use on a Mac it <em>might</em> be case-sensitive! <a href="https://apple.stackexchange.com/questions/71357/how-to-check-if-my-hd-is-case-sensitive-or-not">Recent versions of MacOS</a> use a case-insensitive file system; that took me a little by surprise - I had done most of the casing changes on MacOS and then a bunch of additional things broke when I tried the build on Ubuntu!</p><p>Years of case-insensitive file systems meant we had accumulated a fair number of broken paths - <code>appSettings.json</code> should have been <code>appsettings.json</code>, <code>/content</code> should have been <code>/Content</code>, lots of <code></code> separators. Fortunately they were easy, if not a little repetitive to fix - mostly a case(!) of find/replace. That was a good chunk of this PR;</p><p><img src="https://bakedbean.org.uk/img/stack-overflow-on-macos-1.png" width="640" alt="Linux PR"><br><sub>.NET Core: Build &amp; Run on Linux (and MacOS)</sub></p><p>But, that wasn’t the only thing that needed addressing though, next up…</p><h3 id="binary-dependencies">Binary Dependencies</h3><p>During our builds to dev &amp; prod environments we prepare all our client-side assets for deployment. That process compiles our LESS stylesheets into CSS, performs minification and bundling of CSS &amp; JS and minifies images. To do all of this we run a node.js script to do the heavy lifting; a lot of the tooling for dealing with JS &amp; LESS works best with node so we use the best tool for the job! Unfortunately, in order to run the script we had a <code>node.exe</code> binary committed into the repo (we have different versions of node used across projects and it’s easier to manage the versioning if the dependency is local to each project). Sadly that doesn’t play too well on non-Windows systems :(</p><p>To workaround that we used the handy <a href="https://www.nuget.org/packages/Node.js.redist/14.2.0">Node.js package</a> on NuGet. This package is a massive blob of node binaries for Windows, MacOS &amp; Linux. Sounds like a terrible idea, doesn’t it? But it has a couple of big advantages; 1. it means we don’t have to commit the binaries into source control (yay for package restore!) and 2. it means we can delegate all platform-specific decisions to MSBuild and the NuGet targets - it knows what platform we’re on and makes sure we get the right tooling directory.</p><p>To optimize this a little further we can also make sure the massive package is only retrieved for builds that need to compile client-side assets - that’s something we don’t usually do anywhere but a build server. That means local development environments don’t need to download the package at all.</p><p>Now we have that package we can simply run the right binary for the platform, passing in our script and its parameters as usual.</p><h3 id="long-term-compatibility">Long term compatibility</h3><p>Now that we have the application building and running on multiple platforms we wanna make sure it stays that way. To achieve this we’ve provisioned Linux agents running CentOS (which is what we run for production services like Redis &amp; Elasticsearch) that run build checks on PRs - those checks do things like compile the application, compile client-side assets and run unit / integration tests. If these builds break then the PR can’t be merged into master.</p><p>Longer term we’ll be spinning up ephemeral Windows &amp; Linux environments that will be running the code from a PR so that we can smoke test things as well.</p><p>For the foreseeable future Stack Overflow and the other public sites will continue to run on Windows &amp; IIS but we want to make sure we have the ability to run on Linux for our Enterprise customers and on MacOS for our own local development needs.</p><h2 id="configuring-the-local-environment-on-macos">Configuring the local environment on MacOS</h2><p><img src="https://bakedbean.org.uk/img/stack-overflow-on-macos-2.png" width="640" alt="Dev-Local-Setup on MacOS"><br><sub>Dev-Local-Setup on MacOS</sub></p><p>Once we had confidence that the application could run on non-Windows platforms we got to work on our setup scripts. There’s a bunch of things that our Windows environments give us that we either have to emulate, replace or change our strategy for on MacOS;</p><ul><li>Powershell; we don’t really want to maintain two completely separate sets of scripts forever.</li><li>IIS; we could use nginx as a reverse proxy, but IIS does nice things like process management for us when using the ASP.NET Core hosting module - can we do something similar?</li><li>Certificates; we generate self-signed certificates - is there an equivalent process on MacOS?</li><li>Package management; we use Chocolatey on Windows - Homebrew seems like the most viable alternative here</li><li>Redis/Elasticsearch/SQL; we install these directly on Windows - using Docker seems far saner on MacOS</li></ul><h3 id="bootstrapping">Bootstrapping</h3><p>MacOS doesn’t have Powershell installed out of the box (surprise!), so we need to make sure we have the bare minimim of pre-requisites to bootstrap our scripts.</p><p>We know that we have the ability to run shell scripts out of the box so our bootstrapping process consists of a <code>setup.sh</code> that does the following;</p><ul><li>Makes sure we’re running as <code>root</code>. I’m not particularly fond of this, but most of what we’re doing during setup needs elevated access and this helps eliminate password prompts when installing a bunch of things unattended</li><li>Installs the .NET Core SDK, or updates it if we need a new version. This uses the <a href="https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-install-script"><code>dotnet-install</code> scripts</a> from Microsoft</li><li>Installs Powershell Core using <code>dotnet tool install --global</code>. This gives us access to <code>pwsh</code> across the system</li><li>Makes sure the environment is generally in a sane state; making sure paths are valid, that we have an SSH key for connecting to GitHub, etc. We need most of those things before we can run the main scripts.</li></ul><p>Once all that is done we can start our main Powershell script!</p><h3 id="supporting-macos">Supporting MacOS</h3><p>Powershell Core has a few variables that allow us to check what platform we’re running upon - <code>$IsLinux, $IsWindows, $IsMacOS</code>. We’ve added support for conditions in our menu system in Dev-Local-Setup and this allows us to filter what menu options are available based upon the platform. There’s no sense in exposing “Install Homebrew” on Windows when we use Chocolatey! In addition we can now branch on those variables in menu items that should work cross-platform to do platform-specific things - e.g. we use this to change paths based upon the platform or do things like use the Registry on Windows rather than a config file on *nix.</p><p>It’s worth noting that on Windows with regular old skool Powershell those same variables are not available. To make sure our scripts run everywhere we can define <code>$IsWindows</code> as follows;</p><div><div><table><tbody><tr><td><pre><code><span>1
+</span><span>2
+</span><span>3
+</span><span>4
+</span><span>5
+</span></code></pre></td><td><pre><code data-lang="ps"><span>#</span>&nbsp;<span>Make</span> <span>sure</span> <span>the</span> <span>IsWindows</span> <span>variable</span> <span>is</span> <span>supported</span> <span>for</span> <span>old</span> <span>skool</span> <span>powershell</span> <span>(non-Core)</span>
+<span>#</span>&nbsp;<span>If</span> <span>the</span> <span>variable</span> <span>isn't</span> <span>there</span> <span>then</span> <span>we</span> <span>_must_</span> <span>be</span> <span>running</span> <span>on</span> <span>Windows</span>
+<span>if</span> <span>(!(Get-Variable IsWindows -ErrorAction SilentlyContinue))</span> <span>{</span>
+    <span>$IsWindows</span> <span>=</span> <span>$true</span>
+<span>}</span>
+</code></pre></td></tr></tbody></table></div></div><h3 id="rediselasticsearchsql">Redis/Elasticsearch/SQL</h3><p>On Windows we install our service dependencies directly on the machine. Using Docker feels far more sane on MacOS and, frankly, we’ll probably use the same approach on Windows in the coming months now that Docker has shipped native support for WSL2.</p><p>For now, we’re using Homebrew on MacOS to install the Docker cask then tweaking the Hyperkit VM settings JSON (<code>~/Library/Group Containers/group.com.docker/settings.json</code>) to give more RAM, disk and CPU cores to Docker.</p><p>Once that’s done we have several <code>docker-compose</code> files that construct containers for Redis, Elasticsearch and SQL Server that roughly mimic how our production environment looks.</p><p>For Redis we run all our instances in the same container and orchestrate their lifetimes using <code>supervisord</code>. Thanks to ejsmith for <a href="https://github.com/StackExchange/StackExchange.Redis/pull/1389">this PR</a> to StackExchange.Redis for that approach, it’s awesome - it means we get all the logs in one place and just one container to spin up for all our Redis services!</p><p>For Elasticsearch we install the base container from Elastic and add the ICU and kuromoji plugins; we need those for our international Stack Exchange sites.</p><p>For SQL Server we use the <a href="https://github.com/microsoft/mssql-docker/blob/master/linux/preview/examples/mssql-server-linux-non-root/Dockerfile-2019">example for configuring a non-root instance</a> from Microsoft to install SQL 2019 combined with the <a href="https://github.com/microsoft/mssql-docker/blob/master/linux/preview/examples/mssql-agent-fts-ha-tools/Dockerfile">example for configuring full-text search</a>. We need the latter for efficient text queries across a couple of our tables in production and this keeps our local environments consistent.</p><h4 id="sql-authentication">SQL Authentication</h4><p>On Windows we configure our applications to use integrated authentication to connect to their SQL databases. We grant DB permissions directly to the IIS application pool identities (i.e. the <code>IIS APPPOOL{AppPoolName}</code> pseudo-accounts). This is similar to how we run in production - an application pool runs in IIS as a specific AD user and we grant DB permissions to that user.</p><p>On SQL Server for Linux we’re unable to use integrated authentication so we have to use SQL authentication instead.</p><p>When we initially build the container for SQL we generate a random, secure password for the <code>sa</code> user and store it in an environment variable that can be used by scripts or from the CLI.</p><p>When an application is configured from Dev-Local-Setup we use the host header that the application is exposed from as the user id and generate a password that is salted based upon the <code>sa</code> password.</p><p>By default, in an application’s <code>appsettings.json</code> we usually use a connection string that uses integrated authentication but we need to override this on MacOS. To do so we use environment variables with a specific prefix, hooking into the configuration provider model that is used in .NET Core - I’ll dig more into the specifics of that later on!</p><h4 id="sql-tools">SQL Tools</h4><p>In the absence of SSMS on MacOS we’re installing <a href="https://docs.microsoft.com/en-us/sql/azure-data-studio/download-azure-data-studio?view=sql-server-ver15">Azure Data Studio</a> - it’s not quite at the level of SSMS yet, but it handles the majority of day-to-day tasks against SQL really well.</p><h3 id="replacing-iis">“Replacing” IIS</h3><p>In production we have a shared web tier running a number of applications - there’s Q&amp;A, API, Talent, Chat and other supporting services. HAProxy TLS-offloads traffic to a server running IIS and we use host headers to route the traffic to the right application pool.</p><p>We want our local development environments to reflect this as much as possible, but in the absence of IIS we’re somewhat limited in our options.</p><p>In IIS the ASP.NET Core Hosting Module manages the lifetime of our application by spinning up <code>dotnet</code> for us either out-of-process or in-process (the model we use; it’s faster). When somebody hits the host header associated with the application IIS makes sure there’s something running that it can route the request to.</p><p>On MacOS we considered using something like nginx to reverse proxy inbound requests based upon the host header, but we couldn’t find any way to trivially manage the <code>dotnet</code> process that is actually running our .NET code. After much deliberation we made the call to write a small application that is packaged in Dev-Local-Setup and can reverse proxy and perform the process management that IIS used to do for us based upon host header. That application is called KestelProxy.</p><p>Nobody wants to write another reverse proxy, so we initially started to use the <a href="https://www.nuget.org/packages/AspNetCore.Proxy/">AspNetCore.Proxy</a> NuGet package to handle the reverse proxy shennanigans for us. We’ve since moved to using <a href="https://microsoft.github.io/reverse-proxy/">YARP</a> as it has better integration with the Kestrel pipeline - it’s possible we’ll be using it in more scenarios in the coming months so having something we can use in a few places has less cognitive overhead! We’ve done very little customization of the proxy itself, our changes have been purely in dynamically registering applications using Dev-Local-Setup and managing the underlying <code>dotnet</code> process lifetime.</p><p>Individual teams contribute to Dev-Local-Setup to configure their applications and each has a piece of configuration like this:</p><div><div><table><tbody><tr><td><pre><code><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span><span>12
+</span><span>13
+</span><span>14
+</span><span>15
+</span><span>16
+</span><span>17
+</span><span>18
+</span><span>19
+</span><span>20
+</span><span>21
+</span><span>22
+</span><span>23
+</span><span>24
+</span><span>25
+</span><span>26
+</span><span>27
+</span><span>28
+</span><span>29
+</span></code></pre></td><td><pre><code data-lang="ps"><span>Repos</span> <span>=</span> <span>@</span><span>(
+</span><span>    @{
+</span><span>        Group = "Team"
+</span><span>        Repo = "Project"
+</span><span>    },
+</span><span>    @{
+</span><span>        Group = "Team"
+</span><span>        Repo = "AnotherProject"
+</span><span>    }
+</span><span>)</span><span>;</span>
+<span>Websites</span> <span>=</span> <span>@</span><span>(
+</span><span>    @{
+</span><span>        Directory = "Project</span><span></span><span>Project.Web";
+</span><span>        Environment = @{
+</span><span>          Foo = "Fubar";
+</span><span>        }
+</span><span>        Site = "project.local";
+</span><span>        Aliases = "www.project.local", "alias.local";
+</span><span>        Databases = "Local.Project";
+</span><span>    },
+</span><span>    @{
+</span><span>        Directory = "AnotherProject</span><span></span><span>Project.Web";
+</span><span>        Arguments = @(
+</span><span>            "Foo=bar"
+</span><span>        );
+</span><span>        Site = "another-project.local";
+</span><span>        Databases = "Local.AnotherProject", "Local.Project";
+</span><span>    }
+</span><span>)</span><span>;</span>
+</code></pre></td></tr></tbody></table></div></div><p>This configuration is used by Dev-Local-Setup to generate certificates for HTTPS, update <code>hosts</code> entries, grant access to databases and to configure the websites in either IIS or KestrelProxy. When a user of Dev-Local-Setup runs the menu option to configure the websites associated with their team, we read this configuration and use it to update the KestrelProxy’s <code>appsettings.json</code> file. This registers the host headers (and any aliases) along with the location of the project, any command-line arguments and environment variables with KestrelProxy.</p><p>When KestrelProxy reads its configuration it uses the <code>IBackendsRepo</code>, <code>IRoutesRepo</code> and <code>IReverseProxyConfigManager</code> services exposed by YARP to notify it that there are new routes to listen to.</p><div><div><table><tbody><tr><td><pre><code><span> 1
+</span><span> 2
+</span><span> 3
+</span><span> 4
+</span><span> 5
+</span><span> 6
+</span><span> 7
+</span><span> 8
+</span><span> 9
+</span><span>10
+</span><span>11
+</span><span>12
+</span><span>13
+</span><span>14
+</span><span>15
+</span><span>16
+</span><span>17
+</span><span>18
+</span><span>19
+</span><span>20
+</span><span>21
+</span><span>22
+</span><span>23
+</span><span>24
+</span><span>25
+</span><span>26
+</span><span>27
+</span><span>28
+</span><span>29
+</span><span>30
+</span><span>31
+</span><span>32
+</span><span>33
+</span><span>34
+</span><span>35
+</span><span>36
+</span><span>37
+</span><span>38
+</span><span>39
+</span><span>40
+</span><span>41
+</span><span>42
+</span><span>43
+</span><span>44
+</span><span>45
+</span><span>46
+</span><span>47
+</span><span>48
+</span><span>49
+</span><span>50
+</span><span>51
+</span><span>52
+</span></code></pre></td><td><pre><code data-lang="cs">
+<span>var</span> <span>backends</span> <span>=</span> <span>ImmutableDictionary</span><span>.</span><span>CreateBuilder</span><span>&lt;</span><span>string</span><span>,</span> <span>Backend</span><span>&gt;();</span>
+<span>var</span> <span>routes</span> <span>=</span> <span>ImmutableList</span><span>.</span><span>CreateBuilder</span><span>&lt;</span><span>ProxyRoute</span><span>&gt;();</span>
+<span>// this is our configuration containing the list of projects we should be running
+</span><span></span><span>var</span> <span>proxyOptions</span> <span>=</span> <span>_optionsMonitor</span><span>.</span><span>CurrentValue</span><span>;</span>
+<span>foreach</span> <span>(</span><span>var</span> <span>project</span> <span>in</span> <span>proxyOptions</span><span>.</span><span>Projects</span><span>)</span>
+<span>{</span>
+    <span>var</span> <span>primaryHost</span> <span>=</span> <span>project</span><span>.</span><span>Hosts</span><span>.</span><span>FirstOrDefault</span><span>();</span>
+    <span>if</span> <span>(!</span><span>backends</span><span>.</span><span>TryGetValue</span><span>(</span><span>primaryHost</span><span>,</span> <span>out</span> <span>_</span><span>))</span>
+    <span>{</span>
+      <span>// configure a backend in YARP
+</span><span></span>      <span>backends</span><span>[</span><span>primaryHost</span><span>]</span> <span>=</span> <span>new</span> <span>Backend</span>
+      <span>{</span>
+          <span>Id</span> <span>=</span> <span>primaryHost</span><span>,</span>
+          <span>Destinations</span> <span>=</span>
+          <span>{</span>
+<span>              ["Default"]</span> <span>=</span> <span>new</span> <span>Destination</span>
+              <span>{</span>
+                  <span>// this HTTP endpoint is actually dynamically generated
+</span><span></span>                  <span>// it's the listener that a dotnet process has been configured to
+</span><span></span>                  <span>// listen at
+</span><span></span>                  <span>Address</span> <span>=</span> <span>"http://127.0.0.1:1234"</span>
+              <span>}</span>
+          <span>}</span>
+      <span>};</span>
+    <span>}</span>
+
+    <span>// add the primary host header and any aliases as routes in YARP
+</span><span></span>    <span>foreach</span> <span>(</span><span>var</span> <span>host</span> <span>in</span> <span>project</span><span>.</span><span>Hosts</span><span>)</span>
+    <span>{</span>
+        <span>routes</span><span>.</span><span>Add</span><span>(</span>
+            <span>new</span> <span>ProxyRoute</span>
+            <span>{</span>
+                <span>// identifier of the backend above
+</span><span></span>                <span>BackendId</span> <span>=</span> <span>primaryHost</span><span>,</span>
+                <span>Match</span> <span>=</span>
+                <span>{</span>
+                    <span>// restrict to the specific host header specified in config
+</span><span></span>                    <span>Host</span> <span>=</span> <span>host</span>
+                <span>},</span>
+                <span>// unique identifier of this route
+</span><span></span>                <span>RouteId</span> <span>=</span> <span>host</span>
+            <span>});</span>
+    <span>}</span>
+<span>}</span>
+
+<span>// update the repos YARP uses to store its routes and backends        
+</span><span></span><span>await</span> <span>_backendsRepo</span><span>.</span><span>SetBackendsAsync</span><span>(</span><span>backends</span><span>.</span><span>ToImmutable</span><span>(),</span> <span>CancellationToken</span><span>.</span><span>None</span><span>);</span>
+<span>await</span> <span>_routesRepo</span><span>.</span><span>SetRoutesAsync</span><span>(</span><span>routes</span><span>.</span><span>ToImmutable</span><span>(),</span> <span>CancellationToken</span><span>.</span><span>None</span><span>);</span>
+<span>// and finally notify YARP that we have changes
+</span><span></span><span>await</span> <span>_configManager</span><span>.</span><span>ApplyConfigurationsAsync</span><span>(</span><span>new</span> <span>LoggerConfigErrorReporter</span><span>(</span><span>_logger</span><span>);,</span> <span>CancellationToken</span><span>.</span><span>None</span><span>);</span>
+
+</code></pre></td></tr></tbody></table></div></div><p>KestrelProxy is configured to launch with user privileges using <code>launchd</code> and it sets environment variables to ensure it listens on ports 80 (HTTP) and 443 (HTTPS) as well as being configured to use the certificates Dev-Local-Setup generated when configuring the projects. When a user browses to <a href="https://project.local/,">https://project.local/,</a> or any of the aliases associated with a project, TLS negotiation works as expected and the request hits the KestrelProxy YARP pipeline. As part of the pipeline we ensure that the backend process representing the project has been started. If it hasn’t we execute <code>dotnet run --no-build</code> across the project directory - if the application hasn’t been built then that command exits almost immediately and we log an error. If it has been built then we wait until the process has started and continue the YARP pipeline to dispatch the request to the underlying process.</p><p>When we start the process representing our project we set the <code>ASPNETCORE_URLS</code> environment variable to a dynamically generated HTTP endpoint - YARP forwards the request to that endpoint as part of the proxying pipeline. This is similar to how IIS would do things if it was running an ASP.NET Core application out-of-process - it starts a process and forwards requests from IIS to that process.</p><p>All of this means that there is a long-lived web server that is started when the user initially logs in. There’s a very simple UI showing the list of running sites, logs and any errors (using <a href="https://github.com/NickCraver/StackExchange.Exceptional">Exceptional</a>) - that looks quite a lot like this:</p><p><img src="https://bakedbean.org.uk/img/stack-overflow-on-macos-3.png" width="640" alt="Dev-Local-Setup on MacOS"><br><sub>KestrelProxy UI</sub></p><p>##&nbsp;What’s Next?</p><p>We have some developers and designers using this day-to-day, so we’re hoping it gets battle-tested reasonably quickly. I’d like to get the KestrelProxy bits upto GitHub for other people to play with soon but need to remove the pieces that are very specific to us first!</p><p>Longer term we’re going to look at <a href="https://github.com/dotnet/tye">Project Tye</a> as a way to orchestrate things across multiple projects - it has similar aims to Dev-Local-Setup (orchestrating containers, projects, etc) and it has a much nicer dashboard - things like logs from the child processes it spins up. I suspect Dev-Local-Setup could just be a way to generate the YAML that Tye needs to execute but we haven’t had time to try it out yet!</p></article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

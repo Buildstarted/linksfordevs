@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+256LOL - An x86 Assembler in 256 LOC - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="256LOL - An x86 Assembler in 256 LOC - linksfor.dev(s)"/>
+    <meta property="og:description" content="For the first &#x201C;real&#x201D; post in this blog, we&#x2019;ll build an x86 assembler in less than 256 lines of C code.  Obviously, it won&#x2019;t implement every x86 instruction, but it will implement a surprisingly useful subset: data movement, control flow, integer arithmetic, bitwise operations, and function calls.  We won&#x2019;t be able to run the generated machine code yet (that&#x2019;s coming in a later blog post), but we&#x2019;ll be in a good position to do so."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://blog.jeff.over.bz/assembly/compilers/jit/2017/01/15/x86-assembler.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - 256LOL - An x86 Assembler in 256 LOC</title>
+<div class="readable">
+        <h1>256LOL - An x86 Assembler in 256 LOC</h1>
+            <div>Reading time: 28-35 minutes</div>
+        <div>Posted here: 13 Feb 2020</div>
+        <p><a href="http://blog.jeff.over.bz/assembly/compilers/jit/2017/01/15/x86-assembler.html">http://blog.jeff.over.bz/assembly/compilers/jit/2017/01/15/x86-assembler.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+    <p>For the first “real” post in this blog, we’ll build an x86 assembler in less than 256 lines of C code.  Obviously, it won’t implement every x86 instruction, but it will implement a surprisingly useful subset: data movement, control flow, integer arithmetic, bitwise operations, and function calls.  We won’t be able to <em>run</em> the generated machine code yet (that’s coming in a later blog post), but we’ll be in a good position to do so.</p>
+
+<p>I’ll assume you’re already familiar with x86 assembly language (hopefully the table below will serve as a brief refresher), although I won’t assume you know about their machine language encodings.  I’ll also assume that you’re familiar with hexadecimal representation and arithmetic (e.g., 9&nbsp;+&nbsp;1&nbsp;=&nbsp;A and 10&nbsp;−&nbsp;1&nbsp;=&nbsp;F).</p>
+
+<h2 id="1-which-instructions-will-we-support">1. Which instructions will we support?</h2>
+
+<p>By the time we finish, we’ll have an assembler that supports all of the following x86 instructions (yes, I’m serious):</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Example</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Description of the Example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>nop</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>nop</tt></td>
+      <td>&nbsp;</td>
+      <td><small>No operation (do nothing)</small></td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td><span color="gray"><i>— Data Movement —</i></span></td>
+    </tr>
+    <tr>
+      <td><tt>mov</tt> <small><em>register</em>, <em>immediate</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>mov eax, 0F00Dh</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Place the value F00D (hexadecimal) in EAX</small></td>
+    </tr>
+    <tr>
+      <td><tt>mov</tt> <small><em>register</em>, <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>mov eax, ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Copy the value from the EBX register into EAX</small></td>
+    </tr>
+    <tr>
+      <td><tt>mov</tt> <small><em>register</em>, [<em>register</em>]</small></td>
+      <td>&nbsp;</td>
+      <td><tt>mov eax, [ebx]</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Treat EBX as pointer; load 32-bit value from memory into EAX</small></td>
+    </tr>
+    <tr>
+      <td><tt>mov</tt> <small>[<em>register</em>], <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>mov [eax], ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Treat EAX as pointer; store 32-bit value from EBX in memory</small></td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td><span color="gray"><i>— Arithmetic —</i></span></td>
+    </tr>
+    <tr>
+      <td><tt>add</tt> <small><em>register</em>, <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>add eax, ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = EAX + EBX</small></td>
+    </tr>
+    <tr>
+      <td><tt>cdq</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>cdq</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Sign-extend EAX into EDX in preparation for <tt>idiv</tt></small></td>
+    </tr>
+    <tr>
+      <td><tt>dec</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>dec eax</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = EAX - 1</small></td>
+    </tr>
+    <tr>
+      <td><tt>div</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>div ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Unsigned division: EDX:EAX ÷ EBX,<br>setting EAX = quotient, EDX = remainder</small></td>
+    </tr>
+    <tr>
+      <td><tt>idiv</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>idiv ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Signed division: EDX:EAX ÷ EBX,<br>setting EAX = quotient, EDX = remainder</small></td>
+    </tr>
+    <tr>
+      <td><tt>imul</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>imul ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Signed multiplication: EDX:EAX = EAX × EBX</small></td>
+    </tr>
+    <tr>
+      <td><tt>inc</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>inc eax</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = EAX + 1</small></td>
+    </tr>
+    <tr>
+      <td><tt>neg</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>neg eax</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = -EAX</small></td>
+    </tr>
+    <tr>
+      <td><tt>mul</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>mul ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Unsigned multiplication: EDX:EAX = EAX × EBX</small></td>
+    </tr>
+    <tr>
+      <td><tt>sub</tt> <small><em>register</em>, <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>sub eax, ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = EAX - EBX</small></td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td><span color="gray"><i>— Bitwise Operations —</i></span></td>
+    </tr>
+    <tr>
+      <td><tt>and</tt> <small><em>register</em>, <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>and eax, ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = EAX &amp; EBX</small></td>
+    </tr>
+    <tr>
+      <td><tt>not</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>not eax</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = ~EAX</small></td>
+    </tr>
+    <tr>
+      <td><tt>or</tt>  <small><em>register</em>, <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>or eax, ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = EAX | EBX</small></td>
+    </tr>
+    <tr>
+      <td><tt>sar</tt> <small><em>register</em>, <em>immediate</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>sar eax, 2</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Shift EAX right by 2 bits (sign-fill)</small></td>
+    </tr>
+    <tr>
+      <td><tt>sar</tt> <small><em>register</em>, </small><tt>cl</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>sar eax, cl</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Shift EAX right by CL bits (sign-fill)</small></td>
+    </tr>
+    <tr>
+      <td><tt>shl</tt> <small><em>register</em>, <em>immediate</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>shl eax, 2</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Shift EAX left by 2 bits</small></td>
+    </tr>
+    <tr>
+      <td><tt>shl</tt> <small><em>register</em>, </small><tt>cl</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>shl eax, cl</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Shift EAX left by number of bits in CL</small></td>
+    </tr>
+    <tr>
+      <td><tt>shr</tt> <small><em>register</em>, <em>immediate</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>shr eax, 2</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Shift EAX right by 2 bits (zero-fill)</small></td>
+    </tr>
+    <tr>
+      <td><tt>shr</tt> <small><em>register</em>, </small><tt>cl</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>shr eax, cl</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Shift EAX right by CL bits (zero-fill)</small></td>
+    </tr>
+    <tr>
+      <td><tt>xor</tt> <small><em>register</em>, <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>xor eax, ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>EAX = EAX ^ EBX</small></td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td><span color="gray"><i>— Comparison —</i></span></td>
+    </tr>
+    <tr>
+      <td><tt>cmp</tt> <small><em>register</em>, <em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>cmp eax, ebx</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Compare EAX to EBX, setting flags for conditional jump</small></td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td><span color="gray"><i>— Control Flow —</i></span></td>
+    </tr>
+    <tr>
+      <td><tt>jmp</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jmp -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump -10 bytes, i.e., move EIP backward by 10 bytes</small></td>
+    </tr>
+    <tr>
+      <td><tt>ja</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>ja  -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if above (&gt;, unsigned)</small></td>
+    </tr>
+    <tr>
+      <td><tt>jae</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jae -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if above or equal (&gt;=, unsigned)</small></td>
+    </tr>
+    <tr>
+      <td><tt>jb</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jb  -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if below (&lt;, unsigned)</small></td>
+    </tr>
+    <tr>
+      <td><tt>jbe</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jbe -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if below or equal (&lt;=, unsigned)</small></td>
+    </tr>
+    <tr>
+      <td><tt>je</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>je  -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if equal</small></td>
+    </tr>
+    <tr>
+      <td><tt>jg</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jg  -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if greater (&gt;, signed)</small></td>
+    </tr>
+    <tr>
+      <td><tt>jge</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jge -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if greater or equal (&gt;=, signed)</small></td>
+    </tr>
+    <tr>
+      <td><tt>jl</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jl  -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if less (&lt;, signed)</small></td>
+    </tr>
+    <tr>
+      <td><tt>jle</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jle -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if less or equal (&lt;=, signed)</small></td>
+    </tr>
+    <tr>
+      <td><tt>jne</tt> <small><em>bytes</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>jne -10</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Jump if not equal</small></td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td><span color="gray"><i>— Function Calls —</i></span></td>
+    </tr>
+    <tr>
+      <td><tt>call</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>call eax</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Call function at pointer stored in EAX</small></td>
+    </tr>
+    <tr>
+      <td><tt>push</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>push eax</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Push value of EAX onto the stack</small></td>
+    </tr>
+    <tr>
+      <td><tt>pop</tt> <small><em>register</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>pop eax</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Pop a value from the stack into EAX</small></td>
+    </tr>
+    <tr>
+      <td><tt>ret</tt> <small><em>immediate</em></small></td>
+      <td>&nbsp;</td>
+      <td><tt>ret 4</tt></td>
+      <td>&nbsp;</td>
+      <td><small>Return from function, removing 4 bytes of stack arguments</small></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="2-the-api-x86asmh">2. The API: x86asm.h</h2>
+
+<p>The header file, x86asm.h, defines the API that we intend for clients to use.  It provides</p>
+
+<ul>
+  <li>an enumeration of the x86’s 32-bit registers (<tt>reg32_t</tt>), and</li>
+  <li>one function for each instruction form we can assemble.</li>
+</ul>
+
+<p>Here’s the header in its entirety.  (There’s more explanation in the next section, but it will be helpful to read through the header file first.)</p>
+
+<figure><pre><code data-lang="c"><span>// x86 Subset Assembler - API
+//-----------------------------------------------------------------------------
+// Copyright (C) 2017 Jeffrey L. Overbey.  Use of this source code is governed
+// by a BSD-style license posted at http://blog.jeff.over.bz/license/
+</span>
+<span>#ifndef X86ASM_H
+#define X86ASM_H
+</span>
+<span>#include &lt;stdint.h&gt; // uint8_t, unint32_t
+</span>
+<span>typedef</span> <span>enum</span> <span>{</span> <span>EAX</span><span>,</span> <span>ECX</span><span>,</span> <span>EDX</span><span>,</span> <span>EBX</span><span>,</span> <span>ESP</span><span>,</span> <span>EBP</span><span>,</span> <span>ESI</span><span>,</span> <span>EDI</span> <span>}</span> <span>reg32_t</span><span>;</span>
+
+<span>uint8_t</span> <span>*</span><span>nop</span><span>(</span><span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+
+<span>uint8_t</span> <span>*</span><span>mov_immediate</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>int32_t</span> <span>value</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>mov_from_ptr</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>   <span>mov_to_ptr</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>          <span>mov</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+
+<span>uint8_t</span> <span>*</span>  <span>add</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>sub</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>and</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>   <span>or</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>xor</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>cmp</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>inc</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>dec</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>not</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>neg</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>mul</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>imul</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>div_</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>idiv</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>cdq</span><span>(</span><span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+
+<span>uint8_t</span> <span>*</span>   <span>shl</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>bits</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span><span>shl_cl</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>   <span>shr</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>bits</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span><span>shr_cl</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>   <span>sar</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>bits</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span><span>sar_cl</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+
+<span>uint8_t</span> <span>*</span><span>push</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>pop</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span><span>call</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>ret</span><span>(</span><span>uint16_t</span> <span>bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+
+<span>uint8_t</span> <span>*</span> <span>jmp</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>jb</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>jae</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>je</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>jne</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>jbe</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>ja</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>jl</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>jge</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span> <span>jle</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+<span>uint8_t</span> <span>*</span>  <span>jg</span><span>(</span><span>int32_t</span> <span>relative_bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>);</span>
+
+<span>#endif</span></code></pre></figure>
+
+<h2 id="3-the-demo-program-democ">3. The demo program: demo.c</h2>
+
+<p>Before delving into the implementation of the assembler, it’s probably helpful to show how this API is used.</p>
+
+<p>Each function in our API takes a <tt>uint8_t</tt> pointer <tt>buf</tt>, writes the byte(s) of machine code for a single assembly language instruction to memory starting at that address, then returns a pointer to the next byte after the instruction that was just assembled.</p>
+
+<p>For example, the instruction <tt>mov eax, 12345678h</tt> is assembled into five bytes of machine code: b8 78 56 34 12.  Calling <tt>mov_immediate(EAX, 0x12345678, buf)</tt> stores these five bytes into memory at the location pointed to by <tt>buf</tt>, then it returns <tt>buf+5</tt>, which is presumably where you’ll want to store the next instruction.</p>
+
+<p>For example, suppose you want to assemble the following three-instruction program.</p>
+
+<figure><pre><code data-lang="plaintext">mov eax, 120h
+add eax, ecx
+shl eax, 4</code></pre></figure>
+
+<p>The following program illustrates how to assemble this sequence of three instructions, then write the byte values of the resulting machine code to standard output:</p>
+
+<figure><pre><code data-lang="c"><span>#include "x86asm.h"
+#include &lt;stdio.h&gt;
+</span>
+<span>int</span> <span>main</span><span>()</span> <span>{</span>
+	<span>uint8_t</span> <span>bytes</span><span>[</span><span>64</span><span>];</span>
+	<span>uint8_t</span> <span>*</span><span>cur</span> <span>=</span> <span>bytes</span><span>;</span>
+	<span>cur</span> <span>=</span> <span>mov_immediate</span><span>(</span><span>EAX</span><span>,</span> <span>0x120</span><span>,</span> <span>cur</span><span>);</span>  <span>// mov eax, 120h
+</span>	<span>cur</span> <span>=</span> <span>add</span><span>(</span><span>EAX</span><span>,</span> <span>ECX</span><span>,</span> <span>cur</span><span>);</span>              <span>// add eax, ecx
+</span>	<span>cur</span> <span>=</span> <span>shl</span><span>(</span><span>EAX</span><span>,</span> <span>4</span><span>,</span> <span>cur</span><span>);</span>                <span>// shl eax, 4
+</span>
+	<span>for</span> <span>(</span><span>uint8_t</span> <span>*</span><span>p</span> <span>=</span> <span>bytes</span><span>;</span> <span>p</span> <span>&lt;</span> <span>cur</span><span>;</span> <span>p</span><span>++</span><span>)</span> <span>{</span>
+		<span>printf</span><span>(</span><span>"%02x "</span><span>,</span> <span>*</span><span>p</span><span>);</span>
+	<span>}</span>
+	<span>printf</span><span>(</span><span>"</span><span>\n</span><span>"</span><span>);</span>
+	<span>return</span> <span>0</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<p>When you run this, the output is:</p>
+
+<figure><pre><code data-lang="plaintext">b8 20 01 00 00 03 c1 c1 e0 04</code></pre></figure>
+
+<h2 id="4-the-implementation-x86asmc">4. The implementation: x86asm.c</h2>
+
+<p>Now, we’ll start implementing this API.  For each instruction, I’ll describe its machine language encoding, and then the C function that implements it.</p>
+
+<p>The definitive, official reference for the x86 instruction set and its machine language encoding is Volume&nbsp;2 of the <a href="https://software.intel.com/en-us/articles/intel-sdm">Intel® 64 and IA-32 Architectures Software Developer Manuals</a>.  Unfortunately, Intel’s documentation is not easy to read, so for this small assembler, it will be sufficient to simply describe the encodings by example.</p>
+
+<h3 id="no-operation--nop">No operation – nop</h3>
+
+<p>The <tt>nop</tt> instruction assembles to a single byte of machine code: 90h.</p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>nop</span><span>(</span><span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x90</span><span>;</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<h3 id="increment-and-decrement--inc-dec">Increment and decrement – inc, dec</h3>
+
+<p>The <tt>inc</tt> instruction adds 1 to a value in a register; <tt>dec</tt> subtracts 1.  Recall from the header file above (x86asm.h) that we defined an enumeration with all of the x86’s 32-bit registers.</p>
+
+<figure><pre><code data-lang="c"><span>typedef</span> <span>enum</span> <span>{</span> <span>EAX</span><span>,</span> <span>ECX</span><span>,</span> <span>EDX</span><span>,</span> <span>EBX</span><span>,</span> <span>ESP</span><span>,</span> <span>EBP</span><span>,</span> <span>ESI</span><span>,</span> <span>EDI</span> <span>}</span> <span>reg32_t</span><span>;</span></code></pre></figure>
+
+<p>There’s a reason we listed the registers in this specific order: when instructions take register operands, the encodings tend to follow this same order.  Notice the pattern in the encodings of the <tt>inc</tt> and <tt>dec</tt> instructions:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+      <th>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</th>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>inc eax</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>40</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>dec eax</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>48</tt></td>
+    </tr>
+    <tr>
+      <td><tt>inc ecx</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>41</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>dec ecx</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>49</tt></td>
+    </tr>
+    <tr>
+      <td><tt>inc edx</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>42</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>dec edx</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>4A</tt></td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>inc edi</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>47</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>dec edi</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>4F</tt></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Since our <tt>reg32_t</tt> enum assigns an integer value to each register name (EAX=0, ECX=1, EDX=2, etc.), this means we can encode <tt>inc <i>register</i></tt> by simply adding the register number to hexadecimal 40.</p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>inc</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x40</span> <span>+</span> <span>reg</span><span>;</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span>
+
+<span>uint8_t</span> <span>*</span><span>dec</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x48</span> <span>+</span> <span>reg</span><span>;</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<p>(It’s more conventional to describe encodings in terms of which <i>bits</i> in the encoding represent the operand register.  For example, see Volume 2, Appendix&nbsp;B of the Intel documentation referenced above.  From that perspective, it might make more sense to build encodings using bitwise operations.  However, I’m writing this blog post from the perspective of “look at the pattern and implement it;” adding values seems more intuitive and produces the same result.)</p>
+
+<h3 id="move-immediate-value-to-register--mov-reg-imm">Move immediate value to register – mov reg, imm</h3>
+
+<p>The following table shows the encodings for <tt>mov</tt>&nbsp;<i>reg</i>,&nbsp;<tt>1</tt> and <tt>mov</tt>&nbsp;<i>reg</i>,&nbsp;<tt>12345678h</tt>.  Notice the pattern?</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+      <th>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</th>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>mov eax, 1</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>B8 01 00 00 00</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>mov eax, 12345678h</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>B8 78 56 34 12</tt></td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, 1</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>B9 01 00 00 00</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>mov ecx, 12345678h</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>B9 78 56 34 12</tt></td>
+    </tr>
+    <tr>
+      <td><tt>mov edx, 1</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>BA 01 00 00 00</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>mov edx, 12345678h</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>BA 78 56 34 12</tt></td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov edi, 1</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>BF 01 00 00 00</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>mov edi, 12345678h</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>BF 78 56 34 12</tt></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>While the <tt>inc</tt> and <tt>dec</tt> instructions had 1-byte encodings, the encoding here is always 5&nbsp;bytes.  The first byte of the encoding is <tt>B8</tt>&nbsp;+&nbsp;the register number.  The next four bytes are the immediate value <em>in little endian order</em>, i.e., with the low-order byte first.  Assuming the assembler will be run on an x86/x64 processor, which uses little endian byte ordering natively, nothing special needs to be done to reorder the bytes—storing a 32-bit value in memory will store the bytes in little endian order.</p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>mov_immediate</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>int32_t</span> <span>value</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0xB8</span> <span>+</span> <span>dest</span><span>;</span>
+        <span>*</span><span>((</span><span>int32_t</span> <span>*</span><span>)</span><span>buf</span><span>)</span> <span>=</span> <span>value</span><span>;</span> <span>buf</span> <span>+=</span> <span>sizeof</span><span>(</span><span>int32_t</span><span>);</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<h3 id="load-value-from-memory--mov-reg-dword-ptr-reg">Load value from memory – mov reg, DWORD PTR [reg]</h3>
+
+<p>So far, our instructions have had straightforward encodings with reasonably obvious patterns.  This one gets a bit more interesting.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [eax]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 00</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [ecx]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 01</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [edx]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 02</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [ebx]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 03</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [esp]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 04 24</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [ebp]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 45 00</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [esi]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 06</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, DWORD PTR [edi]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 07</td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [eax]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 08</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [ecx]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 09</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [edx]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 0A</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [ebx]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 0B</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [esp]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 0C 24</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [ebp]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 4D 00</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [esi]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 0E</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, DWORD PTR [edi]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 0F</td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov edx, DWORD PTR [eax]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 10</td>
+    </tr>
+    <tr>
+      <td><tt>mov edx, DWORD PTR [ecx]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 11</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov edi, DWORD PTR [edi]</tt></td>
+      <td>&nbsp;</td>
+      <td>8B 3F</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>This form of the <tt>mov</tt> instruction has a two-byte encoding with a fairly obvious pattern, <em>except when the source operand is ESP or EBP</em>… then it’s a three-byte encoding with a not-so-obvious pattern.<span color="gray"><sup>1</sup></span></p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>mov_from_ptr</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x8B</span><span>;</span>
+        <span>if</span> <span>(</span><span>src</span> <span>==</span> <span>ESP</span><span>)</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>8</span><span>*</span><span>dest</span> <span>+</span> <span>src</span><span>;</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x24</span><span>;</span>
+        <span>}</span> <span>else</span> <span>if</span> <span>(</span><span>src</span> <span>==</span> <span>EBP</span><span>)</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x45</span> <span>+</span> <span>8</span><span>*</span><span>dest</span><span>;</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x00</span><span>;</span>
+        <span>}</span> <span>else</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>8</span><span>*</span><span>dest</span> <span>+</span> <span>src</span><span>;</span>
+        <span>}</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<h3 id="store-value-into-memory--mov-dword-ptr-reg-reg">Store value into memory – mov DWORD PTR [reg], reg</h3>
+
+<p>When <tt>mov</tt> is used to store a value in memory, the encodings are almost
+identical to the encodings for loading a value from memory, except the first
+byte is 89h and the source and destination operands are reversed when encoding
+the second byte.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>mov DWORD PTR [eax], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 00</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [ecx], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 01</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [edx], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 02</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [ebx], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 03</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [esp], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 04 24</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [ebp], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 45 00</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [esi], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 06</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [edi], eax</tt></td>
+      <td>&nbsp;</td>
+      <td>89 07</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [eax], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 08</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [ecx], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 09</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [edx], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 0A</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [ebx], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 0B</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [esp], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 0C 24</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [ebp], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 4D 00</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [esi], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 0E</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [edi], ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 0F</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [eax], edx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 10</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [ecx], edx</tt></td>
+      <td>&nbsp;</td>
+      <td>89 11</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov DWORD PTR [edi], edi</tt></td>
+      <td>&nbsp;</td>
+      <td>89 3F</td>
+    </tr>
+  </tbody>
+</table>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>mov_to_ptr</span><span>(</span><span>reg32_t</span> <span>dest</span><span>,</span> <span>reg32_t</span> <span>src</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x89</span><span>;</span>
+        <span>if</span> <span>(</span><span>dest</span> <span>==</span> <span>ESP</span><span>)</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>8</span><span>*</span><span>src</span> <span>+</span> <span>dest</span><span>;</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x24</span><span>;</span>
+        <span>}</span> <span>else</span> <span>if</span> <span>(</span><span>dest</span> <span>==</span> <span>EBP</span><span>)</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x45</span> <span>+</span> <span>8</span><span>*</span><span>src</span><span>;</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x00</span><span>;</span>
+        <span>}</span> <span>else</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>8</span><span>*</span><span>src</span> <span>+</span> <span>dest</span><span>;</span>
+        <span>}</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<h3 id="rm-encoded-instructions-mov-add-sub-and-or-xor-cmp">RM-encoded instructions: mov, add, sub, and, or, xor, cmp</h3>
+
+<p>Next, we will tackle register-register <tt>mov</tt>, as well as <tt>add</tt>, <tt>sub</tt>, <tt>and</tt>, <tt>or</tt>, <tt>xor</tt>, and <tt>cmp</tt>.  All of these instructions have a similar encoding: an opcode byte (that differs from one instruction to the next – hence the name, “operation code”), followed by a single byte indicating the source and destination registers.</p>
+
+<p>To see the pattern, consider <tt>mov</tt> and <tt>add</tt>:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+      <th>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</th>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>mov eax, eax</tt></td>
+      <td>&nbsp;</td>
+      <td>8B C0</td>
+      <td>&nbsp;</td>
+      <td><tt>add eax, eax</tt></td>
+      <td>&nbsp;</td>
+      <td>03 C0</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>8B C1</td>
+      <td>&nbsp;</td>
+      <td><tt>add eax, ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>03 C1</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, edx</tt></td>
+      <td>&nbsp;</td>
+      <td>8B C2</td>
+      <td>&nbsp;</td>
+      <td><tt>add eax, edx</tt></td>
+      <td>&nbsp;</td>
+      <td>03 C2</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov eax, edi</tt></td>
+      <td>&nbsp;</td>
+      <td>8B C7</td>
+      <td>&nbsp;</td>
+      <td><tt>add eax, edi</tt></td>
+      <td>&nbsp;</td>
+      <td>03 C7</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, eax</tt></td>
+      <td>&nbsp;</td>
+      <td>8B C8</td>
+      <td>&nbsp;</td>
+      <td><tt>add ecx, eax</tt></td>
+      <td>&nbsp;</td>
+      <td>03 C8</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>8B C9</td>
+      <td>&nbsp;</td>
+      <td><tt>add ecx, ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>03 C9</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov ecx, edi</tt></td>
+      <td>&nbsp;</td>
+      <td>8B CF</td>
+      <td>&nbsp;</td>
+      <td><tt>add ecx, edi</tt></td>
+      <td>&nbsp;</td>
+      <td>03 CF</td>
+    </tr>
+    <tr>
+      <td><tt>mov edx, eax</tt></td>
+      <td>&nbsp;</td>
+      <td>8B D0</td>
+      <td>&nbsp;</td>
+      <td><tt>add edx, eax</tt></td>
+      <td>&nbsp;</td>
+      <td>03 D0</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>mov edi, edi</tt></td>
+      <td>&nbsp;</td>
+      <td>8B FF</td>
+      <td>&nbsp;</td>
+      <td><tt>add edi, edi</tt></td>
+      <td>&nbsp;</td>
+      <td>03 FF</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The second byte of the encoding is hex C0, plus 8 times the destination register number, plus the source register number.</p>
+
+<figure><pre><code data-lang="c"><span>#define DEFINE_INSN_RM(mnemonic, opcode)                     \
+uint8_t *mnemonic(reg32_t dest, reg32_t src, uint8_t *buf) { \
+        *buf++ = opcode;                                     \
+        *buf++ = 8*dest + 0xC0 + src;                        \
+        return buf;                                          \
+}
+</span>
+<span>DEFINE_INSN_RM</span><span>(</span><span>mov</span><span>,</span> <span>0x8B</span><span>)</span>
+<span>DEFINE_INSN_RM</span><span>(</span><span>add</span><span>,</span> <span>0x03</span><span>)</span>
+<span>DEFINE_INSN_RM</span><span>(</span><span>sub</span><span>,</span> <span>0x2B</span><span>)</span>
+<span>DEFINE_INSN_RM</span><span>(</span><span>and</span><span>,</span> <span>0x23</span><span>)</span>
+<span>DEFINE_INSN_RM</span><span>(</span> <span>or</span><span>,</span> <span>0x0B</span><span>)</span>
+<span>DEFINE_INSN_RM</span><span>(</span><span>xor</span><span>,</span> <span>0x33</span><span>)</span>
+<span>DEFINE_INSN_RM</span><span>(</span><span>cmp</span><span>,</span> <span>0x3B</span><span>)</span></code></pre></figure>
+
+<h3 id="instructions-with-opcodes-beginning-with-f7-not-neg-mul-imul-div-idiv">Instructions with opcodes beginning with F7: not, neg, mul, imul, div, idiv</h3>
+
+<p>The <tt>not</tt>, <tt>neg</tt>, <tt>mul</tt>, <tt>imul</tt>, <tt>div</tt>, and <tt>idiv</tt> instructions also have similar encodings.  The first byte of the encoding is F7.  The second byte indicates both the operation and the operand (register).</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+      <th>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</th>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>not eax</tt></td>
+      <td>&nbsp;</td>
+      <td>F7 D0</td>
+      <td>&nbsp;</td>
+      <td><tt>neg eax</tt></td>
+      <td>&nbsp;</td>
+      <td>F7 D8</td>
+    </tr>
+    <tr>
+      <td><tt>not ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>F7 D1</td>
+      <td>&nbsp;</td>
+      <td><tt>neg ecx</tt></td>
+      <td>&nbsp;</td>
+      <td>F7 D9</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>not edi</tt></td>
+      <td>&nbsp;</td>
+      <td>F7 D7</td>
+      <td>&nbsp;</td>
+      <td><tt>neg edi</tt></td>
+      <td>&nbsp;</td>
+      <td>F7 DF</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>As a note, we named the C function for the <tt>div</tt> instruction <code>div_</code>, since the C standard library’s <tt>stdlib.h</tt> includes the <a href="https://linux.die.net/man/3/div">div(3)</a> instruction.</p>
+
+<figure><pre><code data-lang="c"><span>#define DEFINE_INSN_F7(mnemonic, reg_base)     \
+uint8_t *mnemonic(reg32_t reg, uint8_t *buf) { \
+        *buf++ = 0xF7;                         \
+        *buf++ = reg_base + reg;               \
+        return buf;                            \
+}
+</span>
+<span>DEFINE_INSN_F7</span><span>(</span> <span>not</span><span>,</span> <span>0xD0</span><span>)</span>
+<span>DEFINE_INSN_F7</span><span>(</span> <span>neg</span><span>,</span> <span>0xD8</span><span>)</span>
+<span>DEFINE_INSN_F7</span><span>(</span> <span>mul</span><span>,</span> <span>0xE0</span><span>)</span>
+<span>DEFINE_INSN_F7</span><span>(</span><span>imul</span><span>,</span> <span>0xE8</span><span>)</span>
+<span>DEFINE_INSN_F7</span><span>(</span><span>div_</span><span>,</span> <span>0xF0</span><span>)</span>
+<span>DEFINE_INSN_F7</span><span>(</span><span>idiv</span><span>,</span> <span>0xF8</span><span>)</span></code></pre></figure>
+
+<h3 id="convert-doubleword-to-quadword--cdq">Convert doubleword to quadword – cdq</h3>
+
+<p>Both the <tt>div</tt> and <tt>idiv</tt> instructions take a 64-bit dividend (with the high 32 bits in EDX and the low 32 bits in EAX) and divide it by a 32-bit divisor (the register operand).  To divide two 32-bit values, the dividend must be extended to 64 bits.  For unsigned division (<tt>div</tt>), this is easy: <tt>mov&nbsp;edx,&nbsp;0</tt>.  For signed division (<tt>idiv</tt>), the 32-bit value must be sign-extended to 64 bits.  This is done by the <tt>cdq</tt> instruction: it copies the sign bit of EAX into all 32 bits of EDX.</p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>cdq</span><span>(</span><span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x99</span><span>;</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<h3 id="bit-shift-instructions--shl-shr-sar">Bit shift instructions – shl, shr, sar</h3>
+
+<p>The bit shift instructions are interesting for two reasons:</p>
+
+<ul>
+  <li>The number of bits to shift can be an immediate value (0–255), or it can be stored in the CL register (another name for the lowest 8 bits of the ECX register).</li>
+  <li>The encoding for a one-bit shift is different.</li>
+</ul>
+
+<p>Using the left shift instruction as an example:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+      <th>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</th>
+      <th>Instruction</th>
+      <th>&nbsp;&nbsp;</th>
+      <th>Encoding (hex)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><tt>shl eax, 0</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E0 00</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>shl eax, cl</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>D3 E0</tt></td>
+    </tr>
+    <tr>
+      <td><tt>shl eax, 1</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>D1 E0</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>shl ecx, cl</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>D3 E1</tt></td>
+    </tr>
+    <tr>
+      <td><tt>shl eax, 2</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E0 02</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>shl edx, cl</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>D3 E2</tt></td>
+    </tr>
+    <tr>
+      <td><tt>shl eax, 3</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E0 03</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>shl ebx, cl</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>D3 E3</tt></td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>shl ecx, 0FFh</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E1 FF</tt></td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>shl ecx, 0</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E1 00</tt></td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>shl ecx, 1</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>D1 E1</tt></td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>shl ecx, 2</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E1 02</tt></td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>shl ecx, 3</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E1 03</tt></td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td><tt>shl ecx, 0FFh</tt></td>
+      <td>&nbsp;</td>
+      <td><tt>C1 E1 FF</tt></td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td>…</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>We can implement this in our assembler as follows.</p>
+
+<figure><pre><code data-lang="c"><span>#define DEFINE_INSN_D1C1(mnemonic, reg_base)                  \
+uint8_t *mnemonic(reg32_t reg, uint8_t bits, uint8_t *buf) {  \
+        switch (bits) {                                       \
+        case 1: </span><span>/* 1-bit shifts have a different opcode */</span><span>    \
+                *buf++ = 0xD1;                                \
+                *buf++ = reg_base + reg;                      \
+                break;                                        \
+        default:                                              \
+                *buf++ = 0xC1;                                \
+                *buf++ = reg_base + reg;                      \
+                *buf++ = bits;                                \
+        }                                                     \
+        return buf;                                           \
+}                                                             \
+uint8_t *mnemonic##_cl(reg32_t reg, uint8_t *buf) {           \
+        *buf++ = 0xD3;                                        \
+        *buf++ = reg_base + reg;                              \
+        return buf;                                           \
+}
+</span>
+<span>DEFINE_INSN_D1C1</span><span>(</span><span>shl</span><span>,</span> <span>0xE0</span><span>)</span>
+<span>DEFINE_INSN_D1C1</span><span>(</span><span>shr</span><span>,</span> <span>0xE8</span><span>)</span>
+<span>DEFINE_INSN_D1C1</span><span>(</span><span>sar</span><span>,</span> <span>0xF8</span><span>)</span></code></pre></figure>
+
+<h3 id="procedure-calls-push-pop-call-ret">Procedure calls: push, pop, call, ret</h3>
+
+<p>The <tt>push</tt>, <tt>pop</tt>, <tt>call</tt>, and <tt>ret</tt> instructions are the four essential instructions for procedure calls.  Their encodings follow similar patterns to those we’ve already seen, except with different opcode bytes.</p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>push</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x50</span> <span>+</span> <span>reg</span><span>;</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span>
+
+<span>uint8_t</span> <span>*</span><span>pop</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0x58</span> <span>+</span> <span>reg</span><span>;</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span>
+
+<span>uint8_t</span> <span>*</span><span>call</span><span>(</span><span>reg32_t</span> <span>reg</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0xFF</span><span>;</span>
+        <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0xD0</span> <span>+</span> <span>reg</span><span>;</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<p>The encoding of <tt>ret</tt> is only slightly more interesting, since <tt>ret 0</tt> (which is often written as <tt>ret</tt> with no operand) is encoded differently than <tt>ret</tt> with a nonzero immediate operand, such as <tt>ret 4</tt> or <tt>ret 16</tt>.</p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>ret</span><span>(</span><span>uint16_t</span> <span>bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>if</span> <span>(</span><span>bytes</span> <span>==</span> <span>0</span><span>)</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0xC3</span><span>;</span>
+        <span>}</span> <span>else</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0xC2</span><span>;</span>
+                <span>*</span><span>((</span><span>uint16_t</span> <span>*</span><span>)</span><span>buf</span><span>)</span> <span>=</span> <span>bytes</span><span>;</span> <span>buf</span> <span>+=</span> <span>sizeof</span><span>(</span><span>uint16_t</span><span>);</span>
+        <span>}</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<h3 id="jumps">Jumps</h3>
+
+<p>In x86 assembly language, jumps are usually written with labels.  For example:</p>
+
+<figure><pre><code data-lang="plaintext">there: mov eax, 12345678h    ; b8 78 56 34 12
+       jmp there             ; eb f9
+       nop                   ; 90</code></pre></figure>
+
+<p>Recall that the EIP register is the instruction pointer.  When the processor
+fetches an instruction to execute, it increments EIP to point to the following
+instruction.  A jump changes the value of EIP.  In our example, the effect of
+the jump is to move EIP backward by 7 bytes, so it will point to the start of
+the <tt>mov</tt> instruction.</p>
+
+<pre>                            EIP is here after the processor
+                            fetches the  "jmp there" instruction
+                            ↓
+B8  78  56  34  12  EB  F9  90
+↑___________________________|
+We want to move it 7 bytes backward
+to place it here
+</pre>
+
+<p>So, how is <tt>jmp</tt> encoded?  Hex F9 is the two’s complement representation
+of -7… so the encoding above (EB F9) is in essence “jump -7 bytes.”</p>
+
+<p>Complicating things slightly, the <tt>jmp</tt> instruction is encoded with an
+EB opcode byte if the jump distance is between -128 and 127 bytes, inclusive,
+and with an E9 opcode if the jump distance is larger than that.</p>
+
+<figure><pre><code data-lang="c"><span>uint8_t</span> <span>*</span><span>jmp</span><span>(</span><span>int32_t</span> <span>bytes</span><span>,</span> <span>uint8_t</span> <span>*</span><span>buf</span><span>)</span> <span>{</span>
+        <span>if</span> <span>(</span><span>INT8_MIN</span> <span>&lt;=</span> <span>bytes</span> <span>&amp;&amp;</span> <span>bytes</span> <span>&lt;=</span> <span>INT8_MAX</span><span>)</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0xEB</span><span>;</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>(</span><span>int8_t</span><span>)</span><span>bytes</span><span>;</span>
+        <span>}</span> <span>else</span> <span>{</span>
+                <span>*</span><span>buf</span><span>++</span> <span>=</span> <span>0xE9</span><span>;</span>
+                <span>*</span><span>((</span><span>int32_t</span> <span>*</span><span>)</span><span>buf</span><span>)</span> <span>=</span> <span>bytes</span><span>;</span> <span>buf</span> <span>+=</span> <span>sizeof</span><span>(</span><span>int32_t</span><span>);</span>
+        <span>}</span>
+        <span>return</span> <span>buf</span><span>;</span>
+<span>}</span></code></pre></figure>
+
+<p>Conditional jumps are encoded similarly, except with different opcodes, of course.</p>
+
+<figure><pre><code data-lang="c"><span>#define DEFINE_INSN_JCC(mnemonic, byte_opcode)                     \
+uint8_t *mnemonic(int32_t bytes, uint8_t *buf) {                   \
+        if (INT8_MIN &lt;= bytes &amp;&amp; bytes &lt;= INT8_MAX) {              \
+                *buf++ = byte_opcode;                              \
+                *buf++ = (int8_t)bytes;                            \
+        } else {                                                   \
+                *buf++ = 0x0F;                                     \
+                *buf++ = byte_opcode + 0x10;                       \
+                *((int32_t *)buf) = bytes; buf += sizeof(int32_t); \
+        }                                                          \
+        return buf;                                                \
+}
+</span>
+<span>DEFINE_INSN_JCC</span><span>(</span> <span>jb</span><span>,</span> <span>0x72</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span><span>jae</span><span>,</span> <span>0x73</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span> <span>je</span><span>,</span> <span>0x74</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span><span>jne</span><span>,</span> <span>0x75</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span><span>jbe</span><span>,</span> <span>0x76</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span> <span>ja</span><span>,</span> <span>0x77</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span> <span>jl</span><span>,</span> <span>0x7C</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span><span>jge</span><span>,</span> <span>0x7D</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span><span>jle</span><span>,</span> <span>0x7E</span><span>)</span>
+<span>DEFINE_INSN_JCC</span><span>(</span> <span>jg</span><span>,</span> <span>0x7F</span><span>)</span></code></pre></figure>
+
+<h2 id="5-whats-next">5. What’s next?</h2>
+
+<p>So, we have a working x86 assembler.  Not bad for 256 lines of code.  You can download the complete source code below.</p>
+
+<p>In the next few posts, we’ll:</p>
+
+<ul>
+  <li>show how to test this assembler (are you sure it actually works?).</li>
+  <li>show how to find the encodings of other instructions (in case you want to extend this assembler).</li>
+  <li>show how to actually <em>execute</em> the generated machine code.</li>
+</ul>
+
+<p>At some point in the future – maybe not right away – I’d like to</p>
+
+<ul>
+  <li>show how the Builder design pattern can make the assembler easier to use.</li>
+  <li>build an x64 assembler (since you’re probably not running a 32-bit machine).</li>
+</ul>
+
+<p>But there are plenty of other non-assembler-related topics I’d like to blog about, so let’s see what actually materializes.</p>
+
+<h2 id="download-the-source-code">Download the source code</h2>
+
+<table>
+  <tbody>
+    <tr>
+      <td><strong>Source Code:</strong> &nbsp;&nbsp;</td>
+      <td><a href="http://blog.jeff.over.bz/_posts/code/x86-assembler/x86asm.h">x86asm.h</a></td>
+      <td>69 lines</td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td><a href="http://blog.jeff.over.bz/_posts/code/x86-assembler/x86asm.c">x86asm.c</a></td>
+      <td>171 lines</td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td><a href="http://blog.jeff.over.bz/_posts/code/x86-assembler/demo.c">demo.c</a></td>
+      <td>16 lines</td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td>&nbsp;</td>
+      <td>Total: 256 lines</td>
+    </tr>
+    <tr>
+      <td><strong>Makefiles:</strong></td>
+      <td><a href="http://blog.jeff.over.bz/_posts/code/x86-assembler/GNUmakefile">GNUmakefile</a>&nbsp;&nbsp;</td>
+      <td><small>(GNU Make on Linux/macOS)</small></td>
+    </tr>
+    <tr>
+      <td>&nbsp;</td>
+      <td><a href="http://blog.jeff.over.bz/_posts/code/x86-assembler/Makefile">Makefile</a></td>
+      <td><small>(NMAKE on Windows)</small></td>
+    </tr>
+  </tbody>
+</table>
+
+<p><small><span color="gray"><sup>1</sup> If you're familiar with the x86 encoding scheme, [EBP] is actually encoded as [EBP+0] (i.e., EBP with an 8-bit displacement), and ESP is encoded using the SIB byte.</span></small></p>
+
+  </div><p>
+      <span id="copyright">Copyright © 2017 Jeffrey L. Overbey.  All rights reserved.  Except for source code where an explicit license is given, no part of this blog may be copied, reproduced, published, translated, or distributed, in whole or in part, without the written permission of the copyright owner.</span>
+    </p></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

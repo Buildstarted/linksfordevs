@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+The anatomy of async iterators (aka await, foreach, yield) - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="The anatomy of async iterators (aka await, foreach, yield) - linksfor.dev(s)"/>
+    <meta property="article:author" content="Marc Gravell"/>
+    <meta property="og:description" content="Here I&#x27;m going to discuss the mechanisms and concepts relating to async iterators in C# - with the hope of both demystifying them a bit, and..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.marcgravell.com/2020/05/the-anatomy-of-async-iterators-aka.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - The anatomy of async iterators (aka await, foreach, yield)</title>
+<div class="readable">
+        <h1>The anatomy of async iterators (aka await, foreach, yield)</h1>
+            <div>by Marc Gravell</div>
+            <div>Reading time: 17-21 minutes</div>
+        <div>Posted here: 14 May 2020</div>
+        <p><a href="https://blog.marcgravell.com/2020/05/the-anatomy-of-async-iterators-aka.html">https://blog.marcgravell.com/2020/05/the-anatomy-of-async-iterators-aka.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="post-body-5530875515992171480" itemprop="description articleBody">
+<p>Here I'm going to discuss the mechanisms and concepts relating to async iterators in C# - with the hope of both demystifying them a bit, and also showing how we can use some of the more advanced (but slightly hidden) features. I'm going to give some illustrations of what happens under the hood, but note: these are <em>illustrations</em>, not the literal generated expansion - this is deliberately to help show what is <em>conceptually</em> happening, so if I ignore some sublte implementation detail: that's not accidental. As always, if you want to see the <em>actual</em> code, tools like <a href="https://sharplab.io/" rel="nofollow">https://sharplab.io/</a> are awesome (just change the "Results" view to "C#" and paste the code you're interested in onto the left).</p>
+<h2>Iterators in the sync world</h2>
+<p>Before we discuss async iterators, let's start by recapping iterators. Many folks may already be familiar with all of this, but hey: it helps to set the scene. More importantly, it is useful to allow us to compare and contrast later when we look at how <code>async</code> changes things. So: we know that we can write a foreach loop (over a sequence) of the form:</p>
+<div><pre><span>foreach</span> (<span>var</span> <span>item</span> <span>in</span> <span>SomeSource</span>(<span>42</span>))
+{
+    <span>Console</span>.<span>WriteLine</span>(<span>item</span>);
+}</pre></div>
+<p>and for each item that <code>SomeSource</code> returns, we'll get a line in the console. <code>SomeSource</code> <em>could</em> be returning a fully buffered set of data (like a <code>List&lt;string&gt;</code>):</p>
+<div><pre><span>IEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSource</span>(<span>int</span> <span>x</span>)
+{
+    <span>var</span> <span>list</span> <span>=</span> <span>new</span> <span>List</span>&lt;<span>string</span>&gt;();
+    <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>5</span>; <span>i</span><span>++</span>)
+        <span>list</span>.<span>Add</span>(<span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>);
+    <span>return</span> <span>list</span>;
+}</pre></div>
+<p>but a problem here is that this requires <code>SomeSource</code> to run <em>to completion</em> before we get even the first result, which could take a lot of time and memory - and is just generally restrictive. Often, when we're trying to represent a <em>sequence</em>, it may be unbounded, or at least: open-ended - for example, we could be pulling data from a remote work queue, where a: we only want to be holding one pending item at a time, and b: it may not <em>have</em> a logical "end". It turns out that C#'s definition of a "sequence" (for the purposes of <code>foreach</code>) is fine with this. Instead of <em>returning</em> a list, we can write an <em>iterator block</em>:</p>
+<div><pre><span>IEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSource</span>(<span>int</span> <span>x</span>)
+{
+    <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>5</span>; <span>i</span><span>++</span>)
+        <span>yield</span> <span>return</span> <span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>;
+}</pre></div>
+<p>This works <em>similarly</em>, but there are some fundamental differences - most noticeably: we don't ever have a buffer - we just make one element available at a time. To understand how this can work, it is useful to take another look at our <code>foreach</code>; the compiler interprets <code>foreach</code> as something <em>like</em> the following:</p>
+<div><pre><span>using</span> (<span>var</span> <span>iter</span> <span>=</span> <span>SomeSource</span>(42).<span>GetEnumerator</span>())
+{
+    <span>while</span> (<span>iter</span>.<span>MoveNext</span>())
+    {
+        <span>var</span> <span>item</span> <span>=</span> <span>iter</span>.<span>Current</span>;
+        <span>Console</span>.<span>WriteLine</span>(<span>item</span>);
+    }
+}</pre></div>
+<p>We have to be a <em>little</em> loose in our phrasing here, because <code>foreach</code> isn't actually tied to <code>IEnumerable&lt;T&gt;</code> - it is duck-typed against an API shape instead; the <code>using</code> may or may not be there, for example. But fundamentally, the compiler calls <code>GetEnumerator()</code> on the expression passed to <code>foreach</code>, then creates a <code>while</code> loop checking <code>MoveNext()</code> (which defines "is there more data?" and advances the mechanism in the success case), then accesses the <code>Current</code> property (which exposes the element we advanced to). As an aside, historically (prior to C# 5) the compiler used to scope <code>item</code> <em>outside</em> of the <code>while</code> loop, which might sound innocent, but it was the source of <strong>absolutely no end</strong> of confusion, code erros, and questions on Stack Overflow (think "captured variables").</p>
+<p>So; hopefully you can see in the above how the <em>consumer</em> can access an unbounded forwards-only sequence via this <code>MoveNext()</code> / <code>Current</code> approach; but how does that get <em>implemented</em>? Iterator blocks (anything involving the <code>yield</code> keyword) are actually <em>incredibly</em> complex, so I'm going to take a lot of liberties here, but what is going on is <em>similar</em> to:</p>
+<div><pre><span>IEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSource</span>(<span>int</span> <span>x</span>)
+    <span>=&gt;</span> <span>new</span> <span>GeneratedEnumerable</span>(<span>x</span>);
+
+<span>class</span> <span>GeneratedEnumerable</span> : <span>IEnumerable</span>&lt;<span>string</span>&gt;
+{
+    <span>private</span> <span>int</span> <span>x</span>;
+    <span>public</span> <span>GeneratedEnumerable</span>(<span>int</span> <span>x</span>)
+        <span>=&gt;</span> <span>this</span>.<span>x</span> <span>=</span> <span>x</span>;
+
+    <span>public</span> <span>IEnumerator</span>&lt;<span>string</span>&gt; <span>GetEnumerator</span>()
+        <span>=&gt;</span> <span>new</span> <span>GeneratedEnumerator</span>(<span>x</span>);
+
+    <span><span>//</span> non-generic fallback</span>
+    IEnumerator IEnumerable.<span>GetEnumerator</span>()
+        <span>=&gt;</span> <span>GetEnumerator</span>();
+}
+
+<span>class</span> <span>GeneratedEnumerator</span> : <span>IEnumerator</span>&lt;<span>string</span>&gt;
+{
+    <span>private</span> <span>int</span> <span>x</span>, <span>i</span>;
+    <span>public</span> <span>GeneratedEnumerator</span>(<span>int</span> <span>x</span>)
+        <span>=&gt;</span> <span>this</span>.<span>x</span> <span>=</span> <span>x</span>;
+
+    <span>public</span> <span>string</span> <span>Current</span> { <span>get</span>; <span>private</span> <span>set</span>; }
+
+    <span><span>//</span> non-generic fallback</span>
+    object IEnumerator.Current =&gt; Current;
+
+    <span><span>//</span> if we had "finally" code, it would go here</span>
+    <span>public</span> <span>void</span> <span>Dispose</span>() { }
+
+    <span><span>//</span> our "advance" logic</span>
+    <span>public</span> <span>bool</span> <span>MoveNext</span>()
+    {
+        <span>if</span> (<span>i</span> <span>&lt;</span> <span>5</span>)
+        {
+            <span>Current</span> <span>=</span> <span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>;
+            <span>i</span><span>++</span>;
+            <span>return</span> <span>true</span>;
+        }
+        <span>else</span>
+        {
+            <span>return</span> <span>false</span>;
+        }
+    }
+
+    <span><span>//</span> this API is essentially deprecated and never used</span>
+    void IEnumerator.<span>Reset</span>() <span>=&gt;</span> <span>throw</span> <span>new</span> <span>NotSupportedException</span>();
+}</pre></div>
+<p>Let's tear this apart:</p>
+<ul>
+<li>firstly, we need <em>some object</em> to represent <code>IEnumerable&lt;T&gt;</code>, but we also need to understand that <code>IEnumerable&lt;T&gt;</code> and <code>IEnumerator&lt;T&gt;</code> (as returned from <code>GetEnumerator()</code>) are <em>different</em> APIs; in the <em>generated</em> version there is a lot of overlap and they can share an instance, but to help discuss it, I've kept the two concepts separate.</li>
+<li>when we call <code>SomeSource</code>, we create our <code>GeneratedEnumerable</code> which stores the state (<code>x</code>) that was passed to <code>SomeSource</code>, and exposes the required <code>IEnumerable&lt;T&gt;</code> API</li>
+<li>later (and it could be <em>much</em> later), when the caller iterates (<code>foreach</code>) the data, <code>GetEnumerator()</code> is invoked, which calls into our <code>GeneratedEnumerator</code> to act as the cursor over the data</li>
+<li>our <code>MoveNext()</code> logic implements the same <code>for</code> loop <em>conceptually</em>, but one step per call to <code>MoveNext()</code>; if there is more data, <code>Current</code> is assigned with the thing we would have passed to <code>yield return</code></li>
+<li>note that there is also a <code>yield break</code> C# keyword, which terminates iteration; this would essentially be <code>return false</code> in the generated expansion</li>
+<li>note that there are some nuanced differences in my hand-written version that the C# compiler needs to deal with; for example, what happens if I change <code>x</code> in my enumerator code (<code>MoveNext()</code>), and then <em>later</em> iterate the data a <em>second time</em> - what is the value of <code>x</code>? emphasis: I don't care about this nuance for this discussion!</li>
+</ul>
+<p>Hopefully this gives enough of a flavor to understand <code>foreach</code> and iterators (<code>yield</code>) - now let's get onto the more interesting bit: <code>async</code>.</p>
+<h2>Why do we need async iterators?</h2>
+<p>The above works great in a synchronous world, but a <em>lot</em> of .NET work is now favoring <code>async</code>/<code>await</code>, in particular to improve server scalability. The big problem in the above code is the <code>bool MoveNext()</code>. This is <em>explicitly synchronous</em>. If the thing it is doing takes some time, we'll be blocking a thread, and blocking a thread is increasingly anathema to us. In the context of our earlier "remote work queue" example, there might not be anything there for seconds, minutes, hours. We really don't want to block threads for that kind of time! The closest we can do without async iterators is to fetch the data synchronously, but buffered - for example:</p>
+<div><pre><span>async</span> <span>Task</span>&lt;<span>List</span>&lt;<span>string</span>&gt;&gt; <span>SomeSource</span>(<span>int</span> <span>x</span>) {...}</pre></div>
+<p>But this is <em>not the same semantics</em> - and is getting back into buffering. Assuming we don't want to fetch everything in one go, to get around this we'd eventually end up implementing some kind of "async batch loop" monstrosity that effectily re-implements <code>foreach</code> using manual ugly code, negating the reasons that <code>foreach</code> even exists. To address this, C# and the BCL have recently added support for async iterators, yay! The new APIs (which are available down to net461 and netstandard20 <a href="https://www.nuget.org/packages/Microsoft.Bcl.AsyncInterfaces" rel="nofollow">via NuGet</a>) are:</p>
+<div><pre><span>public</span> <span>interface</span> <span>IAsyncEnumerable</span>&lt;<span>out</span> <span>T</span>&gt;
+{
+    <span>IAsyncEnumerator</span>&lt;<span>T</span>&gt; <span>GetAsyncEnumerator</span>(<span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>);
+}
+<span>public</span> <span>interface</span> <span>IAsyncEnumerator</span>&lt;<span>out</span> <span>T</span>&gt; : <span>IAsyncDisposable</span>
+{
+    <span>T</span> <span>Current</span> { <span>get</span>; }
+    <span>ValueTask</span>&lt;<span>bool</span>&gt; <span>MoveNextAsync</span>();
+}
+<span>public</span> <span>interface</span> <span>IAsyncDisposable</span>
+{
+    <span>ValueTask</span> <span>DisposeAsync</span>();
+}</pre></div>
+<p>Let's look at our example again, this time: with added async; we'll look at the <em>consumer</em> first (the code doing the <code>foreach</code>), so for now, let's imagine that we have:</p>
+<div><pre><span>IAsyncEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSourceAsync</span>(<span>int</span> <span>x</span>)
+    <span>=&gt;</span> <span>throw</span> <span>new</span> <span>NotImplementedException</span>();</pre></div>
+<p>and focus on the loop; C# now has the <code>await foreach</code> concept, so we can do:</p>
+<div><pre><span>await</span> <span>foreach</span> (<span>var</span> <span>item</span> <span>in</span> <span>SomeSourceAsync</span>(42))
+{
+    <span>Console</span>.<span>WriteLine</span>(<span>item</span>);
+}</pre></div>
+<p>and the compiler interprets this as something similar to:</p>
+<div><pre><span>await</span> <span>using</span> (<span>var</span> <span>iter</span> <span>=</span> <span>SomeSourceAsync</span>(<span>42</span>).<span>GetAsyncEnumerator</span>())
+{
+    <span>while</span> (<span>await</span> <span>iter</span>.<span>MoveNextAsync</span>())
+    {
+        <span>var</span> <span>item</span> <span>=</span> <span>iter</span>.<span>Current</span>;
+        <span>Console</span>.<span>WriteLine</span>(<span>item</span>);
+    }
+}</pre></div>
+<p>(note that <code>await using</code> is similar to <code>using</code>, but <code>DisposeAsync()</code> is called and awaited, instead of <code>Dispose()</code> - even cleanup code can be asynchronous!)</p>
+<p>The key point here is that this is actually pretty similar to our sync version, just with added <code>await</code>. Ultimately, however, the moment we add <code>await</code> the entire body is ripped apart by the compiler and rewritten as an asynchronous state machine. That isn't the topic of this article, so I'm not even going to <em>try</em> and cover how <code>await</code> is implemented behind the scenes. For today "a miracle happens" will suffice for that. The observant might also be wondering "wait, but what about cancellation?" - don't worry, we'll get there!</p>
+<p>So what about our enumerator? Along with <code>await foreach</code>, we can <em>also</em> now write async iterators with <code>yield</code>; for example, we could do:</p>
+<div><pre><span>async</span> <span>IAsyncEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSourceAsync</span>(<span>int</span> <span>x</span>)
+{
+    <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>5</span>; <span>i</span><span>++</span>)
+    {
+        <span>await</span> <span>Task</span>.<span>Delay</span>(<span>100</span>); <span><span>//</span> simulate async something</span>
+        <span>yield</span> <span>return</span> <span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>;
+    }
+}</pre></div>
+<p>In real code, we could now be consuming data from a remote source asynchronously, and we have a <em>very</em> effective mechanism for expressing open sequences of <em>asynchronous</em> data. In particular, remember that the <code>await iter.MoveNextAsync()</code> <strong>might complete synchronously</strong>, so if data <em>is</em> available immediately, there is no context switch. We can imagine, for example, an iterator block that requests data from a remote server <em>in pages</em>, and <code>yield return</code> each record of the data in the current page (making it available immediately), only doing an <code>await</code> when it needs to fetch the next page.</p>
+<p>Behind the scenes, the compiler generates types to implement the <code>IAsyncEnumerable&lt;T&gt;</code> and <code>IAsyncEnumerator&lt;T&gt;</code> pieces, but this time they are <em>even more obtuse</em>, owing to the <code>async</code>/<code>await</code> restructuring. I <em>do not</em> intend to try and cover those here - it is my hope instead that we wave a hand and say "you know that expansion we wrote by hand earlier? like that, but with more async". However, there is a very important topic that we <em>have</em> overlooked, and that we should cover: cancellation.</p>
+<h2>But what about cancellation?</h2>
+<p>Most async APIs support cancellation via a <code>CancellationToken</code>, and this is no exception; look back up to <code>IAsyncEnumerable&lt;T&gt;</code> and you'll see that it can be passed into the <code>GetAsyncEnumerator()</code> method. But if we're not writing the loop by hand, how do we do this? This is achieved via <code>WithCancellation</code>, similarly do how <code>ConfigureAwait</code> can be used to configure <code>await</code> - and indeed, there's even a <code>ConfigureAwait</code> we can use too! For example, we could do (showing both config options in action here):</p>
+<div><pre><span>await</span> <span>foreach</span> (<span>var</span> <span>item</span> <span>in</span> <span>SomeSourceAsync</span>(42)
+    .WithCancellation(cancellationToken).ConfigureAwait(false))
+{
+    <span>Console</span>.<span>WriteLine</span>(<span>item</span>);
+}</pre></div>
+<p>which would be semantically equivalent to:</p>
+<div><pre><span>var</span> <span>iter</span> <span>=</span> <span>SomeSourceAsync</span>(<span>42</span>).<span>GetAsyncEnumerator</span>(<span>cancellationToken</span>);
+<span>await</span> <span>using</span> (iter.ConfigureAwait(false))
+{
+    <span>while</span> (<span>await</span> <span>iter</span>.<span>MoveNextAsync</span>().<span>ConfigureAwait</span>(<span>false</span>))
+    {
+        <span>var</span> <span>item</span> <span>=</span> <span>iter</span>.<span>Current</span>;
+        <span>Console</span>.<span>WriteLine</span>(<span>item</span>);
+    }
+}</pre></div>
+<p>(I've had to split the <code>iter</code> local out to illustrate that the <code>ConfigureAwait</code> applies to the <code>DisposeAsync()</code> too - via <code>await iter.DisposeAsync().ConfigureAwait(false)</code> in a <code>finally</code>)</p>
+<p>So; now we can pass a <code>CancellationToken</code> <em>into</em> our iterator... but - how can we use it? That's where things get <em>even more</em> fun! The <em>naive</em> way to do this would be to think along the lines of "I can't take a <code>CancellationToken</code> until <code>GetAsyncEnumerator</code> is called, so... perhaps I can create a type to hold the state until I get to that point, and create an iterator block on the <code>GetAsyncEnumerator</code> method" - something like:</p>
+<div><pre><span><span>//</span> this is unnecessary; do not copy this!</span>
+<span>IAsyncEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSourceAsync</span>(<span>int</span> <span>x</span>)
+    <span>=&gt;</span> <span>new</span> <span>SomeSourceEnumerable</span>(<span>x</span>);
+<span>class</span> <span>SomeSourceEnumerable</span> : <span>IAsyncEnumerable</span>&lt;<span>string</span>&gt;
+{
+    <span>private</span> <span>int</span> <span>x</span>;
+    <span>public</span> <span>SomeSourceEnumerable</span>(<span>int</span> <span>x</span>)
+        <span>=&gt;</span> <span>this</span>.<span>x</span> <span>=</span> <span>x</span>;
+
+    <span>public</span> <span>async</span> <span>IAsyncEnumerator</span>&lt;<span>string</span>&gt; <span>GetAsyncEnumerator</span>(
+        <span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>)
+    {
+        <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>5</span>; <span>i</span><span>++</span>)
+        {
+            <span>await</span> <span>Task</span>.<span>Delay</span>(<span>100</span>, <span>cancellationToken</span>); <span><span>//</span> simulate async something</span>
+            <span>yield</span> <span>return</span> <span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>;
+        }
+    }
+}</pre></div>
+<p>The above <em>works</em>. If a <code>CancellationToken</code> is passed in via <code>WithCancellation</code>, our iterator will be cancelled at the correct time - including during the <code>Task.Delay</code>; we could also check <code>IsCancellationRequested</code> or call <code>ThrowIfCancellationRequested()</code> at any point in our iterator block, and all the right things would happen. But; we're making life hard for ourselves - the compiler can <em>do this for us</em>, via <code>[EnumeratorCancellation]</code>. We could <em>also</em> just have:</p>
+<div><pre><span>async</span> <span>IAsyncEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSourceAsync</span>(<span>int</span> <span>x</span>,
+    [<span>EnumeratorCancellation</span>] <span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>)
+{
+    <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>5</span>; <span>i</span><span>++</span>)
+    {
+        <span>await</span> <span>Task</span>.<span>Delay</span>(<span>100</span>, <span>cancellationToken</span>); <span><span>//</span> simulate async something</span>
+        <span>yield</span> <span>return</span> <span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>;
+    }
+}</pre></div>
+<p>This works <em>similarly</em> to our approach above - our <code>cancellationToken</code> parameter makes the token from <code>GetAsyncEnumerator()</code> (via <code>WithCancellation</code>) available to our iterator block, and we haven't had to create any dummy types. There is one slight nuance, though... we've <em>changed the signature</em> of <code>SourceSourceAsync</code> by adding a parameter. The code we had above <em>still compiles</em> because the parameter is optional. But this prompts the question: what happens if I <em>passed one in</em>? For example, what are the differences between:</p>
+<div><pre><span><span>//</span> option A - no cancellation</span>
+<span>await</span> <span>foreach</span> (<span>var</span> <span>item</span> <span>in</span> <span>SomeSourceAsync</span>(42))
+
+<span><span>//</span> option B - cancellation via WithCancellation</span>
+await foreach (<span>var</span> <span>item</span> <span>in</span> <span>SomeSourceAsync</span>(42).WithCancellation(cancellationToken))
+
+<span><span>//</span> option C - cancellation via SomeSourceAsync</span>
+await foreach (<span>var</span> <span>item</span> <span>in</span> <span>SomeSourceAsync</span>(42, cancellationToken))
+
+<span><span>//</span> option D - cancellation via both</span>
+await foreach (<span>var</span> <span>item</span> <span>in</span> <span>SomeSourceAsync</span>(42, cancellationToken).WithCancellation(cancellationToken))
+
+<span><span>//</span> option E - cancellation via both with different tokens</span>
+await foreach (<span>var</span> <span>item</span> <span>in</span> <span>SomeSourceAsync</span>(42, tokenA).WithCancellation(tokenB))</pre></div>
+<p>The answer is that <em>the right thing happens</em>: it doesn't matter which API you use - if a cancellation token is provided, it will be respected. If you pass two <em>different</em> tokens, then when <em>either</em> token is cancelled, it will be considered cancelled. What happens is that the <em>original token passed via the parameter</em> is stored as a field on the generated enumerable type, and when <code>GetAsyncEnumerator</code> is called, the parameter to <code>GetAsyncEnumerator</code> and the field are inspected. If they are both genuine but different cancellable tokens, <code>CancellationTokenSource.CreateLinkedTokenSource</code> is used to create a combined token (you can think of <code>CreateLinkedTokenSource</code> as the cancellation version of <code>Task.WhenAny</code>); otherwise, if <em>either</em> is genuine and cancellable, it is used. The result is that when you write an async cancellable iterator, you don't need to worry too much about whether the caller used the API directly vs indirectly.</p>
+<p>You <em>might</em> be more concerned by the fact that we've changed the signature, however; in that case, a neat trick is to use two methods - one <em>without</em> the token that is for consumers, and one <em>with</em> the token for the actual implementation:</p>
+<div><pre><span>public</span> <span>IAsyncEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSourceAsync</span>(<span>int</span> <span>x</span>)
+    <span>=&gt;</span> <span>SomeSourceImplAsync</span>(<span>x</span>);
+
+<span>private</span> <span>async</span> <span>IAsyncEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSourceImplAsync</span>(<span>int</span> <span>x</span>,
+    [<span>EnumeratorCancellation</span>] <span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>)
+{
+    <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>5</span>; <span>i</span><span>++</span>)
+    {
+        <span>await</span> <span>Task</span>.<span>Delay</span>(<span>100</span>, <span>cancellationToken</span>); <span><span>//</span> simulate async something</span>
+        <span>yield</span> <span>return</span> <span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>;
+    }
+}</pre></div>
+<p>This would <em>seem</em> an ideal candidate for a "local function", but unfortunately <em>at the current time</em>, parameters on local functions are not allowed to be decorated with attributes. It is my hope that the language / compiler folks take pity on us, and allow us to do (in the future) something more like:</p>
+<div><pre><span>public</span> <span>IAsyncEnumerable</span>&lt;<span>string</span>&gt; <span>SomeSourceAsync</span>(<span>int</span> <span>x</span>)
+{
+    <span>return</span> <span>Impl</span>();
+
+    <span><span>//</span> this does not compile today</span>
+    <span>async</span> <span>IAsyncEnumerable</span><span>&lt;</span><span>string</span><span>&gt;</span> <span>Impl</span>(
+        [<span>EnumeratorCancellation</span>] <span>CancellationToken</span> <span>cancellationToken</span> <span>=</span> <span>default</span>)
+    {
+        <span>for</span> (<span>int</span> <span>i</span> <span>=</span> <span>0</span>; <span>i</span> <span>&lt;</span> <span>5</span>; <span>i</span><span>++</span>)
+        {
+            <span>await</span> <span>Task</span>.<span>Delay</span>(<span>100</span>, <span>cancellationToken</span>); <span><span>//</span> simulate async something</span>
+            <span>yield</span> <span>return</span> <span><span>$"</span>result from SomeSource, x={<span>x</span>}, result {<span>i</span>}<span>"</span></span>;
+        }
+    }
+}</pre></div>
+<p>or the equivalent using <code>static</code> local functions, which is <em>usually</em> my preference to avoid any surprises in how capture works. The good news is that this works in the preview language versions, but that is not a guarantee that it will "land".</p>
+<h2>Summary</h2>
+<p>So; that's how you can implement and use async iterators in C# now. We've looked at both the consumer and producer versions of iterators, for both synchronous and asynchronous code paths, and looked at various ways of accessing cancellation of asynchronous iterators. There is a <em>lot</em> going on here, but: hopefully it is useful and meaningful.</p>
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

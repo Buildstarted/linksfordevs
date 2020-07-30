@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Lazily resolving services to fix circular dependencies in .NET Core - Thomas Levesque&#x27;s .NET blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Lazily resolving services to fix circular dependencies in .NET Core - Thomas Levesque&#x27;s .NET blog - linksfor.dev(s)"/>
+    <meta property="og:description" content="The problem with circular dependencies When building an application, good design dictates that you should avoid circular dependencies between your services. A circular dependency is when some components depend on each other, directly or indirectly, e.g. A depends on B which depends on C which depends on A: It is generally agreed that this should &#x2026; Continue reading Lazily resolving services to fix circular dependencies in .NET Core &#x2192;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://thomaslevesque.com/2020/03/18/lazily-resolving-services-to-fix-circular-dependencies-in-net-core/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Lazily resolving services to fix circular dependencies in .NET Core - Thomas Levesque&#x27;s .NET blog</title>
+<div class="readable">
+        <h1>Lazily resolving services to fix circular dependencies in .NET Core - Thomas Levesque&#x27;s .NET blog</h1>
+            <div>Reading time: 5-7 minutes</div>
+        <div>Posted here: 19 Mar 2020</div>
+        <p><a href="https://thomaslevesque.com/2020/03/18/lazily-resolving-services-to-fix-circular-dependencies-in-net-core/">https://thomaslevesque.com/2020/03/18/lazily-resolving-services-to-fix-circular-dependencies-in-net-core/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<h2 id="the-problem-with-circular-dependencies">The problem with circular dependencies</h2>
+<p>When building an application, good design dictates that you should avoid circular dependencies between your services. A circular dependency is when some components depend on each other, directly or indirectly, e.g. <code>A</code> depends on <code>B</code> which depends on <code>C</code> which depends on <code>A</code>:</p>
+<p><img src="https://thomaslevesque.com/files/2020/03/circular-dependency.png" alt="Circular dependency"></p>
+<p>It is generally agreed that this should be avoided; I won’t go into the details of the conceptual and theoretical reasons, because there are plenty of resources about it on the web.</p>
+<p>But circular dependencies also have a very concrete effect. If you accidentally introduce a circular dependency in an NET Core app that uses dependency injection, you will know immediately, because the resolution of a component involved in the dependency cycle will fail. For instance, if you have these components:</p>
+<ul>
+<li><code>A</code>, which implements interface <code>IA</code> and depends on <code>IB</code></li>
+<li><code>B</code>, which implements interface <code>IB</code> and depends on <code>IC</code></li>
+<li><code>C</code>, which implements interface <code>IC</code> and depends on <code>IA</code></li>
+</ul>
+<p>When you try to resolve <code>IA</code>, the dependency injection container will try to create an instance of <code>A</code>; to do that, it will need to resolve <code>IB</code>, so it will try to create an instance of <code>B</code>; to do that, it will need to resolve <code>IC</code>, so it will try to create an instance of <code>C</code>; and to do that, it will need to resolve <code>IA</code>… which was already being resolved. Here you have it: circular dependency. The resolution of <code>IA</code> will cannot complete; in fact, .NET Core’s built-in IoC container detects this, and throws a helpful exception:</p>
+<blockquote>
+<p><strong>System.InvalidOperationException</strong>: A circular dependency was detected for the service of type ‘Demo.IA’.</p>
+</blockquote>
+<p>So, clearly, this situation should be avoided.</p>
+<h2 id="workaround">Workaround</h2>
+<p>However, when a real-world app reaches a certain level of complexity, it can sometimes be difficult to avoid. One day, you innocently add a dependency to a service, and things blow up in your face. So you’re faced with a choice: refactor a significant part of your app to avoid the dependency cycle, or "cheat".</p>
+<p>While, ideally, you would opt for a refactoring, it’s not always practical. Because of deadlines, you might not have the time to refactor your code and thoroughly test it for regressions.</p>
+<p>Fortunately, if you’re willing to incur a bit of technical debt, there’s a simple workaround that works in most cases (what I referred to as "cheating" earlier). The trick is to resolve one of the dependencies in the cycle lazily, i.e. resolve it at the last possible moment, when you actually need to use it.</p>
+<p>One way to do that is to inject the <code>IServiceProvider</code> into your class, and use <code>services.GetRequiredService&lt;T&gt;()</code> when you need to use <code>T</code>. For instance, the <code>C</code> class I mentioned earlier might initially look like this:</p>
+<div><div id="highlighter_709479"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p></td><td><div><p><code>class</code> <code>C : IC</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>private</code> <code>readonly</code> <code>IA _a;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>C(IA a)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>_a = a;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>void</code> <code>Bar()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>...</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>_a.Foo()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>...</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+<p>To avoid the dependency cycle, you could rewrite it like this:</p>
+<div><div id="highlighter_664674"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p><p>17</p></td><td><div><p><code>class</code> <code>C : IC</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>private</code> <code>readonly</code> <code>IServiceProvider _services;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>C(IServiceProvider services)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>_services = services;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>void</code> <code>Bar()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>...</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>var</code> <code>a = _services.GetRequiredService&lt;IA&gt;();</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>a.Foo();</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>...</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+<p>Because it’s no longer necessary to resolve <code>IA</code> while <code>C</code> is being constructed, the cycle is broken (at least during construction), and the problem fixed.</p>
+<p>However, I don’t really like this approach, because it smells of the <a href="https://en.wikipedia.org/wiki/Service_locator_pattern">Service Locator pattern</a>, which is a known anti-pattern. I see two main issues with it:</p>
+<ul>
+<li>It makes your class depend explicitly on the service provider. This is bad, because your class shouldn’t have to know anything about the injection dependency mechanism being used; after all, the app could be using <a href="https://blog.ploeh.dk/2014/06/10/pure-di/">Pure DI</a>, i.e. not use an IoC container at all.</li>
+<li>It hides the dependencies of your class. Instead of having them all clearly declared at the constructor level, you now have just an <code>IServiceProvider</code> which doesn’t tell you anything about the actual dependencies. You have to scan the code of the class to find them.</li>
+</ul>
+<h2 id="a-cleaner-workaround">A cleaner workaround</h2>
+<p>The approach I actually use in this situation takes advantage of the <code>Lazy&lt;T&gt;</code> class. You will need the following extension method and class:</p>
+<div><div id="highlighter_405120"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p></td><td><div><p><code>public</code> <code>static</code> <code>IServiceCollection AddLazyResolution(</code><code>this</code> <code>IServiceCollection services)</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>return</code> <code>services.AddTransient(</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>typeof</code><code>(Lazy&lt;&gt;),</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>typeof</code><code>(LazilyResolved&lt;&gt;));</code></p><p><code>}</code></p><p><code>private</code> <code>class</code> <code>LazilyResolved&lt;T&gt; : Lazy&lt;T&gt;</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>LazilyResolved(IServiceProvider serviceProvider)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>: </code><code>base</code><code>(serviceProvider.GetRequiredService&lt;T&gt;)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+<p>Call this new method on your service collection during service registration:</p>
+<div><div id="highlighter_683092"><table><tbody><tr><td><p>1</p></td><td><div><p><code>services.AddLazyResolution();</code></p></div></td></tr></tbody></table></div></div>
+<p>This enables the resolution of a <code>Lazy&lt;T&gt;</code> which will lazily resolve a <code>T</code> from the service provider.</p>
+<p>In the class that depends on <code>IA</code>, inject <code>Lazy&lt;IA&gt;</code> instead. When you need to use <code>IA</code>, just access the lazy’s value:</p>
+<div><div id="highlighter_967762"><table><tbody><tr><td><p>1</p><p>2</p><p>3</p><p>4</p><p>5</p><p>6</p><p>7</p><p>8</p><p>9</p><p>10</p><p>11</p><p>12</p><p>13</p><p>14</p><p>15</p><p>16</p></td><td><div><p><code>class</code> <code>C : IC</code></p><p><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>private</code> <code>readonly</code> <code>Lazy&lt;IA&gt; _a;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>C(Lazy&lt;IA&gt; a)</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>_a = a;</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>public</code> <code>void</code> <code>Bar()</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>{</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>...</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>_a.Value.Foo();</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code><code>...</code></p><p><code>&nbsp;&nbsp;&nbsp;&nbsp;</code><code>}</code></p><p><code>}</code></p></div></td></tr></tbody></table></div></div>
+<p><strong>Note:</strong> DO NOT access the value in the constructor, just store the <code>Lazy</code> itself. Accessing the value in the constructor would eagerly resolve <code>IA</code>, which would cause the same problem we were trying to solve.</p>
+<p>This solution isn’t perfect, but it solves the initial problem without too much hassle, and the dependencies are still clearly declared in the constructor.</p>
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

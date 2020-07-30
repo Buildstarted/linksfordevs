@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Creating a Multi-Tenant ASP.NET Core Web API with Dapper and SQL RLS - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Creating a Multi-Tenant ASP.NET Core Web API with Dapper and SQL RLS - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post we&#x27;re going to leverage SQL Server Row Level Security (RLS), Dapper and ASP.NET Core to create a multi-tenant database with a multi-tenant web API"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.carlrippon.com/creating-an-aspnetcore-multi-tenant-web-api-with-dapper-and-sql-rls/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Creating a Multi-Tenant ASP.NET Core Web API with Dapper and SQL RLS</title>
+<div class="readable">
+        <h1>Creating a Multi-Tenant ASP.NET Core Web API with Dapper and SQL RLS</h1>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 01 Jul 2020</div>
+        <p><a href="https://www.carlrippon.com/creating-an-aspnetcore-multi-tenant-web-api-with-dapper-and-sql-rls/">https://www.carlrippon.com/creating-an-aspnetcore-multi-tenant-web-api-with-dapper-and-sql-rls/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article><header><p>June 30, 2020</p><p><span>dotnet</span></p></header><section><p>In this post, we are going to create a multi-tenant ASP.NET Core web API by leveraging <a href="https://github.com/StackExchange/Dapper">Dapper</a> and SQL Server <a href="https://docs.microsoft.com/en-us/sql/relational-databases/security/row-level-security?view=sql-server-ver15">Row Level Security (RLS)</a>.</p>
+<h2>Creating the database</h2>
+<p>First, let’s create a database containing a couple of tables. One table will store our tenants, and one will store some real data (products in this example). Here are the SQL scripts that create the database and tables:</p>
+<div data-language="sql"><pre><code><span>CREATE</span> <span>DATABASE</span> ProductDb
+GO
+<span>USE</span> ProductDb
+GO
+<span>CREATE</span> <span>TABLE</span> dbo<span>.</span>Tenant
+<span>(</span>
+  TenantId uniqueidentifier <span>NOT</span> <span>NULL</span><span>,</span>
+  APIKey uniqueidentifier <span>NOT</span> <span>NULL</span><span>,</span>
+  TenantName nvarchar<span>(</span><span>200</span><span>)</span> <span>NOT</span> <span>NULL</span><span>,</span>
+  <span>CONSTRAINT</span> PK_Tenant <span>PRIMARY</span> <span>KEY</span> <span>CLUSTERED</span> <span>(</span>TenantId <span>ASC</span><span>)</span>
+<span>)</span>
+GO
+<span>CREATE</span> <span>TABLE</span> dbo<span>.</span>Product
+<span>(</span>
+  ProductID uniqueidentifier <span>NOT</span> <span>NULL</span><span>,</span>
+  TenantId uniqueidentifier <span>NOT</span> <span>NULL</span><span>,</span>
+  ProductName nvarchar<span>(</span><span>50</span><span>)</span> <span>NOT</span> <span>NULL</span><span>,</span>
+  UnitPrice money <span>NULL</span><span>,</span>
+  UnitsInStock <span>smallint</span> <span>NULL</span><span>,</span>
+  UnitsOnOrder <span>smallint</span> <span>NULL</span><span>,</span>
+  ReorderLevel <span>smallint</span> <span>NULL</span><span>,</span>
+  Discontinued <span>bit</span> <span>NOT</span> <span>NULL</span><span>,</span>
+  <span>CONSTRAINT</span> PK_Product <span>PRIMARY</span> <span>KEY</span> <span>CLUSTERED</span> <span>(</span>ProductID <span>ASC</span><span>)</span><span>,</span>
+  <span>CONSTRAINT</span> FK_Product_Tenant <span>FOREIGN</span> <span>KEY</span> <span>(</span>TenantId<span>)</span> <span>REFERENCES</span> dbo<span>.</span>Tenant<span>(</span>TenantId<span>)</span>
+<span>)</span>
+GO</code></pre></div>
+<p>The <code>Tenant</code> table contains an <code>APIKey</code> field, which we will use later to map an HTTP request to a tenant.</p>
+<p>Data in the <code>Product</code> table is allocated to a tenant using the <code>TenantId</code> field.</p>
+<p>Let’s add some test data into the tables:</p>
+<div data-language="sql"><pre><code><span>INSERT</span> <span>INTO</span> dbo<span>.</span>Tenant<span>(</span>TenantId<span>,</span> APIKey<span>,</span> TenantName<span>)</span>
+<span>VALUES</span><span>(</span><span>'6CB8DE43-2043-4415-B267-7FFFA2EB5AC0'</span><span>,</span> <span>'98D92BF3-0620-4CC4-9C7D-78BC94DD4C55'</span><span>,</span><span>'tenant 1'</span><span>)</span>
+<span>INSERT</span> <span>INTO</span> dbo<span>.</span>Tenant<span>(</span>TenantId<span>,</span> APIKey<span>,</span> TenantName<span>)</span>
+<span>VALUES</span><span>(</span><span>'25EA09EF-E24E-494B-911F-F63CE9ED8458'</span><span>,</span> <span>'081FF61A-E688-4DC2-84E7-6CC8FFED4D69'</span><span>,</span><span>'tenant 2'</span><span>)</span>
+GO
+
+<span>INSERT</span> dbo<span>.</span>Product<span>(</span>ProductID<span>,</span> TenantId<span>,</span> ProductName<span>,</span> UnitPrice<span>,</span> UnitsInStock<span>,</span> UnitsOnOrder<span>,</span> ReorderLevel<span>,</span> Discontinued<span>)</span>
+<span>VALUES</span> <span>(</span><span>'E897FF55-8F3D-4154-B582-8D37D116347F'</span><span>,</span> <span>'6CB8DE43-2043-4415-B267-7FFFA2EB5AC0'</span><span>,</span> N<span>'Chai'</span><span>,</span> <span>18.0000</span><span>,</span> <span>39</span><span>,</span> <span>0</span><span>,</span> <span>10</span><span>,</span> <span>0</span><span>)</span>
+GO
+<span>INSERT</span> dbo<span>.</span>Product<span>(</span>ProductID<span>,</span> TenantId<span>,</span> ProductName<span>,</span> UnitPrice<span>,</span> UnitsInStock<span>,</span> UnitsOnOrder<span>,</span> ReorderLevel<span>,</span> Discontinued<span>)</span>
+<span>VALUES</span> <span>(</span><span>'F5506F2A-5148-44FE-9225-AC75108AA30F'</span><span>,</span> <span>'6CB8DE43-2043-4415-B267-7FFFA2EB5AC0'</span><span>,</span> N<span>'Chang'</span><span>,</span> <span>19.0000</span><span>,</span> <span>17</span><span>,</span> <span>40</span><span>,</span> <span>25</span><span>,</span> <span>0</span><span>)</span>
+GO
+<span>INSERT</span> dbo<span>.</span>Product<span>(</span>ProductID<span>,</span> TenantId<span>,</span> ProductName<span>,</span> UnitPrice<span>,</span> UnitsInStock<span>,</span> UnitsOnOrder<span>,</span> ReorderLevel<span>,</span> Discontinued<span>)</span>
+<span>VALUES</span> <span>(</span><span>'775EDB92-32BE-4D46-ABBB-921BC1860514'</span><span>,</span> <span>'6CB8DE43-2043-4415-B267-7FFFA2EB5AC0'</span><span>,</span> N<span>'Aniseed Syrup'</span><span>,</span> <span>10.0000</span><span>,</span> <span>13</span><span>,</span> <span>70</span><span>,</span> <span>25</span><span>,</span> <span>0</span><span>)</span>
+GO
+<span>INSERT</span> dbo<span>.</span>Product<span>(</span>ProductID<span>,</span> TenantId<span>,</span> ProductName<span>,</span> UnitPrice<span>,</span> UnitsInStock<span>,</span> UnitsOnOrder<span>,</span> ReorderLevel<span>,</span> Discontinued<span>)</span>
+<span>VALUES</span> <span>(</span><span>'ED3D0EE0-3D02-460A-9659-58C34CCC663F'</span><span>,</span> <span>'25EA09EF-E24E-494B-911F-F63CE9ED8458'</span><span>,</span> N<span>'Chang'</span><span>,</span> <span>16.0000</span><span>,</span> <span>3</span><span>,</span> <span>12</span><span>,</span> <span>13</span><span>,</span> <span>0</span><span>)</span>
+GO
+<span>INSERT</span> dbo<span>.</span>Product<span>(</span>ProductID<span>,</span> TenantId<span>,</span> ProductName<span>,</span> UnitPrice<span>,</span> UnitsInStock<span>,</span> UnitsOnOrder<span>,</span> ReorderLevel<span>,</span> Discontinued<span>)</span>
+<span>VALUES</span> <span>(</span><span>'CED038B1-DF1C-4111-9E48-E386A1A7063A'</span><span>,</span> <span>'25EA09EF-E24E-494B-911F-F63CE9ED8458'</span><span>,</span> N<span>'Pavlova'</span><span>,</span> <span>17.4500</span><span>,</span> <span>29</span><span>,</span> <span>0</span><span>,</span> <span>10</span><span>,</span> <span>0</span><span>)</span>
+GO</code></pre></div>
+<p>The database has two tenants - one with three products and the other with two products.</p>
+<p>Before moving on to RLS, let’s create a <em>super user</em> that will have access to data in all the tenants (this is useful for debugging). We’ll also create a <em>normal user</em> that our web API will use to access data:</p>
+<div data-language="sql"><pre><code><span>CREATE</span> LOGIN superuserlogin <span>WITH</span> PASSWORD <span>=</span> <span>'p@ssw0rd'</span>
+GO
+<span>CREATE</span> <span>USER</span> superuser <span>FOR</span> LOGIN <span>[</span>superuserlogin<span>]</span>
+GO
+<span>EXEC</span> sp_addrolemember N<span>'db_owner'</span><span>,</span> N<span>'superuser'</span>
+GO
+<span>CREATE</span> LOGIN <span>[</span>normaluserlogin<span>]</span> <span>WITH</span> PASSWORD <span>=</span> <span>'p@ssw0rd'</span>
+GO
+<span>CREATE</span> <span>USER</span> <span>[</span>normaluser<span>]</span> <span>FOR</span> LOGIN <span>[</span>normaluserlogin<span>]</span>
+GO
+<span>EXEC</span> sp_addrolemember N<span>'db_datareader'</span><span>,</span> N<span>'normaluser'</span>
+<span>EXEC</span> sp_addrolemember N<span>'db_datawriter'</span><span>,</span> N<span>'normaluser'</span>
+GO</code></pre></div>
+<h2>Creating the row-level security</h2>
+<p>SQL Server RLS allows predicates to be put on a table. SQL Server then automatically applies the RLS predicate when the table is queried.</p>
+<p><span>
+      <a href="https://www.carlrippon.com/static/0d07625690dab1c7ee21ab772cd2d9f4/8024e/rls.png" target="_blank" rel="noopener">
+    <span></span>
+  <img alt="RLS" title="RLS" src="https://www.carlrippon.com/static/0d07625690dab1c7ee21ab772cd2d9f4/799d3/rls.png" srcset="/static/0d07625690dab1c7ee21ab772cd2d9f4/00d96/rls.png 148w,
+/static/0d07625690dab1c7ee21ab772cd2d9f4/0b23c/rls.png 295w,
+/static/0d07625690dab1c7ee21ab772cd2d9f4/799d3/rls.png 590w,
+/static/0d07625690dab1c7ee21ab772cd2d9f4/2a3d6/rls.png 885w,
+/static/0d07625690dab1c7ee21ab772cd2d9f4/8024e/rls.png 1104w" sizes="(max-width: 590px) 100vw, 590px" loading="lazy">
+  </a>
+    </span></p>
+<p>We are going to use a RLS predicate so that a query returns data from a specified tenant. Here’s the SQL script for the predicate:</p>
+<div data-language="sql"><pre><code><span>CREATE</span> <span>FUNCTION</span> dbo<span>.</span>TenantAccessPredicate <span>(</span><span>@TenantId</span> uniqueidentifier<span>)</span>
+    <span>RETURNS</span> <span>TABLE</span>
+    <span>WITH</span> SCHEMABINDING
+<span>AS</span>
+    <span>RETURN</span> <span>SELECT</span> <span>1</span> <span>AS</span> TenantAccessPredicateResult
+  <span>WHERE</span> <span>(</span><span>@TenantId</span> <span>=</span> CAST<span>(</span>SESSION_CONTEXT<span>(</span>N<span>'TenantId'</span><span>)</span> <span>AS</span> uniqueidentifier<span>)</span><span>)</span>
+      <span>OR</span>
+      <span>(</span>DATABASE_PRINCIPAL_ID<span>(</span><span>)</span> <span>=</span> DATABASE_PRINCIPAL_ID<span>(</span><span>'superuser'</span><span>)</span><span>)</span>
+GO</code></pre></div>
+<p>The <code>Product</code> table will eventually use this predicate on each row during a query, passing in the tenant id.</p>
+<p><code>SESSION_CONTEXT</code> is a key-value store for a SQL connection. We will eventually put the user’s tenant id into <code>SESSION_CONTEXT('TenantId')</code> when the web API handles an HTTP request.</p>
+<p>The predicate returns <code>1</code> if the tenant id passed in matches the one in the session context. The predicate also returns <code>1</code> if the user is a super user. The super user is useful for debugging because it gives access to all the data.</p>
+<p>Now we can bind the predicate to the <code>Product</code> table. The <code>FILTER</code> predicate ensures we only read data for a given tenant and the <code>BLOCK</code> predicate ensures we only write data for a given tenant:</p>
+<div data-language="sql"><pre><code><span>CREATE</span> SECURITY POLICY dbo<span>.</span>TenantAccessPolicy
+<span>ADD</span> FILTER PREDICATE dbo<span>.</span>TenantAccessPredicate<span>(</span>TenantId<span>)</span> <span>ON</span> dbo<span>.</span>Product<span>,</span>
+<span>ADD</span> BLOCK PREDICATE dbo<span>.</span>TenantAccessPredicate<span>(</span>TenantId<span>)</span> <span>ON</span> dbo<span>.</span>Product
+GO</code></pre></div>
+<p>So, let’s give this a quick test, connecting as <code>normaluser</code>. First we’ll use tenant 1:</p>
+<div data-language="sql"><pre><code><span>EXEC</span> sp_set_session_context <span>@key</span><span>=</span>N<span>'TenantId'</span><span>,</span> <span>@value</span><span>=</span><span>'6CB8DE43-2043-4415-B267-7FFFA2EB5AC0'</span>
+GO
+<span>SELECT</span> <span>*</span> <span>FROM</span> dbo<span>.</span>Product
+GO</code></pre></div>
+<p><span>
+      <a href="https://www.carlrippon.com/static/93f7dede3c469c565ff1058794e179e3/aa600/tenant1data.png" target="_blank" rel="noopener">
+    <span></span>
+  <img alt="Tenant 1 data" title="Tenant 1 data" src="https://www.carlrippon.com/static/93f7dede3c469c565ff1058794e179e3/799d3/tenant1data.png" srcset="/static/93f7dede3c469c565ff1058794e179e3/00d96/tenant1data.png 148w,
+/static/93f7dede3c469c565ff1058794e179e3/0b23c/tenant1data.png 295w,
+/static/93f7dede3c469c565ff1058794e179e3/799d3/tenant1data.png 590w,
+/static/93f7dede3c469c565ff1058794e179e3/2a3d6/tenant1data.png 885w,
+/static/93f7dede3c469c565ff1058794e179e3/ae92f/tenant1data.png 1180w,
+/static/93f7dede3c469c565ff1058794e179e3/aa600/tenant1data.png 1222w" sizes="(max-width: 590px) 100vw, 590px" loading="lazy">
+  </a>
+    </span></p>
+<p>Now let’s try tenant 2:</p>
+<div data-language="sql"><pre><code><span>EXEC</span> sp_set_session_context <span>@key</span><span>=</span>N<span>'TenantId'</span><span>,</span> <span>@value</span><span>=</span><span>'25EA09EF-E24E-494B-911F-F63CE9ED8458'</span>
+GO
+<span>SELECT</span> <span>*</span> <span>FROM</span> dbo<span>.</span>Product
+GO</code></pre></div>
+<p><span>
+      <a href="https://www.carlrippon.com/static/a1b23ff1f3f089712c0eaee4aa622efa/e7796/tenant2data.png" target="_blank" rel="noopener">
+    <span></span>
+  <img alt="Tenant 2 data" title="Tenant 2 data" src="https://www.carlrippon.com/static/a1b23ff1f3f089712c0eaee4aa622efa/799d3/tenant2data.png" srcset="/static/a1b23ff1f3f089712c0eaee4aa622efa/00d96/tenant2data.png 148w,
+/static/a1b23ff1f3f089712c0eaee4aa622efa/0b23c/tenant2data.png 295w,
+/static/a1b23ff1f3f089712c0eaee4aa622efa/799d3/tenant2data.png 590w,
+/static/a1b23ff1f3f089712c0eaee4aa622efa/2a3d6/tenant2data.png 885w,
+/static/a1b23ff1f3f089712c0eaee4aa622efa/ae92f/tenant2data.png 1180w,
+/static/a1b23ff1f3f089712c0eaee4aa622efa/e7796/tenant2data.png 1207w" sizes="(max-width: 590px) 100vw, 590px" loading="lazy">
+  </a>
+    </span></p>
+<p>We can see that the same SQL query gives data for the tenant specified in the connection context. Neat!</p>
+<h2>Creating the ASP.NET Core web API</h2>
+<p>The web API will be deliberately simple, focusing on implementing key parts for multi-tenancy.</p>
+<p>Here’s an overview of how a request will be handled:</p>
+<p><span>
+      <a href="https://www.carlrippon.com/static/990a48ea635a02829316a2dfba5da95b/9fc4b/pipeline.png" target="_blank" rel="noopener">
+    <span></span>
+  <img alt="Pipeline" title="Pipeline" src="https://www.carlrippon.com/static/990a48ea635a02829316a2dfba5da95b/799d3/pipeline.png" srcset="/static/990a48ea635a02829316a2dfba5da95b/00d96/pipeline.png 148w,
+/static/990a48ea635a02829316a2dfba5da95b/0b23c/pipeline.png 295w,
+/static/990a48ea635a02829316a2dfba5da95b/799d3/pipeline.png 590w,
+/static/990a48ea635a02829316a2dfba5da95b/2a3d6/pipeline.png 885w,
+/static/990a48ea635a02829316a2dfba5da95b/ae92f/pipeline.png 1180w,
+/static/990a48ea635a02829316a2dfba5da95b/9fc4b/pipeline.png 2159w" sizes="(max-width: 590px) 100vw, 590px" loading="lazy">
+  </a>
+    </span></p>
+<ul>
+<li>The request will have an API key in its HTTP header.</li>
+<li>Custom ASP.NET Core middleware will pull the API key out of the HTTP request and create a SQL connection with <code>TenantId</code> set in its context.</li>
+<li>The API controller will use the connection that the middleware opened.</li>
+<li>SQL Server RLS will kick in and only give data for the relevant tenant.</li>
+</ul>
+<p>Before we write any code, we need to add dependencies for <code>Dapper</code> and <code>System.Data.SqlClient</code>.</p>
+<h3>Creating tenant middleware</h3>
+<p>The tenant middleware is a key part of the web API. So, let’s start with this:</p>
+<div data-language="csharp"><pre><code><span>public</span> <span>class</span> <span>TenantMiddleware</span>
+<span>{</span>
+  <span>private</span> <span>readonly</span> <span>RequestDelegate</span> next<span>;</span>
+
+  <span>public</span> <span>TenantMiddleware</span><span>(</span><span>RequestDelegate</span> next<span>)</span>
+  <span>{</span>
+    <span>this</span><span>.</span>next <span>=</span> next<span>;</span>
+  <span>}</span>
+
+  <span>public</span> <span>async</span> <span>Task</span> <span>Invoke</span><span>(</span><span>HttpContext</span> context<span>,</span> <span>IConfiguration</span> configuration<span>)</span>
+  <span>{</span>
+    context<span>.</span>Items<span>[</span><span>"TenantConnection"</span><span>]</span> <span>=</span> <span>null</span><span>;</span>
+    context<span>.</span>Items<span>[</span><span>"Tenant"</span><span>]</span> <span>=</span> <span>null</span><span>;</span>
+    <span>var</span> apiKey <span>=</span> context<span>.</span>Request<span>.</span>Headers<span>[</span><span>"X-API-Key"</span><span>]</span><span>.</span><span>FirstOrDefault</span><span>(</span><span>)</span><span>;</span>
+    <span>if</span> <span>(</span><span>string</span><span>.</span><span>IsNullOrEmpty</span><span>(</span>apiKey<span>)</span><span>)</span>
+    <span>{</span>
+      <span>return</span><span>;</span>
+    <span>}</span>
+    <span>Guid</span> apiKeyGuid<span>;</span>
+    <span>if</span> <span>(</span><span>!</span>Guid<span>.</span><span>TryParse</span><span>(</span>apiKey<span>,</span> <span>out</span> apiKeyGuid<span>)</span><span>)</span>
+    <span>{</span>
+      <span>return</span><span>;</span>
+    <span>}</span>
+    <span>using</span> <span>(</span><span>var</span> connection <span>=</span> <span>new</span> <span>SqlConnection</span><span>(</span>configuration<span>[</span><span>"ConnectionStrings:DefaultConnection"</span><span>]</span><span>)</span><span>)</span>
+    <span>{</span>
+      <span>await</span> connection<span>.</span><span>OpenAsync</span><span>(</span><span>)</span><span>;</span>
+      <span>var</span> tenant <span>=</span> <span>await</span> <span>SetTenant</span><span>(</span>connection<span>,</span> apiKeyGuid<span>)</span><span>;</span>
+      context<span>.</span>Items<span>[</span><span>"TenantConnection"</span><span>]</span> <span>=</span> connection<span>;</span>
+      context<span>.</span>Items<span>[</span><span>"Tenant"</span><span>]</span> <span>=</span> tenant<span>;</span>
+      <span>await</span> next<span>.</span><span>Invoke</span><span>(</span>context<span>)</span><span>;</span>
+    <span>}</span>
+  <span>}</span>
+
+  <span>private</span> <span>async</span> Task<span>&lt;</span>Tenant<span>&gt;</span> <span>SetTenant</span><span>(</span><span>SqlConnection</span> connection<span>,</span> <span>Guid</span> apiKey<span>)</span>
+  <span>{</span>
+    <span>var</span> tenant <span>=</span> <span>await</span> connection<span>.</span><span><span>QueryFirstOrDefaultAsync</span><span>&lt;</span><span>Tenant</span><span>&gt;</span></span><span>(</span><span>"SELECT * FROM Tenant WHERE APIKey = @APIKey"</span><span>,</span> <span>new</span> <span>{</span> APIKey <span>=</span> apiKey <span>}</span><span>)</span><span>;</span>
+    <span>await</span> connection<span>.</span><span>ExecuteAsync</span><span>(</span><span>"EXEC dbo.sp_set_session_context @key = N'TenantId', @value = @value"</span><span>,</span> <span>new</span> <span>{</span> <span>value</span> <span>=</span> tenant<span>.</span>TenantId <span>}</span><span>)</span><span>;</span>
+    <span>return</span> tenant<span>;</span>
+  <span>}</span>
+<span>}</span>
+
+<span>public</span> <span>static</span> <span>class</span> <span>TenantMiddlewareExtension</span>
+<span>{</span>
+  <span>public</span> <span>static</span> <span>IApplicationBuilder</span> <span>UseTenant</span><span>(</span><span>this</span> <span>IApplicationBuilder</span> app<span>)</span>
+  <span>{</span>
+    app<span>.</span><span><span>UseMiddleware</span><span>&lt;</span><span>TenantMiddleware</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    <span>return</span> app<span>;</span>
+  <span>}</span>
+<span>}</span></code></pre></div>
+<p>Here are the key points for this middleware:</p>
+<ul>
+<li>If the middleware finds an API key in the request, it opens a SQL connection.</li>
+<li>Immediately after opening the connection, a query is executed to set the tenant id in the connection context.</li>
+<li>The connection and the tenant objects are then put inside the HTTP context. This is how the API controller will gain access to these.</li>
+<li>The next middleware in the request pipeline is invoked while the connection is still open.</li>
+</ul>
+<p>We need to register this middleware in the <code>Startup</code> class. The middleware needs to come before the API controller in the request pipeline.</p>
+<div data-language="csharp"><pre><code><span>public</span> <span>void</span> <span>Configure</span><span>(</span><span>IApplicationBuilder</span> app<span>,</span> <span>IWebHostEnvironment</span> env<span>)</span>
+<span>{</span>
+<span>    app<span>.</span><span>UseTenant</span><span>(</span><span>)</span><span>;</span></span>    <span>.</span><span>.</span><span>.</span>
+    app<span>.</span><span>UseEndpoints</span><span>(</span>endpoints <span>=&gt;</span>
+    <span>{</span>
+        endpoints<span>.</span><span>MapControllers</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span><span>)</span><span>;</span>
+<span>}</span></code></pre></div>
+<p>The middleware needs access to HTTP context, so, we need to add that service in the <code>Startup</code> class:</p>
+<div data-language="csharp"><pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+<span>  services<span>.</span><span><span>AddSingleton</span><span>&lt;</span><span>IHttpContextAccessor</span><span>,</span> <span>HttpContextAccessor</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span></span>  <span>.</span><span>.</span><span>.</span>
+<span>}</span></code></pre></div>
+<h3>Creating models</h3>
+<p>We need a couple of simple classes to hold the data:</p>
+<div data-language="csharp"><pre><code><span>public</span> <span>class</span> <span>Tenant</span>
+<span>{</span>
+  <span>public</span> <span>Guid</span> TenantId <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>Guid</span> APIKey <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>string</span> TenantName <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+<span>}</span>
+
+<span>public</span> <span>class</span> <span>Product</span>
+<span>{</span>
+  <span>public</span> <span>Guid</span> ProductId <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>Guid</span> TenantId <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>string</span> ProductName <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>Decimal</span> UnitPrice <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>Int16</span> UnitsInStock <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>Int16</span> UnitsOnOrder <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>Int16</span> ReorderLevel <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+  <span>public</span> <span>bool</span> Discontinued <span>{</span> <span>get</span><span>;</span> <span>set</span><span>;</span> <span>}</span>
+<span>}</span></code></pre></div>
+<h3>Creating the controller</h3>
+<p>The controller is very straight forward:</p>
+<div data-language="csharp"><pre><code><span>[</span><span>Route</span><span>(</span><span>"api/[controller]"</span><span>)</span><span>]</span>
+<span>[</span><span>ApiController</span><span>]</span>
+<span>public</span> <span>class</span> <span>ProductsController</span><span>:</span> <span>ControllerBase</span>
+<span>{</span>
+  <span>[</span><span>HttpGet</span><span>]</span>
+  <span>public</span> <span>async</span> Task<span>&lt;</span>IEnumerable<span>&lt;</span>Product<span>&gt;&gt;</span> <span>GetAll</span><span>(</span><span>)</span>
+  <span>{</span>
+    <span>var</span> connection <span>=</span> <span>(</span>SqlConnection<span>)</span>HttpContext<span>.</span>Items<span>[</span><span>"TenantConnection"</span><span>]</span><span>;</span>
+    <span>return</span> <span>await</span> connection<span>.</span><span><span>QueryAsync</span><span>&lt;</span><span>Product</span><span>&gt;</span></span><span>(</span><span>"SELECT * FROM Product"</span><span>)</span><span>;</span>
+  <span>}</span>
+<span>}</span></code></pre></div>
+<p>We get the connection from the HTTP context and then make the dapper query. Unfortunately, we can’t get the connection in the constructor because the HTTP context isn’t available their.</p>
+<p>If we run the web API and make a request with an API key, we get the relevant tenant products:</p>
+<p><span>
+      <a href="https://www.carlrippon.com/static/4b51880b58f0af94e16c74c4cbc61f67/6e3f3/query1.png" target="_blank" rel="noopener">
+    <span></span>
+  <img alt="Query 1" title="Query 1" src="https://www.carlrippon.com/static/4b51880b58f0af94e16c74c4cbc61f67/799d3/query1.png" srcset="/static/4b51880b58f0af94e16c74c4cbc61f67/00d96/query1.png 148w,
+/static/4b51880b58f0af94e16c74c4cbc61f67/0b23c/query1.png 295w,
+/static/4b51880b58f0af94e16c74c4cbc61f67/799d3/query1.png 590w,
+/static/4b51880b58f0af94e16c74c4cbc61f67/2a3d6/query1.png 885w,
+/static/4b51880b58f0af94e16c74c4cbc61f67/6e3f3/query1.png 1111w" sizes="(max-width: 590px) 100vw, 590px" loading="lazy">
+  </a>
+    </span></p>
+<p>Let’s create an action method for getting a single product:</p>
+<div data-language="csharp"><pre><code><span>[</span><span>HttpGet</span><span>(</span><span>"{productId}"</span><span>,</span> Name <span>=</span> <span>"ProductGet"</span><span>)</span><span>]</span>
+<span>public</span> <span>async</span> Task<span>&lt;</span>ActionResult<span>&lt;</span>Product<span>&gt;&gt;</span> <span>GetById</span><span>(</span><span>Guid</span> productId<span>)</span>
+<span>{</span>
+  <span>var</span> connection <span>=</span> <span>(</span>SqlConnection<span>)</span>HttpContext<span>.</span>Items<span>[</span><span>"TenantConnection"</span><span>]</span><span>;</span>
+  <span>var</span> product <span>=</span> <span>await</span> connection<span>.</span><span><span>QueryFirstOrDefaultAsync</span><span>&lt;</span><span>Product</span><span>&gt;</span></span><span>(</span><span>"SELECT * FROM Product WHERE ProductId = @ProductId"</span><span>,</span> <span>new</span> <span>{</span> ProductId <span>=</span> productId <span>}</span><span>)</span><span>;</span>
+  <span>if</span> <span>(</span>product <span>==</span> <span>null</span><span>)</span> <span>return</span> <span>NotFound</span><span>(</span><span>)</span><span>;</span>
+
+  <span>return</span> <span>Ok</span><span>(</span>product<span>)</span><span>;</span>
+<span>}</span></code></pre></div>
+<p>Let’s test this by trying to access a product that doesn’t belong to the tenant for the API key:</p>
+<p><span>
+      <a href="https://www.carlrippon.com/static/bdc62382a87fe9d61d13c05771a5676b/a76e6/query2.png" target="_blank" rel="noopener">
+    <span></span>
+  <img alt="Query 2" title="Query 2" src="https://www.carlrippon.com/static/bdc62382a87fe9d61d13c05771a5676b/799d3/query2.png" srcset="/static/bdc62382a87fe9d61d13c05771a5676b/00d96/query2.png 148w,
+/static/bdc62382a87fe9d61d13c05771a5676b/0b23c/query2.png 295w,
+/static/bdc62382a87fe9d61d13c05771a5676b/799d3/query2.png 590w,
+/static/bdc62382a87fe9d61d13c05771a5676b/2a3d6/query2.png 885w,
+/static/bdc62382a87fe9d61d13c05771a5676b/a76e6/query2.png 1109w" sizes="(max-width: 590px) 100vw, 590px" loading="lazy">
+  </a>
+    </span></p>
+<p>We get a 404, which is what we want.</p>
+<p>The last action method we will implement will post a product:</p>
+<div data-language="csharp"><pre><code><span>[</span><span>HttpPost</span><span>]</span>
+<span>public</span> <span>async</span> Task<span>&lt;</span>ActionResult<span>&lt;</span>Product<span>&gt;&gt;</span> <span>Post</span><span>(</span><span>[</span><span>FromBody</span><span>]</span><span>Product</span> product<span>)</span>
+<span>{</span>
+  <span>var</span> connection <span>=</span> <span>(</span>SqlConnection<span>)</span>HttpContext<span>.</span>Items<span>[</span><span>"TenantConnection"</span><span>]</span><span>;</span>
+  <span>var</span> tenant <span>=</span> <span>(</span>Tenant<span>)</span>HttpContext<span>.</span>Items<span>[</span><span>"Tenant"</span><span>]</span><span>;</span>
+  product<span>.</span>ProductId <span>=</span> Guid<span>.</span><span>NewGuid</span><span>(</span><span>)</span><span>;</span>
+  product<span>.</span>TenantId <span>=</span> tenant<span>.</span>TenantId<span>;</span>
+  <span>await</span> connection<span>.</span><span>ExecuteAsync</span><span>(</span><span>@"INSERT INTO Product(ProductID, TenantId, ProductName, UnitPrice, UnitsInStock, ReorderLevel, Discontinued)
+                                  VALUES(@ProductID, @TenantId, @ProductName, @UnitPrice, @UnitsInStock, @ReorderLevel, @Discontinued)"</span><span>,</span>
+                                  product<span>)</span><span>;</span>
+
+  <span>var</span> url <span>=</span> Url<span>.</span><span>Link</span><span>(</span><span>"ProductGet"</span><span>,</span> <span>new</span> <span>{</span> productId <span>=</span> product<span>.</span>ProductId <span>}</span><span>)</span><span>;</span>
+  <span>return</span> <span>Created</span><span>(</span>url<span>,</span> product<span>)</span><span>;</span>
+<span>}</span></code></pre></div>
+<p>Notice that we set the correct tenant id on the product before it is inserted into the database.</p>
+<p>Let’s give this a try:</p>
+<p><span>
+      <a href="https://www.carlrippon.com/static/974e5d62f4aa3873c1c0113fb2e871a0/b7cc9/query3.png" target="_blank" rel="noopener">
+    <span></span>
+  <img alt="Query 3" title="Query 3" src="https://www.carlrippon.com/static/974e5d62f4aa3873c1c0113fb2e871a0/799d3/query3.png" srcset="/static/974e5d62f4aa3873c1c0113fb2e871a0/00d96/query3.png 148w,
+/static/974e5d62f4aa3873c1c0113fb2e871a0/0b23c/query3.png 295w,
+/static/974e5d62f4aa3873c1c0113fb2e871a0/799d3/query3.png 590w,
+/static/974e5d62f4aa3873c1c0113fb2e871a0/2a3d6/query3.png 885w,
+/static/974e5d62f4aa3873c1c0113fb2e871a0/b7cc9/query3.png 1115w" sizes="(max-width: 590px) 100vw, 590px" loading="lazy">
+  </a>
+    </span></p>
+<p>It works!</p>
+<p>The code for this post can be found in GitHub at <a href="https://github.com/carlrip/asp-net-core-multi-tenant-dapper-rls">https://github.com/carlrip/asp-net-core-multi-tenant-dapper-rls</a>.</p>
+<h2>Wrap up</h2>
+<p>The great thing about this approach is that we don’t explicitly apply a filter in the dapper queries - the security is all handled downstream in SQL Server. This reduces our development costs and risk of leaking data. Other applications can access the same database and have the same multi-tenancy logic applied.</p></section></article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

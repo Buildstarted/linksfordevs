@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Converting a .NET Standard 2.0 library to .NET Core 3.0: Upgrading to ASP.NET Core 3.0 - Part 1 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Converting a .NET Standard 2.0 library to .NET Core 3.0: Upgrading to ASP.NET Core 3.0 - Part 1 - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I describe the decisions to make and factors affecting upgrading a typical library targeting .NET Standard 2.0 to .NET Core 3.0."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/converting-a-netstandard-2-library-to-netcore-3/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Converting a .NET Standard 2.0 library to .NET Core 3.0: Upgrading to ASP.NET Core 3.0 - Part 1</title>
+<div class="readable">
+        <h1>Converting a .NET Standard 2.0 library to .NET Core 3.0: Upgrading to ASP.NET Core 3.0 - Part 1</h1>
+            <div>Reading time: 17-22 minutes</div>
+        <div>Posted here: 05 Nov 2019</div>
+        <p><a href="https://andrewlock.net/converting-a-netstandard-2-library-to-netcore-3/">https://andrewlock.net/converting-a-netstandard-2-library-to-netcore-3/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>This is the first post in a new series on upgrading from ASP.NET Core 2.x to ASP.NET Core 3.0. I'm not going to cover big topics like adding <a href="https://docs.microsoft.com/en-us/aspnet/core/blazor/?view=aspnetcore-3.0">Blazor</a> or <a href="https://docs.microsoft.com/en-us/aspnet/core/tutorials/grpc/grpc-start">gRPC</a> to your apps. Instead I'm going to cover the little confusing things like how to upgrade your libraries to target ASP.NET Core 3.0, switching to use the new generic-host-based server, and using endpoint routing.</p>
+<p>If you're starting on an upgrade from ASP.NET Core 2.x to 3.0, I strongly suggest <a href="https://docs.microsoft.com/en-us/aspnet/core/migration/22-to-30">following through the migration guide</a>, reading <a href="https://andrewlock.net/series/exploring-asp-net-core-3/">my series on exploring ASP.NET Core 3.0</a>, and checking out <a href="https://weblog.west-wind.com/posts/2019/Sep/24/Upgrading-my-AlbumViewer-Sample-to-NET-Core-30">Rick Strahl's post on converting an app to ASP.NET Core 3.0</a>. <a href="https://www.youtube.com/watch?v=PcxSFu3x1fA&amp;list=PL1rZQsJPBU2St9-Mz1Kaa7rofciyrwWVx&amp;index=0">A recent ASP.NET community standup</a> also walked though the bare minimum for upgrading to 3.0. That should give you a good idea of issues you're likely to run into.</p>
+<p>In this post I describe some of the steps and issues I ran into when converting .NET Standard 2.0 class libraries to .NET Core 3.0. I'm specifically looking at converting <em>libraries</em> in this post. </p>
+<p>For the purposes of this post, I'll assume you have one or more class libraries that you're in control of, and are trying to decide how to support .NET Core 3.0. I consider the following cases, separated based on your library's dependencies:</p>
+<ul>
+<li><a href="#code-only-libraries">Your library doesn't have any "framework" dependencies</a></li>
+<li><a href="#libraries-that-depend-on-microsoft-extensions-nuget-packages">Your library depends on the <em>Microsoft.Extensions.*</em> libraries</a></li>
+<li><a href="#libraries-that-depend-on-asp-net-core-nuget-packages">Your library depends on ASP.NET Core-specific libraries.</a></li>
+</ul>
+<h2 id="upgrading-a-net-standard-2-0-library-to-net-core-3-is-it-necessary-">Upgrading a .NET Standard 2.0 library to .NET Core 3 - is it necessary?<a href="#upgrading-a-net-standard-2-0-library-to-net-core-3-is-it-necessary-"></a></h2>
+<p>The first question you have to answer is whether you even need to update your library. Unfortunately, there isn't a simple answer to this question due to some of the changes that came with .NET Core 3.0. </p>
+<p>Specifically, <a href="https://andrewlock.net/exploring-the-new-project-file-program-and-the-generic-host-in-asp-net-core-3/#the-new-project-file-and-changes-to-the-shared-framework">.NET Core 3.0 introduces the concept of a <code>FrameworkReference</code></a>. This is <em>similar</em> to the <em>Microsoft.AspNetCore.App</em> metapackage in ASP.NET Core 2.x apps, but instead of being a NuGet package that references other NuGet packages, the framework is installed along with the .NET Core runtime.</p>
+<p>This has implications when your class library references packages that <em>used to</em> exist as NuGet packages, but are <em>now pre-installed</em> as part of the shared framework. I'll try to work through the various combinations of target frameworks and NuGet references your library has, to give you an idea of your options around upgrading your library to work with .NET Core 3.0.</p>
+<h3 id="code-only-libraries">Code-only libraries<a href="#code-only-libraries"></a></h3>
+<p>Lets start with the simplest case - you have a library that has no other dependencies.</p>
+<p><strong>Q: My library targets .NET Standard 2.0 only, and has no dependencies on other NuGet packages</strong></p>
+<p>In theory, you shouldn't need to change your library at all. .NET Core 3.0 supports .NET Standard 2.1, and by extension, it supports .NET Standard 2.0. </p>
+<p>By continuing to target .NET Standard 2.0, you will be able to consume it in .NET Core 3.0 applications, but you'll also continue to be able to consume it in .NET Core 2.x applications, .NET Framework 4.6.1+ applications, and Xamarin apps, among others.</p>
+<p><strong>Q: Should I update my library to target .NET Standard 2.1?</strong></p>
+<p>By targeting .NET Standard 2.0, you're allowing a large number of frameworks to consume your library. Upgrading to .NET Standard 2.1 will limit that significantly. You'll no longer be able to consume the library in .NET Core 2.x, .NET Framework, Unity, or earlier Mono/Xamarin versions. So no, you shouldn't target .NET Standard 2.1 just because it's there.</p>
+<p>That said, .NET Standard 2.1 includes a number of performance-related primitives that you <em>may</em> want to use in your application, as well as features <a href="https://stu.dev/iasyncenumerable-introduction/">such as <code>IAsyncEnumerable&lt;&gt;</code></a>. In order to keep the widest audience, you may want to multi-target both 2.0 and 2.1, and use conditional compilation to take advantage of the primitives on platforms that support them. If you're itching to make use of these new features, or you know your library is only going to be used on platforms that support .NET Standard 2.1 then go ahead. It should be as simple as updating the <code>&lt;TargetFramework&gt;</code> element in your <em>.csproj</em> file. </p>
+<pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFramework</span><span>&gt;</span></span>netstandard2.1<span><span><span>&lt;/</span>TargetFramework</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>LangVersion</span><span>&gt;</span></span>8.0<span><span><span>&lt;/</span>LangVersion</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre>
+<blockquote>
+<p>If you're upgrading to target .NET Standard 2.1 then you may as well update to use C# 8 features. .NET Framework won't support them, but as it doesn't support .NET Standard 2.1 either, that ship has already sailed!</p>
+</blockquote>
+<p><strong>Q: My library targets .NET Core 2.x, and has no dependencies on other NuGet packages</strong></p>
+<p>This scenario is essentially the same situation as the previous one. .NET Core 3.0 apps can consume any library that targets .NET Core 3.0 or below, so there's no need to update your library unless you want to. If you're targeting .NET Core 2.x you can use all the features available to the platform (which is more than is in .NET Standard 2.0). If you upgrade to .NET Core 3.0 then you obviously get access to more features again, but you won't be able to consume your library in .NET Core 2.x apps any more.</p>
+<p><strong>Q: My library has dependencies on other NuGet packages</strong></p>
+<p>Libraries with no dependencies are the easiest to deal with - generally you target the lowest version of .NET Standard you can that gives you all the features you need, and leave it at that. Things get a bit trickier when you have dependencies on other NuGet packages. </p>
+<p>However, if your dependencies (and none of your <em>dependencies</em> dependencies, also known as "transitive" dependencies) are not <em>Microsoft.AspNetCore.*</em> or <em>Microsoft.Extensions.*</em> libraries then there's not much to worry about. As long as they support the framework you're trying to target, then you don't need to worry. If you <em>are</em> depending on the Microsoft libraries, then things are more nuanced.</p>
+<h3 id="libraries-that-depend-on-microsoft-extensions-nuget-packages">Libraries that depend on <em>Microsoft.Extensions.*</em> NuGet packages<a href="#libraries-that-depend-on-microsoft-extensions-nuget-packages"></a></h3>
+<p>This is where things start to get interesting. The <em>Microsoft.Extensions.*</em> libraries provide generic features such as <a href="https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection/">dependency injection</a>, <a href="https://www.nuget.org/packages/Microsoft.Extensions.Configuration/">configuration</a>, <a href="https://www.nuget.org/packages/Microsoft.Extensions.Logging/">logging</a>, and <a href="https://www.nuget.org/packages/Microsoft.Extensions.Hosting/">the generic host</a>. Those features are all used by ASP.NET Core apps, but you can also use them without ASP.NET Core for creating all sorts of other services and console apps.</p>
+<p>The nice thing about the <em>Microsoft.Extensions.*</em> libraries is they allow you to create libraries that easily hook into the .NET Core ecosystem, making it pretty simple for users to consume your libraries. </p>
+<p>In .NET Core 3.0, the <em>Microsoft.Extensions.*</em> libraries all received a major version bump to 3.0.0. They also now multi-target <code>netstandard2.0</code> and <code>netcoreapp3.0</code>. This poses an interesting question that Brad Wilson recently asked on Twitter:</p>
+<twitter-widget id="twitter-widget-0"></twitter-widget><blockquote data-twitter-extracted-i1581916762258178566="true"><p lang="en" dir="ltr">Looking at the dependencies, it would seem that all the "Microsoft.Extensions.*" libraries, which are at v3.0.0, seem to imply backward compatibility with .NET Core 2.1 (by being/supporting netstandard2.0). True? /cc <a href="https://twitter.com/DamianEdwards?ref_src=twsrc%5Etfw">@DamianEdwards</a> <a href="https://twitter.com/davidfowl?ref_src=twsrc%5Etfw">@davidfowl</a></p>— Brdead Witchlson (@bradwilson) <a href="https://twitter.com/bradwilson/status/1182716005866328064?ref_src=twsrc%5Etfw">October 11, 2019</a></blockquote> 
+<p>In other words: Given that .NET Core 2.x apps support .NET Standard 2.0, can you use 3.0.0 <em>Microsoft.Extensions.*</em> libraries in .NET Core 2.x?</p>
+<p>Yes! If you're building a console app and are still targeting .NET Core 2.x, you can, if you wish, upgrade your <em>Microsoft.Extension.*</em> library references to 3.0.0. Your app will still work, and you can use the latest abstractions.</p>
+<p>OK, what if it's not just a .NET Core app, it's an <em>ASP.NET</em> Core 2.x app? </p>
+<picture>
+<source srcset="/content/images/2019/libs_yes_but_no.mp4" type="video/mp4">
+<source srcset="/content/images/2019/libs_yes_but_no.webp" type="image/webp">
+<img src="https://andrewlock.net/content/images/2019/libs_yes_but_no.jpg" alt="Well yes, but actually no">
+</picture>
+<p>The problem is that while you can add a reference to the 3.0.0 library, in ASP.NET Core 2.x apps the core libraries <em>also</em> depend on the <em>Microsoft.Extensions.*</em> libraries. When you try and build your app you'll get an error something like the following:</p>
+<pre><code>C:\repos\test\test.csproj <span>:</span> warning NU1608: Detected package version outside of dependency constraint: Microsoft.AspNetCore.App 2.1.1 requires Microsoft.Extensions.Configuration.Abstractions <span>(</span><span>&gt;=</span> 2.1.1 <span>&amp;&amp;</span> <span>&lt;</span> 2.2.0<span>)</span> but version Microsoft.Extensions.Configuration.Abstractions 3.0.0 was 
+resolved.
+C:\repos\test.csproj <span>:</span> error NU1107: Version conflict detected <span>for</span> Microsoft.Extensions.Primitives. Install/reference Microsoft.Extensions.Primitives 3.0.0 directly to project PwnedPasswords.Sample to resolve this issue.
+</code></pre>
+<p>Trying to solve this issues is a fool's errand. Just accept that <em>you can't use 3.0.0 extension libraries in ASP.NET Core 2.x apps</em>. </p>
+<p>Now lets consider the implications to your libraries that depend on the <em>Microsoft.Extensions</em> libraries. </p>
+<p><strong>Q: My library uses <em>Microsoft.Extensions.*</em> and will only be used in .NET Core 3.0 apps</strong></p>
+<p>If you're building an internal library then you may able to specify that a library is only supported on .NET Core 3.0. In that case, it makes sense to target the 3.0.0 libraries. </p>
+<p><strong>Q: My library uses <em>Microsoft.Extensions.*</em> and may be used in both .NET Core 2.x and .NET Core 3.0 apps</strong></p>
+<p>This is where things get interesting. In most cases, there's very few differences between the 2.x and 3.0 versions of the <em>Microsoft.Extensions.*</em> libraries. This is especially true if you're using one of the <em>*.Abstractions</em> libraries, such as <em>Microsoft.Extensions.Configuration.Abstractions</em>. </p>
+<p>For example for <em>Microsoft.Extensions.Configuration.Abstractions</em>, between versions 2.2.0 and 3.0.0, literally a single API was added: </p>
+<p><img src="https://andrewlock.net/content/images/2019/libs_fuget.png" alt="Comparison of Microsoft.Extensions.Configuration.Abstractions versions using fuget.org"></p>
+<blockquote>
+<p>This screenshot was taken from the excellent <a href="https://fuget.org/">https://fuget.org</a> using <a href="https://www.fuget.org/packages/Microsoft.Extensions.Configuration.Abstractions/3.0.0/lib/netstandard2.0/diff/2.2.0/">the API diff feature</a>!</p>
+</blockquote>
+<p>That stability means that it <em>may</em> be be possible for you your library to <em>keep targeting the 2.x versions of the libraries</em>. When used in an ASP.NET Core <strong>2.x</strong> app, the <strong>2.x.x</strong> libraries will be used, just as before. However, when you reference your library in an ASP.NET Core <strong>3.0</strong>, the 2.x dependencies of your library will be automatically upgraded to the <strong>3.0.0</strong> versions due to the NuGet package resolution rules.</p>
+<p>In <em>general</em> that automatic upgrading is something you want to avoid, as a bump in a major version means breaking changes. You can't guarantee that code compiled against one version of a dependency will run correctly when used against a different major version of the dependency. </p>
+<p>However, we've already established that the 3.0.0 version of the libraries are virtually the same, so there's nothing to worry about! To convince you further that this is actually OK, this is the approach used by <a href="https://github.com/serilog/serilog-extensions-logging">Serilog's <em>Microsoft.Extensions.Logging</em> integration package</a>. The package keeps targets .NET Standard 2.0 and references the 2.0.0 version of <em>Microsoft.Extensions.Logging</em>, but can happily be used in ASP.NET Core 3.0 apps:</p>
+<pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFrameworks</span><span>&gt;</span></span>netstandard2.0<span><span><span>&lt;/</span>TargetFrameworks</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Serilog<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>2.8.0<span>"</span></span> <span>/&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.Extensions.Logging<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>2.0.0<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre>
+<blockquote>
+<p>It's worth pointing out that for .NET Framework targets, you'll need to use binding redirects for the Microsoft.Extensions.* libraries. <a href="https://github.com/andrewlock/NetEscapades.Configuration/issues/47#issuecomment-545064915">This is apparently a real pain if you're building a PowerShell module</a>!</p>
+</blockquote>
+<p>Unfortunately, this might not always work for you…</p>
+<p><strong>Q: My library uses <em>Microsoft.Extensions.*</em> and needs to use different versions of those libraries when using in .NET Core 2.x vs 3.0</strong></p>
+<p>Not all of the library changes are safe to be silently upgraded in this way. For example, consider <a href="https://www.fuget.org/packages/Microsoft.Extensions.Options/3.0.0/lib/netstandard2.0/diff/2.2.0/">the <em>Microsoft.Extensions.Options</em> library</a>. In 3.0.0, the <code>Add</code>, <code>Get</code> and <code>Remove</code> methods were removed <a href="https://github.com/aspnet/Extensions/blob/20dbe660793d5280aead975cd5e6e8d6b280ea3c/src/Options/Options/src/OptionsWrapper.cs">from <code>OptionsWrapper&lt;&gt;</code></a>. If you use these methods in your library, then consuming apps running on ASP.NET Core 3.0 will get a <code>MethodNotFoundException</code> at runtime. Not good!</p>
+<p>The above example is a bit contrived (it's unlikely you're using <code>OptionsWrapper&lt;&gt;</code> in your libraries), but I've run into this issue a lot when using <a href="https://www.fuget.org/packages/IdentityModel/4.0.0/lib/netstandard2.0/diff/3.10.10/">the <code>IdentityModel</code> library</a>. You have to be very careful to reference the same major version of this library in all your dependencies, otherwise you're likely to get <code>MethodNotFoundException</code>s at runtime. </p>
+<blockquote>
+<p>The issue you're likely to see with <code>IdentityModel</code> after upgrading to .NET Core 3.0 is for the <code>CryptoRandom.CreateUniqueId()</code> method. As you can see in <a href="https://www.fuget.org/packages/IdentityModel/4.0.0/lib/netstandard2.0/diff/3.10.10/">the fuget.org comparison below</a>, the default parameters for the method have changed in version 4.0.0. That <a href="https://haacked.com/archive/2010/08/10/versioning-issues-with-optional-arguments.aspx/">avoids compile-time breaking changes, but gives a runtime breaking change instead</a>!</p>
+</blockquote>
+<p><img src="https://andrewlock.net/content/images/2019/libs_identitymodel.png" alt="The breaking change to IdentityModel moving from 3.10.10 to 4.0.0"></p>
+<p>So how can you handle this? The best answer I've found is to multi-target .NET Standard 2.0 and .NET Core 3.0, and conditionally include the correct version of your library using MSBuild conditions.</p>
+<pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFrameworks</span><span>&gt;</span></span>netstandard2.0;netcoreapp3.0<span><span><span>&lt;/</span>TargetFrameworks</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span> <span>Condition</span><span><span>=</span><span>"</span><span>'</span>$(TargetFramework)<span>'</span> == <span>'</span>netcoreapp3.0<span>'</span><span>"</span></span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.Extensions.Options<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>3.0.0<span>"</span></span> <span>/&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>IdentityModel<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>4.0.0<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span> <span>Condition</span><span><span>=</span><span>"</span><span>'</span>$(TargetFramework)<span>'</span> != <span>'</span>netcoreapp3.0<span>'</span><span>"</span></span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.Extensions.Options<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>2.2.0<span>"</span></span> <span>/&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>IdentityModel<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>3.10.10<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre>
+<p>In the above example, I've shown a library that depends on both <em>Microsoft.Extensions.Options</em> and <em>IdentityModel</em>. Even though <em>technically</em> the latest versions of both of these packages support .NET Standard 2.0, the differences are nuanced, as I've discussed. </p>
+<p>When an ASP.NET Core <strong>2.x</strong> app depends on the library above, it will use the 2.2.0 version of the <em>*.Options</em> library, and the <em>3.10.10</em> version of <em>IdentityModel</em>. When an ASP.NET Core <strong>3.0</strong> app depends on the library above, it will use the 3.0.0 version of the <em>*.Options</em> library, and the <em>4.0.0</em> version of <em>IdentityModel</em>.</p>
+<p>The main downside to this approach is the increased complexity in tooling. You may need to add <code>#ifdef</code>s around your code to cater to the different target frameworks and libraries. You may also need extra tests. Generally speaking though, this approach is probably the "safest". </p>
+<p>There is a scenario I haven't addressed here - if you're running a .NET Core <strong>2.x</strong> app (non-ASP.NET Core) and are using the <strong>3.0.0</strong> version <em>Microsoft.Extensions.*</em> libraries (or <strong>4.0.0</strong> version of <em>IdentityModel</em>), and are consuming an app built using the approach shown above. In this case it all falls down. The <code>netstandard2.0</code> version of the library will be selected, and you could be back in <code>MethodNotFound</code> land. 🙁 Luckily, that seems like a pretty niche and generally unsupported scenario…</p>
+<p><img src="https://andrewlock.net/content/images/2019/libs_it_hurts.jpg" alt="Patient saying 'Doc, it hurts when I touch my shoulder'. Doctor saying 'Then don't touch it'"></p>
+<h3 id="libraries-that-depend-on-asp-net-core-nuget-packages">Libraries that depend on ASP.NET Core NuGet packages<a href="#libraries-that-depend-on-asp-net-core-nuget-packages"></a></h3>
+<p>This brings us to the final section: libraries that depend on ASP.NET Core-specific libraries. That includes pretty much any library that starts <em>Microsoft.AspNetCore.*</em> (<a href="https://docs.microsoft.com/en-us/aspnet/core/migration/22-to-30?view=aspnetcore-3.0&amp;tabs=visual-studio#remove-obsolete-package-references">see the migration guide for a complete list</a>). These NuGet packages are no longer being produced and pushed to <a href="https://nuget.org/">https://nuget.org</a>, so you can't reference them! </p>
+<p>Instead, these are installed as part of the ASP.NET Core 3.0 shared framework. Instead of referencing individual packages, you use a <code>&lt;FrameworkReference&gt;</code> element. This makes all of the APIs in ASP.NET Core 3.0 available. A nice feature of the <code>&lt;FrameworkReference&gt;</code> is that it doesn't need to copy any extra libraries to your app's output folder. MSBuild knows those APIs will be available when the app is executed, so <a href="https://stackoverflow.com/a/57760357/6375486">you get a nicely trimmed output</a>.</p>
+<blockquote>
+<p>Not <em>all</em> of the libraries that were in the <em>Microsoft.AspNetCore.App</em>
+meta package have been moved to the framework. <a href="https://docs.microsoft.com/en-us/aspnet/core/migration/22-to-30?view=aspnetcore-3.0&amp;tabs=visual-studio#add-package-references-for-removed-assemblies">The packages listed in this section of the migration document</a> <strong>do</strong> still need to be referenced directly, in addition (or instead of) the <code>&lt;FrameworkReference&gt;</code> element. This includes things like <a href="https://www.nuget.org/packages/Microsoft.EntityFrameworkCore">EF Core</a>, <a href="https://www.nuget.org/packages/Microsoft.AspNetCore.Mvc.NewtonsoftJson">JSON.NET MVC support</a>, and the <a href="https://docs.microsoft.com/en-us/aspnet/core/security/authentication/identity?view=aspnetcore-3.0">Identity UI</a>.</p>
+</blockquote>
+<p><strong>Q: My library only needs to target ASP.NET Core 3.0</strong></p>
+<p>This is the simplest scenario, <a href="https://stackoverflow.com/questions/57760356/how-do-i-use-asp-net-core-3-0-types-from-a-library-project-for-shared-controller">as described in this StackOverflow question</a> - you have a library that uses ASP.NET Core specific features, and you want to upgrade it from 2.x to 3.0. </p>
+<p>The solution, as described above, is to remove the obsolete packages, and use a <code>FrameworkReference</code> instead:</p>
+<pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFramework</span><span>&gt;</span></span>netcoreapp3.0<span><span><span>&lt;/</span>TargetFramework</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>FrameworkReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.AspNetCore.App<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre>
+<p>This is actually pretty nice for libraries. All the ASP.NET Core APIs are available to IntelliSense, and you don't have to worry about trying to hunt down the APIs you need in individual packages. </p>
+<p>Where things get more complicated again is if you need to support .NET Core 2.x as well.</p>
+<p><strong>Q: My library needs to support both ASP.NET Core 2.x and ASP.NET Core 3.0</strong></p>
+<p>The only real way to handle this scenario is with the multi-targeting approach we used previously for the <em>Microsoft.Extensions.*</em> (and <em>IdentityModel</em>) libraries. Continue to target .NET Standard 2.0 (to support .NET Core 2.x and .NET Framework 4.6.1+) and also target .NET Core 3.0. Conditionally include either the individual packages for ASP.NET Core 2.x, or the Framework Reference for ASP.NET Core 3.0:</p>
+<pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFrameworks</span><span>&gt;</span></span>netstandard2.0;netcoreapp3.0<span><span><span>&lt;/</span>TargetFrameworks</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span> <span>Condition</span><span><span>=</span><span>"</span><span>'</span>$(TargetFramework)<span>'</span> == <span>'</span>netcoreapp3.0<span>'</span><span>"</span></span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>FrameworkReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.AspNetCore.App<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span> <span>Condition</span><span><span>=</span><span>"</span> <span>'</span>$(TargetFramework)<span>'</span> != <span>'</span>netcoreapp3.0<span>'</span><span>"</span></span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.AspNetCore.Mvc.Cors<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>2.1.3<span>"</span></span> <span>/&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.AspNetCore.Mvc.Formatters.Json<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>2.1.3<span>"</span></span> <span>/&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>Microsoft.Extensions.Configuration<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>2.1.1<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre>
+<p>That pretty much covers all the scenarios you should run into. Supporting older versions of the libraries is frustratingly complex, so whether the pay off is worth it, is up to you. But with ASP.NET Core 2.1 being <a href="https://dotnet.microsoft.com/platform/support/policy/dotnet-core">an LTS release for .NET Core</a> (and being supported "forever" on .NET Framework), I suspect many people will be stuck in this situation for a while.</p>
+<blockquote>
+<p>Rather than targeting .NET Standard 2.0, you can also explicitly target .NET Core 2.1 and .NET Framework 4.6.1 <a href="https://github.com/DamianEdwards/TagHelperPack/blob/a1c0a7e964da9725052bb59984f6fef3db794e91/src/TagHelperPack/TagHelperPack.csproj">as Damian Edwards does in his TagHelperPack</a>. The end result is pretty much the same.</p>
+</blockquote>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I tried to break down all the different approaches to upgrading your libraries to support .NET Core 3.0, based on their dependencies. If you don't <em>have</em> any dependencies, or they're isolated from the ASP.NET Core/<em>Microsoft.Extensions.*</em> ecosystem, then you shouldn't have any problems upgrading. If you have <em>Microsoft.Extensions.*</em> dependencies, then you <em>may</em> get away without upgrading your package references, but you might have to conditionally include libraries based on target framework. If you have ASP.NET Core dependencies and need to support for 2.x and 3.0 then you'll almost certainly need to add MSBuild conditionals to your <em>.csproj</em> files.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

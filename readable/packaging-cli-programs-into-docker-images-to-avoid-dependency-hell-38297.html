@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Packaging CLI programs into Docker images to avoid dependency hell - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Packaging CLI programs into Docker images to avoid dependency hell - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I show how to create a Docker image containing your favourite CLI tool, and a helper script for invoking it. I demonstrate with the AWS CLI."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/packaging-cli-programs-into-docker-images-to-avoid-dependency-hell/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Packaging CLI programs into Docker images to avoid dependency hell</title>
+<div class="readable">
+        <h1>Packaging CLI programs into Docker images to avoid dependency hell</h1>
+            <div>Reading time: 10-12 minutes</div>
+        <div>Posted here: 10 Oct 2019</div>
+        <p><a href="https://andrewlock.net/packaging-cli-programs-into-docker-images-to-avoid-dependency-hell/">https://andrewlock.net/packaging-cli-programs-into-docker-images-to-avoid-dependency-hell/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+<div>
+<p>In this post, I'm not going to talk about ASP.NET Core for a change. Instead, I'm going to show one way to package CLI tools and their dependencies as Docker images. With a simple helper script, this allows you to run a CLI tool without having to install the dependencies on your host machine. I'll show how to create a Docker image containing your favourite CLI tool, and a helper script for invoking it.</p>
+<p>All the commands in this post describe using Linux containers. The same principal can be applied to Windows containers if you update the commands. However the benefits of isolating your environment come with the downside of large Docker image sizes.</p>
+<blockquote>
+<p>If you're looking for a Dockerised version of the AWS CLI specifically, I have an <a href="https://hub.docker.com/r/andrewlock/aws-cli">image on Docker hub</a> which is generated from <a href="https://github.com/andrewlock/aws-cli">this GitHub</a> repository.</p>
+</blockquote>
+<h2 id="the-problem-dependency-hell">The problem: dependency hell<a href="#the-problem-dependency-hell"></a></h2>
+<p>For example, take the <a href="https://aws.amazon.com/cli/">AWS CLI</a>. The suggested way to install the CLI on Linux is to use Python and <a href="https://pip.pypa.io/en/stable/">pip</a> (Pip is the package installer for Python; the equivalent of NuGet for .NET). The recommended version to use is Python 3, but you may have other apps that require Python 2, at which point you're in a world of dependency hell. </p>
+<p>Docker containers can completely remove this problem. By packaging all the dependencies of an application into a container (even the operating system) you isolate the apps from both your host machine, and other apps. Each container runs in its own little world, and can have completely different dependencies to every other and the host system.</p>
+<p><img src="https://andrewlock.net/content/images/2019/containers.png" alt="Diagram of two containers, isolated from he host OS"></p>
+<p>This is obviously one of the big selling points of containers, and is part of the reason they're seeing such high adoption for production loads. But they can also help with our AWS CLI problem. Instead of installing the CLI on our host machine, we can install it in a Docker container instead, and execute our CLI commands there. </p>
+<h2 id="creating-a-docker-image-for-the-aws-cli">Creating a Docker image for the AWS CLI<a href="#creating-a-docker-image-for-the-aws-cli"></a></h2>
+<p>So what does it actually take to package up a tool in a Docker container? That depends on the tool in question. Hopefully, the installation instructions include a set of commands for you to run. In most cases, if you're at all familiar with Docker you can take these commands and convert them into a Dockerfile.</p>
+<p>For example, let's take the AWS CLI instructions. According to <a href="https://docs.aws.amazon.com/cli/latest/userguide/install-linux.html#install-linux-awscli">the installation instructions</a>, you need to have Python and <code>pip</code> installed, after which you can run </p>
+<pre><code>pip3 <span>install</span> awscli --upgrade --user
+</code></pre>
+<p>to install the CLI. </p>
+<p>One of the main difficulties of packaging your app into a Docker container, is establishing all of the dependencies. Python and <code>pip</code> are clearly required, but depending on which operating system you use for your base image, you may find you need to install additional dependencies. </p>
+<p><a href="https://alpinelinux.org/">Alpine Linux</a> is a common candidate for a base OS as it's tiny, which keeps your final Docker images as small as possible. However Alpine is kept small by not including much in the box. You may well find you need to add some extra dependencies for your target tool to work correctly.</p>
+<p>The example Dockerfile below shows how to install the AWS CLI in an Alpine base image. It's taken from <a href="https://github.com/andrewlock/aws-cli/blob/master/Dockerfile">the aws-cli image</a> which is <a href="https://hub.docker.com/r/andrewlock/aws-cli">available on Docker Hub</a>:</p>
+<pre><code><span>FROM</span> alpine<span>:</span>3.6
+<span>RUN</span> apk <span>-</span>v <span>-</span><span>-</span>no<span>-</span>cache add \
+        python \
+        py<span>-</span>pip \
+        groff \
+        less \
+        mailcap \
+        &amp;&amp; \
+    pip install <span>-</span><span>-</span>upgrade awscli==1.16.206 s3cmd==2.0.2 python<span>-</span>magic &amp;&amp; \
+    apk <span>-</span>v <span>-</span><span>-</span>purge del py<span>-</span>pip
+<span>VOLUME</span> /root/.aws
+<span>VOLUME</span> /project
+<span>WORKDIR</span> /project
+<span>ENTRYPOINT</span> <span>[</span><span>"aws"</span><span>]</span>
+</code></pre>
+<p>This base image uses Alpine 3.6, and starts by installing a bunch of prerequisites:</p>
+<ul>
+<li><code>python</code>: the Python (3) environment</li>
+<li><code>py-pip</code>: the <code>pip</code> package installer we need to install the AWS CLI</li>
+<li><code>groff</code>: used for formatting text</li>
+<li><code>less</code>: used for controlling the amount of text displayed on a terminal</li>
+<li><code>mailcap</code>: used for controlling how to display non-text</li>
+</ul>
+<p>Next, as part of the same <code>RUN</code> command (to keep the final Docker image as small as possible) we install the AWS CLI using <code>pip</code>. We also install <a href="https://s3tools.org/s3cmd">the tool <code>s3cmd</code></a> (which makes it easier to work with S3 data), and <code>python-magic</code> (which helps with mime-type detection).</p>
+<p>As the last step of the <code>RUN</code> command, we uninstall the <code>py-pip</code> package. We only needed it to install the AWS CLI and other tools, and now it's just taking up space. Deleting (and purging) it helps keep the size of the final Docker image down.</p>
+<p>The next two <code>VOLUME</code> commands define locations known by the Docker container when it runs on your machine. The <code>/root/.aws</code> path is where the AWS CLI will look for credential files. The <code>/project</code> path is where we set the working directory (using <code>WORKDIR</code>), so it's where the AWS CLI commands will be run. We'll bind that at runtime to wherever we want to run the AWS CLI, as you'll see shortly. </p>
+<p>Finally we set the <code>ENTRYPOINT</code> for the container. This sets the command that will run when the container is executed. So running the Docker container will execute <code>aws</code>, the AWS CLI.</p>
+<p>To build the image, run <code>docker build .</code> in the same directory as Dockerfile, and give it a tag:</p>
+<pre><code>docker build -t example/aws-cli <span>.</span>
+</code></pre>
+<p>You will now have a Docker image containing the AWS CLI. The next step is to use it!</p>
+
+<p>You can create a container from your tool image and run it in the most basic form using:</p>
+<pre><code>docker run --rm example/aws-cli
+</code></pre>
+<p>If you run this, Docker creates a container from your image, executes the <code>aws</code> command, and then exists. The <code>--rm</code> option means that the old container is removed afterwards, so it doesn't clutter up your drive. In this example, we didn't provide any command line arguments, so the AWS CLI shows the standard help text:</p>
+<pre><code><span>&gt;</span> docker run --rm example/aws-cli
+usage: aws <span>[</span>options<span>]</span> <span>&lt;</span>command<span>&gt;</span> <span>&lt;</span>subcommand<span>&gt;</span> <span>[</span><span>&lt;</span>subcommand<span>&gt;</span> <span>..</span>.<span>]</span> <span>[</span>parameters<span>]</span>
+To see <span>help</span> text, you can run:
+
+  aws <span>help</span>
+  aws <span>&lt;</span>command<span>&gt;</span> <span>help</span>
+  aws <span>&lt;</span>command<span>&gt;</span> <span>&lt;</span>subcommand<span>&gt;</span> <span>help</span>
+aws: error: too few arguments
+</code></pre>
+<p>If you want to do something useful, you'll need to provide some arguments to the CLI. For example, lets try listing the available S3 buckets, by passing the arguments <code>s3 ls</code>:</p>
+<pre><code><span>&gt;</span> docker run --rm example/aws-cli s3 <span>ls</span>
+Unable to <span>locate</span> credentials. You can configure credentials by running <span>"aws configure"</span><span>.</span>
+</code></pre>
+<p>This is where things start to get a bit more tricky. To call AWS, you need to provide credentials. There are a <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html">variety of ways of doing this</a>, including using credentials files in your profile, or by setting environment variables. The easiest approach is to use environment variables, by exporting them in your host environment: </p>
+<pre><code><span>export</span> AWS_ACCESS_KEY_ID<span>=</span><span>"&lt;id&gt;"</span>
+<span>export</span> AWS_SECRET_ACCESS_KEY<span>=</span><span>"&lt;key&gt;"</span>
+<span>export</span> AWS_SESSION_TOKEN<span>=</span><span>"&lt;token&gt;"</span> 
+<span>export</span> AWS_DEFAULT_REGION<span>=</span><span>"&lt;region&gt;"</span>
+</code></pre>
+<p>And passing these to the <code>docker run</code> command:</p>
+<pre><code>docker run --rm \
+  -e AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY \
+  -e AWS_DEFAULT_REGION \
+  -e AWS_SESSION_TOKEN \
+  example/aws-cli \
+  s3 <span>ls</span>
+</code></pre>
+<p>I split the command over multiple lines as it's starting to get a bit unwieldy. If you have your AWS credentials <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html#cli-configure-files-where">stored in credentials files instead</a> in <code>$HOME/.aws</code> instead of environment variables, you can pass those to the container using:</p>
+<pre><code>docker run --rm \
+  -v <span>"<span>$HOME</span>/.aws:/root/.aws"</span> \
+  example/aws-cli \
+  s3 <span>ls</span>
+</code></pre>
+<p>In these examples, we're just listing out our S3 buckets, so we're not interacting with the file system directly. But what if you want to copy a file from a bucket to your local file system? To achieve this, you need to bind your working directory to the <code>/project</code> volume inside the container. For example: </p>
+<pre><code>docker run --rm \
+  -v <span>"<span>$HOME</span>/.aws:/root/.aws"</span> \
+  -v <span>$PWD</span>:/project \
+  example/aws-cli \
+  s3 <span>cp</span> s3://mybucket/test.txt test2.txt
+</code></pre>
+<p>In this snippet we bind the current directory (<code>$PWD</code>) to the working directory in the container <code>/project</code>. When we use <code>s3 cp</code> to download the <em>test.txt</em> file, it's written to <code>/project/test2.txt</code> in the container, which in turn writes it to your current directory on the host.</p>
+<p>By now you might be getting a bit fatigued - having to run such a long command every time you want to use the AWS CLI sucks. Luckily there's easy fixes by using a small script</p>
+
+<p>Having to pass all those environment variables and volume mounts is a pain. The simplest solution, is to create a basic script that includes all those defaults for you:</p>
+<pre><code><span>#!/bin/bash</span>
+
+docker run --rm \
+  -v <span>"<span>$HOME</span>/.aws:/root/.aws"</span> \
+  -v <span>$PWD</span>:/project \
+  example/aws-cli \
+  <span>"<span>$@</span>"</span>
+</code></pre>
+<p>Note that this script is pretty much the same as the final example from the previous section. The difference is that we're using the arguments catch-all <code>"$@"</code> at the end of the script, which means "paste all of the arguments here as quoted string". </p>
+<p>If you save this script as <em>aws.sh</em> in your home directory (and give it execute permissions by running <code>chmod +x ~/aws.sh</code>), then copying a file becomes almost identical to using the AWS CLI directly:</p>
+<pre><code>
+aws.sh s3 <span>cp</span> s3://mybucket/test.txt test2.txt
+
+~/aws.sh s3 <span>cp</span> s3://mybucket/test.txt test2.txt
+</code></pre>
+<p>Much nicer!</p>
+<p>You could even go one step further and create an alias for <code>aws</code> to be the contents of the script:</p>
+<pre><code><span>alias</span> aws<span>=</span><span>'docker run --rm -v "<span>$HOME</span>/.aws:/root/.aws" -v <span>$PWD</span>:/project example/aws-cli'</span>
+</code></pre>
+<p>or alternatively, copy the file into your path:</p>
+<pre><code><span>sudo</span> <span>cp</span> ~/aws.sh /usr/local/bin/aws
+</code></pre>
+<p>As ever with Linux, there's a whole host of extra things you could do. You could create different versions of the <em>aws.sh</em> script which is configured to use alternative credentials or regions. But using a Dockerised tool rather than installing the CLI directly on your host means you can also have scripts that use different <em>versions</em> of the CLI. All the while, you've avoided polluting your host environment with dependencies!</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post, I showed how you can Dockerise your CLI tools to avoid having to install dependencies in your host environment. I showed how to pass environment variables and arguments to the Dockerised tool, and how to bind to your host's file system. Finally, I showed how you can use scripts to simplify executing your Docker images.</p>
+<p>If you're looking for a Dockerised version of the AWS CLI specifically, I have an <a href="https://hub.docker.com/r/andrewlock/aws-cli">image on Docker hub</a> which is generated from <a href="https://github.com/andrewlock/aws-cli">this GitHub</a> repository (which is a <a href="https://github.com/mesosphere/aws-cli">fork of an original</a> which fell out of maintenance).</p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

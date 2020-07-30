@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Content Injection with Response Rewriting in ASP.NET Core - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Content Injection with Response Rewriting in ASP.NET Core - linksfor.dev(s)"/>
+    <meta property="article:author" content="https://facebook.com/rickstrahl"/>
+    <meta property="og:description" content="If you&#x27;re creating middleware components you might need at some point to inject content in the existing HTTP output stream in ASP.NET Core. In this post I discuss how to intercept Response output by using a customized stream, modify the data and update the final output generated, effectively providing response filtering."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://weblog.west-wind.com/posts/2020/Apr/02/Content-Injection-with-Response-Rewriting-in-ASPNET-Core-3x"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Content Injection with Response Rewriting in ASP.NET Core</title>
+<div class="readable">
+        <h1>Content Injection with Response Rewriting in ASP.NET Core</h1>
+            <div>by https://facebook.com/rickstrahl</div>
+            <div>Reading time: 16-20 minutes</div>
+        <div>Posted here: 03 Apr 2020</div>
+        <p><a href="https://weblog.west-wind.com/posts/2020/Apr/02/Content-Injection-with-Response-Rewriting-in-ASPNET-Core-3x">https://weblog.west-wind.com/posts/2020/Apr/02/Content-Injection-with-Response-Rewriting-in-ASPNET-Core-3x</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="ArticleBody" itemprop="articleBody">
+        
+        
+
+
+        <p><a href="https://weblog.west-wind.com/images/2020/Response-Rewriting-in-ASP-NET-Core-3x/Injection.png"><img src="https://weblog.west-wind.com/images/2020/Response-Rewriting-in-ASP-NET-Core-3x/Injection.png" alt=""></a></p>
+<p>In building my <a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload">Westwind.AspNetCore.LiveReload middleware component</a> a while back, one issue that came up was how to handle Response rewriting in ASP.NET Core. This middleware provides optional live reload functionality to ASP.NET Core projects letting you reload the active page as soon as any monitored file is changed. Rather than an external tool it provides this functionality as middleware that can be plugged in and turned on/off via configuration.</p>
+<p>As part of that middleware logic, the component needs to inject some JavaScript for the WebSocket interaction into any HTML pages sent to the client for display in the browser. Each HTML page includes the content so the server can trigger a reload when a monitored file is changed on the server. In order to do this the middleware needs to look at any original HTML output and transform it with the injected script code.</p>
+<h2 id="html-injection-in-aspnet-core-content"><a name="html-injection-in-aspnet-core-content" href="#html-injection-in-aspnet-core-content"></a>HTML Injection in ASP.NET Core Content</h2>
+<p>Let's back up for a second and talk about Response filtering and modifying content in <code>Response.Body</code>. If you want to do Response filtering you need to intercept the Response output stream and then intercept and look at the outgoing bytes written and rewrite them with your updated data.</p>
+<p>The way this used to work in classic ASP.NET was by using a special <code>Response.Filter</code> property, which was basically a filter stream applied to the Response stream. ASP.NET took care of taking your stream and chaining it to the <code>Response.Stream</code>. Multiple filters could be applied, effectively chaining the streams together.</p>
+<h3 id="response-wrapping-in-net-core-2x"><a name="response-wrapping-in-net-core-2x" href="#response-wrapping-in-net-core-2x"></a>Response Wrapping in .NET Core 2.x</h3>
+<p>In ASP.NET Core there's no <code>Response Filter</code> so the process looks a bit different in ASP.NET Core, but essentially the concepts are the same. Instead of a filter you need to directly wrap the  <code>context.Response.Body</code> or - as I'll show in a minute by using an <code>IHttpResponseBodyFeature</code> wrapper.</p>
+<p>The raw filter wrapping looks something like this and this works both in .NET Core 2.x and 3.x:</p>
+<pre><code><span><span>private</span> <span>async</span> Task <span>HandleHtmlInjection</span>(<span>HttpContext context</span>)</span>
+{
+    <span>using</span> (<span>var</span> filteredResponse = <span>new</span> ResponseStreamWrapper(context.Response.Body, context))
+    {
+        context.Response.Body = filteredResponse;
+        <span>await</span> _next(context);
+    }
+}
+</code></pre>
+<p>This essentially wraps the existing <code>context.Response.Body</code> stream with a new stream. <code>ResponseStreamWrapper</code> in this case is a custom <code>Stream</code> implementation that  forwards most stream operations to the old stream and specifically overwrites the various <code>Write</code> methods to look at the outbound <code>byte[]</code> array to check for certain content and rewrite it - in this case looking for the ending <code>&lt;/body&gt;</code> tag and injecting the LiveReload script there.</p>
+<h3 id="aspnet-core-3x-response-rewriting-with-ihttpresponsestreamfeature"><a name="aspnet-core-3x-response-rewriting-with-ihttpresponsestreamfeature" href="#aspnet-core-3x-response-rewriting-with-ihttpresponsestreamfeature"></a>ASP.NET Core 3.x Response Rewriting with IHttpResponseStreamFeature</h3>
+<p>While the above approach also works in ASP.NET Core 3.1, there are some changes in how ASP.NET Core processes response output and the recommendations for writing Response output have changed.</p>
+<p>A while back when having some discussions around Response filtering with this Live Reload component, <a href="https://github.com/Tratcher">Chris Ross</a> from the ASP.NET Core team mentioned that it would be better to use the new <code>IHttpResponseBodyFeature</code> functionality instead of directly taking over the Response output stream.</p>
+<p>The reason for this suggestion is that in ASP.NET Core 3.x there have been a lot of <strong>under the cover performance changes on how Request and Response data is moved around</strong> using <code>Pipeline&lt;T&gt;</code> instead of <code>Stream</code>. There are a number of <code>IHttpXXXXFeature</code> interfaces and corresponding implementations that are helping to abstract those new implementation details in higher level interfaces and implementations that are don't have to take the differences between a raw stream and Pipeline IO into account. It's a nice way to handle the new functionality without breaking based on different implementations under the covers. But it makes the process of intercepting a little less obvious - especially since some of those new interfaces aren't even documented (yet?).</p>
+<p>For response body access the specific Feature is <code>IHttpResponseBodyFeature</code>. The only place I could find any information on <code>IHttpResponseBodyFeature</code> was in the ASP.NET Source code. After some digging there, I ended up with the following code (<a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/blob/2de8bb64a417b7fd5986b9808d7707f3e1e8c6ee/Westwind.AspnetCore.LiveReload/LiveReloadMiddleware.cs#L68">full code on GitHub</a>):</p>
+<pre><code><span><span>private</span> <span>async</span> Task <span>HandleHtmlInjection</span>(<span>HttpContext context</span>)</span>
+{
+    
+    <span>using</span> (<span>var</span> filteredResponse = <span>new</span> ResponseStreamWrapper(context.Response.Body, context))
+    {
+<span>#<span>if</span> !NETCORE2  </span>
+        
+        
+        context.Features.Set&lt;IHttpResponseBodyFeature&gt;(<span>new</span> StreamResponseBodyFeature(filteredResponse));
+<span>#<span>else</span></span>
+        context.Response.Body = filteredResponse;
+<span>#<span>endif</span></span>
+        <span>await</span> _next(context);
+    }
+}
+</code></pre>
+<p>Because <code>IHttpResponseBodyFeature</code> is a new feature in ASP.NET Core 3.x I need the bracketed <code>#IF !NETCORE2</code> block to run the new code in 3.x and the old <code>Response.Body</code> assignment in 2.x.</p>
+<p>To get that to work the Compiler constant has to be defined in the project:</p>
+<pre><code><span>&lt;<span>PropertyGroup</span> <span>Condition</span>=<span>"'$(TargetFramework)' == 'netcoreapp2.1'"</span>&gt;</span>
+    <span>&lt;<span>DefineConstants</span>&gt;</span>NETCORE2<span>&lt;/<span>DefineConstants</span>&gt;</span>
+<span>&lt;/<span>PropertyGroup</span>&gt;</span>
+</code></pre>
+<p>Since <code>IHttpResponseBodyFeature</code> is  a new feature in 3.x and its purpose is to abstract response stream writes, instead assigning the <code>Response.Stream</code> directly you use the <code>context.Features</code> to assign the feature and pass in the stream:</p>
+<pre><code>context.Features.Set&lt;IHttpResponseBodyFeature&gt;(<span>new</span> StreamResponseBodyFeature(filteredResponse));
+
+
+<span>var</span> feature = context.Features.Get&lt;IHttpResponseBodyFeature&gt;();
+</code></pre>
+<p>Once added, you can only get access to the <code>IHttpResponseBodyFeature</code> by explicitly retrieving it from the Features list, which is kind of wonky.  There's not much there though so most likely you won't ever talk directly to the feature interface but here's what the interface looks like:</p>
+<p><a href="https://weblog.west-wind.com/images/2020/Response-Rewriting-in-ASP-NET-Core-3x/ResponseFeatureIntellisense.png"><img src="https://weblog.west-wind.com/images/2020/Response-Rewriting-in-ASP-NET-Core-3x/ResponseFeatureIntellisense.png" alt=""></a></p>
+<p>It seems like a mixture for helpers for writing the stream and controlling the response.</p>
+<p>Although undocumented and not very discoverable, the good news is that it's easy enough to use once you figure out you need this interface, and you can replace the old code with a the alternative shown in the code snippet with a single line of code.</p>
+<p>Just remember that <code>IHttpResponseBodyFeature</code> only exists .NET Core 3.x and later.</p>
+<h2 id="wrap-it-up-html-injection-with-response-wrapping-in-more-detail"><a name="wrap-it-up-html-injection-with-response-wrapping-in-more-detail" href="#wrap-it-up-html-injection-with-response-wrapping-in-more-detail"></a>Wrap it up: HTML Injection with Response Wrapping in more Detail</h2>
+<p>Ok, so I've shown the top level of how to replace the output stream to intercept and write out a custom response. For completeness' sake I'm going to describe the Response wrapping code and stream implementation that handles the HTML injection logic here, because this actually turned out to be more tricky than it should be due to a few difficulties in ASP.NET Core access to Response header information.</p>
+<p>For this middleware component, in order to inject the Web Socket script into <strong>any HTML output</strong> that the application renders - static HTML, or Razor/MVC generated pages or views - I need to rewrite the <code>&lt;/body&gt;</code> tag in the HTML output, and when I find it, inject the WebSocket script into the output.</p>
+<p>To do this the only way I could find is to capture the Response stream and as part of that process the stream logic has to:</p>
+<ul>
+<li>Check to see if the Response Content Type is HTML</li>
+<li>If so force the Content Length to <code>null</code>  (ie. auto-length)</li>
+<li>If so update the stream and inject the Web Socket script code if the marker is found</li>
+<li>If not HTML pass raw content straight through to the base stream</li>
+</ul>
+<p>This pretty much like what you had to do in classic ASP.NET with <code>Response.Filter</code> except here I have to explicitly take over the Response stream (or Http Feature) directly.</p>
+<p>There are a few quirks that make this <strong>a lot harder</strong> than it used to be, that has to do with the fact ASP.NET Core that you can't write headers after the Response has started outputting. There's also no clean way I could find outside of the Output Stream implementation to check the <code>Response.ContentType</code> and set the <code>Response.ContentLength</code> for the current request before it hits the stream. This means that the stream handles those two tasks internally which is messy to say the least.</p>
+<p>Let's start with the <code>ResponseStreamWrapper</code> which is a custom <code>Stream</code> implementation. Here's what the relevant overridden methods in this stream class look like . I've left out the methods that just forward to the base stream leaving just the relevant methods that operate on checking and manipulating the Response (<a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/blob/master/Westwind.AspnetCore.LiveReload/ResponseStreamWrapper.cs">full code on Github</a>):</p>
+<pre><code><span>public</span> <span>class</span> <span>ResponseStreamWrapper</span> : <span>Stream</span>
+{
+    <span>private</span> Stream _baseStream;
+    <span>private</span> HttpContext _context;
+    <span>private</span> <span>bool</span> _isContentLengthSet = <span>false</span>;
+
+    <span><span>public</span> <span>ResponseStreamWrapper</span>(<span>Stream baseStream, HttpContext context</span>)</span>
+    {
+        _baseStream = baseStream;
+        _context = context;
+        CanWrite = <span>true</span>;
+    }
+
+    <span><span>public</span> <span>override</span> Task <span>FlushAsync</span>(<span>CancellationToken cancellationToken</span>)</span>
+    {
+        
+        
+        
+        <span>if</span> (!_isContentLengthSet &amp;&amp; IsHtmlResponse())
+        {
+            _context.Response.Headers.ContentLength = <span>null</span>;
+            _isContentLengthSet = <span>true</span>;
+        }
+
+        <span>return</span> _baseStream.FlushAsync(cancellationToken);
+    }
+
+    ... 
+
+    <span><span>public</span> <span>override</span> <span>void</span> <span>SetLength</span>(<span><span>long</span> <span>value</span></span>)</span>
+    {
+        _baseStream.SetLength(<span>value</span>);
+        IsHtmlResponse(forceReCheck: <span>true</span>);
+    }
+
+    <span><span>public</span> <span>override</span> <span>void</span> <span>Write</span>(<span><span>byte</span>[] buffer, <span>int</span> offset, <span>int</span> count</span>)</span>
+    {
+        <span>if</span> (IsHtmlResponse())
+        {
+            WebsocketScriptInjectionHelper.InjectLiveReloadScriptAsync(buffer, offset, count, _context, _baseStream)
+                                          .GetAwaiter()
+                                          .GetResult();
+        }
+        <span>else</span>
+            _baseStream.Write(buffer, offset, count);
+    }
+
+    <span><span>public</span> <span>override</span> <span>async</span> Task <span>WriteAsync</span>(<span><span>byte</span>[] buffer, <span>int</span> offset, <span>int</span> count,
+                                          CancellationToken cancellationToken</span>)</span>
+    {
+        <span>if</span> (IsHtmlResponse())
+        {
+            <span>await</span> WebsocketScriptInjectionHelper.InjectLiveReloadScriptAsync(
+                buffer, offset, count,
+                _context, _baseStream);
+        }
+        <span>else</span>
+            <span>await</span> _baseStream.WriteAsync(buffer, offset, count, cancellationToken);
+    }
+
+
+    <span>private</span> <span>bool</span>? _isHtmlResponse = <span>null</span>;
+    <span><span>private</span> <span>bool</span> <span>IsHtmlResponse</span>(<span><span>bool</span> forceReCheck = <span>false</span></span>)</span>
+    {
+        <span>if</span> (!forceReCheck &amp;&amp; _isHtmlResponse != <span>null</span>)
+            <span>return</span> _isHtmlResponse.Value;
+
+        _isHtmlResponse =
+            _context.Response.StatusCode == <span>200</span> &amp;&amp;
+            _context.Response.ContentType != <span>null</span> &amp;&amp;
+            _context.Response.ContentType.Contains(<span>"text/html"</span>, StringComparison.OrdinalIgnoreCase) &amp;&amp;
+            (_context.Response.ContentType.Contains(<span>"utf-8"</span>, StringComparison.OrdinalIgnoreCase) ||
+            !_context.Response.ContentType.Contains(<span>"charset="</span>, StringComparison.OrdinalIgnoreCase));
+
+        
+        
+        
+        <span>if</span> (!_isContentLengthSet &amp;&amp; _context.Response.ContentLength != <span>null</span>)
+        {
+            _context.Response.Headers.ContentLength = <span>null</span>;
+            _isContentLengthSet = <span>true</span>;
+        } 
+            
+        <span>return</span> _isHtmlResponse.Value;
+    }
+}
+</code></pre>
+<p>There are a couple of things of note here.</p>
+<h3 id="everything-is-forced-through-the-stream"><a name="everything-is-forced-through-the-stream" href="#everything-is-forced-through-the-stream"></a>Everything is forced through the Stream</h3>
+<p>This approach requires <strong>that all content</strong> - not just the HTML content - goes through this filtering stream because I have no other way to determine the Response <code>Content-Type</code> reliably before the stream is accessed to determine if the output is HTML. Even the detection of whether output is HTML is rolled into the stream logic because that was the only way I could figure out how to get the <code>Content-Type</code> before the Response starts writing. All those calls to <code>IsHtmlRepsonse()</code> check for the content type and are required on all the write operations so that the content can be passed straight through for none HTML respsonses.</p>
+<p>The filter stream is pretty efficient as it passes through all stream methods to the base stream in the case of non-HTML content. It does have to check whether the content is HTML but that check only happens once and after that uses a cached value. Still, it seems that it would be much more efficient if there was a way to tell whether the stream needs to be wrapped <strong>before</strong> creating a new wrapping stream.</p>
+<p>Maybe there's a better way to do this which would make non-HTML content more efficient, but I couldn't find one.</p>
+
+<p>Another small problem is that in ASP.NET Core headers <strong>cannot be modified once you start writing to the Response</strong> stream. That makes sense in some scenarios (such as streaming data or dynamic data), but seems infuriating for others when you know that ASP.NET has to still write the <code>Content-Length</code> anyway when it's done with content because the size of the content isn't known until the output has been completely rendered. So there's some sort of buffering happening - but your code doesn't get to participate in that unless you completely reset the Response.</p>
+<p>Regardless, since this middleware injects additional script into the page, <code>Content-Length</code> <strong>always</strong> has to be set to <code>null</code> for HTML content because even if the size was previously set, with the injected script the size is no longer accurate. So <code>Response.ContentLength=null</code> is still a requirement and it has to be set <strong>before writing to the header</strong>.</p>
+<p>To make this scenario even worse, in <a href="https://github.com/dotnet/aspnetcore/issues/14056#issuecomment-532066740">ASP.NET Core 3.0 there was a bug</a> that fired the stream's <code>FlushAsync()</code> method <strong>before the first <code>Write</code> operation</strong> when the initial Response stream was created. Arrgh! So the code also checks <code>FlushAsync()</code> for HTML content and resets the <code>Content-Length</code> there. That was a fun one to track down. . Luckily it <strong>looks like that issues was fixed in ASP.NET Core 3.1.</strong>.</p>
+<h3 id="the-actual-rewrite-code"><a name="the-actual-rewrite-code" href="#the-actual-rewrite-code"></a>The Actual Rewrite Code</h3>
+<p>The actual rewrite code rewrites the incoming byte buffer as it comes into any of the Stream write operations. Because there are a number of overloads and sync and async versions, this code is moved out into separate helper methods that are called from the appropriate Write methods.  The code uses <code>Span&lt;T&gt;</code> to split the inbound buffer to avoid additional allocation of an extra buffer and then writes the three buffers - pre, script, post - out into the stream:</p>
+<pre><code><span><span>public</span> <span>static</span> Task <span>InjectLiveReloadScriptAsync</span>(<span>
+            <span>byte</span>[] buffer, 
+            <span>int</span> offset, <span>int</span> count, 
+            HttpContext context, 
+            Stream baseStream</span>)</span>
+{
+    Span&lt;<span>byte</span>&gt; currentBuffer = buffer;
+    <span>var</span> curBuffer = currentBuffer.Slice(offset, count).ToArray();
+    <span>return</span> InjectLiveReloadScriptAsync(curBuffer, context, baseStream);
+}
+
+<span><span>public</span> <span>static</span> <span>async</span> Task <span>InjectLiveReloadScriptAsync</span>(<span>
+        <span>byte</span>[] buffer, 
+        HttpContext context, 
+        Stream baseStream</span>)</span>
+{
+    <span>var</span> index = buffer.LastIndexOf(_markerBytes);
+
+    <span>if</span> (index &gt; <span>-1</span>)
+    {
+        <span>await</span> baseStream.WriteAsync(buffer, <span>0</span>, buffer.Length);
+        <span>return</span>;
+    }
+
+    index = buffer.LastIndexOf(_bodyBytes);
+    <span>if</span> (index == <span>-1</span>)
+    {
+        <span>await</span> baseStream.WriteAsync(buffer, <span>0</span>, buffer.Length);
+        <span>return</span>;
+    }
+
+    <span>var</span> endIndex = index + _bodyBytes.Length;
+
+    
+    <span>await</span> baseStream.WriteAsync(buffer, <span>0</span>, index - <span>1</span>);
+
+    
+    <span>var</span> scriptBytes = Encoding.UTF8.GetBytes(GetWebSocketClientJavaScript(context));
+    <span>await</span> baseStream.WriteAsync(scriptBytes, <span>0</span>, scriptBytes.Length);
+
+    
+    <span>await</span> baseStream.WriteAsync(buffer, endIndex, buffer.Length - endIndex);
+}
+
+<span>static</span> <span>int</span> LastIndexOf&lt;T&gt;(<span>this</span> T[] array, T[] sought) <span>where</span> T : IEquatable&lt;T&gt; 
+                          =&gt; array.AsSpan().LastIndexOf(sought);
+</code></pre>
+<p>Again the complete code including the dependencies that are not listed here are on Github in the <a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload/blob/master/Westwind.AspnetCore.LiveReload/WebsocketScriptInjectionHelper.cs">WebSocketScriptInjectionHelper class</a>. This code has all the logic needed to inject additional bytes into an existing byte array which is what's needed to rewrite the content from an individual (or complete) <code>Response.Write()</code> or <code>Response.WriteAsync()</code> operation.</p>
+<h2 id="summary"><a name="summary" href="#summary"></a>Summary</h2>
+<p>As you can see the by all of this, rewriting Response is by no means trivial - there are quite a few moving parts that need to be implemented all essentially in the customized response stream. Getting all the relevant information at the relevant time in the pipeline processing in ASP.NET Core is a lot harder to find than it ever was in classic ASP.NET. All these piled up abstractions make for an alphabet soup of functionality layered on top of each other. The good news is that once you find the right levers to turn, there are ways to manipulate just about anything in the pipeline. Just don't expect it to be easy to figure out.</p>
+<p>The bottom line is that re-writing HTTP Response content is still a pain in the ass in ASP.NET Core. It still requires capturing the active Response stream and rewriting the content on the fly. You have to be careful to set your headers <strong>before</strong> the re-write and especially you have to ensure that if you change the content's size that the <code>Content-Length</code> gets dynamically set by ASP.NET internally by setting <code>context.Response.Headers.ContentLength = null;</code>.</p>
+<p>It's not much different from what you had to do in classic ASP.NET, except for the header manipulation which makes some of this more cryptic. The fact that some of the new interfaces like <code>IHttpResponseBodyFeature</code> aren't documented also isn't helpful.</p>
+<p>Hopefully walking through this scenario is useful to some of you heading down the same path of rewriting output as I did.</p>
+<h2 id="resources"><a name="resources" href="#resources"></a>Resources</h2>
+<ul>
+<li><a href="https://github.com/RickStrahl/Westwind.AspnetCore.LiveReload">Westwind.AspNetCore.LiveReload on GitHub</a></li>
+</ul>
+
+
+
+
+
+        
+        
+        
+    </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+The Pain of Debugging WebAssembly &#x2013; The New Stack - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="The Pain of Debugging WebAssembly &#x2013; The New Stack - linksfor.dev(s)"/>
+    <meta property="og:description" content="WASM can do some awesome things. But what&#x27;s not awesome? Debugging with WASM."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://thenewstack.io/the-pain-of-debugging-webassembly/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - The Pain of Debugging WebAssembly &#x2013; The New Stack</title>
+<div class="readable">
+        <h1>The Pain of Debugging WebAssembly &#x2013; The New Stack</h1>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 01 Jul 2020</div>
+        <p><a href="https://thenewstack.io/the-pain-of-debugging-webassembly/">https://thenewstack.io/the-pain-of-debugging-webassembly/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+			
+			<div>
+				<p><a href="https://bit.ly/2vTUd9j" rel="external " onclick="this.target='_blank';">Sentry</a> sponsored this post.</p>
+<a href="https://www.linkedin.com/in/arminronacher/" target="_blank">
+				<p><img src="https://cdn.thenewstack.io/media/2020/06/fd534157-armin.jpeg">
+				</p>
+				<div>
+					<p>Armin Ronacher</p>
+					<p>Armin is Director of Engineering at Sentry.</p>
+				</div>
+			</a>
+<p>If you know anything about <a href="https://webassembly.org/" rel="external " onclick="this.target='_blank';">WebAssembly</a> (WASM), it’s probably that WASM lets you execute code compiled from languages such as C, C++, Rust, or others in the browser at almost native speeds. You might be less familiar with the fact that WASM is not only an interesting technology in the browser, but also in other environments that require fast sandboxing. As such, WASM has found some popularity with edge computing and as a lightweight docker replacement for certain situations.</p>
+<p>The latter is enabled by a standard called <a href="https://wasi.dev/" rel="external " onclick="this.target='_blank';">WASI</a>, which provides a platform-independent abstraction to interface with the operating system for basic input/output, file system access, getting the current time, and other such things. WASI is implemented by runtimes such as <a href="https://wasmtime.dev/" rel="external " onclick="this.target='_blank';">wasmtime</a> or <a href="https://wasmer.io/" rel="external " onclick="this.target='_blank';">wasmer</a>.</p>
+<p>WASM can do some awesome things. But what’s not awesome? Debugging with WASM.</p>
+<p>Many of us are working on complex systems where it’s increasingly difficult to reproduce real bugs. As developers, we understand this challenge. That’s why we made sure you can use Sentry’s source maps to find stack traces that reliably show what your real stack trace looked like — even on a minimized JavaScript build. And when it comes to WASM, we want to have a reliable stack trace with reliable function names, line numbers and file names in production, so we can send this to a system like Sentry. But this is where we’re running into limitations at the moment.</p>
+<h2><strong>Current Debug Gripes</strong></h2>
+<p>WASM at its core is quite different from many systems that native languages normally deal with. It’s a stack machine! Functions are not “addressable” in the same memory space as the memory we are working with. This “novel” concept has advantages, but much of WASM’s existing tooling is not built for our current reality.</p>
+<h2><strong>Stack Unwinding</strong></h2>
+<p>Let’s start with the basics: to get a stack trace we need to unwind the stack. In the world of native code, this is typically done with libraries like <a href="https://www.nongnu.org/libunwind/" rel="external " onclick="this.target='_blank';">libunwind</a> — which implements the platform’s unwinding scheme. For our needs, we just care about the return addresses for a function and nothing more.</p>
+
+	
+
+
+<p>There are generally two ways to unwind. The first is to dump the entire stack memory with registers into a memory dump (like a minidump), then unwind after the fact. The second is to capture the registers and unwind in the running program. The latter is also necessary when C++ exceptions or Rust panics are thrown. These exceptions or panics already tell us that stack unwinding is not just needed to build a fancy stack trace, but also to execute destructors in the presence of exceptions.</p>
+<p>At present, WASM does not support stack unwinding. Though it seems like a pretty severe limitation, it turns out not to be a huge issue (at least for the browser JavaScript case). It turns out that because of WASM’s stack-based nature, the WASM function calls are visible within the JavaScript stack trace. This means that if a JavaScript function calls WASM and WASM calls JavaScript, we can observe the WASM frames from JavaScript. So as a fancy workaround, we can create a JavaScript exception object and then parse its stack trace.</p>
+<h2><strong>DWARF</strong></h2>
+<p>DWARF is our favorite debug standard, mostly because it’s the only one that is thought through and documented. (The other being source maps and PDB, which is so bizarre that we might have some material for future content).</p>
+<p>While DWARF is great, it just doesn’t really work with WASM yet — it’s supported by at least Chrome for debugging WASM, but there are remaining issues.</p>
+<p>DWARF works by embedding sections with DWARF debug data in an executable or object file. Because WASM is an extensible object format, it’s absolutely possible to embed DWARF in it. However, we already mentioned earlier that WASM is stack-based and that functions are not in memory. It works because there is a <a href="https://yurydelendik.github.io/webassembly-dwarf/" rel="external " onclick="this.target='_blank';">DWARF for WASM</a> spec and it says that code addresses are byte offsets in the code section of the WASM file.</p>
+<p>Cool. Except a lot of WASM tools don’t account for things like byte offsets. For good reason, because WASM actually has two formats: a binary format and WAST, which is a text representation. Within DWARF, these two formats are no longer interchangeable in the presence of debug information, as otherwise the offsets would require rewriting. Bummer.</p>
+<h2><strong>DWARF Splitting</strong></h2>
+<p>So alright, DWARF kind of works. But let’s think about *<em>how</em>* DWARF works. DWARF debug data is embedded right in the WASM file. This is a problem for two reasons: one is that most people don’t want anyone to easily decompile their code and see the file names from their build machines or other metadata.</p>
+<p>But even if you’re an open source lover who doesn’t mind debug information living on the internet, you still wouldn’t want to embed the debug info in the WASM file. At present, DWARF data for WASM is humongous and even in the most optimistic future, WASM debug data will still be an order of magnitude larger than the main WASM file.</p>
+<p>This is where the idea of splitting DWARF data from the main executable comes into play. On macOS, these are called <code>.dSYM</code> files — but really this works everywhere, including with WASM. You can, in fact, already split a WASM file into code and debug data just fine. The debug data can live in a non-executable and non-functional WASM file that only contains the debug information.</p>
+<p>The problem is that after splitting these two things, it’s difficult to link them back together. The current DWARF spec proposes to embed a reference to a downloadable debug file in the main WASM file as a custom section. This is basically how source maps work, but not how native debugging normally works. One of the brilliant ideas popularized by both Apple and Microsoft was giving debug and executable files globally unique debug IDs. With that knowledge, you can link a debug file and a code file together.</p>
+<p>From what I can tell, nobody supports DWARF splitting yet. The only spec floating around uses URL references, which are a worse user experience than debug IDs.</p>
+<h2><strong>Debug IDs</strong></h2>
+<p>As you can see from the last section, you can’t say “DWARF splitting” without talking about debug IDs. They also go by other monikers: Build ID, Debug ID, Code ID — all names that more or less communicate a unique ID for our debug data.</p>
+<p>Debug IDs are useful because they let you connect the debug file to the right WASM file. If I were to connect the wrong debug data with your file, then it’s a classic example of two unrelated pieces of good data in, garbage out.</p>
+<p>I proposed such an <a href="https://github.com/WebAssembly/tool-conventions/issues/133" rel="external " onclick="this.target='_blank';">extension for WASM</a> on the tool conventions issue tracker, but so far it hasn’t gone anywhere.</p>
+<p>What makes debug IDs so wonderful is that they are so nice to use. Your toolchain will just emit those files and you can put them on a <a href="https://getsentry.github.io/symbolicator/advanced/symbol-server-compatibility/" rel="external " onclick="this.target='_blank';">symbol server</a>, where debuggers can download the binaries and debug data. (As a side note, Sentry also loves debug IDs — even if you don’t use a symbol server, you can upload these files conveniently to your organization on Sentry and it will work.</p>
+<h2><strong>Source Maps</strong></h2>
+<p>The WASM source map format is completely inadequate (you can’t get function names, can’t access variables in a debugger, can’t get scope information, etc.) even for JavaScript debugging, but it has found its way into the WASM world as well. I think it would be better for us to collectively forget that they exist in a WASM world, but at the moment they’re the only thing that is somewhat widely supported. They’re not great, cannot map function names, and only show where an instruction points *in the text assembly version* of WASM.</p>
+<h2><strong>Stack Trace Information</strong></h2>
+<p>Let’s imagine all of the above works. We’re still not out of the woods yet. WASM rarely comes alone. At the very least, it comes with its friend JavaScript, but not uncommonly, it also brings other WASM modules. Though WASM modules are self-contained, they can export and import functions. When you have a stack trace involving WASM, a file name encodes WASM location information and looks something like this: <code>${url}:wasm-function[${funcIndex}]:${pcOffset}</code>. It tells us the function index and the offset within that. Unfortunately, you can’t know where to look up the function index or tell loaded WASM modules apart, because two different functions from two different modules can have the same <code>funcIndex</code>.</p>
+<h2><strong>Debugging is Still a Niche</strong></h2>
+<p>This is the meta-gripe. It seems like everybody is super excited about Web Assembly, but barely anyone is excited about making sure it’s debuggable. There are great folks working on this of course, but it’s a relatively tight-knit community. If you’d like to participate or follow along check out any of the following projects:</p>
+<ul>
+<li><a href="https://github.com/WebAssembly/tool-conventions/" rel="external " onclick="this.target='_blank';">General Tool Conventions</a></li>
+<li><a href="https://github.com/WebAssembly/tool-conventions/issues/133" rel="external " onclick="this.target='_blank';">Debug IDs</a></li>
+<li><a href="https://www.notion.so/sentry/WebAssembly-and-the-7-Debug-Gripes-7619b647c00d45988f8e238f5b2badd9#949ae922a3284744877dd853973b80f4" rel="external " onclick="this.target='_blank';">Except handling discussions</a></li>
+<li><a href="https://github.com/yurydelendik/webassembly-dwarf" rel="external " onclick="this.target='_blank';">WASMDWARF spec</a></li>
+<li><a href="https://github.com/WebAssembly/design/issues/1340" rel="external " onclick="this.target='_blank';">Stack Walking</a></li>
+</ul>
+<p>Feature image <a href="https://pixabay.com/photos/cactus-blossom-plant-flower-4276771/" rel="external " onclick="this.target='_blank';">via</a> Pixabay.</p>
+<p>At this time, The New Stack does not allow comments directly on this website. We invite all readers who wish to discuss a story to visit us on&nbsp;<a href="https://twitter.com/thenewstack" rel="external  " onclick="this.target='_blank';">Twitter</a>&nbsp;or&nbsp;<a href="https://www.facebook.com/thenewstack/" rel="external  " onclick="this.target='_blank';">Facebook</a>. We also welcome your news tips and feedback via email:&nbsp;<a href="mailto:feedback@thenewstack.io">feedback@thenewstack.io</a>.</p>
+			</div>
+
+			
+		</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

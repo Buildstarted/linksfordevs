@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Proposal: Extension await operator to address scoped ConfigureAwait &#xB7; Issue #2649 &#xB7; dotnet/csharplang - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Proposal: Extension await operator to address scoped ConfigureAwait &#xB7; Issue #2649 &#xB7; dotnet/csharplang - linksfor.dev(s)"/>
+    <meta property="article:author" content="stephentoub"/>
+    <meta property="og:description" content="Library developers are often frustrated at needing to use .ConfigureAwait(false) on all of their awaits, and this has led to numerous proposals for assembly-level configuration, e.g. #645, #2542. T..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/dotnet/csharplang/issues/2649"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Proposal: Extension await operator to address scoped ConfigureAwait &#xB7; Issue #2649 &#xB7; dotnet/csharplang</title>
+<div class="readable">
+        <h1>Proposal: Extension await operator to address scoped ConfigureAwait &#xB7; Issue #2649 &#xB7; dotnet/csharplang</h1>
+            <div>by stephentoub</div>
+            <div>Reading time: 9-11 minutes</div>
+        <div>Posted here: 11 Jul 2019</div>
+        <p><a href="https://github.com/dotnet/csharplang/issues/2649">https://github.com/dotnet/csharplang/issues/2649</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div disabled="" sortable="">
+<div>
+          <p>I do like the ability to intercept <code>await</code> as an operator one way or another. Recently, I've been working on a system in C++ using <a href="https://en.cppreference.com/w/cpp/language/coroutines" rel="nofollow">upcoming support for coroutines in C++20</a>, which offers ample extensibility points we've been using to thread through schedulers and mechanisms akin to <code>ExecutionContext</code> to flow state across <code>co_await</code> sites.</p>
+<p>Three things have been particularly useful and are relevant to this conversion:</p>
+<ul>
+<li>Binding of <code>co_await e</code> first looks for an <code>await_transform</code> method on the promise type, which is analogous to the async method builder type in .NET. It allows to transform an awaiter and <code>co_await</code> the result returned by <code>await_transform</code>.</li>
+<li>Binding of <code>operator co_await</code>, which is the equivalent of <code>GetAwaiter</code> and can either be found either as a member on non-member overload, akin to support for binding <code>GetAwaiter</code> as an extension method. The main difference is that <code>co_await</code> is an operator.</li>
+<li>Ability to bind to an "awaiter" without the presence of an <code>operator co_await</code>, which would be equivalent to <code>await</code> being willing to bind to an object that has the shape of what's returned by <code>GetAwaiter</code> today.</li>
+</ul>
+<p>Quoting <a data-hovercard-type="user" data-hovercard-url="/users/stephentoub/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/stephentoub">@stephentoub</a> on this possibility:</p>
+<blockquote>
+<p>Of course, we could introduce another aspect to the awaiter pattern: a type is awaitable not only if it exposes GetAwaiter returning the right shape, but alternatively if it exposes a GetAwaitable which itself returns a GetAwaiter.</p>
+</blockquote>
+<p>This is very similar to the latter two extensibility points in C++ coroutines, effectively adding two chances for binding <code>await e</code>. In C++, there are three levels: <code>e.operator co_await()</code> as a member, <code>operator co_await(e)</code> as a non-member, or <code>e</code> (requiring the "awaiter" pattern). In the method-based approach for C#, there'd be two levels: <code>e.GetAwaitable()</code> returning an <em>awaitable</em> and <code>e.GetAwaiter()</code> returning an <em>awaiter</em>.</p>
+<p>For the (extension) operator-based approach, I assume the thinking is that a regular (non-extension) <code>operator await</code> would be added to the language, but types such as <code>[Value]Task[&lt;T&gt;]</code> would not have such an operator defined (as a <code>public static … operator await()</code> on those types themselves).</p>
+<p>Then, if an extension <code>operator await</code> is defined, it takes precedence. If no <code>operator await</code> exists at all, the existing rules apply to detect the awaitable pattern. So the rules would be similar to the <code>GetAwaitable</code> approach above:</p>
+<ol>
+<li>find <code>operator await</code> on the type of the <code>await</code> operand (~ <code>GetAwaitable</code> instance method, or <code>operator co_await</code> as a member lookup in C++);</li>
+<li>find an extension <code>operator await</code> based on the new concept of extension operators (~ <code>GetAwaitable</code> extension method, or <code>operator co_await</code> as a non-member lookup in C++);</li>
+<li>existing rules to treat the <code>await</code> operand as having the awaitable pattern (~ <code>GetAwaiter</code>, or treating the object itself as an "awaiter" in C++).</li>
+</ol>
+<p>Without a "regular" <code>operator await</code> being supported to be defined on a type (just like any existing unary operator definition), we'd have some new notion of an operator that only exists as an "extension operator". This would also feel like an extension <code>operator await</code> taking precedence over an instance <code>GetAwaiter</code>, which is backwards compared to existing extension methods being the last resort for binding.</p>
+<p>FWIW, another extensibility point that could be considered is an analogous concept to <code>await_transform</code> on promise types in C++, which we've been using extensively to intercept <code>co_await</code> sites in a coroutine method, e.g. to capture and restore context across suspension points, but also to implement a coroutine scheduling scheme. (In fact, we combine this with "parameter preview" capabilities on coroutine methods to fish out an allocator from the parameters on the coroutine method, which is similar to weaving a concept like cancellation through async methods.)</p>
+<p>The C# analogous concept to this would be some instance method on the async method builder, which does not exist in the BCL by default, thus opening up for it to be defined as an extension method. While potentially more flexible (i.e. the ability to substitute one awaitable for another one, e.g. wrapping the original one), it likely gets unweildy quickly because on needs to define extension methods like this:</p>
+<div><pre><span>static</span> <span>ConfiguredTaskAwaiter</span>&lt;<span>T</span>&gt; <span>GetAwaiter</span>&lt;<span>R</span>, <span>T</span>&gt;(<span>this</span> <span>AsyncTaskMethodBuilder</span>&lt;<span>R</span>&gt; <span>builder</span>, <span>Task</span>&lt;<span>T</span>&gt; <span>task</span>) { … }</pre></div>
+<p>which has way more combinations than the four task variants because it also involves the return type of the async method (for which we have five distinct builder types), unless there's some common (interface) type across all builder types to tame this:</p>
+<div><pre><span>static</span> <span>ConfiguredTaskAwaiter</span>&lt;<span>T</span>&gt; <span>GetAwaiter</span>&lt;<span>Builder</span>, <span>T</span>&gt;(<span>this</span> <span>Builder</span> <span>builder</span>, <span>Task</span>&lt;<span>T</span>&gt; <span>task</span>) <span>where</span> <span>Builder</span> : <span>IAsyncMethodBuilder</span> { … }</pre></div>
+<p>In a way, it's similar to <code>AwaitOnCompleted</code> methods on the builder operating on the awaitees within the async method, though it'd serve a different complementary purpose. For plain <code>ConfigureAwait</code> it's most likely overly complex (and users have to see the <code>System.Runtime.CompilerServices</code> builder types they likely have never heard of), but it could be a design point if other behavior adapters for <code>await</code> are desirable and could benefit from context provided by the builder. Quoting <a data-hovercard-type="user" data-hovercard-url="/users/stephentoub/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/stephentoub">@stephentoub</a>:</p>
+<blockquote>
+<p>Wanting to make all awaits cancelable via a global token. Wanting a timeout on all awaits. Wanting additional logging around all awaits. Wanting to flow additional state (e.g. in specific thread locals) across awaits. Wanting to force all awaits to complete asynchronously. Wanting to schedule all continuations to a specific scheduler. Wanting to override the SyncCtx/TaskScheduler behavior to instead look for a different ambient scheduler.</p>
+</blockquote>
+<p>Things like cancellation, timeouts, schedulers, etc. seem like they would likely be threaded through async methods as parameters rather than being globals (though async locals may be an alternative for a subset of those in some cases). At that point, these things become contextual, and the nearest relevant context for an <code>await</code> site is the containing async method, so getting a handle to that would be desirable.</p>
+<p>Obviously, the question becomes how to "fish out" parameters and have them be accessible to the transformer of the awaitees. The <code>[EnumeratorCancellation]</code> attribute for async enumerables is in fact a bit similar and a very specific case of this more general pattern; it carries a top-level parameter down to a synthesized construct. (For comparison, in the C++ land, one uses a variadic template to preview the parameters of the coroutine and uses template metaprogramming techniques to fish out things, the simplest of which is the "leading allocator convention" which feels very similar to the "trailing cancellation token convention" in .NET.)</p>
+<p>In fact, <code>await foreach</code> is another place where <code>ConfigureAwait(false)</code> can occur in the body of an async method, this time on an <code>IAsyncEnumerable&lt;T&gt;</code> to influence all await sites. It'd be great for whatever proposal on implicit <code>ConfigureAwait</code> application to cover this case as well. It may just fall out from the <code>await</code> expressions on the <code>ValueTask&lt;bool&gt;</code> and <code>ValueTask</code> values returned from <code>await foreach</code> lowering being subject to binding rules that pick up on <code>operator await</code> or some <code>GetAwaitable</code> extension, but it would involve more binding steps after initial lowering of <code>await foreach</code>.</p>
+<p>Alternatively, one could think of it as <code>await foreach</code> being "transformed" in the context of the surrounding async (iterator) method, thus allowing transformations for <code>ConfigureAwait</code> or passing of cancellation tokens to be applied to the source operand of <code>await foreach</code> (prior to lowering). With an <code>await_transform</code> type of thing, it could be (yet another) overload for <code>IAsyncEnumerable&lt;T&gt;</code> that returns the configured variant (or, with the ability to pick up on more async method context, the <code>WithCancellation</code> variant of the sequence to thread cancellation down).</p>
+<p>Just one final thought from more noodling with C++ coroutines lately. We've been using <code>initial_suspend</code> and <code>final_suspend</code> as extensibility points as well, in combination with <code>await_transform</code>. One place where this became handy is to track execution of async coroutine methods (when they get kicked off, when they get suspended due to a <code>co_await</code>, and when they complete), both for diagnostics (async call stacks, async "task manager" to see what's running and how much time is spent, etc.) but also for scheduling decisions (e.g. one can force a <code>co_await</code> to suspend based on the containing coroutine's runtime relative to other coroutines running on the same scheduler, thus forcing a "context switch").</p>
+<blockquote>
+<p>Wanting a timeout on all awaits.</p>
+</blockquote>
+<p>Timeouts reminded me of this due to the similarity with our accounting voodoo. Sometimes one wants to compute timeouts from an initial budget (the timeout of the overall operation, no matter how many <code>await</code> sites it has) and actual execution time, rather than having all <code>await</code>s being subject to the same timeout. Support for some contextual "await transformer" akin to <code>await_transform</code> could be use to transform each <code>await e</code> by an <code>await e.WithTimeout()</code> where <code>WithTimeout</code> is similar to <code>Task.WhenAny(e, Task.Delay(t))</code> but also takes care of getting the remaining timeout <code>t</code> (e.g. from an async local) and adjusting it upon resumption).</p>
+<p>All in all, I think having a look at C++ coroutines may be worth it as just another data point. The degree of extensibility over there is quite high, some of which may not carry over to C# (or not be desirable at all) but could provide another point of view that could be useful here. I, for one, found all the knobs provided over there to be useful.</p>
+      </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

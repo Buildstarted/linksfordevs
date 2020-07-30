@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+PhobosLab - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="PhobosLab - linksfor.dev(s)"/>
+    <meta property="og:description" content="Like last year with Underrun, I participated in this year&#x27;s js13kGames &#x2013; a JavaScript game development competition with a file size limit of 13kb, including code, assets and everything else. My entry was Voidcall, a Real-time Strategy game."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://phoboslab.org/log/2019/09/voidcall-making-of"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - PhobosLab</title>
+<div class="readable">
+        <h1>PhobosLab</h1>
+            <div>Reading time: 24-30 minutes</div>
+        <div>Posted here: 01 Oct 2019</div>
+        <p><a href="https://phoboslab.org/log/2019/09/voidcall-making-of">https://phoboslab.org/log/2019/09/voidcall-making-of</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+	
+	
+	<p>Like last year with <a href="https://phoboslab.org/log/2018/09/underrun-making-of">Underrun</a>, I participated in this year's <a href="https://js13kgames.com/">js13kGames</a> – a JavaScript game development competition with a file size limit of 13kb, including code, assets and everything else. My entry was <a href="https://phoboslab.org/voidcall">Voidcall</a>, a Real-time Strategy game.</p>
+<p><a href="https://phoboslab.org/voidcall/"><img src="https://phoboslab.org/content/assets/voidcall-screenshot.jpg" alt="Voidcall"></a>
+<em>Play Voidcall – A WebGL Real-time Strategy game in 13kb of JavaScript</em></p>
+<p>Recently, I played the original Command &amp; Conquer (later dubbed "Tiberian Dawn") again. I spent a whole summer of my childhood exploring the game in a friends basement. Compared to later real-time strategy games it's quite simple, yet very compelling. I set out to capture a bit of the game's essence for js13k.</p>
+<p>Squeezing everything I wanted for this game into the tiny size of 13kb was a tough challenge. Much more so than last year. The technology is quite ambitious: a 3d rendered height map, fully polygonal and textured models with smooth keyframe interpolated vertex animations, comprehensive mouse control with accurate picking and solid pathfinding. It's a lot.</p>
+<p>This article presents the various pieces of the puzzle with in-depth explanations. Everything is open source, so you can follow along on <a href="https://github.com/phoboslab/voidcall">github</a>.</p>
+<h2>Terrain Generation</h2>
+<p>Initially I thought about implementing the game in a simpler Canvas2D rendered view, but realized that I would need a lot of different graphics for the map (and much more for animated characters). Using a 3d rendered height map was the <em>easier</em> way to get a good looking terrain on the screen.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-collisionmap.png" alt="Perlin Noise Collision Map">
+<em>The collision map: 2-octave perlin noise, converted to 1bit</em></p>
+<p>An initial 256x256 Canvas2D image is generated using a perlin noise function. This function produces random values with a smooth gradient for nearby pixels. The key is to layer several perlin noise values with different frequencies on top of each other. In this case each pixel is the sum two perlin noise values. You can create the broad features of the terrain with just one value at a low frequency and add finer detail with a second one at a higher frequency.</p>
+<pre><code><span>for</span> <span>(</span><span>let</span> y <span>=</span> <span>0</span><span>,</span> i <span>=</span> <span>0</span><span>;</span> y <span>&lt;</span> <span>MAP_SIZE</span><span>;</span> y<span>++)</span> <span>{</span>
+    <span>for</span> <span>(</span><span>let</span> x <span>=</span> <span>0</span><span>;</span> x <span>&lt;</span> <span>MAP_SIZE</span><span>;</span> x<span>++,</span> i<span>++)</span> <span>{</span>
+        <span>let</span> height <span>=</span> 
+            noise<span>(</span>x<span>/</span><span><span>35</span></span><span>,</span> y<span>/</span><span><span>35</span></span><span>)</span> <span>+</span>             noise<span>(</span>x<span>/</span><span><span>50</span></span><span>,</span> y<span>/</span><span><span>50</span></span><span>);</span>     <span>}</span>
+<span>}</span></code></pre>
+<p>While the result is visually already quite pleasing, it's not of much use for the game I wanted to build. I needed discrete distinction between walkable and un-walkable terrain for the pathfinding to work properly. So this image is converted to just 1 bit with a carefully chosen threshold.</p>
+<p>This 1 bit image becomes the initial collision map for the game logic. For the height map that is used for the graphics this collision map is further processed. The first step is a bit of blur, so we get some smooth edges around the hills again. After that a bunch of high frequency perlin noise is layered on top.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-heightmap.png" alt="Perlin Noise Height Map">
+<em>The height map: blurred and detailed with high frequency perlin noise</em></p>
+<p>Unfortunately, the Canvas2D API does not provide a cross-browser blur function. Applying a box blur on each pixel using a convolution filter is not only computationally expensive, but also requires a bit more code than I wanted to spend on this. My solution was just to draw the height map on top of itself a bunch of times:</p>
+<pre><code>ctx<span>.</span>globalAlpha <span>=</span> <span>0</span><span>.</span><span>2</span><span>;</span>
+<span>for</span> <span>(</span><span>let</span> x <span>=</span> <span>-</span><span>2</span><span>;</span> x <span>&lt;</span> <span>2</span><span>;</span> x<span>++)</span> <span>{</span>
+    <span>for</span> <span>(</span><span>let</span> y <span>=</span> <span>-</span><span>2</span><span>;</span> y <span>&lt;</span> <span>2</span><span>;</span> y<span>++)</span> <span>{</span>
+                ctx<span>.</span>drawImage<span>(</span>canvas<span>,</span> x<span>,</span> y<span>);</span> 
+    <span>}</span>
+<span>}</span></code></pre>
+<p>For the details a number of perlin noise values are computed and mashed together until it looked <em>right</em>. The higher frequency noise is applied more strongly to the hills and less so to the valleys.</p>
+<pre><code><span>for</span> <span>(</span><span>let</span> y <span>=</span> <span>0</span><span>,</span> i <span>=</span> <span>0</span><span>;</span> y <span>&lt;</span> <span>MAP_SIZE</span><span>;</span> y<span>++)</span> <span>{</span>
+    <span>for</span> <span>(</span><span>let</span> x <span>=</span> <span>0</span><span>;</span> x <span>&lt;</span> <span>MAP_SIZE</span><span>;</span> x<span>++,</span> i<span>++)</span> <span>{</span>
+        <span>let</span>
+            coarse <span>=</span> px<span>[(</span>y<span>*</span><span>MAP_SIZE</span><span>+</span>x<span>)*</span><span>4</span><span>],</span>
+            mid <span>=</span> noise<span>(</span>x<span>/</span><span><span>12</span></span><span>,</span> y<span>/</span><span><span>12</span></span><span>)</span> <span>*</span> <span>8</span><span>,</span> 
+            fine <span>=</span> 
+                noise<span>(</span>x<span>/</span><span><span>30</span></span><span>,</span> y<span>/</span><span><span>30</span></span><span>)</span> <span>*</span> <span>4</span> <span>+</span>
+                noise<span>(</span>x<span>/</span><span><span>10</span></span><span>,</span> y<span>/</span><span><span>10</span></span><span>)</span> <span>*</span> <span>2</span> <span>+</span>
+                noise<span>(</span>x<span>/</span><span>5</span><span>,</span> y<span>/</span><span>5</span><span>)</span> <span>+</span> 
+                noise<span>(</span>x<span>/</span><span>3</span><span>,</span> y<span>/</span><span>3</span><span>),</span>
+            height <span>=</span> 
+                coarse <span>*</span> <span>6</span> <span>+</span>                 fine <span>*</span> <span><span>300</span></span> <span>+</span>                 mid <span>*</span> <span>5</span> <span>+</span>                 <span>(</span>coarse <span>*</span> <span>(</span>mid<span>+</span><span>5</span><span>))</span> <span>*</span> <span>2</span><span>.</span><span>5</span> <span>+</span>                 <span>(</span>coarse <span>*</span> <span>(</span>fine<span>+</span><span>1</span><span>))</span> <span>*</span> <span>1</span><span>.</span><span>5</span> <span>+</span>                 <span>((</span><span><span>255</span></span><span>-</span>coarse<span>)</span> <span>*</span> mid<span>*-</span><span>1</span><span>)*</span><span>0</span><span>.</span><span>5</span><span>;</span>     <span>}</span>
+<span>}</span></code></pre>
+<p>Now that we have the height map, we can create the 3d geometry. For each pixel of this height map a quad (2 triangles) is created and pushed to the render buffer. Each quad is randomly textured with one of two different grass-like tiles – just enough to make it not look repetitive.</p>
+<p>The normal vector (the vector perpendicular to the surface) is computed once for each quad. This is later used for light calculations in the shader. The same normal vector is initially stored for each of the 4 vertices of the quad. This results in a flat shaded look.</p>
+<p>The final buffer for the height map contains 131k triangles consisting of 393k vertices, each described by 8 Float32 values. In total about 12 MB of data - which may sound like a lot, but your GPU laughs at these numbers. I'll talk more about how this is actually rendered later.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-terrain-flat-shaded.jpg" alt="Perlin Noise Terrain">
+<em>Flat shaded terrain, without smooth normals. Interesting, but not what I was going for.</em></p>
+<p>Computing smooth normals turned out to be a particularly hairy problem to solve in this very size constrained code. The solution I ended up with is to walk through the otherwise final buffer, gather all normals from adjacent vertices, average them and put the averaged normals straight back into the buffer. This <em>in place</em> editing of the normal vectors produces quite terse code, but is otherwise horrible in every aspect.</p>
+<p>The result of all this is stored in a <code>gl.STATIC_DRAW</code> buffer.</p>
+<p>For the final detailing a few thousand models of rocks and trees are randomly sprinkled over the map. The 1 bit collision map is used, so that these models are only placed in the valleys.</p>
+<p>It was important for the mouse picking to work correctly to have <em>just</em> the height map without trees in it's own buffer. So all detailed models combined are stored in second <code>gl.STATIC_DRAW</code> buffer, separate from the height map geometry.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-terrain.jpg" alt="Perlin Noise Terrain">
+<em>The final Perlin Noise generated terrain, with smoothed normals and detail models</em></p>
+<p>Though the terrain generation is based on randomness, it was important for the gameplay that you always end up with the same terrain each time you load the game. So using JavaScript's built-in <code>Math.random()</code> would not do. Instead, the game makes use of a very simple <em>seedable</em> random number generator. Initializing it with the same seed value before generating the terrain always produces exactly the same result.</p>
+<p>A fun problem I encountered with my perlin noise function was that it still produced different results in different browsers. To initialize the perlin noise function an array of sequential values is shuffled using JavaScripts built-in <code>Array.sort</code>:</p>
+<pre><code>p<span>.</span>sort<span>(</span><span>function</span><span>()</span> <span>{</span>
+    <span>return</span> <span>0</span><span>.</span><span>5</span> <span>-</span> random_float<span>();</span>
+<span>});</span></code></pre>
+<p>While <code>random_float()</code> always correctly produced the same sequence of numbers in all browsers, browsers still implement the sort algorithm differently. So in Chrome you will end up with a different shuffled array than in Firefox. Of course <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort">MDN warns you about this</a>:</p>
+<blockquote>
+<p>The time and space complexity of the sort cannot be guaranteed as it depends on the implementation.</p>
+</blockquote>
+<p>It's not exactly the right way to shuffle an array with an nonsensical comparator function anyway. Lesson learned. (The <em>right</em> way is to <a href="https://github.com/phoboslab/voidcall/blob/master/source/perlin_noise.js#L12-L18">walk through the array and swap each element with a random other element</a>).</p>
+<p>For the final game I just plugged in different seed values until I found a terrain that was interesting and suitable for the gameplay. Not all terrains generated with this method produce usable results. Sometimes one half of the map is completely cut off from the other half. Sometimes "islands" of unreachable terrain are generated.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-terrain-seeds.jpg" alt="Perlin Noise Terrain">
+<em>Terrains generated with different seed values</em></p>
+<p>Even though the terrain I initially settled on was quite nice, I later discovered that an area that I thought was reachable in fact wasn't. I didn't want to search for a new terrain and carefully place all game objects again. So I just fudged it by drawing a rectangle on a certain spot on the map to make a traversable path. It's the nasty secrets of game development.</p>
+<p>The final code for the terrain generation is all in <a href="https://github.com/phoboslab/voidcall/blob/master/source/map.js#L4">map_generate()</a>.</p>
+<h2>3D Models, Textures &amp; Vertex Animations</h2>
+<p>A lot of work has gone into making the animated models and compressing them down to a reasonable size.</p>
+<p>I'm still a doofus when it comes to 3d modeling, but the amazingly ingenious <a href="http://www.wings3d.com/">Wings3D</a> once again saved the day. It works great with low-poly models. Turns out low-poly modeling is a lot like creating low-res pixel art: you just push things around until it looks right.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-unit-model.png" alt="Low Poly Character Model">
+<em>The main character model – 36 vertices, 62 faces, 6 animation frames, compressed to 572 bytes</em></p>
+<p>The main character model is as low-poly as you can possibly get with a convincing humanoid. All limbs are just triangular and end in a single point. Still, as you previously saw with the terrain, 3d data can get absolutely huge. Even for this model, if we'd store each of the 62 faces with 3x3 Float32 values, we'd end up with 2kb of data - for a single animation frame.</p>
+<p>Now, the character model contains 6 animation frames. I looked into skeletal animations, but this would have required a lot of code to get working. So instead I opted for the simplest possible solution: vertex animations. I.e. each frame of an animation contains the whole model again.</p>
+<p>So the character model contains a full set of vertex positions for each of the 6 animation frames, but still compresses to just 572 bytes.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-unit-animations.png" alt="Animation Frames">
+<em>The six different animation frames: 4x run, 1x shoot, 1x idle</em></p>
+<p>There's two techniques I used to get there. The first one is just common sense (and used by almost any model data format): each of the 36 vertices is shared by multiple faces. So we just store the x,y,z position for each of the 36 vertices once and use an index into the vertex positions for each of the 3 corners of a face.</p>
+<p>Furthermore, if we don't change the topology of the model in each animation frame, we just need to store the vertex positions again. The set of indices for the faces remains the same.</p>
+<p>If we restrict ourselves to a maximum of just 255 vertices, we can store each index as a single byte. Similarly, if we convert the Float32 x,y,z vertex positions to a single byte each, we can save 9 bytes per vertex. "Compressing" arbitrary precision numbers down to a set of discrete values (in this case 0–255) is called quantization.</p>
+<p>So with the x,y,z position as one byte each, we need 3 bytes to store each vertex. Similarly, with each face using 3 x 1 byte indices (one for each corner) into the vertex data, we need 3 bytes to store a single face.</p>
+<pre><code>36 vertices * 6 animation frames * 3 byte = 648 bytes
+ +
+62 faces * 3 byte = 186 byte
+ =
+834 bytes</code></pre>
+<p>Not too bad, but still too much.</p>
+<p>I noticed that with models this simple, we don't actually need the 1 byte "precision" of 256 discrete values for the x,y,z positions. We can lower the resolution even more.</p>
+<p>The next logical step is to pack all 3 values into just 2 bytes or 16 bit. This leaves us with 5 bits for each x,y,z value. (Technically 5.333 bits per value. We could use the extra 1 bit to give one of the x,y,z axis more resolution, but here I didn't. The extra 1 bit is just unused.)</p>
+<p>5 bits gives us values from 0–31. So each of the vertex positions is essentially snapped into a grid of 32x32x32 values.</p>
+<p>Of course I wanted to compress the face data similarly, but with values in the range 0–31 we wouldn't be able to address all 36 vertices. Luckily I noticed that Wings3D exports the face data with the vertex index for the first corner of each face in ascending order:</p>
+<pre><code>f 1// 22// 2//
+f 2// 3// 1//
+f 2// 24// 18//
+f 3// 4// 1//
+f 3// 8// 6//
+f 4// 23// 17//
+f 5// 3// 6//
+…
+f 32// 35// 33//
+f 33// 26// 32//
+f 33// 34// 26//
+f 33// 35// 34//
+f 34// 32// 27//
+f 36// 30// 29//</code></pre>
+<p>The exported model contains one row per face, 3 indices into the vertex data. Notice how the first index is in ascending order and increases by 2 at most.</p>
+<p>The logical conclusion is to store a 2 bit address increment for the first vertex index of each face and use 2 x 7 bit numbers for the two remaining indices. This allows us to store models with up to 127 vertices. Plenty!</p>
+<p>Of course we need to store a bit of metadata with each model: the number of vertices, faces and animation frames. Described as a C-struct, the final model format looks like this:</p>
+<pre><code><span>struct</span> <span>{</span>
+    uint8_t num_frames<span>;</span>
+    uint8_t num_verts<span>;</span>     uint16_t num_indices<span>;</span>
+    <span>struct</span> <span>{</span>
+        uint8_t reserved <span>:</span> <span>1</span><span>;</span>
+        int8_t x <span>:</span> <span>5</span><span>;</span>
+        int8_t y <span>:</span> <span>5</span><span>;</span>
+        int8_t z <span>:</span> <span>5</span><span>;</span>
+    <span>}</span> vertices<span>[</span>num_frames <span>*</span> num_verts<span>];</span>
+    <span>struct</span> <span>{</span>
+        uint8_t a_address_inc <span>:</span> <span>2</span><span>;</span>
+        uint8_t b_index <span>:</span> <span>7</span><span>;</span>
+        uint8_t c_index <span>:</span> <span>7</span><span>;</span>
+    <span>}</span> indices<span>[</span>num_indices<span>];</span>
+<span>}</span> rmf_data<span>;</span></code></pre>
+<p>Of course Wings3D doesn't have an exporter for this esoteric format. Instead I exported my models in the Wavefront OBJ format. This format contains easily parsable plain text data. A <a href="https://github.com/phoboslab/voidcall/blob/master/obj_to_rmf.php">simple PHP script</a> is used to convert the OBJ format into this binary format.</p>
+<p>The game contains a total of 10 different models. All those are concatenated into a single file for easier loading and better ZIP compression, totaling in 1328 bytes. The model format is so terse that it barely ZIP-compresses (1203 bytes zipped).</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-all-models.png" alt="All Voidcall Models">
+<em>From left to right: tree, boulder (re-used for gibs and energy well), blade of grass (yes, really), waypoint, unit selection bracket, ship, harvester, turret, enemy, unit.</em></p>
+<p>The models then get textured, each with a single tile of the texture image.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-textures.png" alt="Textured Model">
+<em>All the textures used in the game, 1643 bytes</em></p>
+<p>Because my model format doesn't contain any texture coordinates I opted for a very simple hack to lay textures over the models: the tile is just projected from the front onto the model. Essentially the x,y coordinates of each vertex <em>are</em> the texture coordinates.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-unit-models-textured.png" alt="Textured Model">
+<em>Textured Model, with the texture projected directly from the front</em></p>
+<p>Notice how the feet and hands of the untextured model are very pointy, ending in a single vertex. Using transparent pixels in the textures for all unit types the hand and feet are cut off, expect for the military unit where a black texture indicates the gun.</p>
+<p>To blend between the different animation frames the game just linearly interpolates between the vertex positions of the last and current frame. The frame interpolation, as well as unpacking of the face indices into vertex positions and Y-rotation of the models is all handled in JavaScript.</p>
+<p>The final <a href="https://github.com/phoboslab/voidcall/blob/master/source/model.js">code to load and render a model</a> clocks in at just 150 lines. It's wholly unoptimized (e.g. loaded models are not cached) but it just doesn't matter for these kinds of poly-counts.</p>
+<h2>Mouse Picking</h2>
+<p>My game requires accurate mouse controls. I need to know exactly where the mouse cursor is, not in screen space, but <em>in world space</em>. Typically you'd project a ray from the mouse cursor, through the screen and onto the 3d geometry. This requires quite a bit of math that I so far avoided throughout the project. Plus, you'd need a hit-test function on the height map.</p>
+<p>Another technique – one that has fallen out of favor for modern games – is to render a specially encoded view of the game and read back the pixels. For instance, you could render each object that you can hit in a different color, then read back the pixel color under the mouse cursor and determine which object you have hit.</p>
+<p>For my game I wasn't really interested in any particular object, but where exactly the mouse cursor is on the height map. If I know that, I can easily determine the objects nearby in JavaScript.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-mouse-picking.jpg" alt="Mouse picking">
+<em>World position (x, y, z) encoded in RGB colors</em></p>
+<p>The game renders just the height map, nothing else, with a simple shader that encodes the x, y, z coordinates in RGB colors. This leaves us with a resolution of just 0–255 in each dimension, but as it turned out the low resolution is not really noticeable in game. The game space is divided into a tile grid anyway, so the accuracy to hit a single tile is plenty.</p>
+<p>The shader looks like this:</p>
+<pre><code><span>void</span> main<span>(</span><span>void</span><span>)</span> <span>{</span>
+    gl_FragColor <span>=</span> vec4<span>(</span>
+        vertex_pos<span>.</span>x <span>/</span> <span><span>512</span></span><span>.</span><span>0</span> <span>+</span> <span>0</span><span>.</span><span>5</span><span>,</span>
+        vertex_pos<span>.</span>y <span>/</span> <span>MAP_HEIGHT</span><span>,</span>
+        vertex_pos<span>.</span>z <span>/</span> <span><span>512</span></span><span>.</span><span>0</span> <span>+</span> <span>1</span><span>.</span><span>2</span><span>,</span>
+        <span>1</span><span>.</span><span>0</span>
+    <span>);</span>
+<span>}</span></code></pre>
+<p>The x, z offset and the divisions are carefully selected for the normal camera distance. The Z-axis is just divided by the maximum height of the map. If the game would allow you to zoom out, we'd need to account for this in the shader. However, the game's zoom level always stays the same, so these values can be hardcoded.</p>
+<p>Of course these RGB colors are offset by the current camera position, so we have account for that when determining the mouse position:</p>
+<pre><code><span>let</span> px <span>=</span> <span>new</span> Uint8Array<span>(</span><span>4</span><span>);</span>
+gl<span>.</span>readPixels<span>(</span>
+    mouse_x<span>,</span> 
+    screen_height <span>-</span> mouse_y<span>,</span>     <span>1</span><span>,</span> <span>1</span><span>,</span> gl<span>.</span><span>RGBA</span><span>,</span> gl<span>.</span><span>UNSIGNED_BYTE</span><span>,</span> px
+<span>);</span>
+
+mouse_world_x <span>=</span> <span>(</span>px<span>[</span><span>0</span><span>]</span> <span>/</span> <span><span>255</span></span> <span>-</span> <span>0</span><span>.</span><span>5</span><span>)</span> <span>*</span> <span><span>512</span></span> <span>-</span> camera_x<span>;</span> mouse_world_y <span>=</span> <span>(</span>px<span>[</span><span>1</span><span>]</span> <span>/</span> <span><span>255</span></span><span>)</span> <span>*</span> <span>MAP_HEIGHT</span><span>;</span>           mouse_world_z <span>=</span> <span>(</span>px<span>[</span><span>2</span><span>]</span> <span>/</span> <span><span>255</span></span> <span>-</span> <span>1</span><span>.</span><span>2</span><span>)</span> <span>*</span> <span><span>512</span></span> <span>-</span> camera_z<span>;</span> </code></pre>
+<p>Allow me to complain about OpenGLs coordinate system. OpenGL has it's 0,0 position in the lower left corner of screen, because apparently it's more scientific this way. It seems trivial to just invert everything, but the number of times and the hours I spent dealing with this just leaves me bitter. Whether it was for <a href="https://github.com/phoboslab/ejecta">Ejecta</a>, simple things like my <a href="https://github.com/phoboslab/WebGLImageFilter">WebGLImageFilter</a> or for this game – you have to flip the screen and your coordinates ALL THE FKING TIME. I hate it.</p>
+<p>This way of mouse picking – implemented with another render pass – is discouraged these days because you typically stall your program while waiting for <code>gl.readPixels()</code> to render the view and return the color buffer, instead of letting the GPU do its thing and compute the next frame. It just absolutely kills performance. But as with so many other things for this game, it just doesn't matter. Computers are fast.</p>
+<h2>Rendering</h2>
+<p>The renderer borrows most of its code from my last year's entry <a href="https://phoboslab.org/log/2018/09/underrun-making-of">Underrun</a>. Underun pushed everything into a single buffer and rendered the whole game in just one draw call. For Voidcall I needed to divide that into several draw calls, but the overall structure remains the same.</p>
+<p>The terrain geometry is stored in a separate static buffer and first rendered in faux-colors for the mouse picking described above. </p>
+<p>Afterwards the terrain is rendered again with a special shader that desaturates the texture color based on the y position. This nicely "blends" the grass texture into gray-ish stone for the hills. On top of that follows another static buffer with all decorative geometry, trees and bolders.</p>
+<p>A dynamic buffer is used to render all the models, then flushed and re-used for another pass for the shadows.</p>
+<p>The object shadows are just quads with a shadow blurred shadow blob as texture. But because they are transparent, we need to render these on top of all the other objects, with the depth buffer disabled. Otherwise the semi-transparent pixels of the shadow texture would hide all objects below them.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-render-phases.jpg" alt="Voidcall render passes">
+<em>Four draw calls produce the final image</em></p>
+<p>The game allows for a maximum of 16 dynamic lights. They work basically the same as in Underrun, but this time the light calculations are done in the pixel shader, instead of in the vertex shaders. This gives us a smoother look, compared to the low-fi visuals of last year's game.</p>
+<p>The ingame "chat" of your units is just an HTML element overlayed over the canvas. I didn't want to deal with text-rendering inside of WebGL. After all we are running in a browser here, so why not use it?</p>
+<p>The code for the renderer can be found in the aptly named <a href="https://github.com/phoboslab/voidcall/blob/master/source/renderer.js">renderer.js</a>.</p>
+<h2>Pathfinding</h2>
+<p>Voidcall uses a pretty standard A-Star algorithm for pathfinding. To optimize the performance a bit my A-Star implementation allocates all neccessary data up-front. It never has to allocate any data during run-time.</p>
+<p>Instead of storing the set of visited nodes and their costs in objects pushed into a plain JavaScript arrays, all state information is stored in a number of separate TypedArrays. To make this work, my implementation works directly with the "addresses" of nodes instead of their x, z position. The address is just <code>z * MAP_SIZE + x</code> – i.e. the index into these typed arrays. Consequently, this also reduced the code size quite a bit.</p>
+<pre><code><span>let</span> 
+    nodes_parent <span>=</span> <span>new</span> Uint16Array<span>(</span><span>MAP_SIZE</span> <span>*</span> <span>MAP_SIZE</span><span>),</span>
+    nodes_state <span>=</span> <span>new</span> Uint8Array<span>(</span><span>MAP_SIZE</span> <span>*</span> <span>MAP_SIZE</span><span>),</span>
+    nodes_g <span>=</span> <span>new</span> Float32Array<span>(</span><span>MAP_SIZE</span> <span>*</span> <span>MAP_SIZE</span><span>),</span>
+    nodes_f <span>=</span> <span>new</span> Float32Array<span>(</span><span>MAP_SIZE</span> <span>*</span> <span>MAP_SIZE</span><span>),</span>
+    open_nodes <span>=</span> <span>new</span> Uint16Array<span>(</span><span>MAP_SIZE</span> <span>*</span> <span>4</span><span>),</span> 
+    <span>NEIGHBORS</span> <span>=</span> <span>[</span>
+        <span>-</span><span>1</span><span>-</span><span>MAP_SIZE</span><span>,</span> <span>-</span><span>MAP_SIZE</span><span>,</span> <span>1</span><span>-</span><span>MAP_SIZE</span><span>,</span>
+        <span>-</span><span>1</span><span>,</span>                     <span>1</span><span>,</span>
+        <span>-</span><span>1</span><span>+</span><span>MAP_SIZE</span><span>,</span>  <span>MAP_SIZE</span><span>,</span> <span>1</span><span>+</span><span>MAP_SIZE</span>
+    <span>],</span>
+
+    <span>STATE_UNKNOWN</span> <span>=</span> <span>0</span><span>,</span>
+    <span>STATE_OPEN</span> <span>=</span> <span>1</span><span>,</span>
+    <span>STATE_CLOSED</span> <span>=</span> <span>2</span><span>;</span>
+
+<span>while</span> <span>(</span>num_open_nodes    <span>let</span> current_addr <span>=</span> open_nodes<span>[</span>num_open_nodes<span>];</span>
+    …
+
+    <span>for</span> <span>(</span><span>let</span> i <span>=</span> <span>0</span><span>;</span> i <span>&lt;</span> <span>NEIGHBORS</span><span>.</span>length<span>;</span> i<span>++)</span> <span>{</span>
+        <span>let</span> neighbor_addr <span>=</span> current_addr <span>+</span> <span>NEIGHBORS</span><span>[</span>i<span>],</span>
+
+                …
+
+                nodes_parent<span>[</span>neighbor_addr<span>]</span> <span>=</span> current_addr<span>;</span>
+        nodes_state<span>[</span>neighbor_addr<span>]</span> <span>=</span> <span>STATE_OPEN</span><span>;</span>
+        nodes_g<span>[</span>neighbor_addr<span>]</span> <span>=</span> g<span>;</span>
+        nodes_f<span>[</span>neighbor_addr<span>]</span> <span>=</span> f<span>;</span>
+        num_open_nodes<span>++;</span>
+
+                …
+    <span>}</span>
+<span>}</span></code></pre>
+<p>Of course, to compute the cost for each node we need to get the x, z position from the address again, which is simply:</p>
+<pre><code><span>let</span> x <span>=</span> address <span>%</span> <span>MAP_SIZE</span><span>,</span>
+    z <span>=</span> <span>(</span>address <span>/</span> <span>MAP_SIZE</span><span>)|</span><span>0</span><span>;</span></code></pre>
+<p>Or, as I knew my MAP_SIZE is 256, I can just use some bit-twiddling instead of costly divisions:</p>
+<pre><code><span>let</span> x <span>=</span> address <span>&amp;</span> <span>0xff</span><span>,</span>     z <span>=</span> address <span>&gt;</span> <span>8</span><span>;</span>    </code></pre>
+<p><img src="https://phoboslab.org/content/assets/voidcall-astar-nodes.jpg" alt="AStar Pathfinding">
+<em>All visited nodes (white) and the found path (blue)</em></p>
+<p>In a final step the found path is condensed to the minimum number of waypoints: For each waypoint all subsequent waypoints are removed if they are visible across the map until we find one that is not. This eliminates extraneous waypoints that would result in stiff movement in a checkerboard fashion.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-astar-path.jpg" alt="AStar Pathfinding">
+<em>The condensed set of nodes necessary to reach the target</em></p>
+<p>With this all, plotting a path across the whole map takes about 1.5ms. Still costly, but good enough. The complete implementation fits in <a href="https://github.com/phoboslab/voidcall/blob/master/source/astar.js">just 120 lines of code</a>.</p>
+<h2>Sound &amp; Music</h2>
+<p>Just like last year, I used the brilliant <a href="https://github.com/nicolas-van/sonant-x">Sonant-X</a> library for sound and music. My dear friend Andreas Lösch of <a href="http://no-fate.net/">no-fate.net</a> once again produced an amazing soundtrack in <a href="https://nicolas-van.github.io/sonant-x-live/">Sonant-X Live</a>. Likewise, the few sound effects also use this library.</p>
+<p>I did however overhaul the library; almost rewriting it. Instead of using generator functions for the sine, square, sawtooth and triangle oscillators everything is precomputed into a single lookup table. This tremendously sped up the time needed to render the soundtrack. It allowed me to remove all of the asynchronous <code>setTimeout()</code> calls that were originally implemented to make the page more responsive while loading.</p>
+<p>The whole library is now <a href="https://github.com/phoboslab/voidcall/blob/master/source/audio.js">about 250 lines of code</a> and generates the 120 seconds of music in just 900ms – down from 5900ms for the original library.</p>
+<h2>Gameplay</h2>
+<p>Admittedly the gameplay is a bit of a weak spot. With all the tech implemented I had very little time to tune the actual game mechanics. The game is probably a bit too hard, even if you know exactly what to do. Worse, most players are initially totally lost. The game really could have used a bit of tutorial or maybe just a slower start to give players more time to get familiar.</p>
+<video src="/content/assets/voidcall-pathfinding.mp4" controls="" muted=""></video>
+<p><em>Cursor controls stress test with a lot of units</em></p>
+<p>I'm pretty proud of how the mouse controls turned out: selecting single units, dragging selection areas, ordering them around, building turrets and harvesters all work pretty much like in any other full-blown RTS. The code to get this working however is <a href="https://github.com/phoboslab/voidcall/blob/master/source/entity_cursor.js#L16">a big mess of spaghetti</a>. And it's not <em>feature-complete</em> either.</p>
+<p>You can't order one of your grunts to attack a specific enemy. Instead, they will only attack the closest one. Similarly, your medic will only heal the unit closest to him – even if that unit has full health already and another unit that really needs healing is in range. I simply ran out of time and space to implement these things.</p>
+<p>The logic to spawn enemies and their AI is pretty bare bones, too: Enemies spawn in decreasing time intervals, depending on the total amount of energy you're creating. A random position outside the map is chosen for the spawn point. The enemy then walks down the hills to the valley and searches for the nearest player unit or building. The initial random target for the enemy can be overridden if the enemy is attacked. It will then move towards the attacker. That's it.</p>
+<p>The game has a bit of animation when you successfully get your power levels up and return with all (remaining) units to the ship. I doubt many people have seen it.</p>
+<h2>Minification</h2>
+<p>Many of the same techniques as in <a href="https://phoboslab.org/log/2018/09/underrun-making-of">Underrun</a> were used to compress the game. This time however I had to work harder to keep the game's size under the 13kb limit. The uncompressed code weighs in at about 96kb, so minifying was absolutely crucial.</p>
+<p>Some random observations:</p>
+<ul>
+<li>Aliasing lengthy JavaScript function names or <code>document</code> and <code>window</code> to shorter names doesn't help when you ZIP-compress your code anyway.</li>
+<li>Every file in a ZIP carries a considerable overhead of about 100 bytes</li>
+<li>The order in which you concat your source files does matter for ZIP compression. Grouping code that <em>looks</em> similar can give you another 100-200 bytes</li>
+</ul>
+<p>The final game consists of just three files: the textures PNG, the models in binary format and an index.html with all the code. The PNG and models are just about 2kb; the rest, about 11kb, is all code.</p>
+<p><img src="https://phoboslab.org/content/assets/voidcall-code.png" alt="Voidcall code">
+<em>The complete minified code just about fits on my screen in the default font size</em></p>
+<p>The full uncompressed source for Voidcall is on github: <a href="https://github.com/phoboslab/voidcall">github.com/phoboslab/voidcall</a></p>
+<p>Fun fact: this article contains 28000 characters – more than twice as much as was allowed for the game. It does ZIP-compress to just 10kb, though.</p>
+	
+
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

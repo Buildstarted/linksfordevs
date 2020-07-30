@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Measure Two Hundred Times, Tweak Twice - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Measure Two Hundred Times, Tweak Twice - linksfor.dev(s)"/>
+    <meta property="og:description" content="Let&#x27;s profile some code! And see if we can figure out some great options for things that might matter"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://hyr.mn/Fun-with-BenchmarkDotNet/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Measure Two Hundred Times, Tweak Twice</title>
+<div class="readable">
+        <h1>Measure Two Hundred Times, Tweak Twice</h1>
+            <div>Reading time: 10-12 minutes</div>
+        <div>Posted here: 26 Jul 2019</div>
+        <p><a href="https://hyr.mn/Fun-with-BenchmarkDotNet/">https://hyr.mn/Fun-with-BenchmarkDotNet/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article>
+
+  
+  
+
+
+
+
+
+<header>
+    
+    
+    <time datetime="2019-07-25" pubdate="">July 25, 2019</time>
+    
+    
+    <nav>
+        <a href="https://hyr.mn/">← Back to Posts</a>
+    </nav>
+    
+</header>
+
+<p>My buddy <a href="https://twitter.com/purekrome">Pure.Krome</a> stopped by the JabbR nerd chat with a question.</p>
+<blockquote>
+<p>With this code, would a string be created <em>each time</em> the response was generated?</p>
+</blockquote>
+<div><pre><code data-lang="csharp">httpResponse.Headers[<span>"Cache-Control"</span>] = <span>$"public,max-age={seconds},must-revalidate"</span>;
+</code></pre></div><p><a href="https://twitter.com/davidwengier">David Wengier</a> helpfully provided an answer (yes), and why (a bling-string is just a <code>string.Format()</code> call when it's converted to IL). But, in TRUE NERD FASHION, we took things to the extreme with some helpful and not-helpful alternatives.</p>
+<p>Mr. Wengier also has a <a href="https://www.youtube.com/watch?v=24qazsRnc40">talk on pragmatic performance</a> that is worth the watch and inspired me to sit down and play with <a href="https://benchmarkdotnet.org/">BenchmarkDotNet</a> for the first time.</p>
+<p>BenchmarkDotNet is a wonderful tool for micro-benchmarking. When you have a small bit of code and you want to know if one option is better or worse than another, you need a miro-benchmarking tool. It will run though a bunch of iterations for you and present a cleaner picture than if you put a timer on each end yourself.</p>
+<p>Below, I set up a .NET Core console app, create a class to hold the benchmarks I want to compare, and then tell the BenchmarkRunner to go to town. By default, the output will be sent to the console window.</p>
+<div><pre><code data-lang="csharp"><span>[CoreJob]</span>
+<span>public</span> <span>class</span> <span>Strings</span>
+{
+<span>    [Benchmark(Baseline = true)]</span>
+<span>    [ArgumentsSource(nameof(PassingInts))]</span>
+    <span>public</span> <span>string</span> BlingString(<span>int</span> seconds) =&gt; <span>$"public,max-age={seconds},must-revalidate"</span>;
+}
+
+<span>public</span> IEnumerable&lt;<span>int</span>&gt; PassingInts()
+{
+    <span>yield</span> <span>return</span> <span>6</span><span>0</span>;
+    <span>yield</span> <span>return</span> <span>6</span><span>0</span> * <span>6</span><span>0</span>;
+    <span>yield</span> <span>return</span> <span>6</span><span>0</span> * <span>6</span><span>0</span> * <span>2</span><span>4</span>;
+}
+
+<span>public</span> <span>class</span> <span>Program</span>
+{
+    <span>public</span> <span>static</span> <span>void</span> Main(<span>string</span>[] args)
+    {
+        <span>var</span> summary = BenchmarkRunner.Run&lt;Strings&gt;();
+    }
+}
+</code></pre></div><p>And, spoiler alert, the <code>BlingString(seconds)</code> method is not speedy. But, it's not horrible. I'm going to throw my pragmatic hat in the bushes and come up with some alternatives. Then I'll order a shiny, new pragmatic hat and discuss trade-offs.</p>
+<p>First, the easy alternative. If we want execution speed, then let's just hard-code something in. Everything gets cached for an hour.</p>
+<div><pre><code data-lang="csharp"><span>    [Benchmark]</span>
+    <span>public</span> <span>string</span> Literal() =&gt; <span>"public,max-age=3600,must-revalidate"</span>;
+</code></pre></div><p>If <code>BlingString</code> is our skateboard, then <code>Literal()</code> is the super-charged sport bike. There is no computation. BenchmarkDotNet is confused why it's here.</p>
+<pre><code>Strings.Literal: Core -&gt; The method duration is indistinguishable from the empty method duration
+</code></pre><p>That's interesting but… well, only until one of your teammates uses your cache header function when they want to cache a critical lookup for just a second. Then your high-frequency trading app trades on stale data. The investors lose millions. And you swear you'll never use C# again.</p>
+<p>So, now we know that literals are fast. And, we know that <code>string.Format()</code> (our bling string) is slow. If we could just cache strings we've returned before…</p>
+<p>It turns out, in fact, that we can do just that.</p>
+<p>One of the collection objects in .NET is the <code>ConcurrentDictionary</code>. It's thread-safe (well, enough for our usage) and, as importantly, it has a <code>GetOrAdd</code> method we can use</p>
+<div><pre><code data-lang="csharp">TValue GetOrAdd(TKey key, Func&lt;TKey, TValue&gt; valueFactory);
+</code></pre></div><p>If a given key exists, then the value is returned.</p>
+<p>If the key does not exist, then the Func is called to generate the value. The value is then added to the dictionary and returned. Broadly, this means we can store our cached strings and generate new ones only when needed.</p>
+<div><pre><code data-lang="csharp">    <span>private</span> ConcurrentDictionary&lt;<span>int</span>, <span>string</span>&gt; LittleShopOfHorrors = <span>new</span> ConcurrentDictionary&lt;<span>int</span>, <span>string</span>&gt;();
+<span>
+</span><span>    [Benchmark]</span>
+<span>    [ArgumentsSource(nameof(PassingInts))]</span>
+    <span>public</span> <span>string</span> LookupDictionary(<span>int</span> seconds) =&gt;
+        LittleShopOfHorrors.GetOrAdd(seconds, s =&gt; <span>$"public,max-age={s},must-revalidate"</span>);
+</code></pre></div><p>But, this has a glaring problem that <a href="https://twitter.com/adandy_">Aaron Dandy</a> pointed out “dictionaries fill up”. That is, there's no limit to how big our dictionary can grow. Other developers, intentionally (adversarial) or not, might leave you with a 2GB dictionary full of unused values.</p>
+<p>Anyway, this part of the journey is to keep some brainstorming ideas going. We don't have our pragmatic hat on so we don't care about memory!</p>
+<p>On to a couple of more elegant ideas propsed by David…</p>
+<p>First, if we're fairly sure that we will often see many requests for the same value at once, we can implement a poor cache. Just track what we've seen last and use that if it matches.</p>
+<div><pre><code data-lang="csharp">    <span>private</span> <span>int</span> _lastSeconds = <span>3</span><span>6</span><span>0</span><span>0</span>;
+    <span>private</span> <span>string</span> _lastHeader = <span>"public,max-age=3600,must-revalidate"</span>;
+<span>
+</span><span>    [Benchmark()]</span>
+<span>    [ArgumentsSource(nameof(PassingInts))]</span>
+    <span>public</span> <span>string</span> LastCache(<span>int</span> seconds)
+    {
+        <span>if</span> (_lastSeconds != seconds)
+        {
+            _lastSeconds = seconds;
+            _lastHeader = <span>$"public,max-age={seconds},must-revalidate"</span>;
+        }
+
+        <span>return</span> _lastHeader;
+    }
+</code></pre></div><p>This retains the flexibility of working for any number of seconds passed in while betting on most calls using the same value.</p>
+<p>The next option is to just take all but a couple options off of the table. We can use an enum to control what is returned.</p>
+<div><pre><code data-lang="csharp">    <span>public</span> <span>enum</span> CacheLengths
+    {
+        Short = <span>6</span><span>0</span>,
+        Medium = <span>6</span><span>0</span> * <span>6</span><span>0</span>,
+        Long = <span>6</span><span>0</span> * <span>6</span><span>0</span> * <span>2</span><span>4</span>
+    }
+<span>
+</span><span>    [Benchmark]</span>
+<span>    [ArgumentsSource(nameof(PassingEnums))]</span>
+    <span>public</span> <span>string</span> LiteralByChoice(CacheLengths cacheLength)
+    {
+        <span>switch</span> (cacheLength)
+        {
+            <span>case</span> CacheLengths.Short:
+                <span>return</span> <span>"public,max-age=60,must-revalidate"</span>;
+            <span>case</span> CacheLengths.Medium:
+                <span>return</span> <span>"public,max-age=3600,must-revalidate"</span>;
+            <span>case</span> CacheLengths.Long:
+                <span>return</span> <span>"public,max-age=86400,must-revalidate"</span>;
+            <span>default</span>:
+                <span>return</span> <span>"public,max-age=0"</span>;
+        }
+    }
+</code></pre></div><p>Now, obviously, this is very inflexible. But, on the other hand, it allows the original author to provide a clearer indication of what the impact of a given value is.</p>
+<p>Last, I came up with what I feel is a more esoteric option. I learned a lot about some parts of the framework that I didn't know before. I can keep this knowledge filed away in case I need it in the future. And, of course, we're not going to limit ourselves until we see what the runtime characteristics are.</p>
+<div><pre><code data-lang="csharp">    <span>private</span> <span>const</span> <span>int</span> Entries = <span>2</span><span>0</span>;
+    <span>private</span> <span>const</span> <span>int</span> StepSize = <span>6</span><span>0</span>;
+
+    <span>private</span> <span>static</span> <span>readonly</span> <span>int</span>[] _acceptableSeconds =
+        Enumerable.Range(<span>1</span>, Entries).Select(seconds =&gt; seconds * StepSize).ToArray();
+
+    <span>private</span> <span>static</span> <span>readonly</span> <span>string</span>[] _fuckYouImATrain =
+        _acceptableSeconds.Select(seconds =&gt; <span>$"public,max-age={seconds},must-revalidate"</span>).ToArray();
+<span>
+</span><span>    [Benchmark]</span>
+<span>    [ArgumentsSource(nameof(PassingInts))]</span>
+    <span>public</span> <span>string</span> FindNearest(<span>int</span> seconds)
+    {
+        <span>var</span> idx = Array.BinarySearch(_acceptableSeconds, RoundToNearest(seconds, StepSize));
+        <span>if</span> (idx &gt; -<span>1</span>)
+            <span>return</span> _fuckYouImATrain[idx];
+        <span>return</span> ~idx &lt; Entries ? _fuckYouImATrain[~idx] : _fuckYouImATrain[Entries - <span>1</span>];
+    }
+</code></pre></div><p>We create some acceptable values for <code>seconds</code>. And then we create a string array of cache headers generated from those acceptable values.</p>
+<p>When <code>FindNearest(seconds)</code> is called, we want to find the closest matching header. We know that we store strings generated in 60 second increments. So, if <code>FindNearest(50)</code>, <code>FindNearest(60)</code>, or <code>FindNearest(59)</code> is called, then we want to find the nearest match to <code>60</code> (in this case).</p>
+<p>This code is, honestly, a mess from top to bottom:</p>
+<ul>
+<li>It relies on keys and values being the same length and in the same order.</li>
+<li>The returned value does not follow the principal of least surprise because there's no obviously correlation between what you pass in and what you receive back (better naming would help a little).</li>
+<li>From a maintenance standpoint, you'll need to remember what operator <code>~</code> is each time you read the code;</li>
+<li>you'll have to know why you're using either the index or the XORed compliment of the index</li>
+<li>and you'll have to think about bounds checking.</li>
+</ul>
+<p>But, if the speed is there then maybe… maybe… it's worth it.</p>
+<p>Let's put it all together (<a href="https://gist.github.com/hyrmn/160fe639d4e5627be16fbeb4ae3b2cdf">gist here</a>) and see what those numbers look like.</p>
+<p><img src="https://d33wubrfki0l68.cloudfront.net/d0fe65bf2334d989112f731ab9ecd6785716439a/e6ce3/img/run_results.png" alt="BenchmarkDotNet results"></p>
+<p>A look at the results will tell us that, by far, the bling string approach is the worst with a mean time of about 250 nanoseconds per call.</p>
+<p>Our enum option is the best contender if we can live with the constraints while the the simple cache approach is perfect if we'll often use the same value in subsequent calls (it trends towards the bling string performance the less often that's true).</p>
+<p>The lookup dictionary is next fastest while our binary search is slow enough that it hardly seems worth the trouble. This is because search time for the dictionary is an <code>O(1)</code> operation while the binary search is, on average, <code>O(log n)</code>. (Thanks <a href="https://en.wikipedia.org/wiki/Binary_search_algorithm">Wikipedia</a>!)</p>
+<p>So, pragmatic hat back on. What's the best option? That depends! Look at that, after reading all the way to here, I pull out a trite catchphrase. This is where we need to understand our system. We don't care about optimizing the 97% that doesn't matter; we need to apply ourselves to the 3% that does.</p>
+<p>If this method is called on every single HTTP request, but it's an internal app that gets called 1000 a day, then who cares! Leave the bling string in place. If this is only called when an image is requested from blob storage and the cache time is an hour, then maybe just hard-code it and be done.</p>
+<p>On the other hand, if this is part of some critical infrastructure where saving milliseconds will net you a comfortable end-of-year bonus, then it's time to dig in and make some harder choices that depend on understanding your system.</p>
+<p>When we optimize code, we have to keep mutiple audiences in mind. There's the callers of our code. Which design choice keeps the API straightforward and unsurprising? There's future maintenance devs (including yourself after you've forgotten the reasoning behind your change). Which change makes the code straightforward? What can we do to minimize breaking logic changes? And, of course, the runtime. Which change has a positive impact on execution time? Which change is least likely to have unintended runtime consequences if misused?</p>
+<p>Lots of questions but no answers. But, with a solid handle on writing small benchmarks to evaluate options, you'll be better equiped to make choices within the scope of the applications that you write and maintain.</p>
+
+
+    
+    <nav>
+    tags:
+    <ul>
+    
+        <li><a href="https://hyr.mn/tags/csharp/">#CSharp</a>&nbsp;
+    
+        </li><li><a href="https://hyr.mn/tags/code/">#Code</a>&nbsp;
+    
+    </li></ul>
+    </nav>
+    
+</article></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Building End-to-End Diagnostics: OpenTelemetry Integration - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Building End-to-End Diagnostics: OpenTelemetry Integration - linksfor.dev(s)"/>
+    <meta property="article:author" content="Jimmy Bogard"/>
+    <meta property="og:description" content="Posts in this series: An IntroTrace ContextDiagnostic EventsOpenTelemetry IntegrationSource Code In the last post, we looked at providing diagnostic event hooks into our code at specific points so that &quot;something&quot; could listen in. For our purposes, we want to listen in to surface telemetry data, but the uses are far"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://jimmybogard.com/building-end-to-end-diagnostics-opentelemetry-integration/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Building End-to-End Diagnostics: OpenTelemetry Integration</title>
+<div class="readable">
+        <h1>Building End-to-End Diagnostics: OpenTelemetry Integration</h1>
+            <div>by Jimmy Bogard</div>
+            <div>Reading time: 10-13 minutes</div>
+        <div>Posted here: 11 May 2020</div>
+        <p><a href="https://jimmybogard.com/building-end-to-end-diagnostics-opentelemetry-integration/">https://jimmybogard.com/building-end-to-end-diagnostics-opentelemetry-integration/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="site-main">
+    <div>
+
+        <article>
+
+            
+
+
+            <section>
+                <div>
+                    <p>Posts in this series:</p><ul><li><a href="https://jimmybogard.com/building-end-to-end-diagnostics-and-tracing-a-primer/">An Intro</a></li><li><a href="https://jimmybogard.com/building-end-to-end-diagnostics-and-tracing-a-primer-trace-context/">Trace Context</a></li><li><a href="https://jimmybogard.com/building-end-to-end-tracing-diagnostic-events/">Diagnostic Events</a></li><li><a href="https://jimmybogard.com/building-end-to-end-diagnostics-opentelemetry-integration/">OpenTelemetry Integration</a></li></ul><p><a href="https://github.com/jbogard/nsb-diagnostics-poc">Source Code</a></p><p>In the last post, we looked at providing diagnostic event hooks into our code at specific points so that "something" could listen in. For our purposes, we want to listen in to surface telemetry data, but the uses are far wider for diagnostic events, such as logging, testing, and metrics. We want to focus on telemetry through the <a href="https://opentelemetry.io//">OpenTelemetry project</a>.</p><p>So why OpenTelemetry? Just another standard we need to follow? As someone that uses NServiceBus on a wide variety of clients, I'm exposed to a number of different observability tools, to name a few:</p><ul><li>Zipkin</li><li>Jaeger</li><li>Dynatrace</li><li>Application Insights</li></ul><p>If you're a library author, like NServiceBus, and you want to enable observability through these tools, you'd have to create and maintain packages for <em>each one</em> of those products. Instead, if you could target some common API, like you can today for:</p><ul><li>Logging</li><li>Dependency Injection</li><li>Configuration</li></ul><p>Then you don't have to have some extensive matrix of support. You target one common API, and the implementation providers can plug in to that common model. OpenTelemetry is just this - providing a standardized API for tracing primitives (and eventually, much more). The .NET SDK for OpenTelemetry (in alpha at the moment, in beta for most other runtimes/platforms) provides that SDK, as well as convenient bridges for the diagnostics event API</p><h3 id="plugging-into-opentelemetry">Plugging into OpenTelemetry</h3><p>The diagnostic events by themselves provide quite a bit of value, but we need to <em>listen</em> to them in order to do something. That's where OpenTelemetry comes in - the "something" listening to diagnostic events. Since <a href="https://github.com/open-telemetry/opentelemetry-dotnet">OpenTelemetry .NET SDK</a> is currently in alpha, I'm going to reference the OpenTelemetry MyGet repository and reference the OpenTelemetry alpha package:</p><pre><code><span><span><span>&lt;</span>Project</span> <span>Sdk</span><span><span>=</span><span>"</span>Microsoft.NET.Sdk<span>"</span></span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>PropertyGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>TargetFramework</span><span>&gt;</span></span>netstandard2.0<span><span><span>&lt;/</span>TargetFramework</span><span>&gt;</span></span>
+  <span><span><span>&lt;/</span>PropertyGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>PackageReference</span> <span>Include</span><span><span>=</span><span>"</span>OpenTelemetry<span>"</span></span> <span>Version</span><span><span>=</span><span>"</span>0.2.0-alpha.231<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+  <span><span><span>&lt;</span>ItemGroup</span><span>&gt;</span></span>
+    <span><span><span>&lt;</span>ProjectReference</span> <span>Include</span><span><span>=</span><span>"</span>..\NServiceBus.Diagnostics\NServiceBus.Diagnostics.csproj<span>"</span></span> <span>/&gt;</span></span>
+  <span><span><span>&lt;/</span>ItemGroup</span><span>&gt;</span></span>
+
+<span><span><span>&lt;/</span>Project</span><span>&gt;</span></span>
+</code></pre><p>This library I created serves as the listener to diagnostic events, as well as provide an extension to OpenTelemetry to register those listeners. But first, what do we need to create? With the current OpenTelemetry SDK, we need 3 things:</p><ul><li>A <code>ListenerHandler</code> that receives <code>Activity</code>-based diagnostic events</li><li>An <code>Adapter</code> that subscribes a <code>ListenerHandler</code> to diagnostic events</li><li>Extension method to <code>TracerBuilder</code> that registers our <code>Adapter</code> with OpenTelemetry</li></ul><h3 id="listenerhandlers">ListenerHandlers</h3><p>For NServiceBus, we have two kinds of activities - sending and processing messages. That means we'll have two telemetry events, two spans, and two listeners. The OpenTelemetry SDK includes a helper for dealing with the Activity/OpenTelemetry bridge, and that's a base <code><a href="https://github.com/open-telemetry/opentelemetry-dotnet/blob/master/src/OpenTelemetry/Adapter/ListenerHandler.cs">ListenerHandler</a></code> class. Note: this is all subject to change as it's all alpha, but the primitives defined in the <a href="https://github.com/open-telemetry/opentelemetry-specification">OpenTelemetry Specification</a> are at least in beta.</p><p>That base <code>ListenerHandler</code> class has methods to override - when an Activity starts, stops, raises an exception event, or any other custom event. For us, we only have start/stop events, so we can create a class that overrides those two methods:</p><pre><code><span>internal</span> <span>class</span> <span>SendMessageListener</span> <span>:</span> <span>ListenerHandler</span>
+<span>{</span>
+    <span>public</span> <span>SendMessageListener</span><span>(</span><span>string</span> sourceName<span>,</span> <span>Tracer</span> tracer<span>)</span> <span>:</span> <span>base</span><span>(</span>sourceName<span>,</span> tracer<span>)</span>
+    <span>{</span>
+    <span>}</span>
+
+    <span>public</span> <span>override</span> <span>void</span> <span>OnStartActivity</span><span>(</span><span>Activity</span> activity<span>,</span> <span>object</span> payload<span>)</span>
+    <span>{</span>
+        <span>ProcessEvent</span><span>(</span>activity<span>,</span> payload <span>as</span> BeforeSendMessage<span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>override</span> <span>void</span> <span>OnStopActivity</span><span>(</span><span>Activity</span> activity<span>,</span> <span>object</span> payload<span>)</span>
+    <span>{</span>
+        <span>ProcessEvent</span><span>(</span>activity<span>,</span> payload <span>as</span> AfterSendMessage<span>)</span><span>;</span>
+    <span>}</span>
+</code></pre><p>The <code>payload</code> is the argument fed into <code>StartActivity</code> in our diagnostic listener, allowing our OpenTelemetry listener to have an actual class to work with. The processing of those events needs to create OpenTelemetry spans from the activities, and add attributes to the span.</p><p>Our <code>ProcessEvent</code> method is a bit long, so let's break it up into parts:</p><pre><code><span>private</span> <span>void</span> <span>ProcessEvent</span><span>(</span><span>Activity</span> activity<span>,</span> <span>BeforeSendMessage</span> payload<span>)</span>
+<span>{</span>
+    <span>if</span> <span>(</span>payload <span>==</span> <span>null</span><span>)</span>
+    <span>{</span>
+        AdapterEventSource<span>.</span>Log<span>.</span><span>NullPayload</span><span>(</span><span>"SendMessageListener.OnStartActivity"</span><span>)</span><span>;</span>
+        <span>return</span><span>;</span>
+    <span>}</span>
+
+    <span>var</span> span <span>=</span> <span>StartSpanFromActivity</span><span>(</span>activity<span>,</span> payload<span>)</span><span>;</span>
+
+    <span>if</span> <span>(</span>span<span>.</span>IsRecording<span>)</span>
+    <span>{</span>
+        <span>SetSpanAttributes</span><span>(</span>activity<span>,</span> payload<span>,</span> span<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre><p>If the payload wasn't recognized as what we expect, then we simply return. Next, we start an OpenTelemetry span from the activity. Finally, if we detect that the span is recording, then we apply the span attributes.</p><p>The <code>StartSpanFromActivity</code> is:</p><pre><code><span>private</span> <span>TelemetrySpan</span> <span>StartSpanFromActivity</span><span>(</span><span>Activity</span> activity<span>,</span> <span>BeforeSendMessage</span> payload<span>)</span>
+<span>{</span>
+    payload<span>.</span>Context<span>.</span>Headers<span>.</span><span>TryGetValue</span><span>(</span>Headers<span>.</span>MessageIntent<span>,</span> <span>out</span> <span>var</span> intent<span>)</span><span>;</span>
+
+    <span>var</span> routes <span>=</span> payload<span>.</span>Context<span>.</span>RoutingStrategies
+        <span>.</span><span>Select</span><span>(</span>r <span>=&gt;</span> r<span>.</span><span>Apply</span><span>(</span>payload<span>.</span>Context<span>.</span>Headers<span>)</span><span>)</span>
+        <span>.</span><span>Select</span><span>(</span>t <span>=&gt;</span>
+        <span>{</span>
+            <span>switch</span> <span>(</span>t<span>)</span>
+            <span>{</span>
+                <span>case</span> <span>UnicastAddressTag</span> u<span>:</span>
+                    <span>return</span> u<span>.</span>Destination<span>;</span>
+                <span>case</span> <span>MulticastAddressTag</span> m<span>:</span>
+                    <span>return</span> m<span>.</span>MessageType<span>.</span>Name<span>;</span>
+                <span>default</span><span>:</span>
+                    <span>return</span> <span>null</span><span>;</span>
+            <span>}</span>
+        <span>}</span><span>)</span>
+        <span>.</span><span>ToList</span><span>(</span><span>)</span><span>;</span>
+
+    <span>var</span> operationName <span>=</span> $<span>"{intent ?? activity.OperationName} {string.Join("</span><span>,</span> <span>", routes)}"</span><span>;</span>
+
+    Tracer<span>.</span><span>StartActiveSpanFromActivity</span><span>(</span>operationName<span>,</span> activity<span>,</span> SpanKind<span>.</span>Producer<span>,</span> <span>out</span> <span>var</span> span<span>)</span><span>;</span>
+    <span>return</span> span<span>;</span>
+<span>}</span>
+</code></pre><p>I wanted to have a more meaningful name here, so I had to do a bit of munging of the incoming data to detect what "kind" of message we're sending here from the intent of the message (Send/Publish/Reply etc.). I also wanted to record where this operation was being sent to, so I also record the routes. The reason this is a little wonky is that NServiceBus is an abstraction over messaging, so I don't have access for example to the inner workings of RabbitMQ or Azure Service Bus or MSMQ.</p><p>The final result however is a <code>Span</code> with a kind of <code>SpanKind.Producer</code> started from the <code>Activity</code> we pass in. The basic guidance of setting the span and its attributes comes from the <a href="https://github.com/open-telemetry/opentelemetry-specification/blob/master/specification/trace/semantic_conventions/messaging.md">OpenTelemetry span conventions around messaging</a>.</p><p>With the span started, we now want to apply the span attributes. Following the span guidance, we set several well-known attributes:</p><pre><code><span>private</span> <span>static</span> <span>void</span> <span>SetSpanAttributes</span><span>(</span><span>Activity</span> activity<span>,</span> <span>BeforeSendMessage</span> payload<span>,</span> <span>TelemetrySpan</span> span<span>)</span>
+<span>{</span>
+    span<span>.</span><span>SetAttribute</span><span>(</span><span>"messaging.message_id"</span><span>,</span> payload<span>.</span>Context<span>.</span>MessageId<span>)</span><span>;</span>
+    span<span>.</span><span>SetAttribute</span><span>(</span><span>"messaging.message_payload_size_bytes"</span><span>,</span> payload<span>.</span>Context<span>.</span>Body<span>.</span>Length<span>)</span><span>;</span>
+
+    span<span>.</span><span>ApplyContext</span><span>(</span>payload<span>.</span>Context<span>.</span>Builder<span>.</span><span><span>Build</span><span>&lt;</span><span>ReadOnlySettings</span><span>&gt;</span></span><span>(</span><span>)</span><span>,</span> payload<span>.</span>Context<span>.</span>Headers<span>)</span><span>;</span>
+
+    <span>foreach</span> <span>(</span><span>var</span> tag <span>in</span> activity<span>.</span>Tags<span>)</span>
+    <span>{</span>
+        span<span>.</span><span>SetAttribute</span><span>(</span>$<span>"messaging.nservicebus.{tag.Key.ToLowerInvariant()}"</span><span>,</span> tag<span>.</span>Value<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre><p>As well as fill in the span with any tags passed in through the Activity. Those extra tags translated into span attributes will allow the diagnostics hooks to add any extra details they want that can finally show up in telemetry events. There's a lot more attributes being set in the <code>ApplyContext</code> method, but it's very specific to NServiceBus internals.</p><p>Finally, to end the span, the <code>ProcessEvent</code> method takes in the <code>AfterSendMessage</code> payload but doesn't really do anything with it - the current <code>Span</code> already tracks the given <code>Activity</code> so we don't have anything additional to add in its data:</p><pre><code><span>private</span> <span>void</span> <span>ProcessEvent</span><span>(</span><span>Activity</span> activity<span>,</span> <span>AfterSendMessage</span> payload<span>)</span>
+<span>{</span>
+    Tracer<span>.</span>CurrentSpan<span>.</span><span>End</span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre><p>The corresponding <code>ProcessMessageListener</code> is quite similar, and you can find that code over on GitHub. With our listeners in place, we now need the hooks into OpenTelemetry to register our listeners with its configuration.</p><h3 id="registering-our-listeners">Registering Our Listeners</h3><p>The last two steps in OpenTelemetry integration are to provide the bridge from "what diagnostic events should I be listening to" to the <code>ListenerHandler</code> classes we created above. Listening to diagnostic events isn't the most straightforward thing in the world - it uses a global registry and a series of nested observables to subscribe to (more on that in a future post), and you need to be mindful to clean up your subscriptions to avoid memory leaks.</p><p>Luckily, OpenTelemetry .NET SDK has this nailed down for us, we just need to create a disposable class that uses a <code>DiagnosticSourceSubscriber</code> to listen to specific named diagnostic events. Here's the one for the "Send" messages:</p><pre><code><span>public</span> <span>class</span> <span>NServiceBusSendAdapter</span> <span>:</span> <span>IDisposable</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>DiagnosticSourceSubscriber</span> _diagnosticSourceSubscriber<span>;</span>
+
+    <span>public</span> <span>NServiceBusSendAdapter</span><span>(</span><span>Tracer</span> tracer<span>)</span>
+    <span>{</span>
+        _diagnosticSourceSubscriber <span>=</span> <span>new</span> <span>DiagnosticSourceSubscriber</span><span>(</span>
+            <span>new</span> <span>SendMessageListener</span><span>(</span><span>"NServiceBus.Diagnostics.Send"</span><span>,</span> tracer<span>)</span><span>,</span>
+            <span>null</span><span>)</span><span>;</span>
+        _diagnosticSourceSubscriber<span>.</span><span>Subscribe</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>void</span> <span>Dispose</span><span>(</span><span>)</span> 
+        <span>=&gt;</span> _diagnosticSourceSubscriber<span>?.</span><span>Dispose</span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre><p>We create an instance of the <code>DiagnosticSourceSubscriber</code>, which is the main helper for bridging diagnostic events and activities, and pass in an instance of our <code>SendMessageListener</code> class we saw earlier. The name of the source, <code>NServiceBus.Diagnostics.Send</code>, is the root name of our diagnostic event.</p><p>When the diagnostic events get raised, they are then suffixed with "Start" and "Stop" in their name, and the base listener class uses that convention to call the <code>OnStart</code> and <code>OnStop</code> methods. If you compare this code with say, the Azure SDK code for listening to diagnostic events, ours is MUCH easier to make sense of.</p><p>Finally, we need to create an extension to OpenTelemetry configuration for our adapters to register them with OpenTelemetry:</p><pre><code><span>public</span> <span>static</span> <span>class</span> <span>TraceBuilderExtensions</span>
+<span>{</span>
+    <span>public</span> <span>static</span> <span>TracerBuilder</span> <span>AddNServiceBusAdapter</span><span>(</span><span>this</span> <span>TracerBuilder</span> builder<span>)</span>
+        <span>=&gt;</span> builder
+            <span>.</span><span>AddAdapter</span><span>(</span>t <span>=&gt;</span> <span>new</span> <span>NServiceBusReceiveAdapter</span><span>(</span>t<span>)</span><span>)</span>
+            <span>.</span><span>AddAdapter</span><span>(</span>t <span>=&gt;</span> <span>new</span> <span>NServiceBusSendAdapter</span><span>(</span>t<span>)</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre><p>With that in place, we can now register our adapters in our application startup. But before we get to that, what happens when our underlying infrastructure does <em>not</em> play nicely with this model? In the next post, I'll walk through adding telemetry to the <a href="https://mongodb.github.io/mongo-csharp-driver/">Mongo .NET driver</a>, where async context is not preserved and we have to do some more work to correlate diagnostic events.</p>
+                </div>
+            </section>
+
+
+            
+
+        </article>
+
+    </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Deep Dive: How is the ASP.NET Core Middleware Pipeline Built? - Code with Steve - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Deep Dive: How is the ASP.NET Core Middleware Pipeline Built? - Code with Steve - linksfor.dev(s)"/>
+    <meta property="article:author" content="Steve Gordon"/>
+    <meta property="og:description" content="In this post, we&#x27;ll dive into ASP.NET Core code and explore how the request handling pipeline is built into a chain of RequestDelegates (middleware)."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.stevejgordon.co.uk/how-is-the-asp-net-core-middleware-pipeline-built"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Deep Dive: How is the ASP.NET Core Middleware Pipeline Built? - Code with Steve</title>
+<div class="readable">
+        <h1>Deep Dive: How is the ASP.NET Core Middleware Pipeline Built? - Code with Steve</h1>
+            <div>by Steve Gordon</div>
+            <div>Reading time: 27-34 minutes</div>
+        <div>Posted here: 15 Jul 2020</div>
+        <p><a href="https://www.stevejgordon.co.uk/how-is-the-asp-net-core-middleware-pipeline-built">https://www.stevejgordon.co.uk/how-is-the-asp-net-core-middleware-pipeline-built</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="pryc-wp-acctp-original-content">
+<div><p>If you’ve ever used ASP.NET Core, then you’ll likely be familiar with the Startup class. This class, by convention, includes at least one method named Configure. Often, a ConfigureServices method is also included and used to register services with the Microsoft dependency injection container, but this isn’t an absolute requirement.</p><p>The configure method is where you define the app’s request processing pipeline, by registering framework or custom middleware components.</p><p>Have you ever wondered how the code you include in the Configure method in the Startup class is converted to a pipeline to handle requests? Wonder no more! In this post, we’ll explore some of the ASP.NET Core source code and answer this question.</p><p>This post dives into some of the implementation details of ASP.NET Core. This is not required reading to effectively use ASP.NET Core, and it’s middleware pipeline. However, I believe there is value in understanding these details to appreciate what is happening inside your applications. I’ll show some rather complicated looking code snippets in this post and explain them as best I can. Don’t worry if you don’t understand everything at first.</p></div>
+<h2>A Basic ASP.NET Core Application</h2>
+<p>We’ll use a simple application to demonstrate the flow which we can fit inside a single file.</p>
+
+
+
+<div id="gist104338425">
+    <div>
+      <div>
+        <div>
+  <div id="file-program-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-program-cs-L1" data-line-number="1"></td>
+        <td id="file-program-cs-LC1"><span>using</span> <span>Microsoft</span>.<span>AspNetCore</span>.<span>Builder</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L2" data-line-number="2"></td>
+        <td id="file-program-cs-LC2"><span>using</span> <span>Microsoft</span>.<span>AspNetCore</span>.<span>Hosting</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L3" data-line-number="3"></td>
+        <td id="file-program-cs-LC3"><span>using</span> <span>Microsoft</span>.<span>AspNetCore</span>.<span>Http</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L4" data-line-number="4"></td>
+        <td id="file-program-cs-LC4"><span>using</span> <span>Microsoft</span>.<span>Extensions</span>.<span>Hosting</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L5" data-line-number="5"></td>
+        <td id="file-program-cs-LC5">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L6" data-line-number="6"></td>
+        <td id="file-program-cs-LC6"><span>namespace</span> <span>BasicWebSite</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L7" data-line-number="7"></td>
+        <td id="file-program-cs-LC7">{</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L8" data-line-number="8"></td>
+        <td id="file-program-cs-LC8">    <span>public</span> <span>class</span> <span>Program</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L9" data-line-number="9"></td>
+        <td id="file-program-cs-LC9">    {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L10" data-line-number="10"></td>
+        <td id="file-program-cs-LC10">        <span>public</span> <span>static</span> <span>void</span> <span>Main</span>(<span>string</span>[] <span>args</span>) <span>=&gt;</span> <span>CreateHostBuilder</span>(<span>args</span>).<span>Build</span>().<span>Run</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L11" data-line-number="11"></td>
+        <td id="file-program-cs-LC11">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L12" data-line-number="12"></td>
+        <td id="file-program-cs-LC12">        <span>public</span> <span>static</span> <span>IHostBuilder</span> <span>CreateHostBuilder</span>(<span>string</span>[] <span>args</span>) <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L13" data-line-number="13"></td>
+        <td id="file-program-cs-LC13">            <span>Host</span>.<span>CreateDefaultBuilder</span>(<span>args</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L14" data-line-number="14"></td>
+        <td id="file-program-cs-LC14">                .<span>ConfigureWebHostDefaults</span>(<span>webBuilder</span> <span>=&gt;</span> </td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L15" data-line-number="15"></td>
+        <td id="file-program-cs-LC15">                    <span>webBuilder</span>.<span>UseStartup</span>&lt;<span>Startup</span>&gt;());</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L16" data-line-number="16"></td>
+        <td id="file-program-cs-LC16">    }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L17" data-line-number="17"></td>
+        <td id="file-program-cs-LC17">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L18" data-line-number="18"></td>
+        <td id="file-program-cs-LC18">    <span>public</span> <span>class</span> <span>Startup</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L19" data-line-number="19"></td>
+        <td id="file-program-cs-LC19">    {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L20" data-line-number="20"></td>
+        <td id="file-program-cs-LC20">        <span>public</span> <span>void</span> <span>Configure</span>(<span>IApplicationBuilder</span> <span>app</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L21" data-line-number="21"></td>
+        <td id="file-program-cs-LC21">        {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L22" data-line-number="22"></td>
+        <td id="file-program-cs-LC22">            <span>app</span>.<span>Use</span>(<span>async</span> (<span>context</span>, <span>next</span>) <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L23" data-line-number="23"></td>
+        <td id="file-program-cs-LC23">            {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L24" data-line-number="24"></td>
+        <td id="file-program-cs-LC24">                <span>if</span> (<span>context</span>.<span>Request</span>.<span>Path</span> <span>==</span> <span><span>"</span>/<span>"</span></span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L25" data-line-number="25"></td>
+        <td id="file-program-cs-LC25">                {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L26" data-line-number="26"></td>
+        <td id="file-program-cs-LC26">                    <span>await</span> <span>context</span>.<span>Response</span>.<span>WriteAsync</span>(<span><span>"</span>Hello World!<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L27" data-line-number="27"></td>
+        <td id="file-program-cs-LC27">                    <span>return</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L28" data-line-number="28"></td>
+        <td id="file-program-cs-LC28">                }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L29" data-line-number="29"></td>
+        <td id="file-program-cs-LC29">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L30" data-line-number="30"></td>
+        <td id="file-program-cs-LC30">                <span>await</span> <span>next</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L31" data-line-number="31"></td>
+        <td id="file-program-cs-LC31">            });</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L32" data-line-number="32"></td>
+        <td id="file-program-cs-LC32">        }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L33" data-line-number="33"></td>
+        <td id="file-program-cs-LC33">    }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L34" data-line-number="34"></td>
+        <td id="file-program-cs-LC34">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<div><p>Inside the Program class, the main method builds and runs a host. The host concept supports long-running .NET Core applications, providing features such as dependency injection and configuration.</p><p>To create the Host, the static CreateHostBuilder method is used. This first establishes a generic host builder using the Host.CreateDefaultBuilder method. A call to ConfigureWebHostDefaults is also made, to enable support for hosting ASP.NET Core applications. This method accepts an Action&lt;IWebHostBuilder&gt; which can be used to further configure the web host and enables ASP.NET Core to function.</p><p>In this example, an expression lambda is used to point the web host to the Startup class by calling UseStartup. The Startup class is, by convention, used to configure the services and the request pipeline.</p><p>The Startup class for this sample contains a lone Configure method. This method accepts an IApplicationBuilder parameter. The IApplicationBuilder may be used to configure the request handling pipeline for this ASP.NET Core application.</p></div>
+<h2>Introducing Request Delegates</h2>
+<p>The request pipeline is defined as a series of RequestDelegate components. Let’s first focus on that type.</p>
+
+
+
+<div id="gist104338486">
+    <div>
+      <div>
+        <div>
+  <div id="file-requestdelegate-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-requestdelegate-cs-L1" data-line-number="1"></td>
+        <td id="file-requestdelegate-cs-LC1"><span><span>///</span> &lt;<span><span>summary</span></span>&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-requestdelegate-cs-L2" data-line-number="2"></td>
+        <td id="file-requestdelegate-cs-LC2"><span><span>///</span> A function that can process an HTTP request.</span></td>
+      </tr>
+      <tr>
+        <td id="file-requestdelegate-cs-L3" data-line-number="3"></td>
+        <td id="file-requestdelegate-cs-LC3"><span><span>///</span> &lt;/<span><span>summary</span></span>&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-requestdelegate-cs-L4" data-line-number="4"></td>
+        <td id="file-requestdelegate-cs-LC4"><span><span>///</span> &lt;<span><span>param</span></span> <span><span>name</span></span>=<span><span>"</span>context<span>"</span></span>&gt;The &lt;<span><span>see</span></span> <span><span>cref</span></span>=<span><span>"</span>HttpContext<span>"</span></span>/&gt; for the request.&lt;/<span><span>param</span></span>&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-requestdelegate-cs-L5" data-line-number="5"></td>
+        <td id="file-requestdelegate-cs-LC5"><span><span>///</span> &lt;<span><span>returns</span></span>&gt;A task that represents the completion of request processing.&lt;/<span><span>returns</span></span>&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-requestdelegate-cs-L6" data-line-number="6"></td>
+        <td id="file-requestdelegate-cs-LC6"><span>public</span> <span>delegate</span> <span>Task</span> <span>RequestDelegate</span>(<span>HttpContext</span> <span>context</span>);</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p><span data-preserver-spaces="true">The delegate keyword may be a new concept for some .NET developers as it’s not frequently required by user code. The <a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/delegates/" target="_blank" rel="noopener noreferrer">Microsoft documentation</a></span><span data-preserver-spaces="true">&nbsp;defines a delegate as follows…</span><span data-preserver-spaces="true">&nbsp;</span></p>
+<blockquote>
+<p><span data-preserver-spaces="true">“A delegate is a type that represents references to methods with a particular parameter list and return type.”</span><span data-preserver-spaces="true">&nbsp;</span></p>
+</blockquote>
+<p><span data-preserver-spaces="true">You may think this sounds quite similar to an Action&lt;T&gt; or Func&lt;T&gt; and you’d be correct. Both of these are types are actually delegates and defined using the delegate keyword. For general use, Func and Action are easy to apply. In cases, as we have here with the RequestDelegate, where one wants to afford more meaning, a specific delegate signature can be defined.</span><span data-preserver-spaces="true">&nbsp;</span></p>
+<p><span data-preserver-spaces="true">The RequestDelegate type represents any Task returning method, which has a single parameter of type HttpContext. A RequestDelegate can therefore operate on the HttpContext asynchronously.</span></p>
+<p><span data-preserver-spaces="true">ASP.NET Core request handling is achieved by chaining one or more RequestDelegate instances together. Each delegate may handle the request by writing to the response on the HttpContext. If the RequestDelegate is considered terminal, i.e. it has fully completed the response, it can simply return. In cases, where it has not entirely handled the request, it may pass the HttpContext onto the next RequestDelegate in the chain.</span></p>
+<h2>ASP.NET Core Middleware</h2>
+<p><span data-preserver-spaces="true">At a higher level, we often see this as a sequence of middleware components. When defining a middleware class, one of the main requirements is that it include a method named either Invoke or InvokeAsync. Either is suitable, although, since ASP.NET Core 2.0, the later is more commonly used.</span></p>
+<p><span data-preserver-spaces="true">The signature for this method is as follows…</span></p>
+<pre><span data-preserver-spaces="true">public Task InvokeAsync(HttpContext httpContext)</span></pre>
+<p><span data-preserver-spaces="true">If you focus on the signature, you will see that it matches the signature of a RequestDelegate. It accepts a HttpContext and returns a Task. </span></p>
+<p><span data-preserver-spaces="true">Middleware classes are a common concept used to provide request handling functionality. If you’ve built any ASP.NET Core applications, you’ve used middleware, whether consciously or not. For common crosscutting concerns in your application, <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write?view=aspnetcore-3.1" target="_blank" rel="noopener noreferrer">writing your own middleware</a> is a relatively trivial exercise.</span></p>
+<h2>Inline Middleware</h2>
+<p><span data-preserver-spaces="true">For this post, I want to focus on how we get from the Configure method, to a final request handling pipeline. We’ll ignore the middleware class concept and instead define our request pipeline by registering a single inline middleware component.</span></p>
+
+
+
+<div id="gist104338744">
+    <div>
+      <div>
+        <div>
+  <div id="file-program-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-program-cs-L1" data-line-number="1"></td>
+        <td id="file-program-cs-LC1"><span>public</span> <span>void</span> <span>Configure</span>(<span>IApplicationBuilder</span> <span>app</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L2" data-line-number="2"></td>
+        <td id="file-program-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L3" data-line-number="3"></td>
+        <td id="file-program-cs-LC3">    <span>app</span>.<span>Use</span>(<span>async</span> (<span>context</span>, <span>next</span>) <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L4" data-line-number="4"></td>
+        <td id="file-program-cs-LC4">    {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L5" data-line-number="5"></td>
+        <td id="file-program-cs-LC5">        <span>if</span> (<span>context</span>.<span>Request</span>.<span>Path</span> <span>==</span> <span><span>"</span>/<span>"</span></span>)</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L6" data-line-number="6"></td>
+        <td id="file-program-cs-LC6">        {</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L7" data-line-number="7"></td>
+        <td id="file-program-cs-LC7">            <span>await</span> <span>context</span>.<span>Response</span>.<span>WriteAsync</span>(<span><span>"</span>Hello World!<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L8" data-line-number="8"></td>
+        <td id="file-program-cs-LC8">            <span>return</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L9" data-line-number="9"></td>
+        <td id="file-program-cs-LC9">        }</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L10" data-line-number="10"></td>
+        <td id="file-program-cs-LC10">
+</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L11" data-line-number="11"></td>
+        <td id="file-program-cs-LC11">        <span>await</span> <span>next</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L12" data-line-number="12"></td>
+        <td id="file-program-cs-LC12">    });</td>
+      </tr>
+      <tr>
+        <td id="file-program-cs-L13" data-line-number="13"></td>
+        <td id="file-program-cs-LC13">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p>Inline middleware components are not really any different from creating and registering a middleware class. However, they require more ceremony to access application services from the dependency injection container. Ultimately, they are used to define a request delegate for your application.</p>
+<p>In the above code, we’ve created and registered a single middleware delegate into the request pipeline. In real-world applications, you’ll usually have more than one middleware delegate defined. When registering middleware inside the Configure method, those registered first (at the top of the Configure method), run before those registered last. Often, the order is essential for middleware features to function correctly.</p>
+<p>In our example, we have defined the inline middleware by calling the Use extension method on the IApplicationBuilder.&nbsp;</p>
+
+
+
+<div id="gist104338777">
+    <div>
+      <div>
+        <div>
+  <div id="file-useextensions-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-useextensions-cs-L1" data-line-number="1"></td>
+        <td id="file-useextensions-cs-LC1"><span>public</span> <span>static</span> <span>IApplicationBuilder</span> <span>Use</span>(<span>this</span> <span>IApplicationBuilder</span> <span>app</span>, <span>Func</span>&lt;<span>HttpContext</span>, <span>Func</span>&lt;<span>Task</span>&gt;, <span>Task</span>&gt; <span>middleware</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L2" data-line-number="2"></td>
+        <td id="file-useextensions-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L3" data-line-number="3"></td>
+        <td id="file-useextensions-cs-LC3">    <span>return</span> <span>app</span>.<span>Use</span>(<span>next</span> <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L4" data-line-number="4"></td>
+        <td id="file-useextensions-cs-LC4">    {</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L5" data-line-number="5"></td>
+        <td id="file-useextensions-cs-LC5">        <span>return</span> <span>context</span> <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L6" data-line-number="6"></td>
+        <td id="file-useextensions-cs-LC6">        {</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L7" data-line-number="7"></td>
+        <td id="file-useextensions-cs-LC7">            <span>Func</span>&lt;<span>Task</span>&gt; <span>simpleNext</span> <span>=</span> () <span>=&gt;</span> <span>next</span>(<span>context</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L8" data-line-number="8"></td>
+        <td id="file-useextensions-cs-LC8">            <span>return</span> <span>middleware</span>(<span>context</span>, <span>simpleNext</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L9" data-line-number="9"></td>
+        <td id="file-useextensions-cs-LC9">        };</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L10" data-line-number="10"></td>
+        <td id="file-useextensions-cs-LC10">    });</td>
+      </tr>
+      <tr>
+        <td id="file-useextensions-cs-L11" data-line-number="11"></td>
+        <td id="file-useextensions-cs-LC11">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p>This method extends the IApplicationBuilder and as its parameter, accepts a Func&lt;HttpContext, Func&lt;Task&gt;, Task&gt; representing a part of the middleware component chain. It’s a pretty nasty signature so let’s try to break it down.</p>
+<p>The middleware parameter here is a Func which accepts two parameters, a HttpContext and another Func. The return type for this Func is a Task. At this point we have a representation of a wrapped RequestDelegate. At runtime, we can access the HttpContext in our middleware code, and optionally, invoke the Func&lt;Task&gt; which represents the next RequestDelegate.</p>
+<p>The Use extension method calls the Use method defined directly on the IApplicationBuilder interface.</p>
+<pre>IApplicationBuilder Use(Func&lt;RequestDelegate, RequestDelegate&gt; middleware);</pre>
+<p>This method accepts a RequestDelegate and returns a RequestDelegate. This is how the chaining is achieved to form the request handling pipeline. Each piece of middleware needs to know about the next middleware component so that it can choose to call it, to continue request handling. This call to the next RequestDelegate is optional as a component may decide it has entirely handled the request and been able to produce a “terminal” HTTP response.</p>
+<p>Let’s look at the Use implementation on the ApplicationBuilder. This type is the concrete implementation for the IApplicationBuilder abstraction.</p>
+
+
+
+<div id="gist104338814">
+    <div>
+      <div>
+        <div>
+  <div id="file-applicationbuilder-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-applicationbuilder-cs-L1" data-line-number="1"></td>
+        <td id="file-applicationbuilder-cs-LC1"><span>public</span> <span>IApplicationBuilder</span> <span>Use</span>(<span>Func</span>&lt;<span>RequestDelegate</span>, <span>RequestDelegate</span>&gt; <span>middleware</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L2" data-line-number="2"></td>
+        <td id="file-applicationbuilder-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L3" data-line-number="3"></td>
+        <td id="file-applicationbuilder-cs-LC3">    <span>_components</span>.<span>Add</span>(<span>middleware</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L4" data-line-number="4"></td>
+        <td id="file-applicationbuilder-cs-LC4">    <span>return</span> <span>this</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L5" data-line-number="5"></td>
+        <td id="file-applicationbuilder-cs-LC5">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p>It’s a pretty straightforward method. It adds the middleware Func to a list of components which it maintains. Each middleware is added into the list in the order in which they are registered in the Configure method.</p>
+<p>Back in the extension method, it calls the Use method on the ApplicationBuilder, supplying the Func&lt;RequestDelegate, RequestDelegate&gt; using a lambda. The Func expects us to accept a RequestDelegate, which represents the next piece of middleware to run, and returns a RequestDelegate.</p>
+<p>The RequestDelegate being returned is defined with a second lambda, accepting the HttpContext. Inside the statement body, the next RequestDelegate is wrapped into a Func&lt;Task&gt; with yet another lambda expression. This defines code which when called, invokes the RequestDelegate, passing in the current HttpContext.</p>
+<p>This layering of lambdas is pretty confusing to look at, and even harder to explain in writing. Don’t worry if it’s not entirely clear. The summary is that the Use extension method supports registering code representing a middleware delegate. When called this acts on the HttpContext and if necessary, may invoke the next RequestDelegate.</p>
+
+
+
+<h2>Building the Final Request Handling Pipeline</h2>
+<p>When the application starts, the Main method is invoked, and the generic host is built and started. We’ll step through some of the critical sections of code inside ASP.NET Core which are involved in building the request handling pipeline.</p>
+<p>Because we specified a Startup class for the host, during the build phase, ASP.NET core will attempt to invoke its methods. The last method which is invoked is the Configure method.&nbsp;</p>
+
+
+
+<div id="gist104338921">
+    <div>
+      <div>
+        <div>
+  <div id="file-genericwebhostbuilder-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-genericwebhostbuilder-cs-L1" data-line-number="1"></td>
+        <td id="file-genericwebhostbuilder-cs-LC1"><span>configureBuilder</span> <span>=</span> <span>StartupLoader</span>.<span>FindConfigureDelegate</span>(<span>startupType</span>, <span>context</span>.<span>HostingEnvironment</span>.<span>EnvironmentName</span>);</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p>At this point, we have a ConfigureBuilder instance which is used to register an Action to operate upon the GenericWebHostServiceOptions.</p>
+
+
+
+<div id="gist104338951">
+    <div>
+      <div>
+        <div>
+  <div id="file-genericwebhostbuilder-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-genericwebhostbuilder-cs-L1" data-line-number="1"></td>
+        <td id="file-genericwebhostbuilder-cs-LC1"><span>services</span>.<span>Configure</span>&lt;<span>GenericWebHostServiceOptions</span>&gt;(<span>options</span> <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L2" data-line-number="2"></td>
+        <td id="file-genericwebhostbuilder-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L3" data-line-number="3"></td>
+        <td id="file-genericwebhostbuilder-cs-LC3">    <span>options</span>.<span>ConfigureApplication</span> <span>=</span> <span>app</span> <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L4" data-line-number="4"></td>
+        <td id="file-genericwebhostbuilder-cs-LC4">    {</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L5" data-line-number="5"></td>
+        <td id="file-genericwebhostbuilder-cs-LC5">        <span><span>//</span> Throw if there was any errors initializing startup</span></td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L6" data-line-number="6"></td>
+        <td id="file-genericwebhostbuilder-cs-LC6">        <span>startupError</span><span>?</span>.<span>Throw</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L7" data-line-number="7"></td>
+        <td id="file-genericwebhostbuilder-cs-LC7">
+</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L8" data-line-number="8"></td>
+        <td id="file-genericwebhostbuilder-cs-LC8">        <span><span>//</span> Execute Startup.Configure</span></td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L9" data-line-number="9"></td>
+        <td id="file-genericwebhostbuilder-cs-LC9">        <span>if</span> (<span>instance</span> <span>!=</span> <span>null</span> <span>&amp;&amp;</span> <span>configureBuilder</span> <span>!=</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L10" data-line-number="10"></td>
+        <td id="file-genericwebhostbuilder-cs-LC10">        {</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L11" data-line-number="11"></td>
+        <td id="file-genericwebhostbuilder-cs-LC11">            <span>configureBuilder</span>.<span>Build</span>(<span>instance</span>)(<span>app</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L12" data-line-number="12"></td>
+        <td id="file-genericwebhostbuilder-cs-LC12">        }</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L13" data-line-number="13"></td>
+        <td id="file-genericwebhostbuilder-cs-LC13">    };</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L14" data-line-number="14"></td>
+        <td id="file-genericwebhostbuilder-cs-LC14">});</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p>After the build stage for the host, the host is started. At this point, any hosted services are also started. In recent versions, ASP.NET Core is itself a hosted service and is started by the IHostedService mechanism. We won’t dive into that for this post, but it is something I’ll revisit at a later date.</p>
+<p><em>If you’re interested in hosted services, I have a <a href="https://pluralsight.pxf.io/vdn6j">Pluralsight course</a> which explains how they work and where they can be applied in your own applications.</em></p>
+<p>The GenericWebHostService implements IHostedService and therefore, is started when the host StartAsync method is called. The<br>GenericWebHostService includes a dependency on IOptions&lt;GenericWebHostServiceOptions&gt; which is resolved from the dependency injection container. When it’s Value property is accessed, any registered configure Actions are invoked. This includes the Action&lt;T&gt; which causes the ConfigureApplication property to be set with an Action&lt;IApplicationBuilder&gt;. This Action is specified in the lambda above.</p>
+<p>GenericWebHostService implements the StartAsync method, which is responsible for building the request pipeline and starting the server. The code we’re focused on is <a href="https://github.com/dotnet/aspnetcore/blob/master/src/Hosting/Hosting/src/GenericHost/GenericWebHostedService.cs#L85" target="_blank" rel="noopener noreferrer">inside a try block</a>.</p>
+
+
+
+<div id="gist104339064">
+    <div>
+      <div>
+        <div>
+  <div id="file-genericwebhostservice-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-genericwebhostservice-cs-L1" data-line-number="1"></td>
+        <td id="file-genericwebhostservice-cs-LC1"><span>Action</span>&lt;<span>IApplicationBuilder</span>&gt; <span>configure</span> <span>=</span> <span>Options</span>.<span>ConfigureApplication</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L2" data-line-number="2"></td>
+        <td id="file-genericwebhostservice-cs-LC2">
+</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L3" data-line-number="3"></td>
+        <td id="file-genericwebhostservice-cs-LC3"><span>if</span> (<span>configure</span> <span>==</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L4" data-line-number="4"></td>
+        <td id="file-genericwebhostservice-cs-LC4">{</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L5" data-line-number="5"></td>
+        <td id="file-genericwebhostservice-cs-LC5">    <span>throw</span> <span>new</span> <span>InvalidOperationException</span>(<span><span>$"</span>No application configured. Please specify an application via IWebHostBuilder.UseStartup, IWebHostBuilder.Configure, or specifying the startup assembly via {<span>nameof</span>(<span>WebHostDefaults</span>.<span>StartupAssemblyKey</span>)} in the web host configuration.<span>"</span></span>);</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L6" data-line-number="6"></td>
+        <td id="file-genericwebhostservice-cs-LC6">}</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L7" data-line-number="7"></td>
+        <td id="file-genericwebhostservice-cs-LC7">
+</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L8" data-line-number="8"></td>
+        <td id="file-genericwebhostservice-cs-LC8"><span>var</span> <span>builder</span> <span>=</span> <span>ApplicationBuilderFactory</span>.<span>CreateBuilder</span>(<span>Server</span>.<span>Features</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L9" data-line-number="9"></td>
+        <td id="file-genericwebhostservice-cs-LC9">
+</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L10" data-line-number="10"></td>
+        <td id="file-genericwebhostservice-cs-LC10"><span>foreach</span> (<span>var</span> <span>filter</span> <span>in</span> <span>StartupFilters</span>.<span>Reverse</span>())</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L11" data-line-number="11"></td>
+        <td id="file-genericwebhostservice-cs-LC11">{</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L12" data-line-number="12"></td>
+        <td id="file-genericwebhostservice-cs-LC12">    <span>configure</span> <span>=</span> <span>filter</span>.<span>Configure</span>(<span>configure</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L13" data-line-number="13"></td>
+        <td id="file-genericwebhostservice-cs-LC13">}</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L14" data-line-number="14"></td>
+        <td id="file-genericwebhostservice-cs-LC14">
+</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L15" data-line-number="15"></td>
+        <td id="file-genericwebhostservice-cs-LC15"><span>configure</span>(<span>builder</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L16" data-line-number="16"></td>
+        <td id="file-genericwebhostservice-cs-LC16">
+</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L17" data-line-number="17"></td>
+        <td id="file-genericwebhostservice-cs-LC17"><span><span>//</span> Build the request pipeline</span></td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostservice-cs-L18" data-line-number="18"></td>
+        <td id="file-genericwebhostservice-cs-LC18"><span>application</span> <span>=</span> <span>builder</span>.<span>Build</span>();</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p>The value of the GenericWebHostServiceOptions.ConfigureApplication property is stored into a variable called configure and then null checked.</p>
+<h2>Introducing the ApplicationBuilder</h2>
+<p>An ApplicationBuilderFactory is used to create an ApplicationBuilder instance. This type implements the IApplicationBuilder interface.</p>
+<p>Next, any registered IStartupFilter instances are applied. We’ll skip over the IStartupFilter concept for this post since it’s more detail than we need here. Let’s assume for the sake of this post that none are registered, which is not true in the sample, but go with it!</p>
+<p>Finally, the configure variable (an Action&lt;IApplicationBuilder&gt;) is invoked. This causes the GenericWebHostServiceOptions.ConfigureApplication Action to be invoked.</p>
+
+
+
+<div id="gist104339096">
+    <div>
+      <div>
+        <div>
+  <div id="file-genericwebhostbuilder-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-genericwebhostbuilder-cs-L1" data-line-number="1"></td>
+        <td id="file-genericwebhostbuilder-cs-LC1"><span>startupError</span><span>?</span>.<span>Throw</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L2" data-line-number="2"></td>
+        <td id="file-genericwebhostbuilder-cs-LC2">
+</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L3" data-line-number="3"></td>
+        <td id="file-genericwebhostbuilder-cs-LC3"><span><span>//</span> Execute Startup.Configure</span></td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L4" data-line-number="4"></td>
+        <td id="file-genericwebhostbuilder-cs-LC4"><span>if</span> (<span>instance</span> <span>!=</span> <span>null</span> <span>&amp;&amp;</span> <span>configureBuilder</span> <span>!=</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L5" data-line-number="5"></td>
+        <td id="file-genericwebhostbuilder-cs-LC5">{</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L6" data-line-number="6"></td>
+        <td id="file-genericwebhostbuilder-cs-LC6">    <span>configureBuilder</span>.<span>Build</span>(<span>instance</span>)(<span>app</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-genericwebhostbuilder-cs-L7" data-line-number="7"></td>
+        <td id="file-genericwebhostbuilder-cs-LC7">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<p>At this point, the Invoke method on the ConfigureBuilder is called…</p>
+
+
+
+<div id="gist104339111">
+    <div>
+      <div>
+        <div>
+  <div id="file-configurebuilder-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-configurebuilder-cs-L1" data-line-number="1"></td>
+        <td id="file-configurebuilder-cs-LC1"><span>private</span> <span>void</span> <span>Invoke</span>(<span>object</span> <span>instance</span>, <span>IApplicationBuilder</span> <span>builder</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L2" data-line-number="2"></td>
+        <td id="file-configurebuilder-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L3" data-line-number="3"></td>
+        <td id="file-configurebuilder-cs-LC3">    <span><span>//</span> Create a scope for Configure, this allows creating scoped dependencies</span></td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L4" data-line-number="4"></td>
+        <td id="file-configurebuilder-cs-LC4">    <span><span>//</span> without the hassle of manually creating a scope.</span></td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L5" data-line-number="5"></td>
+        <td id="file-configurebuilder-cs-LC5">    <span>using</span> (<span>var</span> <span>scope</span> <span>=</span> <span>builder</span>.<span>ApplicationServices</span>.<span>CreateScope</span>())</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L6" data-line-number="6"></td>
+        <td id="file-configurebuilder-cs-LC6">    {</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L7" data-line-number="7"></td>
+        <td id="file-configurebuilder-cs-LC7">        <span>var</span> <span>serviceProvider</span> <span>=</span> <span>scope</span>.<span>ServiceProvider</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L8" data-line-number="8"></td>
+        <td id="file-configurebuilder-cs-LC8">        <span>var</span> <span>parameterInfos</span> <span>=</span> <span>MethodInfo</span>.<span>GetParameters</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L9" data-line-number="9"></td>
+        <td id="file-configurebuilder-cs-LC9">        <span>var</span> <span>parameters</span> <span>=</span> <span>new</span> <span>object</span>[<span>parameterInfos</span>.<span>Length</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L10" data-line-number="10"></td>
+        <td id="file-configurebuilder-cs-LC10">        <span>for</span> (<span>var</span> <span>index</span> <span>=</span> <span>0</span>; <span>index</span> <span>&lt;</span> <span>parameterInfos</span>.<span>Length</span>; <span>index</span><span>++</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L11" data-line-number="11"></td>
+        <td id="file-configurebuilder-cs-LC11">        {</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L12" data-line-number="12"></td>
+        <td id="file-configurebuilder-cs-LC12">            <span>var</span> <span>parameterInfo</span> <span>=</span> <span>parameterInfos</span>[<span>index</span>];</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L13" data-line-number="13"></td>
+        <td id="file-configurebuilder-cs-LC13">            <span>if</span> (<span>parameterInfo</span>.<span>ParameterType</span> <span>==</span> <span>typeof</span>(<span>IApplicationBuilder</span>))</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L14" data-line-number="14"></td>
+        <td id="file-configurebuilder-cs-LC14">            {</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L15" data-line-number="15"></td>
+        <td id="file-configurebuilder-cs-LC15">                <span>parameters</span>[<span>index</span>] <span>=</span> <span>builder</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L16" data-line-number="16"></td>
+        <td id="file-configurebuilder-cs-LC16">            }</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L17" data-line-number="17"></td>
+        <td id="file-configurebuilder-cs-LC17">            <span>else</span></td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L18" data-line-number="18"></td>
+        <td id="file-configurebuilder-cs-LC18">            {</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L19" data-line-number="19"></td>
+        <td id="file-configurebuilder-cs-LC19">                <span>try</span></td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L20" data-line-number="20"></td>
+        <td id="file-configurebuilder-cs-LC20">                {</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L21" data-line-number="21"></td>
+        <td id="file-configurebuilder-cs-LC21">                    <span>parameters</span>[<span>index</span>] <span>=</span> <span>serviceProvider</span>.<span>GetRequiredService</span>(<span>parameterInfo</span>.<span>ParameterType</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L22" data-line-number="22"></td>
+        <td id="file-configurebuilder-cs-LC22">                }</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L23" data-line-number="23"></td>
+        <td id="file-configurebuilder-cs-LC23">                <span>catch</span> (<span>Exception</span> <span>ex</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L24" data-line-number="24"></td>
+        <td id="file-configurebuilder-cs-LC24">                {</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L25" data-line-number="25"></td>
+        <td id="file-configurebuilder-cs-LC25">                    <span>throw</span> <span>new</span> <span>Exception</span>(<span>string</span>.<span>Format</span>(</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L26" data-line-number="26"></td>
+        <td id="file-configurebuilder-cs-LC26">                        <span><span>"</span>Could not resolve a service of type '{0}' for the parameter '{1}' of method '{2}' on type '{3}'.<span>"</span></span>,</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L27" data-line-number="27"></td>
+        <td id="file-configurebuilder-cs-LC27">                        <span>parameterInfo</span>.<span>ParameterType</span>.<span>FullName</span>,</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L28" data-line-number="28"></td>
+        <td id="file-configurebuilder-cs-LC28">                        <span>parameterInfo</span>.<span>Name</span>,</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L29" data-line-number="29"></td>
+        <td id="file-configurebuilder-cs-LC29">                        <span>MethodInfo</span>.<span>Name</span>,</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L30" data-line-number="30"></td>
+        <td id="file-configurebuilder-cs-LC30">                        <span>MethodInfo</span>.<span>DeclaringType</span>.<span>FullName</span>), <span>ex</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L31" data-line-number="31"></td>
+        <td id="file-configurebuilder-cs-LC31">                }</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L32" data-line-number="32"></td>
+        <td id="file-configurebuilder-cs-LC32">            }</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L33" data-line-number="33"></td>
+        <td id="file-configurebuilder-cs-LC33">        }</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L34" data-line-number="34"></td>
+        <td id="file-configurebuilder-cs-LC34">
+</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L35" data-line-number="35"></td>
+        <td id="file-configurebuilder-cs-LC35">        <span>MethodInfo</span>.<span>InvokeWithoutWrappingExceptions</span>(<span>instance</span>, <span>parameters</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L36" data-line-number="36"></td>
+        <td id="file-configurebuilder-cs-LC36">    }</td>
+      </tr>
+      <tr>
+        <td id="file-configurebuilder-cs-L37" data-line-number="37"></td>
+        <td id="file-configurebuilder-cs-LC37">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<div><p>The above code first creates a scope from the dependency injection container. Why is this necessary?</p><p>Well, the requirement for the Configure method is that it must accept at least one parameter, which is an IApplicationBuiler. It can, however, support parameters for other dependencies to be supplied from the service provider. This is where that magic happens.</p><p>Using reflection, all parameters of the method are identified. The code then loops over these, supplying them from the service provider if they are available. In the case where the type of the parameter is IApplicationBuilder, it is special-cased so that the current IApplicationBuilder is provided.</p><p>Once all parameters can be fulfilled, the method is invoked via reflection. This where your code, inside the Configure method, is executed. As a reminder, our code called the Use extension method on the IApplicationBuilder to register our inline middleware as a RequestDelegate.</p></div>
+<h2>Building the RequestDelegate Pipeline</h2>
+<p>Back <a href="https://github.com/dotnet/aspnetcore/blob/master/src/Hosting/Hosting/src/GenericHost/GenericWebHostedService.cs#L104" target="_blank" rel="noopener noreferrer">inside the GenericWebHostedService</a>, the Build method is called on the IApplicationBuilder.</p>
+
+
+
+<div id="gist104339175">
+    <div>
+      <div>
+        <div>
+  <div id="file-applicationbuilder-cs">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8" data-paste-markdown-skip="">
+      <tbody><tr>
+        <td id="file-applicationbuilder-cs-L1" data-line-number="1"></td>
+        <td id="file-applicationbuilder-cs-LC1"><span>public</span> <span>RequestDelegate</span> <span>Build</span>()</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L2" data-line-number="2"></td>
+        <td id="file-applicationbuilder-cs-LC2">{</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L3" data-line-number="3"></td>
+        <td id="file-applicationbuilder-cs-LC3">    <span>RequestDelegate</span> <span>app</span> <span>=</span> <span>context</span> <span>=&gt;</span></td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L4" data-line-number="4"></td>
+        <td id="file-applicationbuilder-cs-LC4">    {</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L5" data-line-number="5"></td>
+        <td id="file-applicationbuilder-cs-LC5">        <span><span>//</span> If we reach the end of the pipeline, but we have an endpoint, then something unexpected has happened.</span></td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L6" data-line-number="6"></td>
+        <td id="file-applicationbuilder-cs-LC6">        <span><span>//</span> This could happen if user code sets an endpoint, but they forgot to add the UseEndpoint middleware.</span></td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L7" data-line-number="7"></td>
+        <td id="file-applicationbuilder-cs-LC7">        <span>var</span> <span>endpoint</span> <span>=</span> <span>context</span>.<span>GetEndpoint</span>();</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L8" data-line-number="8"></td>
+        <td id="file-applicationbuilder-cs-LC8">        <span>var</span> <span>endpointRequestDelegate</span> <span>=</span> <span>endpoint</span><span>?</span>.<span>RequestDelegate</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L9" data-line-number="9"></td>
+        <td id="file-applicationbuilder-cs-LC9">        <span>if</span> (<span>endpointRequestDelegate</span> <span>!=</span> <span>null</span>)</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L10" data-line-number="10"></td>
+        <td id="file-applicationbuilder-cs-LC10">        {</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L11" data-line-number="11"></td>
+        <td id="file-applicationbuilder-cs-LC11">            <span>var</span> <span>message</span> <span>=</span></td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L12" data-line-number="12"></td>
+        <td id="file-applicationbuilder-cs-LC12">                <span><span>$"</span>The request reached the end of the pipeline without executing the endpoint: '{<span>endpoint</span>.<span>DisplayName</span>}'. <span>"</span></span> <span>+</span></td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L13" data-line-number="13"></td>
+        <td id="file-applicationbuilder-cs-LC13">                <span><span>$"</span>Please register the EndpointMiddleware using '{<span>nameof</span>(<span>IApplicationBuilder</span>)}.UseEndpoints(...)' if using <span>"</span></span> <span>+</span></td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L14" data-line-number="14"></td>
+        <td id="file-applicationbuilder-cs-LC14">                <span><span>$"</span>routing.<span>"</span></span>;</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L15" data-line-number="15"></td>
+        <td id="file-applicationbuilder-cs-LC15">            <span>throw</span> <span>new</span> <span>InvalidOperationException</span>(<span>message</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L16" data-line-number="16"></td>
+        <td id="file-applicationbuilder-cs-LC16">        }</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L17" data-line-number="17"></td>
+        <td id="file-applicationbuilder-cs-LC17">
+</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L18" data-line-number="18"></td>
+        <td id="file-applicationbuilder-cs-LC18">        <span>context</span>.<span>Response</span>.<span>StatusCode</span> <span>=</span> <span>StatusCodes</span>.<span>Status404NotFound</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L19" data-line-number="19"></td>
+        <td id="file-applicationbuilder-cs-LC19">        <span>return</span> <span>Task</span>.<span>CompletedTask</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L20" data-line-number="20"></td>
+        <td id="file-applicationbuilder-cs-LC20">    };</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L21" data-line-number="21"></td>
+        <td id="file-applicationbuilder-cs-LC21">
+</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L22" data-line-number="22"></td>
+        <td id="file-applicationbuilder-cs-LC22">    <span>foreach</span> (<span>var</span> <span>component</span> <span>in</span> <span>_components</span>.<span>Reverse</span>())</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L23" data-line-number="23"></td>
+        <td id="file-applicationbuilder-cs-LC23">    {</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L24" data-line-number="24"></td>
+        <td id="file-applicationbuilder-cs-LC24">        <span>app</span> <span>=</span> <span>component</span>(<span>app</span>);</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L25" data-line-number="25"></td>
+        <td id="file-applicationbuilder-cs-LC25">    }</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L26" data-line-number="26"></td>
+        <td id="file-applicationbuilder-cs-LC26">
+</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L27" data-line-number="27"></td>
+        <td id="file-applicationbuilder-cs-LC27">    <span>return</span> <span>app</span>;</td>
+      </tr>
+      <tr>
+        <td id="file-applicationbuilder-cs-L28" data-line-number="28"></td>
+        <td id="file-applicationbuilder-cs-LC28">}</td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+
+
+
+
+<div><p>This method causes the final pipeline of RequestDelegates to be produced.</p><p>An oft used analogy for this that of the <a href="https://en.wikipedia.org/wiki/Matryoshka_doll" target="_blank" rel="noopener noreferrer">traditional Matryoshka (Russian) doll</a>. These are a set of wooden dolls which stack inside one another. The largest outer doll can be opened to reveal the doll nested inside, which in turn can be opened to access the next.</p><p>This is precisely how the RequestDelegate instances are treated at this stage. The first RequestDelegate registered at the top of the Configure method will be wrapped around the next RequestDelegate. When the pipeline handles a request, it flows through each layer starting with the outermost RequestDelegate. This would be the largest doll in our analogy. If that delegate can produce a response, it is free to do so and return directly. Otherwise, it will call the next delegate, opening up the doll to find the next layer inside.</p></div>
+
+
+
+<figure><img src="https://www.stevejgordon.co.uk/wp-content/uploads/2020/07/Wrapped-RequestDelegate-Pipeline-1024x627.png" alt="" srcset="https://www.stevejgordon.co.uk/wp-content/uploads/2020/07/Wrapped-RequestDelegate-Pipeline-1024x627.png 1024w, https://www.stevejgordon.co.uk/wp-content/uploads/2020/07/Wrapped-RequestDelegate-Pipeline-300x184.png 300w, https://www.stevejgordon.co.uk/wp-content/uploads/2020/07/Wrapped-RequestDelegate-Pipeline-768x470.png 768w, https://www.stevejgordon.co.uk/wp-content/uploads/2020/07/Wrapped-RequestDelegate-Pipeline-1536x941.png 1536w, https://www.stevejgordon.co.uk/wp-content/uploads/2020/07/Wrapped-RequestDelegate-Pipeline.png 1714w" sizes="(max-width: 1024px) 100vw, 1024px"></figure>
+
+
+
+<p>Logically, since each middleware (RequestDelegate) in the pipeline needs to be able to optionally call the next RequestDelegate which it will wrap, the pipeline needs to be built up in reverse order, starting with the innermost delegate.</p>
+<p>The code above handles this process and helps to answer a common question people ask about ASP.NET Core…</p>
+<h2>How Does ASP.NET Core Return a 404 Not Found Response?</h2>
+<p>This is a reasonable question since in most apps, we don’t see any middleware registered to handle the requests for paths which our application code does not expect. Inside MVC, for example, we define Actions or RazorPages. We may use convention-based or attribute-based routing to define the URLs which map to these endpoints. But we are not required to define a catch-all Action method for unknown paths. So where and how is a 404 response generated for unknown URLs?</p>
+<p>Take a look again at the code snippet above.</p>
+<p>It first defines a RequestDelegate using a lambda and stores it into the app variable. This first delegate is going to be our innermost wooden doll, which is, therefore, the last to be executed in the request pipeline. This is essentially a fall back which will be called in cases where all prior middleware have not been able to produce a response.</p>
+<p>It performs a check to see if an Endpoint was matched for the request via the Endpoint Routing mechanism. This may occur in rare situations where the endpoint feature has not been applied correctly. Below this is the code we are most interested in. It sets the response status code to 404 Not Found and then returns. Any requests which make it this far, into the innermost RequestDelegate, therefore, return a 404 response to the caller.</p>
+<p>With the innermost RequestDelegate defined, the remaining code begins the process of wrapping each RequestDelegate inside one another, working from the inside. To achieve this, the list of components is used. As a reminder, a component, in this case, is simply a Func&lt;T, T&gt; which accepts a RequestDelegate as a parameter and returns a RequestDelegate. This is a signature used to perform the wrapping of request delegates into a request handling pipeline.</p>
+<p>Components were added to this list in the order that they are registered inside the Configure method. To perform the wrapping, the list is reversed so that we start with the innermost delegates first.&nbsp;</p>
+<p>The app variable is updated by taking the delegate from the reversed list and passing it the reference to the current value of the app variable. On the first iteration, this will be the 404 RequestDelegate, allowing it to be wrapped by one of the middleware components registered in the Configure method. This continues, progressively moving out until we have wrapped all delegates inside one another.</p>
+<p>We are now at the outer RequestDelegate, which is the first component that we expect to be called when handling a request. This is returned from the Build method.</p>
+<p>At this point, we find ourselves back in the StartAsync method of the GenericWebHostedService. A HostingApplication is constructed, accepting the RequestDelegate pipeline which will then be executed for each incoming request handled by ASP.NET Core.</p>
+<p>We’ll end our journey here, as we’ve explored lots of code.</p>
+<p>For the sample application, a request to the server with a path of “/” will be handled fully by our inline middleware component. It will set a response and return, without invoking any further middleware.</p>
+<p>For requests where the URL is anything but “/”, our middleware is unable to handle it and cannot produce a response. In this case, the pipeline continues when our middleware component executes the next RequestDelegate.&nbsp;</p>
+<p>For this sample, there are no other middleware components registered, so the innermost RequestDelegate, defined in the ApplicationBuilder, will respond. It returns a status code of 404, not found.</p>
+
+
+
+<h2>Summary</h2>
+<p>In this post, we have taken a deep dive into ASP.NET Core implementation code. We set out to understand how the request handling pipeline is built so that an ASP.NET Core application can handle requests.&nbsp;</p>
+<p>We saw that some of this takes place when then Host is built, with the remainder occurring when the Host is started. ASP.NET Core is fundamentally a complex IHostedService. When is starts it identifies the Configure method of Startup class and invokes it to register one or more components into the pipeline.</p>
+<p>When the ApplicationBuilder is used to build the pipeline, it forms a chain of RequestDelegates, wrapping them one inside the other, to produce a pipeline for request handling.</p>
+<p>I hope this has been as interesting for you to read as it has for me to research and write!</p>
+<!-- PRyC WP: Add custom content to bottom of post/page: Standard Content START --></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

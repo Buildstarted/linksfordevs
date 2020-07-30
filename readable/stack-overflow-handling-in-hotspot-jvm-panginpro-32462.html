@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Stack Overflow handling in HotSpot JVM - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Stack Overflow handling in HotSpot JVM - linksfor.dev(s)"/>
+    <meta property="og:description" content="JVM stack layout, guard zone, stack banging, reserved pages - how HotSpot implements Stack Overflow check"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://pangin.pro/posts/stack-overflow-handling"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Stack Overflow handling in HotSpot JVM</title>
+<div class="readable">
+        <h1>Stack Overflow handling in HotSpot JVM</h1>
+            <div>Reading time: 11-14 minutes</div>
+        <div>Posted here: 07 Aug 2019</div>
+        <p><a href="https://pangin.pro/posts/stack-overflow-handling">https://pangin.pro/posts/stack-overflow-handling</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+          <div>
+
+  
+
+  <article>
+    <p>As you probably know, HotSpot JVM has one-to-one mapping of Java threads to OS threads.
+Each thread is associated with its own stack. Sounds simple… until you realize
+that in Java there are at least 3 different notions of a stack:</p>
+<ul>
+  <li>
+<a href="https://docs.oracle.com/javase/specs/jvms/se12/html/jvms-2.html#jvms-2.5.2">Java Virtual Machine Stack</a>,
+which stores local variables and keeps track of method invocations.
+As the specification says, this stack does not need to be contiguous
+and may be heap allocated. E.g. Java ME virtual machine (that I worked on at Sun Microsystems)
+indeed had chunked stacks allocated in Java heap.</li>
+  <li>
+<a href="https://docs.oracle.com/javase/specs/jvms/se12/html/jvms-2.html#jvms-2.6.2">Operand Stack</a>,
+which holds operands for bytecode instructions.</li>
+  <li>
+<a href="https://docs.oracle.com/javase/specs/jvms/se12/html/jvms-2.html#jvms-2.5.6">Native Stack</a> -
+the classical “C” stack required for native method execution.</li>
+</ul>
+
+<!--more-->
+
+<h2 id="jvm-stack-layout">JVM stack layout</h2>
+
+<p>HotSpot JVM uses one contiguous stack for all the above purposes.
+Java methods and native methods share the same stack with Java and native frames
+interleaved. Unlike C, where stack space can be allocated dynamically with
+<a href="http://man7.org/linux/man-pages/man3/alloca.3.html"><code>alloca()</code></a>,
+the maximum stack usage of any Java method is known beforehand,
+but may vary depending on whether the method is interpreted or compiled.
+The compiled frame is often smaller than the interpreter frame for the same method –
+this seems intuitive, since the optimizing compiler does not need to have
+all the local variables and all the monitors on the stack.</p>
+
+<p><img src="https://pangin.pro/img/stack-frames.png" width="240" alt="Stack frames"></p>
+
+<p>Each thread stack has limited capacity.
+The stack size is configured with <code>-Xss</code> option and defaults to 1 MB on a 64-bit system.
+This is usually enough to place several thousand average frames.</p>
+
+<p>When a call chain becomes too deep and there is no free space on the stack to create more frames,
+Java obviously throws StackOverflowError. But how does JVM know when it’s time to throw an error?
+It simply performs a stack overflow check on every method invocation.
+There are some interesting details though.</p>
+
+<h2 id="interpreter-vs-stack-banging">Interpreter vs. Stack banging</h2>
+
+<p>Interpreter performs a straightforward check in a method prologue.
+It takes the address of a stack limit for the current thread and compares it
+to the stack pointer in RSP register adjusted by the size of the current stack frame,
+see <a href="http://hg.openjdk.java.net/jdk/jdk/file/8ae33203d600/src/hotspot/cpu/x86/templateInterpreterGenerator_x86.cpp#l512">TemplateInterpreterGenerator::generate_stack_overflow_check</a>.</p>
+
+<div><div><pre><code>  <span>mov</span>    <span>%</span><span>edx</span><span>,</span><span>%</span><span>eax</span>
+  <span>shl</span>    <span>$</span><span>0x3</span><span>,</span><span>%</span><span>rax</span>         <span>; rax = number_of_locals * 8 bytes</span>
+  <span>add</span>    <span>$</span><span>0x58</span><span>,</span><span>%</span><span>rax</span>        <span>; + constant frame overhead</span>
+  <span>add</span>    <span>0x410</span><span>(</span><span>%</span><span>r15</span><span>),</span><span>%</span><span>rax</span>  <span>; + current_thread.stack_limit</span>
+  <span>cmp</span>    <span>%</span><span>rax</span><span>,</span><span>%</span><span>rsp</span>
+  <span>ja</span>     <span>0x7fffe054e55f</span>    <span>; if rsp &gt; rax, continue normally</span>
+                           <span>; otherwise throw StackOverflowError</span>
+</code></pre></div></div>
+
+<p>Even though the check is relatively simple, it still involves at least one memory load,
+a few arithmetic instructions and a conditional jump on <em>every</em> method invocation.
+That would be too much for a hot JITted code.</p>
+
+<p>Compiler’s strategy is different. In most cases, the stack overflow check in
+C1- or C2-compiled code is just a single store instruction:</p>
+
+
+
+<p>It writes any meaningless value from EAX register onto the stack somewhere above
+the current stack pointer. If there is enough free space above the current frame,
+this instruction is harmless. Otherwise it touches one of the <strong>guard pages</strong>,
+and the hardware exception is triggered. This technique is called <strong>stack banging</strong>.</p>
+
+<h2 id="guard-pages">Guard pages</h2>
+
+<p><img src="https://pangin.pro/img/stack-guardzone.png" width="360" alt="Guard zone"></p>
+
+<p>When JVM allocates a stack for a new thread, it reserves a few pages
+on the top of the stack – the <strong>guard zone</strong>. All the guard pages are initially
+<a href="http://man7.org/linux/man-pages/man2/mprotect.2.html">protected</a>
+from both reading and writing, so that any access to these pages causes
+Segmentation Fault (SIGSEGV). However, these SIGSEGVs are managed by the JVM,
+i.e. the signal handler detects which guard page has been accessed, and acts accordingly.</p>
+
+<ul>
+  <li>
+    <p><span>Yellow zone</span> is used for detecting
+recoverable stack overflows. If a stack banging instruction hits the yellow zone,
+SIGSEGV happens, and the signal handler resumes the current thread from the continuation
+that throws StackOverflowError. Meanwhile the yellow zone is disabled
+(i.e. the pages are unprotected) to give some extra stack space for the exception
+throwing code. The yellow pages are reguarded later during stack unwinding.</p>
+  </li>
+  <li>
+    <p><span>Red zone</span> is for handling
+unrecoverable stack overflows. This is the last line of defence. Normally, the red pages
+should never be touched, but if this happens for any reason, JVM treats this
+as a fatal error and dies leaving the final crash report. The red zone is unguarded only
+to provide some stack space for writing <code>hs_err_pid.log</code>.</p>
+  </li>
+  <li>
+    <p><span>Reserved zone</span>
+has been added in JDK 9 to address the problem when StackOverflowError occurs
+in a critical section, e.g. while executing <code>ReentrantLock.lock()</code>. If an error is thrown
+in the middle of <code>lock()</code> or <code>unlock()</code> method, the ReentrantLock object may remain
+in an inconsistent state, so no other thread would be able to acquire the lock again.</p>
+
+    <p>The problem and the solution is described in <a href="https://openjdk.java.net/jeps/270">JEP 270</a>.
+The idea is to reserve an additional stack page for execution of such critical methods.
+Reserved zone acts like a yellow zone with one exception: when stack banging hits
+the reserved zone during the execution of a critical method, JVM unprotects
+the reserved pages allowing the critical method to finish.
+StackOverflowError is deferred until the critical method returns.</p>
+
+    <p>Current HotSpot implementation treats a method <em>critical</em> if it is annotated with
+<code>@jdk.internal.vm.annotation.ReservedStackAccess</code>.
+As of JDK 12, there are only a few of them:</p>
+
+    <ul>
+      <li>acquire / release methods in <code>ReentrantLock.Sync</code> and <code>ReentrantReadWriteLock.Sync</code>
+</li>
+      <li>lock / unlock methods in <code>StampedLock</code>
+</li>
+      <li><code>AccessController.wrapException</code></li>
+    </ul>
+  </li>
+</ul>
+
+<p>When a stack overflow happens in one of the above methods, JVM emits the warning
+and allows the method to complete:</p>
+
+<div><div><pre><code>OpenJDK 64-Bit Server VM warning: Potentially dangerous stack overflow in ReservedStackAccess annotated method
+java.util.concurrent.locks.ReentrantLock$FairSync.tryAcquire(I)Z
+</code></pre></div></div>
+
+<p>Although JEP 270 makes <code>lock</code> and <code>unlock</code> methods somewhat atomic, it does not guarantee
+the invocation of these methods will always succeed. Unfortunately, the simplest lock-unlock
+pattern remains fragile:</p>
+
+<div><div><pre><code>  <span>lock</span><span>.</span><span>lock</span><span>();</span>
+  <span>try</span> <span>{</span>
+      <span>deepCall</span><span>();</span>
+  <span>}</span> <span>finally</span> <span>{</span>
+      <span>lock</span><span>.</span><span>unlock</span><span>();</span>
+  <span>}</span>
+</code></pre></div></div>
+
+<p>If StackOverflowError happens here inside <code>deepCall</code>, JVM will attempt to execute
+the finally block, but a call to <code>unlock</code> method may result in another StackOverflowError,
+leaving the object locked forever. For some reason <code>ReentrantLock.unlock()</code> method itself
+is not annotated with <code>@ReservedStackAccess</code> <img title=":disappointed:" alt=":disappointed:" src="https://github.githubassets.com/images/icons/emoji/unicode/1f61e.png" height="20" width="20"></p>
+
+<h2 id="shadow-pages">Shadow pages</h2>
+
+<p>Remember that HotSpot has Java and native frames on the same stack?
+This means, a stack overflow may also happen inside a native method.
+The problem is that JVM knows nothing about the layout of non-Java frames,
+and of course, cannot unwind the native part of the stack.</p>
+
+<p>How to deal with that? The idea is to ensure the stack overflow does not happen
+in the native code at all! For this purpose HotSpot reserves yet another bunch of stack pages.
+This <strong>shadow zone</strong> is a normal unprotected stack area, except that it can be used
+exclusively by the native or VM code, but not by Java methods.
+The shadow zone must be large enough to accommodate the deepest VM call or
+the deepest native function from the standard JDK library.
+The typical example is <a href="http://hg.openjdk.java.net/jdk/jdk/file/8ae33203d600/src/java.base/unix/native/libnet/SocketOutputStream.c#l57"><code>Java_java_net_SocketOutputStream_socketWrite0</code></a>
+which allocates 64 KB buffer on the stack.</p>
+
+<p>The default number of shadow pages on Linux x64 is 20 – this means,
+native methods can use up to 80 KB of the stack without a risk of JVM crash.
+This is where the offset <code>-0x14000(%rsp)</code> in the bang instruction comes from.</p>
+<div><div><pre><code>0x14000 = 80 KB = 20 pages  -- exactly the size of the shadow zone
+</code></pre></div></div>
+
+<p>Okay, can I create a JNI method that will allocate more than 80 KB on the stack?
+It’s better not to, or I won’t be protected from the crash anymore. If I <em>really</em> need
+so much stack space (perhaps, because of a 3rd party native library out of my control),
+I can always add more shadow pages with <code>-XX:StackShadowPages=N</code>.</p>
+
+<div><div><pre><code><span>public</span> <span>class</span> <span>NativeStackOverflow</span> <span>{</span>
+
+    <span>private</span> <span>static</span> <span>void</span> <span>recursion</span><span>(</span><span>int</span> <span>depth</span><span>,</span> <span>Runnable</span> <span>nativeCall</span><span>)</span> <span>{</span>
+        <span>nativeCall</span><span>.</span><span>run</span><span>();</span>
+        <span>recursion</span><span>(</span><span>depth</span> <span>+</span> <span>1</span><span>,</span> <span>nativeCall</span><span>);</span>
+    <span>}</span>
+
+    <span>public</span> <span>static</span> <span>void</span> <span>main</span><span>(</span><span>String</span><span>[]</span> <span>args</span><span>)</span> <span>{</span>
+        <span>System</span><span>.</span><span>loadLibrary</span><span>(</span><span>"deepNative"</span><span>);</span>
+
+        <span>// Fails with StackOverflowError</span>
+        <span>recursion</span><span>(</span><span>0</span><span>,</span> <span>NativeStackOverflow:</span><span>:</span><span>deepNative64K</span><span>);</span>
+
+        <span>// Crashes JVM, unless StackShadowPages &gt; 32</span>
+        <span>recursion</span><span>(</span><span>0</span><span>,</span> <span>NativeStackOverflow:</span><span>:</span><span>deepNative128K</span><span>);</span>
+    <span>}</span>
+
+    <span>// JNIEXPORT void JNICALL</span>
+    <span>// Java_NativeStackOverflow_deepNative64K() {</span>
+    <span>//     char buf[64 * 1024];</span>
+    <span>//     memset(buf, sizeof(buf), 1);</span>
+    <span>// }</span>
+    <span>private</span> <span>static</span> <span>native</span> <span>void</span> <span>deepNative64K</span><span>();</span>
+
+    <span>// JNIEXPORT void JNICALL</span>
+    <span>// Java_NativeStackOverflow_deepNative128K() {</span>
+    <span>//     char buf[128 * 1024];</span>
+    <span>//     memset(buf, sizeof(buf), 1);</span>
+    <span>// }</span>
+    <span>private</span> <span>static</span> <span>native</span> <span>void</span> <span>deepNative128K</span><span>();</span>
+<span>}</span>
+</code></pre></div></div>
+
+<h2 id="hit-the-mark">Hit the mark</h2>
+
+<p>By default, the yellow zone consists of two 4 KB pages (<code>-XX:StackYellowPages=2</code>).
+But what if a Java frame is larger than that? A very exotic, but still valid case.
+Does not stack banging accidentally jump over the yellow zone?
+To ensure the overflow check does not miss the yellow zone, HotSpot touches
+<em>all</em> the involved pages from the bottom to the top.
+E.g. before entering a Java method with 10 KB frame, the compiler issues 3 bang instructions:</p>
+
+<div><div><pre><code>  <span>mov</span>    <span>%</span><span>eax</span><span>,</span><span>-</span><span>0x14000</span><span>(</span><span>%</span><span>rsp</span><span>)</span>
+  <span>mov</span>    <span>%</span><span>eax</span><span>,</span><span>-</span><span>0x15000</span><span>(</span><span>%</span><span>rsp</span><span>)</span>
+  <span>mov</span>    <span>%</span><span>eax</span><span>,</span><span>-</span><span>0x16000</span><span>(</span><span>%</span><span>rsp</span><span>)</span>
+</code></pre></div></div>
+
+<p>Not all Java methods require a stack overflow check though.
+HotSpot has an optimization to skip stack banging for <strong>small leaf methods</strong>,
+i.e. the methods with no Java calls and with the frame size less than 1/8 page,
+see <a href="http://hg.openjdk.java.net/jdk/jdk/file/8ae33203d600/src/hotspot/share/opto/output.cpp#l158">Compile::need_stack_bang</a>.</p>
+
+<h2 id="how-large-is-the-guard-zone">How large is the guard zone</h2>
+
+<p>All the guard and shadow zones can be resized with the corresponding JVM options.
+The defaults for Linux x64 are:</p>
+
+<ul>
+  <li><code>-XX:StackRedPages=1</code></li>
+  <li><code>-XX:StackYellowPages=2</code></li>
+  <li><code>-XX:StackReservedPages=1</code></li>
+  <li><code>-XX:StackShadowPages=20</code></li>
+</ul>
+
+<p>These values affect the minimum stack size a thread can have. Given that HotSpot considers
+the <a href="http://hg.openjdk.java.net/jdk/jdk/file/8ae33203d600/src/hotspot/os_cpu/linux_x86/os_linux_x86.cpp#l687">minimum usable stack</a>
+of 40 KB, the lower bound of the actual <code>-Xss</code> in JDK 11/12 is</p>
+
+<div><div><pre><code>min_stack_size = 40 KB + (1 + 2 + 1 + 20) * 4 KB = 136 KB
+</code></pre></div></div>
+
+<p>If I try to set a lower value, I’ll expectedly get an error:</p>
+
+<div><div><pre><code>$ /usr/java/jdk-12.0.2/bin/java -Xss100k
+
+The Java thread stack size specified is too small. Specify at least 136k
+Error: Could not create the Java Virtual Machine.
+Error: A fatal exception has occurred. Program will exit.
+</code></pre></div></div>
+
+<p>Not only HotSpot JVM uses guard pages.
+<strong>Glibc</strong> also reservers a page or a few at the end of the stack when creating
+a new thread. However, since JVM already handles stack overflows on its own,
+additional glibc guard would be a waste. That’s why HotSpot
+<a href="http://hg.openjdk.java.net/jdk/jdk/file/8ae33203d600/src/hotspot/os/linux/os_linux.cpp#l3168">explicitly disables</a>
+glibc guard for all Java threads by calling
+<a href="https://linux.die.net/man/3/pthread_attr_setguardsize"><code>pthread_attr_setguardsize</code></a> with zero argument.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>HotSpot employs a very efficient stack overflow check which is usually a single
+harmless store instruction. The further optimization allows to skip
+an overflow check in the compiled code for small leaf methods.</p>
+
+<p>Special mprotect’ed guard pages at the top of the stack are responsible for
+detecting overflows. Yellow pages detect regular Java stack overflows.
+Red pages are for handling fatal errors. 
+Starting from JDK 9, an additional page is reserved below the yellow zone for
+graceful handling of overflows occured in java.util.concurrent lock methods,
+however, the mechanism is not bullet-proof.</p>
+
+<p>For more information about Java stack I invite you to watch my presentation<br>
+<a href="https://2017.javazone.no/program/c5577d90198b474cbf14c7867209d96c"><img src="https://pangin.pro/img/film.png" width="16" height="16"> Everything you wanted to know about Stack Traces and Heap Dumps</a></p>
+
+  </article>
+  
+  
+
+
+
+
+
+</div>
+
+        </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

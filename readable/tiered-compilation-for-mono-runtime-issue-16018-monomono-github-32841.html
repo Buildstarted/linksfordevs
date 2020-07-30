@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Tiered compilation for Mono runtime &#xB7; Issue #16018 &#xB7; mono/mono - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Tiered compilation for Mono runtime &#xB7; Issue #16018 &#xB7; mono/mono - linksfor.dev(s)"/>
+    <meta property="article:author" content="marek-safar"/>
+    <meta property="og:description" content="This issue is intended to be a location where we can discuss the specifics needed for tiered compilation in Mono. Background Mono today offers two code generation engines, one that produces code ve..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/mono/mono/issues/16018"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Tiered compilation for Mono runtime &#xB7; Issue #16018 &#xB7; mono/mono</title>
+<div class="readable">
+        <h1>Tiered compilation for Mono runtime &#xB7; Issue #16018 &#xB7; mono/mono</h1>
+            <div>by marek-safar</div>
+            <div>Reading time: 5-7 minutes</div>
+        <div>Posted here: 12 Aug 2019</div>
+        <p><a href="https://github.com/mono/mono/issues/16018">https://github.com/mono/mono/issues/16018</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div disabled="" sortable="">
+<div>
+          <p>This issue is intended to be a location where we can discuss the specifics needed for tiered compilation in Mono.</p>
+
+<p>Mono today offers two code generation engines, one that produces code very quickly, but performs poorly in various CPU intensive benchmarks and one powered by LLVM that is very slow, but incredibly efficient code.  Additionally, Mono can either just-in-time compile, or ahead-of-time compile.    On the desktop, ahead-of-time compilation is mostly used to reduce startup time, and reduce memory usage, and rarely to produce better code - as AOT code pays a price that JIT code does not pay.  Additionally, AOT can be a slow process.</p>
+<p>Mobile users for example use the fast compiler during development, and use LLVM for Release builds.   But desktop users tend to not do this, as the cost of using LLVM for running their applications is too high.</p>
+<p>CoreCLR calls the code generated quickly with low quality the Tier0, and the code generated with a higher optimization level Tier1.  It makes sense to embrace the same naming convetion.</p>
+<p>One useful scenario to support would be tiered compilation.   One where we use the Mono built-in code generator for the startup sequence, and based on a heuristic that determines just how important a method is, we recompile the code with LLVM.</p>
+<p>One specific user that could benefit from this is VSMac, which currently only uses the quick code generator, where using LLVM on startup is deemed too slow.   This would also help the Unity editor (<a href="https://tirania.org/blog/archive/2018/Apr-11.html" rel="nofollow">an example showing Unity</a>)</p>
+
+<p>Tiered compilation is made up of a couple of pieces:</p>
+<ul>
+<li>Instrumenting the slow code to track candidates to be recompiled.</li>
+<li>Heuristics that determine when a method is suitable for recompilation.</li>
+<li>The actual recompilation changes.</li>
+<li>Redirecting any calls to the original low-quality generated code to the high-quality generated code.</li>
+</ul>
+<p>While there are many different approaches for instrumenting the code, and many difference heuristics that can be used, we could start by embracing the current  <a href="https://github.com/dotnet/coreclr/blob/master/Documentation/design-docs/tiered-compilation.md">heuristics and processes used by the CoreCLR</a>, saving us design and experimentation time.   We could later adjust those parameters to better suit the Mono workloads.</p>
+<p>While there are some very advanced use cases for tiered compilation that allow replacements of methods on the stack.   For interactive applications like VSMac, where control goes back to a mainloop to process events, the need to replace live methods is not as important.  Because even the mainloop is ran by unmanaged code.</p>
+<p>The CoreCLR implementation replaces methods during a GC pause, ensuring that it can patch existing code without requiring atomic changes.</p>
+
+<ul>
+<li>
+  <span>
+    
+  </span> Implement instrumentation that counts the number of invocations to a method.</li>
+<li>
+  <span>
+    
+  </span> Implement code generation in tier0 compilation that can transfer control to tier1</li>
+<li>
+  <span>
+    
+  </span> Implement the heuristic/policy to recompile (currently does 100 counts, needs to do some sort of slow start like CoreCLR does)</li>
+<li>
+  <span>
+    
+  </span> Make the tiered buffer dynamic, currently it only tracks 1000 or so methods.</li>
+<li>
+  <span>
+    
+  </span> Implement recompilation machinery</li>
+<li>
+  <span>
+    
+  </span> Compiler domain-appropriate code (currently we do not switch the domain on recompilation)</li>
+<li>
+  <span>
+    
+  </span> Make patching code be arch-independent, rather than hardcoding amd64</li>
+<li>
+  <span>
+    
+  </span> Register rejit thread with runtime</li>
+<li>
+  <span>
+    
+  </span> Avoid GC pauses, like CoreCLR does, see below for a couple of strategies and links to documents.</li>
+<li>
+  <span>
+    
+  </span> Should disable tier0 flag if --nollvm is passed.</li>
+<li>
+  <span>
+    
+  </span> If tier0 is disabled, probably should not enabled LLVM by default.</li>
+</ul>
+
+<p>The heuristics from CoreCLR might not apply as well to Mono+LLVM, as our LLVM pass is considerably slower than CoreCLR's optimizing pass.   I will make the parameters configurable and try this against different scenarios (in particular, the VSMac startup, which takes around 25-bounces to startup).</p>
+<ul>
+<li>
+<p>Load average: this is a difficult metric to obtain reliably, but would be useful to determine whether there is additional capacity to reJIT with our slower LLVM while the application is starting up.</p>
+</li>
+<li>
+<p>Prioritizing methods to reJIT: Once a set of methods have been identified for recompilation, it might be useful to sort those in a priority list.   We could sort by number of times the method has been invoked (which means that we should keep incrementing the counter).</p>
+</li>
+<li>
+<p>Taking number of CPUs into consideration: we could take the number of CPUs for consideration, if there are enough available CPUs, we might want to reduce the time it takes for us to determine that a method should be reJITed.</p>
+</li>
+<li>
+<p>We might end up reJITing methods that could have been inlined with a more aggressive optimization, so we could record the calling methods and flag those for recompilation instead.</p>
+</li>
+</ul>
+
+<p>We do not need to stop the world to patch all the targets, as seen on the discussion below, we could patch with a single atomic instruction some of the entry points (see the discussion below) and also update existing vtable slots with the new location.</p>
+
+<ul>
+<li>Should we track every call site to a Tier0 method be tracked, so we can directly patch those call sites to the Tier1 method?   Or should we patch the entry point of tier0 to insert a jump to the tier1 method?   This is a balance between memory usage and performance.</li>
+</ul>
+      </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

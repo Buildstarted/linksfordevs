@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Livin&#x2019; on the Edge: Root Causing Regressions - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Livin&#x2019; on the Edge: Root Causing Regressions - linksfor.dev(s)"/>
+    <meta property="article:author" content="About ericlaw"/>
+    <meta property="og:description" content="As we&#x2019;ve been working to replatform the new Microsoft Edge browser atop Chromium, one interesting outcome has been early exposure to a lot more bugs in Chromium. Rapidly root-causing these re&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://textslashplain.com/2019/09/03/livin-on-the-edge-root-causing-regressions/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Livin&#x2019; on the Edge: Root Causing Regressions</title>
+<div class="readable">
+        <h1>Livin&#x2019; on the Edge: Root Causing Regressions</h1>
+            <div>by About ericlaw</div>
+            <div>Reading time: 14-17 minutes</div>
+        <div>Posted here: 03 Sep 2019</div>
+        <p><a href="https://textslashplain.com/2019/09/03/livin-on-the-edge-root-causing-regressions/">https://textslashplain.com/2019/09/03/livin-on-the-edge-root-causing-regressions/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+		
+	<div>
+
+		
+<p>As we’ve been working to replatform the new Microsoft Edge browser atop Chromium, one interesting outcome has been early exposure to a lot more bugs in Chromium. Rapidly root-causing these <em>regressions</em> (bugs in scenarios that used to work correctly) has been a high-priority activity to help ensure Edge users have a good experience with our browser.</p>
+
+
+
+<h2>Stabilization via Channels</h2>
+
+
+
+<p>Edge’s code stabilizes as it flows through <a href="https://www.chromium.org/getting-involved/dev-channel">release channels</a>, from the developer’s-only <strong>ToT</strong>/HEAD (Tip-of-tree, the latest commit in the source repository) to the <strong>Canary Channel</strong> build (updated daily) to the <strong>Dev Channel</strong> updated weekly, to the <strong>Beta Channel</strong> (updated a few times over its six week lifetime) to our eventual, as-yet-unreleased <strong>Stable Channel</strong>. </p>
+
+
+
+<p>Until recently, Microsoft Edge was only <a href="https://microsoftedgeinsider.com/">available</a> in Canary and Dev channels, which meant that any bugs landed in Chromium would almost immediately impact almost all users of Edge. Even as we added a Beta channel, we still found users reporting issues that “<em>reproduce in all Edge builds, but not in Chrome.</em>“</p>
+
+
+
+<p>As it turns out, most of the “<em>not in Chrome</em>” comparisons turn out to mean that the problems are “<em>not repro in Chrome <strong>Stable</strong>.</em>” And that’s because the either the regressions simply haven’t made it to Stable yet, or because the regressions are hidden <a href="https://textslashplain.com/2019/07/16/updating-browsers-quickly-flags-respins-and-components/">behind Feature Flags</a> that are not enabled for Chrome’s stable channel. </p>
+
+
+
+<p>A common example of this is <a href="https://www.chromium.org/blink/layoutng">LayoutNG</a>, a major update to the layout engine used in Chromium. This redesigned engine is more flexible than its predecessor and allows the layout engineers to more easily add the latest layout features to the browser as new standards are finalized. Unfortunately, changing any major component of the browser is almost certain to lead <a href="https://bugs.chromium.org/p/chromium/issues/list?q=label%3ALayoutNG%20Type%3DBug-Regression%20&amp;can=1">to regressions</a>, especially in corner cases. Google had enabled LayoutNG by default in the code for Chrome 76 (and Edge picked up the change), but then subsequently used the Feature Flag to <a href="https://crbug.com/997705#c11">disable LayoutNG for the stable channel</a> three days before Chrome 76 shipped. As a result, the new LayoutNG engine is on-by-default for Chrome Beta, Dev, and Canary and Edge Beta, Dev, and Canary. </p>
+
+
+
+<p>The key difference is that <strong>Edge doesn’t yet <em>have </em>a public stable channel</strong> to which any bug-impacted users can retreat. Therefore, reproducing, isolating, and fixing regressions as quickly as possible is important for Edge engineers.</p>
+
+
+
+<h2>Isolating Regressions</h2>
+
+
+
+<p>When we receive a report of a bug that reproduces in Microsoft Edge, we follow a set of steps for figuring out what’s going on.</p>
+
+
+
+<h3>Check Latest Canary</h3>
+
+
+
+<p>The first step is checking whether it reproduces in our Edge Canary builds. </p>
+
+
+
+<p>If not, then it’s likely the bug was already found and fixed. We can either tell our users to sit tight and wait for the next update, or we can search on CRBug.com to figure out <a href="https://textslashplain.com/2019/08/08/livin-on-the-edge-dude-wheres-my-fix-redux/">when exactly the fix went in</a> and inform the user specifically when a fix will reach them. </p>
+
+
+
+<h3>Check Upstream</h3>
+
+
+
+<p>If the problem still reproduces in the latest Edge Canary build, we next try to reproduce the problem in the equivalent build of Chrome or plain-vanilla Chromium.</p>
+
+
+
+<h4>If Not Repro in Chromium?</h4>
+
+
+
+<p>If the problem doesn’t not reproduce in Chrome, this implies that the problem was caused by Microsoft’s modifications to the code in our internal branches. Alternatively, it <em>might </em>also be the case that the problem is hidden in upstream Chrome behind an experimental flag, so sometimes we must go spelunking into the browser’s Feature Flag configuration by visiting:</p>
+
+
+
+<pre><strong>chrome://version/?show-variations-cmd </strong></pre>
+
+
+
+<p>The <strong>Command-Line Variations</strong> section of that page reveals the names of the experiments that are enabled/disabled. Launching the browser with a modified version of the command line enables launching Chrome in a different configuration<sup>2</sup>.</p>
+
+
+
+<p>If the issue really is unique to Edge, we can use <strong>git blame</strong> and similar techniques on our code to see where we might have caused the problem. </p>
+
+
+
+<h4>If Repro in Chromium?</h4>
+
+
+
+<p>If the problem does reproduce in Chrome or Chromium, that’s strong evidence that we’ve inherited the problem from upstream. </p>
+
+
+
+<h4>Sanity Check: Does it Repro in Firefox?</h4>
+
+
+
+<p>If the problem isn’t a crashing bug or some other obviously incorrect behavior, I will first check the site’s behavior in the latest Firefox nightly build, on the off chance that the browsers are behaving correctly and the site’s markup or JavaScript is actually incorrect.</p>
+
+
+
+<h4>Try tweaking common Flags</h4>
+
+
+
+<p>Depending on the area where the problem occurs, a quick next step is to try toggling Feature Flags that seem relevant on the chrome://flags page. For instance, if the problem is in layout, try setting <strong>chrome://flags/#enable-layout-ng</strong> to Disabled. If the problem seems to be related to the network, try toggling <strong>chrome://flags/#network-service-in-process</strong>, and so on. </p>
+
+
+
+<p>Understanding whether the problem can be impacted by flags enables us to more quickly find its root cause, <em>and </em>provides us an option to quickly mitigate the problem for our users (by <a href="https://textslashplain.com/2019/07/16/updating-browsers-quickly-flags-respins-and-components/">adjusting the flag</a> remotely from our experimental configuration server).</p>
+
+
+
+<h2>Bisecting Regressions</h2>
+
+
+
+<p>The gold standard for root-causing regressions is <strong>finding the specific commit</strong> (aka “change list” aka “pull request” aka “patch”) that introduced the problem. When we determine which commit caused a problem, we not only know exactly what builds the problem affects, we also know what engineer committed the breaking change, and we know what exactly code was changed– often we can quickly spot the bug within the changed files. </p>
+
+
+
+<p>Fortunately, Chromium engineers trying to find regressing commits have <strong>a super power, known as <a href="https://www.chromium.org/developers/bisect-builds-py">bisect-builds.py</a></strong>. Using this script is simple: You specify the known-bad Chromium version and a guesstimate of the last known good version. The script then automates the <a href="https://en.wikipedia.org/wiki/Binary_search_algorithm">binary search</a> of the builds between the two positions, requiring the user to grade each trial as “Good” or “Bad”, until the introduction of the regression is isolated. </p>
+
+
+
+<p>The simplicity of this tool belies its <strong>magic</strong>— or, at least, the power of the  log<sub>2</sub> math that underlies it. <a href="https://omahaproxy.appspot.com/">OmahaProxy</a> informs me that the current Chrome tree contains 692,278 commits. log<sub>2</sub>(692278) is 19.4, which means that we should be able to isolate <em>any</em> regressing change in history in just 20 trials, taking a few minutes at most<sup>1</sup>. And it’s rare that you’d want to even try to bisect all of history– between <strong>stable </strong>and <strong>ToT</strong> we see ~27250 commits, so we should be able to find any regression within such a range in just 15 trials. </p>
+
+
+
+<p>On CrBug.com, regressions <a href="https://bugs.chromium.org/p/chromium/issues/list?q=label%3ANeeds-Bisect&amp;can=2">awaiting a bisect</a> are tagged with the label <strong>Needs-Bisect</strong>, and a small set of engineers try to burn down the backlog every day. But running bisects is so easy that it’s usually best to just do it yourself, and Edge engineers are doing so constantly.</p>
+
+
+
+<p>One advantage available to Googlers but not the broader Chromium community is the ability to do what’s called a “Per-Revision Bisect.” Inside Google, Chrome builds a new build for every single change (so they can unambiguously flag any change that impacts performance), but not all of these builds are public. Publicly, Google provides the <a href="https://commondatastorage.googleapis.com/chromium-browser-snapshots/index.html">Chromium Continuous Build Archive</a>, an archive of builds that are built approximately every one to fifteen commits. That means that when we do bisects, we often don’t get back a single commit, but instead a <strong>regression range</strong>. We then must look at all of the commits within that range to figure out which was the culprit. In my experience, this is rarely a problem– most commits in the range obviously have nothing to do with the problem (“Change the icon for some far off feature”), so there are rarely more than one or two obvious suspects.</p>
+
+
+
+<p>The Edge team does not currently expose our Edge build archives for bisects, but fortunately almost all of our web platform work is contributed upstream, so bisecting against Chromium is almost always effective. </p>
+
+
+
+<h3>Recent Example</h3>
+
+
+
+<p>Last Thursday, we started to get reports of a “missing certificate” problem in Microsoft Edge, whereby the browser wasn’t showing the expected Lock icon for HTTPS pages that didn’t contain any mixed content:</p>
+
+
+
+<div><figure><img data-attachment-id="2217" data-permalink="https://textslashplain.com/missingcert/" data-orig-file="https://textplain.files.wordpress.com/2019/09/missingcert.png" data-orig-size="646,453" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="missingcert" data-image-description="" data-medium-file="https://textplain.files.wordpress.com/2019/09/missingcert.png?w=300" data-large-file="https://textplain.files.wordpress.com/2019/09/missingcert.png?w=646" src="https://textplain.files.wordpress.com/2019/09/missingcert.png?w=646" alt="" srcset="https://textplain.files.wordpress.com/2019/09/missingcert.png 646w, https://textplain.files.wordpress.com/2019/09/missingcert.png?w=150 150w, https://textplain.files.wordpress.com/2019/09/missingcert.png?w=300 300w" sizes="(max-width: 646px) 100vw, 646px"><figcaption><em>The certificate is missing</em></figcaption></figure></div>
+
+
+
+<p>While the lock was missing for <em>some </em>users, it was present for others. After also reproducing the issue in Chrome itself, I <a href="https://bugs.chromium.org/p/chromium/issues/detail?id=999562">filed a bug upstream</a> and began investigating.</p>
+
+
+
+<p>Back when I worked on the Chrome Security team, we saw a bunch of bugs that manifested like this one that were caused by refactoring in Chrome’s navigation code. Users could hit these bugs in cases where they <a href="https://bugs.chromium.org/p/chromium/issues/detail?id=738177">navigated back/forward rapidly</a> or performed an <a href="https://bugs.chromium.org/p/chromium/issues/detail?id=642838">undo tab close</a> operation, or sites <a href="https://bugs.chromium.org/p/chromium/issues/detail?id=647683">used the HTML5 History API</a>. In all of these cases, the high-level issue is that the page’s certificate is missing in the <a href="https://cs.chromium.org/chromium/src/components/security_state/">security_state</a>: either the <a href="https://cs.chromium.org/chromium/src/content/public/browser/ssl_status.h">ssl_status</a> on the NavigationHandle is missing or it contains the wrong information. </p>
+
+
+
+<p>This issue, however, didn’t seem to involve navigations, but instead was hit as the site was loaded and thus it called to mind a more recent regression from <a href="https://bugs.chromium.org/p/chromium/issues/detail?id=937761">back in March</a>, where sites that used AppCache were missing their lock icon. That issue involved a major refactoring to use the new Network Service.</p>
+
+
+
+<p>One fact that immediately jumped out at me about the sites first reported to hit this new problem is that <strong>they all use <a href="https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API">ServiceWorker</a> </strong>(e.g. Hotmail, Gmail, MS Teams, Twitter). Like AppCache, ServiceWorker allows the browser to avoid hitting the network in response to a fetch. As with AppCache, that characteristic means that the the browser must <em>somehow</em> have the “original certificate” for that response from the network so it can set that certificate in the <a href="https://cs.chromium.org/chromium/src/components/security_state/core/security_state.h?l=123&amp;rcl=98f7925910cfe0e8abb8b3ccce42201c52cb8ac1">security_state</a> when it’s needed. </p>
+
+
+
+<p>But where does that certificate live? </p>
+
+
+
+<p>Chromium stores the certificate for a given HTTPS response after the end of the cache entry, so it should be available whenever the cached resource is used<sup>3</sup>. A quick disk search revealed that ServiceWorker stores its scripts inside the folder: </p>
+
+
+
+<pre>%localappdata%\<em>Microsoft\Edge SxS\User Data\Default</em>\Service Worker\ScriptCache</pre>
+
+
+
+<p>Comparing the contents of the cache file on a “good”  and a “bad” PC, we see that the certificate information is missing in the cache file for a machine that reproduces the problem:</p>
+
+
+
+<div><figure><img data-attachment-id="2225" data-permalink="https://textslashplain.com/missingcertinresponse/" data-orig-file="https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png" data-orig-size="946,682" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="missingcertinresponse" data-image-description="" data-medium-file="https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png?w=300" data-large-file="https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png?w=800" src="https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png?w=946" alt="" srcset="https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png 946w, https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png?w=150 150w, https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png?w=300 300w, https://textplain.files.wordpress.com/2019/09/missingcertinresponse.png?w=768 768w" sizes="(max-width: 946px) 100vw, 946px"><figcaption><em>The serialized certificate chain is present in the “Good” case</em></figcaption></figure></div>
+
+
+
+<p>So, why is that certificate missing? I didn’t know. </p>
+
+
+
+<p>I performed a bisect three times, and each time I ended up with the same range of a dozen commits, only <a href="https://chromium.googlesource.com/chromium/src/+/e6bd736b20fb7223bf9ede8787426fe68b5027d4">one of which</a> had anything to do with anything to do with caching, and that commit was for AppCache, not ServiceWorker. </p>
+
+
+
+<div><p>More damning for my bisect suspect was the fact that this suspect commit landed (in 78.0.3890) the day <em>after </em>the build (3889) upon which the reproducing Edge build was based. I spent a bunch of time figuring out whether this could be the <a href="https://textslashplain.com/2019/08/08/livin-on-the-edge-dude-wheres-my-fix-redux/">off-by-one</a> issue in Edge build numbering before convincing myself that no, it couldn’t be: build number misalignment just means that Edge 3889 might not contain everything that’s in Chrome 3889. </p><p>Unless an Edge Engineer had cherry-picked the regressing commit into our 3889 (unlikely), the suspect couldn’t be the culprit.</p></div>
+
+
+
+<div><figure><img data-attachment-id="2228" data-permalink="https://textslashplain.com/misaligned-build-number/" data-orig-file="https://textplain.files.wordpress.com/2019/09/misaligned-build-number.png" data-orig-size="506,274" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="misaligned-build-number" data-image-description="" data-medium-file="https://textplain.files.wordpress.com/2019/09/misaligned-build-number.png?w=300" data-large-file="https://textplain.files.wordpress.com/2019/09/misaligned-build-number.png?w=506" src="https://textplain.files.wordpress.com/2019/09/misaligned-build-number.png?w=506" alt="" srcset="https://textplain.files.wordpress.com/2019/09/misaligned-build-number.png 506w, https://textplain.files.wordpress.com/2019/09/misaligned-build-number.png?w=150 150w, https://textplain.files.wordpress.com/2019/09/misaligned-build-number.png?w=300 300w" sizes="(max-width: 506px) 100vw, 506px"><figcaption><em>Edge 3889 doesn’t include all of the commits in Chromium 3889.</em></figcaption></figure></div>
+
+
+
+<p>I posted my research into the bug <a href="https://bugs.chromium.org/p/chromium/issues/detail?id=999562#c13">at 10:39 PM</a> on Friday and forty minutes later a Chrome engineer casually revealed something I didn’t realize: Chrome uses <em>two </em>different codepaths for fetching a ServiceWorker script– a “new_script_loader” and an “updated_script_loader.” </p>
+
+
+
+<p>And instantly, everything fell into place. The reason the repro wasn’t perfectly reliable (for both users and my bisect attempts) was that it only happened <em>after </em>a ServiceWorker script updates. </p>
+
+
+
+<ul><li>If the ServiceWorker in the user’s cache is missing, it is downloaded by the new_script_loader and the certificate is stored.</li><li>If the ServiceWorker script is present and is unchanged on the server, the lock shows just fine. </li><li>But if the ServiceWorker in the user’s cache is present but outdated, the updated_script_loader downloads the new script… and <strong>omits the certificate chain</strong>. The lock icon disappears until the user clears their cache or performs a hard (CTRL+F5) refresh, at which point the lock remains until the next script update.</li></ul>
+
+
+
+<p>With this new information in hand, building <a href="https://webdbg.com/apps/alwaysoutdated/">a reliable reduced repro case</a> was easy– I just ripped out the guts of one of my existing PWAs and configured it so that it updated itself every five seconds. That way, on nearly every load, the cached ServiceWorker would be deemed outdated and the script redownloaded.</p>
+
+
+
+<p>With this repro, we can kick off our bisect thusly:</p>
+
+
+
+<pre>python tools/bisect-builds.py -a win -g <strong>681094 </strong>-b <strong>690908 </strong>--verify-range --use-local-cache -- --no-first-run --user-data-dir=/temp <strong>https://webdbg.com/apps/alwaysoutdated/</strong></pre>
+
+
+
+<p>… and grade each build based on whether the lock disappears on refresh:</p>
+
+
+
+<figure><img data-attachment-id="2230" data-permalink="https://textslashplain.com/repros/" data-orig-file="https://textplain.files.wordpress.com/2019/09/repros.png" data-orig-size="737,295" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="repros" data-image-description="" data-medium-file="https://textplain.files.wordpress.com/2019/09/repros.png?w=300" data-large-file="https://textplain.files.wordpress.com/2019/09/repros.png?w=737" src="https://textplain.files.wordpress.com/2019/09/repros.png?w=737" alt="" srcset="https://textplain.files.wordpress.com/2019/09/repros.png 737w, https://textplain.files.wordpress.com/2019/09/repros.png?w=150 150w, https://textplain.files.wordpress.com/2019/09/repros.png?w=300 300w" sizes="(max-width: 737px) 100vw, 737px"><figcaption><em>Grading each build based on whether the lock disappears</em></figcaption></figure>
+
+
+
+<p>Within a few minutes, we’ve identified the regression range:</p>
+
+
+
+<div><figure><img data-attachment-id="2231" data-permalink="https://textslashplain.com/bisect/" data-orig-file="https://textplain.files.wordpress.com/2019/09/bisect.png" data-orig-size="1096,863" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="bisect" data-image-description="" data-medium-file="https://textplain.files.wordpress.com/2019/09/bisect.png?w=300" data-large-file="https://textplain.files.wordpress.com/2019/09/bisect.png?w=800" src="https://textplain.files.wordpress.com/2019/09/bisect.png?w=1024" alt="" srcset="https://textplain.files.wordpress.com/2019/09/bisect.png?w=1024 1024w, https://textplain.files.wordpress.com/2019/09/bisect.png?w=150 150w, https://textplain.files.wordpress.com/2019/09/bisect.png?w=300 300w, https://textplain.files.wordpress.com/2019/09/bisect.png?w=768 768w, https://textplain.files.wordpress.com/2019/09/bisect.png 1096w" sizes="(max-width: 1024px) 100vw, 1024px"><figcaption><em>A culprit is found</em></figcaption></figure></div>
+
+
+
+<p>In this case, <a href="https://chromium.googlesource.com/chromium/src/+log/2219bc87479739a676223b6ad56406102e1dbc2b..b9067eb02b0212bdd6d5694665c8ab8b9a4bc3fd">the regression range</a> contains just one <a href="https://chromium.googlesource.com/chromium/src/+/b9067eb02b0212bdd6d5694665c8ab8b9a4bc3fd">commit</a>— one that turns on the new ServiceWorker update check code. This confirms the Chromium engineer’s theory and that this problem is almost identical to the prior AppCache bug. In both cases, the problem is that the download request passed <strong>kURLLoadOptionNone</strong> and that prevented the certificate from being stored in the <a href="https://cs.chromium.org/chromium/src/net/http/http_response_info.h?l=211&amp;rcl=b81ec83f72ff8e370939d73721ee601aa3ff3d67">HttpResponseInfo</a> serialized to the cache file. Changing the flag to <strong>kURLLoadOptionSendSSLInfoWithResponse</strong> results in the retrieval and storage of the <a href="https://cs.chromium.org/chromium/src/net/ssl/ssl_info.h?l=62&amp;rcl=0cf51f1d632a40fb7ed12055fffbcbd16829e2e9">ssl_info</a>, including the certificate.</p>
+
+
+
+<p>The <a href="https://chromium.googlesource.com/chromium/src.git/+/0af0485264bbbb52b7184965b6852f905929d91c">fix</a> was quick and straightforward; it will be available in Chrome <strong>78.0.3902</strong> and the following build of Edge based on that Chromium version. Notably, because the bug is caused by failure to put data in a cache file, the lock will remain missing even in later builds until either the ServiceWorker script updates again, or you hard refresh the page once.</p>
+
+
+
+
+
+
+
+<p>-Eric</p>
+
+
+
+<p><sup>1</sup> By way of comparison, when I last bisected an issue in Internet Explorer, circa 2012, it was an extraordinarily painful<strong> two-day</strong> affair. </p>
+
+
+
+<div> <p><sup>2</sup> You can use the command line arguments in the variations page (starting at <code>--force-fieldtrials=</code>) to force the bisect builds to use the same variations.</p><p>Chromium also has a <a href="https://cs.chromium.org/chromium/src/tools/variations/bisect_variations.py">bisect-variations</a> script which you can use to help narrow down which of the dozens of active experiments is causing a problem. </p><p>If all else fails, you can also reset Chrome’s field trial configuration using <code>chrome.exe --reset-variation-state</code> to see if the repro disappears.</p></div>
+
+
+
+<p><sup>3</sup> Aside: <a href="https://blogs.msdn.microsoft.com/ieinternals/2010/04/21/https-caching-and-internet-explorer/">Back in the days of Internet Explorer</a>, WinINET had no way to preserve the certificate, so it always bypassed the cache for the first request to a HTTPS server so that the browser process would have a certificate available for its subsequent display needs. </p>
+
+
+
+
+
+		
+	</div><!--.entry-content-->
+
+	
+	
+<!-- #comments -->
+
+		</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

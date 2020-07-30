@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+What is Zig&#x27;s &#x201C;Colorblind&#x201D; Async/Await? - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="What is Zig&#x27;s &#x201C;Colorblind&#x201D; Async/Await? - linksfor.dev(s)"/>
+    <meta property="og:description" content="An introduction to Zig&#x27;s curious concurrent programming API."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://kristoff.it/blog/zig-colorblind-async-await/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - What is Zig&#x27;s &#x201C;Colorblind&#x201D; Async/Await?</title>
+<div class="readable">
+        <h1>What is Zig&#x27;s &#x201C;Colorblind&#x201D; Async/Await?</h1>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 23 Jun 2020</div>
+        <p><a href="https://kristoff.it/blog/zig-colorblind-async-await/">https://kristoff.it/blog/zig-colorblind-async-await/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><p>An introduction to Zig's curious concurrent programming API.</p><div><p>Zig is a new, general-purpose programming language that is rethinking from the ground up the way languages and related tooling should work. I’ve <a href="https://kristoff.it/blog/what-is-zig-comptime">already discussed compile-time code execution</a>, and now I’m going to introduce another innovative concept from the language: async/await.</p>
+<p><strong>But wait a minute, isn’t async/await present also in other languages?</strong></p>
+<p>Well yes, but async/await in Zig combines with compile-time execution, allowing functions to implicitly become async and whole libraries to work transparently in both blocking and evented I/O mode in a way that’s very much unique to Zig.</p>
+<p>Let’s see what that means.</p>
+<h2 id="asyncawait-notation-in-zig"><a href="#asyncawait-notation-in-zig" aria-label="asyncawait notation in zig permalink"></a>Async/Await notation in Zig</h2>
+<p>While Zig is very innovative, it tries to be a small and simple language. Zig takes a lot of inspiration from the simplicity of C and reserves metaprogramming acrobatics for when you really need them. In general, you should be able to become productive with Zig in a weekend. So, while most Zig features will immediately strike you as pleasant and somewhat familiar, async/await is one example of the familiarity-rule being broken, but for good reason.</p>
+<h2 id="a-bit-of-context"><a href="#a-bit-of-context" aria-label="a bit of context permalink"></a>A bit of context</h2>
+<p>When it comes to making use of evented I/O, you tend to have two options in imperative programming languages: callbacks or async/await.</p>
+<p>The first case has the advantage of not requiring any addition to the language, but the downside is that now everything has to be based on callbacks and nested closures. The second case basically leaves it to the compiler to break down your function into different “stages”, making the whole translation transparent to the user (i.e. to you it still looks like normal, sequential, imperative code) but, unfortunately, it has the side effect of introducing function coloring.</p>
+<h3 id="function-coloring"><a href="#function-coloring" aria-label="function coloring permalink"></a>Function coloring</h3>
+<p>The idea of function coloring is nicely explained by <a href="https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/" target="_blank" rel="nofollow noopener noreferrer">this blog post</a>, but to sum it up: since you can’t call async functions from non-async code, you end up with a lot of duplicated effort, where you need to reimplement parts of your standard library and all networking-related libraries to account for async/await. One example of this is Python, where the introduction of async/await in Python 3 birthed projects like <a href="https://github.com/aio-libs" target="_blank" rel="nofollow noopener noreferrer">aio-libs</a>, whose goal is to reimplement popular networking libraries on top of AsyncIO.</p>
+<h2 id="zigs-colorblind-asyncawait"><a href="#zigs-colorblind-asyncawait" aria-label="zigs colorblind asyncawait permalink"></a>Zig’s “colorblind” async/await</h2>
+<p>Let’s walk through how async/await works in Zig by looking at a few examples. To see the following code snippets run, launch Netcat in another terminal in listen mode and, if everything works, you should see “Hello World!” being printed after every run.  </p>
+<p>Here’s the complete Netcat command:</p>
+
+<h3 id="basics"><a href="#basics" aria-label="basics permalink"></a>Basics</h3>
+<p>The first example is a simple blocking program that writes to a socket. Nothing surprising there.</p>
+<div><pre data-language="zig"><code><span><span>const</span><span> net = </span><span>@import</span><span>(</span><span>"std"</span><span>).net;</span></span>
+<span><span></span></span>
+<span><span>pub</span><span> </span><span>fn</span><span> main() !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>const</span><span> addr = </span><span>try</span><span> net.Address.parseIp(</span><span>"127.0.0.1"</span><span>, </span><span>7000</span><span>);</span></span>
+<span><span>    </span><span>try</span><span> send_message(addr);</span></span>
+<span><span>}</span></span>
+<span><span></span></span>
+<span><span>fn</span><span> send_message(addr: net.Address) !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>var</span><span> socket = </span><span>try</span><span> net.tcpConnectToAddress(addr);</span></span>
+<span><span>    </span><span>defer</span><span> socket.close();</span></span>
+<span><span></span></span>
+<span><span>    _ = </span><span>try</span><span> socket.write(</span><span>"Hello World!</span><span>
+</span><span>"</span><span>);</span></span>
+<span><span>}</span></span></code></pre></div>
+<p>Adding one special declaration in the source file enables evented I/O.</p>
+<div><pre data-language="zig"><code><span><span>const</span><span> net = </span><span>@import</span><span>(</span><span>"std"</span><span>).net;</span></span>
+<span><span></span></span>
+<span><span>pub</span><span> </span><span>const</span><span> io_mode = .evented;</span></span>
+<span><span></span></span>
+<span><span>pub</span><span> </span><span>fn</span><span> main() !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>const</span><span> addr = </span><span>try</span><span> net.Address.parseIp(</span><span>"127.0.0.1"</span><span>, </span><span>7000</span><span>);</span></span>
+<span><span>    </span><span>try</span><span> send_message(addr);</span></span>
+<span><span>}</span></span>
+<span><span></span></span>
+<span><span>fn</span><span> send_message(addr: net.Address) !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>var</span><span> socket = </span><span>try</span><span> net.tcpConnectToAddress(addr);</span></span>
+<span><span>    </span><span>defer</span><span> socket.close();</span></span>
+<span><span></span></span>
+<span><span>    _ = </span><span>try</span><span> socket.write(</span><span>"Hello World!</span><span>
+</span><span>"</span><span>);</span></span>
+<span><span>}</span></span></code></pre></div>
+<p>That declaration caused a few changes in the background, one of which is opening the socket in non-blocking mode. This causes the function to become async, but as you can see the way it gets called did not change: it still looks like a normal function invocation, even though it’s not.</p>
+<p>The Zig code above is functionally equivalent to the following Python code:</p>
+<div><pre data-language="python"><code><span><span>import</span><span> asyncio</span></span>
+<span><span></span></span>
+<span><span>async</span><span> </span><span>def</span><span> </span><span>main</span><span>():</span></span>
+<span><span>    </span><span>await</span><span> send_message(</span><span>"127.0.0.1"</span><span>, </span><span>7000</span><span>)</span></span>
+<span><span></span></span>
+<span><span>async</span><span> </span><span>def</span><span> </span><span>send_message</span><span>(</span><span>addr</span><span>, </span><span>port</span><span>):</span></span>
+<span><span>    _, writer = </span><span>await</span><span> asyncio.open_connection(addr, port)</span></span>
+<span><span>    writer.write(</span><span>b</span><span>"Hello World!</span><span>
+</span><span>"</span><span>)</span></span>
+<span><span>    writer.close()</span></span>
+<span><span></span></span>
+<span><span>asyncio.run(main())</span></span></code></pre></div>
+<h3 id="expressing-concurrency"><a href="#expressing-concurrency" aria-label="expressing concurrency permalink"></a>Expressing concurrency</h3>
+<p>You’ve seen now that in Zig there is no extra keyword requirement to launch a coroutine and immediately wait for its completion. So how do you start a coroutine and <code>await</code> it afterward then? By using <code>async</code> of course!</p>
+<div><pre data-language="zig"><code><span><span>const</span><span> net = </span><span>@import</span><span>(</span><span>"std"</span><span>).net;</span></span>
+<span><span></span></span>
+<span><span>pub</span><span> </span><span>const</span><span> io_mode = .evented;</span></span>
+<span><span></span></span>
+<span><span>pub</span><span> </span><span>fn</span><span> main() !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>const</span><span> addr = </span><span>try</span><span> net.Address.parseIp(</span><span>"127.0.0.1"</span><span>, </span><span>7000</span><span>);</span></span>
+<span><span></span></span>
+<span><span>    </span><span>var</span><span> sendFrame = </span><span>async</span><span> send_message(addr);</span></span>
+<span><span>    </span><span>// ... do something else while</span></span>
+<span><span>    </span><span>//     the message is being sent ...</span></span>
+<span><span>    </span><span>try</span><span> </span><span>await</span><span> sendFrame;</span></span>
+<span><span>}</span></span>
+<span><span></span></span>
+<span><span>// Note how the function definition doesn't require any static</span></span>
+<span><span>// `async` marking. The compiler can deduce when a function is</span></span>
+<span><span>// async based on its usage of `await`.</span></span>
+<span><span>fn</span><span> send_message(addr: net.Address) !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>// We could also delay `await`ing for the connection</span></span>
+<span><span>    </span><span>// to be established, if we had something else we</span></span>
+<span><span>    </span><span>// wanted to do in the meantime.</span></span>
+<span><span>    </span><span>var</span><span> socket = net.tcpConnectToAddress(addr);</span></span>
+<span><span>    </span><span>defer</span><span> socket.close();</span></span>
+<span><span></span></span>
+<span><span>    </span><span>// Using both await and async in the same statement</span></span>
+<span><span>    </span><span>// is unnecessary and non-idiomatic, but it shows</span></span>
+<span><span>    </span><span>// what's happening behind the scenes when `io_mode`</span></span>
+<span><span>    </span><span>// is `.evented`.</span></span>
+<span><span>    _ = </span><span>try</span><span> </span><span>await</span><span> </span><span>async</span><span> socket.write(</span><span>"Hello World!</span><span>
+</span><span>"</span><span>);</span></span>
+<span><span>}</span></span></code></pre></div>
+<p>By using the <code>async</code> keyword, you’re creating the coroutine and running it until it encounters a suspension point (when it has to wait for I/O to happen, roughly speaking). The return value is what Zig calls an “async frame” and is to some degree equivalent to <code>Future</code>, <code>Task</code>, <code>Promise</code>, or <code>Coroutine</code> objects from other languages.</p>
+<h3 id="one-final-trick"><a href="#one-final-trick" aria-label="one final trick permalink"></a>One final trick</h3>
+<p>Let me show you the final trick that completes the puzzle: using async/await in blocking mode.
+To revert back to blocking I/O, all we have to do is delete the special declaration we added in the beginning (or use the corresponding enum case).</p>
+<div><pre data-language="zig"><code><span><span>const</span><span> net = </span><span>@import</span><span>(</span><span>"std"</span><span>).net;</span></span>
+<span><span></span></span>
+<span><span>pub</span><span> </span><span>const</span><span> io_mode = .blocking;</span></span>
+<span><span></span></span>
+<span><span>pub</span><span> </span><span>fn</span><span> main() !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>const</span><span> addr = </span><span>try</span><span> net.Address.parseIp(</span><span>"127.0.0.1"</span><span>, </span><span>7000</span><span>);</span></span>
+<span><span></span></span>
+<span><span>    </span><span>// yes, this still works</span></span>
+<span><span>    </span><span>var</span><span> sendFrame = </span><span>async</span><span> send_message(addr);</span></span>
+<span><span>    </span><span>try</span><span> </span><span>await</span><span> sendFrame;</span></span>
+<span><span>}</span></span>
+<span><span></span></span>
+<span><span>fn</span><span> send_message(addr: net.Address) !</span><span>void</span><span> {</span></span>
+<span><span>    </span><span>var</span><span> socket = net.tcpConnectToAddress(addr);</span></span>
+<span><span>    </span><span>defer</span><span> socket.close();</span></span>
+<span><span></span></span>
+<span><span>    </span><span>// this too</span></span>
+<span><span>    _ = </span><span>try</span><span> </span><span>await</span><span> </span><span>async</span><span> socket.write(</span><span>"Hello World!</span><span>
+</span><span>"</span><span>);</span></span>
+<span><span>}</span></span></code></pre></div>
+<p>Yes, this program compiles and works as expected. The function is no longer async, and in fact both keywords basically become no-ops, but <strong>the point is that you can express concurrency even if you’re not able to take advantage of it</strong>. This might not seem such a big deal in our small example, but it’s the principle that allows libraries to offer both blocking and evented I/O capabilities off of a single code base.</p>
+<h2 id="a-concrete-example"><a href="#a-concrete-example" aria-label="a concrete example permalink"></a>A concrete example</h2>
+<p>A while ago I started working on <a href="https://github.com/kristoff-it/zig-okredis" target="_blank" rel="nofollow noopener noreferrer">OkRedis, a Redis client library written in Zig</a> that tries to offer as many niceties it can to the user without compromising in terms of efficiency. Among other things, it features full support for both blocking and evented I/O in a single codebase. If you want to learn more, take a look at the available documentation on GitHub and watch this talk <a href="https://twitter.com/andrew_kelley" target="_blank" rel="nofollow noopener noreferrer">Andrew Kelley</a> (the creator of Zig) co-authored with me. In it, Andrew explains the basics of async/await in Zig and, in the second part, I demo OkRedis.</p>
+
+          <p>
+            <iframe src="https://www.youtube.com/embed/zeLToGnjIUM" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen=""></iframe>
+          </p>
+          
+<center><i>"Modeling Data Concurrency with Asynchronous I/O in Zig"</i></center>
+<h2 id="understanding-the-limits"><a href="#understanding-the-limits" aria-label="understanding the limits permalink"></a>Understanding the limits</h2>
+<p>While the compiler is very smart and defeating function coloring has many practical benefits, it’s not a magic bullet, so let me immediately demystify some ideas about it.</p>
+<h4 id="q-will-enabling-evented-io-immediately-make-my-program-faster"><a href="#q-will-enabling-evented-io-immediately-make-my-program-faster" aria-label="q will enabling evented io immediately make my program faster permalink"></a>Q: Will enabling evented I/O immediately make my program faster?</h4>
+<p>No, to make your program take advantage of evented I/O you need to express concurrency in your code.
+If you never did that work, enabling evented I/O will not provide any appreciable advantage, but you might experience better performance if one of the libraries you’re using has been properly designed for async/await.</p>
+<p>That said if your code gets embedded in a larger project that does make use of async/await, the
+automated translation to evented I/O will make your code play nice with the surrounding context, to some extent.</p>
+<h4 id="q-so-all-async-applications-can-be-made-blocking-just-by-flipping-a-switch"><a href="#q-so-all-async-applications-can-be-made-blocking-just-by-flipping-a-switch" aria-label="q so all async applications can be made blocking just by flipping a switch permalink"></a>Q: So all async applications can be made blocking just by flipping a switch?</h4>
+<p>No, there’s plenty of applications that need evented I/O to behave correctly. Switching to blocking mode, without introducing any change, might cause them to deadlock. Think for example of a single application that acts both as server and client to itself.</p>
+<p>That said, during compile-time, it’s possible to inspect if the overall program is in evented mode or not, and properly designed code might decide to move to a threaded model when in blocking mode, for example.</p>
+<h4 id="q-so-i-dont-even-have-to-think-about-normal-functions-vs-coroutines-in-my-library"><a href="#q-so-i-dont-even-have-to-think-about-normal-functions-vs-coroutines-in-my-library" aria-label="q so i dont even have to think about normal functions vs coroutines in my library permalink"></a>Q: So I don’t even have to think about normal functions vs coroutines in my library?</h4>
+<p>No, occasionally you will have to. As an example, if you’re allowing your users to pass to your library function pointers at runtime, you will need to make sure to use the right calling convention based on whether the function is async or not. You normally don’t have to think about it because the compiler is able to do the work for you at compile-time, but that can’t happen for runtime-known values.</p>
+<p>The silver lining is that you have at your disposal all the tools to account for all the possibilities in a simple and clear way. Once you get the details right, the code will be no more complicated than it has to be, and your library will be easy to use.</p>
+<h3 id="concurrency-and-resource-allocation"><a href="#concurrency-and-resource-allocation" aria-label="concurrency and resource allocation permalink"></a>Concurrency and resource allocation</h3>
+<p>While I wrote the introduction with the average developer in mind, you need to be aware that Zig is not a dynamically typed language and, on top of that, it puts in your hands a lot of power (and responsibility) when it comes to resource management. If you know how to do async/await in C#, JavaScript, or Python, for example, you won’t be able to immediately know how to do <em>everything</em> in Zig.</p>
+<p>In particular, garbage-collected languages hide from you where the memory is coming from. This makes things much easier for the programmer, but the price for this extra ease is shouldered entirely by the machine. This is nothing new and it’s a trade-off very often worth doing but, especially when it comes to async/await, it’s  problematic because you lose control of how much memory you’re consuming, eventually over-committing and encountering issues when under heavy load (see
+<a href="https://lucumr.pocoo.org/2020/1/1/async-pressure/" target="_blank" rel="nofollow noopener noreferrer">this blog post</a>
+for more info).</p>
+<p>One of the main points of Zig is to make resource allocation always clear and manageable. When it comes to async/await, this means that all the memory required to run a coroutine is represented by its underlying async frame. Once you have a frame (be it because it’s static memory or because the corresponding dynamic allocation succeded), then you know the coroutine will be able to run to completion without problems. In the context of a HTTP server, for example, this means that you will be able to know upfront if you have enough resources to accept a connection or not, without encountering unrecoverable error conditions.</p>
+<h2 id="a-final-word-on-concurrency-in-zig"><a href="#a-final-word-on-concurrency-in-zig" aria-label="a final word on concurrency in zig permalink"></a>A final word on concurrency in Zig</h2>
+<p>Up until now, I’ve only talked about the language features that implement coroutines. I haven’t mentioned all of them but, more importantly, I haven’t talked about the event loop. In Zig, the event loop is part of the standard library and the idea is to make it swappable.</p>
+<p>At the moment of writing, there’s still a lot of work to do on the event loop, but you can already try everything out today. The current implementation is already multi-threaded, in case you were wondering. Just go to <a href="https://ziglang.org/" target="_blank" rel="nofollow noopener noreferrer">ziglang.org</a>, download the latest version, and take a look a the docs.</p>
+<h4 id="and-what-about-go"><a href="#and-what-about-go" aria-label="and what about go permalink"></a>…And what about Go?</h4>
+<p>Ah, yes. Go — alongside a few other languages in fact — doesn’t have function coloring problems. Andrew mentions Go in his part of the aforelinked talk, but I’ll give my two cents here.</p>
+<p>If you’ve read my blog before, you know that I like Go. I think that goroutines are generally preferable to async/await in application-level programming, especially when it comes to server-side applications, which I believe to be Go’s main domain.</p>
+<p>I think goroutines are preferable in that context because async/await is a much lower level tool that is easy to misuse, but when it comes to writing code with critical requirements of correctness and efficiency, you need async/await and you need Zig’s philosophy that we all should strive to write <strong>robust</strong>, <strong>optimal</strong>, and <strong>reusable</strong> software.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

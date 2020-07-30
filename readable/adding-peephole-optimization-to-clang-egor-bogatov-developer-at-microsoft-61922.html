@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Adding peephole optimization to Clang | Egor Bogatov &#x2014; Developer at Microsoft  - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Adding peephole optimization to Clang | Egor Bogatov &#x2014; Developer at Microsoft  - linksfor.dev(s)"/>
+    <meta property="article:author" content="Egor Bogatov"/>
+    <meta property="og:description" content="C#, C&#x2B;&#x2B;, Performance"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://egorbo.com/opt-for-llvm-guide.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Adding peephole optimization to Clang | Egor Bogatov &#x2014; Developer at Microsoft </title>
+<div class="readable">
+        <h1>Adding peephole optimization to Clang | Egor Bogatov &#x2014; Developer at Microsoft </h1>
+            <div>by Egor Bogatov</div>
+            <div>Reading time: 6-7 minutes</div>
+        <div>Posted here: 20 May 2020</div>
+        <p><a href="https://egorbo.com/opt-for-llvm-guide.html">https://egorbo.com/opt-for-llvm-guide.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div role="main">
+                
+                <article role="article" itemscope="" itemtype="http://schema.org/BlogPosting">
+    
+
+    <div>
+        <p><a href="https://medium.com/@prathamesh1615/adding-peephole-optimization-to-gcc-89c329dd27b3">“Adding peephole optimization to GCC”</a> article covers it for GCC and I decided to cover Clang. Clang is basically a front-end on top of LLVM. It parses C/C++ files into an AST and converts them to an intermediate representation - LLVM IR.</p>
+
+<figure>
+	<img src="https://egorbo.com/images/llvm-opt/llvm-arch.png">
+	<figcaption>High-level architecture for C++ AOT scenario.</figcaption>
+</figure>
+
+<p><code>opt</code> is a console application, it accepts LLVM IR and optimizes it using a loop of analysis and transformation phases (produces optimized LLVM IR as an output). Then <code>llc</code> (a console app as well) emits machine code/assembly. <code>opt</code> is basically a PassManager with some generic (actually, C/C++-friendly) order of optimization passes. Other languages or JIT-compilers should use their own order of passes. Thus, when we introduce a new optimization in LLVM we improve many programming languages at once! E.g. Rust, Swift, C, C++, C# (Mono and Burst) - all of them use LLVM as a primary back-end. I assume you’re familiar with some LLVM IR basics such as SSA-form, and If you’re not I highly recommend watching/reading these:</p>
+
+<ul>
+  <li><a href="https://www.youtube.com/watch?v=m8G_S5LwlTo">LLVM IR Tutorial (2019 EuroLLVM)</a></li>
+  <li><a href="https://blog.regehr.org/archives/1605">How Clangs compiles a function</a></li>
+  <li><a href="https://blog.regehr.org/archives/1603">How LLVM optimizes a function</a></li>
+</ul>
+
+<h3 id="lets-optimize-something">Let’s optimize something!</h3>
+<!--more-->
+<p>Although it might sound complicated, some of the compilers’ internals are just quite simple programs you can easily build from sources and improve. For instance, local optimizations (aka peepholes) where you don’t really have to care about surroundings, control flow, etc.
+I decided to make a step-by-step tutorial on how to create your own optimizations for C/C++. 
+A good source of ideas for peepholes are Math formulas from google/books. I decided to check this one:</p>
+
+<figure>
+	<img src="https://egorbo.com/images/llvm-opt/formula.png">
+</figure>
+
+<p>It’s a pretty basic math formula, let’s check if modern C++ compilers handle it well via godbolt (<a href="https://godbolt.org/z/Nvxs4o">godbolt.org/z/Nvxs4o</a>):</p>
+
+<figure>
+	<img src="https://egorbo.com/images/llvm-opt/asm1.png">
+</figure>
+
+<p>Ouch, so GCC and MSVC managed to recognize it and optimize to <code>pow(x, a+b)</code> but Clang did not. Let’s fix that!
+We need to get the LLVM IR clang emits for it first. It can be easily obtained via <code>-emit-llvm</code> argument:</p>
+
+<figure>
+	<img src="https://egorbo.com/images/llvm-opt/ir1.png">
+</figure>
+
+<p>Most of the <code>math.h</code> functions have their built-in LLVM intrinsics. E.g. see <a href="https://github.com/mono/mono/pull/16578">my PR</a> for Mono where I 
+tell LLVM our <code>Math.XY()</code> methods should be LLVM-intrinsics in order to get such optimizations for free.
+We, obviously, need somehow transform the IR like this:</p>
+
+<figure>
+	<img src="https://egorbo.com/images/llvm-opt/ir.png">
+</figure>
+
+<p>See <a href="https://godbolt.org/z/3D2jmd">godbolt.org/z/ZGG2dG</a>.</p>
+
+<h3 id="how-to-build-llvm">How to build LLVM</h3>
+<p>LLVM is now hosted at github (moved recently) and uses cmake as a build system so it takes just a few commands to
+download it and build. We can ask cmake to generate project files for your favorite IDE, for instance VS on Windows
+and XCode on macOS.</p>
+
+<p><strong>Windows</strong>:</p>
+
+<figure><pre><code data-lang="cpp"><table><tbody><tr><td><pre>1
+2
+3
+4
+</pre></td><td><pre><span>git</span> <span>clone</span> <span>git</span><span>@</span><span>github</span><span>.</span><span>com</span><span>:</span><span>llvm</span><span>/</span><span>llvm</span><span>-</span><span>project</span><span>.</span><span>git</span>
+<span>mkdir</span> <span>myllvm</span>
+<span>cd</span> <span>myllvm</span>
+<span>cmake</span> <span>-</span><span>G</span> <span>"Visual Studio 16"</span> <span>..</span><span></span><span>llvm</span><span>-</span><span>project</span><span></span><span>llvm</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p><strong>macOS</strong>:</p>
+
+<figure><pre><code data-lang="cpp"><table><tbody><tr><td><pre>1
+2
+3
+4
+</pre></td><td><pre><span>git</span> <span>clone</span> <span>git</span><span>@</span><span>github</span><span>.</span><span>com</span><span>:</span><span>llvm</span><span>/</span><span>llvm</span><span>-</span><span>project</span><span>.</span><span>git</span>
+<span>mkdir</span> <span>myllvm</span>
+<span>cd</span> <span>myllvm</span>
+<span>cmake</span> <span>-</span><span>G</span> <span>Xcode</span> <span>..</span><span>/</span><span>llvm</span><span>-</span><span>project</span><span>/</span><span>llvm</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>Now open LLVM.xcodeproj or LLVM.sln in myllvm folder and build <code>ALL_BUILD</code> target. It might take a while…</p>
+<figure>
+	<img src="https://egorbo.com/images/llvm-opt/jdun.png">
+	<figcaption>Zhdun or "waiter" (in a non-catering sense)</figcaption>
+</figure>
+
+<p>Once it’s done we need to prepare a test and it’s simple - just copy that IR from godbolt to a file, e.g. <strong>test.ll</strong>:</p>
+
+<figure><pre><code data-lang="llvm"><table><tbody><tr><td><pre>1
+2
+3
+4
+5
+6
+7
+8
+</pre></td><td><pre><span>define</span> <span>double</span> <span>@Test</span><span>(</span><span>double</span> <span>%x</span><span>,</span> <span>double</span> <span>%a</span><span>,</span> <span>double</span> <span>%b</span><span>)</span> <span>{</span>
+  <span>%powa</span> <span>=</span> <span>tail</span> <span>call</span> <span>fast</span> <span>double</span> <span>@llvm.pow.f64</span><span>(</span><span>double</span> <span>%x</span><span>,</span> <span>double</span> <span>%a</span><span>)</span>
+  <span>%powb</span> <span>=</span> <span>tail</span> <span>call</span> <span>fast</span> <span>double</span> <span>@llvm.pow.f64</span><span>(</span><span>double</span> <span>%x</span><span>,</span> <span>double</span> <span>%b</span><span>)</span>
+  <span>%res</span> <span>=</span> <span>fmul</span> <span>fast</span> <span>double</span> <span>%powb</span><span>,</span> <span>%powa</span>
+  <span>ret</span> <span>double</span> <span>%res</span>
+<span>}</span>
+
+<span>declare</span> <span>double</span> <span>@llvm.pow.f64</span><span>(</span><span>double</span><span>,</span> <span>double</span><span>)</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>I mentioned <code>opt</code> console app several times and actually you can find it in the solution. We are going to use it as an entry-point app
+where we pass a path to our test and ask InstCombine to run our peepholes. You need to find that <code>opt</code> project and modify its properties like this:</p>
+
+<p><img src="https://egorbo.com/images/llvm-opt/opt-props-win.png"></p>
+
+<p>and for <strong>XCode</strong> (see <code>Edit Scheme</code>):</p>
+
+<p><img src="https://egorbo.com/images/llvm-opt/opt-props-macos.png"></p>
+
+<p><code>-O1</code> means run all the optimizations from <code>O1</code> set (including <code>-instcombine</code> pass). <code>-S</code> means we prefer a human-readable format.</p>
+
+<p>And that’s it! Click “Run/Debug” and you are able to debug LLVM internals: hit breakpoints, view locals!
+It’s time to write some code. We want to add a peephole optimization and it means we need InstCombine. Also, we need to optimize
+multiplication (<code>FMul</code>, <code>F</code> stands for floating-point) so our entry point is <code>visitFMul</code> in <code>InstCombineMulDivRem.cpp</code>. Let me paste 
+the optimization there and explain:</p>
+
+<p><img src="https://egorbo.com/images/llvm-opt/instcombine.png"></p>
+
+<p>Here we visit a binary node <code>FMul</code> with <code>Op0</code> and <code>Op1</code> sub-nodes and we just need to match the pattern we want via <code>match</code>. In our case we want both to be <code>pow</code> intrinsics. It looks super simple and in those InstCombine*.cpp files you can find plenty of similar peephole optimizations. A bit more complicated case is my PR to LLVM: <a href="https://reviews.llvm.org/D79369">reviews.llvm.org/D79369</a>. Now when we press the Run button we can see the resulting IR:</p>
+
+<p><img src="https://egorbo.com/images/llvm-opt/result.png"></p>
+
+<p>Voila! IR is optimized! Now let me test it for C# (.NET 5.0 Mono-LLVM-JIT)</p>
+
+<figure><pre><code data-lang="cpp"><table><tbody><tr><td><pre>1
+2
+3
+4
+</pre></td><td><pre><span>using</span> <span>System</span><span>;</span>
+
+<span>double</span> <span>PowAb</span><span>(</span><span>double</span> <span>x</span><span>,</span> <span>double</span> <span>a</span><span>,</span> <span>double</span> <span>b</span><span>)</span> <span>=&gt;</span>
+	<span>Math</span><span>.</span><span>Pow</span><span>(</span><span>x</span><span>,</span> <span>a</span><span>)</span> <span>*</span> <span>Math</span><span>.</span><span>Pow</span><span>(</span><span>x</span><span>,</span> <span>b</span><span>);</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>Codegen (<code>MONO_VERBOSE_METHOD=PowAb</code>):</p>
+
+<figure><pre><code data-lang="asm"><table><tbody><tr><td><pre>1
+2
+3
+4
+</pre></td><td><pre>Program_PowAb__double_double_double:
+   vaddsd %xmm2,%xmm1,%xmm1
+   movabs $0x7f9f58caeb00,%rax
+   jmpq   *%rax  ; pow
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<div><p>It just works! My commit with these changes can be <a href="https://github.com/EgorBo/llvm-project/commit/2b46c1438601b48c5d40eedce80aee0b14409384">found here</a> (it also handles <code>FDiv</code> and takes care about Fast Math and OneUse checks).
+</p><p>
+For reference, <a href="https://github.com/gcc-mirror/gcc/blob/master/gcc/match.pd#L5251-L5254">here is how</a> the optimization is defined in GCC (in a sort of a DSL):</p></div>
+
+<figure><pre><code data-lang="c"><table><tbody><tr><td><pre>1
+2
+3
+4
+</pre></td><td><pre> <span>/* Simplify pow(x,y) * pow(x,z) -&gt; pow(x,y+z). */</span>
+ <span>(</span><span>simplify</span>
+  <span>(</span><span>mult</span> <span>(</span><span>POW</span><span>:</span><span>s</span> <span>@</span><span>0</span> <span>@</span><span>1</span><span>)</span> <span>(</span><span>POW</span><span>:</span><span>s</span> <span>@</span><span>0</span> <span>@</span><span>2</span><span>))</span>
+   <span>(</span><span>POW</span> <span>@</span><span>0</span> <span>(</span><span>plus</span> <span>@</span><span>1</span> <span>@</span><span>2</span><span>)))</span>
+</pre></td></tr></tbody></table></code></pre></figure>
+
+<p>Let me know (e.g. on <a href="https://twitter.com/EgorBo">twitter</a>) if you want me to do the same step-by-step tutorial for RyuJIT and C#.</p>
+
+<h3 id="links">Links</h3>
+<ul>
+  <li><a href="https://www.youtube.com/watch?v=m8G_S5LwlTo">“LLVM IR Tutorial (2019 EuroLLVM)”</a></li>
+  <li><a href="https://blog.regehr.org/archives/1603">“How LLVM Optimizes a Function”</a> by John Regehr</li>
+  <li><a href="https://medium.com/@prathamesh1615/adding-peephole-optimization-to-gcc-89c329dd27b3">“Adding peephole optimization to GCC”</a> by Prathamesh Kulkarni</li>
+</ul>
+
+    </div>
+
+    
+</article>
+
+
+            </div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+PooledAwait - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="PooledAwait - linksfor.dev(s)"/>
+    <meta property="og:description" content="Low allocation async/await for C#/.NET"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://mgravell.github.io/PooledAwait/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - PooledAwait</title>
+<div class="readable">
+        <h1>PooledAwait</h1>
+            <div>Reading time: 7-9 minutes</div>
+        <div>Posted here: 09 Jul 2019</div>
+        <p><a href="https://mgravell.github.io/PooledAwait/">https://mgravell.github.io/PooledAwait/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section>
+      
+
+<p>Low-allocation utilies for writing <code>async</code> methods, and related tools</p>
+
+<h3 id="contents">Contents</h3>
+
+<ul>
+  <li><a href="#pooledvaluetask--pooledvaluetaskt"><code>PooledValueTask</code> / <code>PooledValueTask&lt;T&gt;</code></a></li>
+  <li><a href="#pooledtask--pooledtaskt"><code>PooledTask</code> / <code>PooledTask&lt;T&gt;</code></a></li>
+  <li><a href="#fireandforget"><code>FireAndForget</code></a></li>
+  <li><a href="#configuredyieldawaitable"><code>ConfiguredYieldAwaitable</code></a></li>
+  <li><a href="#valuetaskcompletionsourcet"><code>ValueTaskCompletionSource&lt;T&gt;</code></a></li>
+  <li><a href="#pooledvaluetasksource--pooledvaluetasksourcet"><code>PooledValueTaskSource / PooledValueTaskSource&lt;T&gt;</code></a></li>
+  <li><a href="#lazytaskcompletionsource--lazytaskcompletionsourcet"><code>LazyTaskCompletionSource / LazyTaskCompletionSource&lt;T&gt;</code></a></li>
+  <li><a href="#pool"><code>Pool</code></a></li>
+</ul>
+
+<hr>
+
+<h2 id="pooledvaluetask--pooledvaluetaskt"><code>PooledValueTask</code> / <code>PooledValueTask&lt;T&gt;</code></h2>
+
+<p>These are the main tools of the library; their purpose is to remove the boxing of the async state-machine and builder that happens when a method
+marked <code>async</code> performs an <code>await</code> on an awaitable target that <em>is not yet complete</em>, i.e.</p>
+
+<div><div><pre><code><span>async</span> <span>ValueTask</span><span>&lt;</span><span>int</span><span>&gt;</span> <span>SomeMethod</span><span>()</span>
+<span>{</span>
+	<span>await</span> <span>Task</span><span>.</span><span>Yield</span><span>();</span> <span>// *is not yet complete*</span>
+	<span>return</span> <span>42</span>
+<span>}</span>
+</code></pre></div></div>
+
+<p>If you’ve ever looked at an application that uses <code>async</code> / <code>await</code> in a memory profiler and seen things like <code>System.Runtime.CompilerServices.AsyncTaskMethodBuilder</code><code>1.AsyncStateMachineBox</code><code>1</code>
+or <code>YourLib.&lt;&lt;SomeMethod&gt;g__Inner|8_0&gt;d</code>, then that’s what I’m talking about. You can avoid this by simply using a different return type:</p>
+
+<ul>
+  <li><code>PooledValueTask&lt;T&gt;</code> instead of <code>ValueTask&lt;T&gt;</code></li>
+  <li><code>PooledValueTask</code> instead of <code>ValueTask</code></li>
+</ul>
+
+<p>For <code>private</code> / <code>internal</code> methods, you can probably just <em>change the return type directly</em>:</p>
+
+<div><div><pre><code><span>private</span> <span>async</span> <span>PooledValueTask</span><span>&lt;</span><span>int</span><span>&gt;</span> <span>SomeMethod</span><span>()</span>
+<span>{</span>
+	<span>await</span> <span>Task</span><span>.</span><span>Yield</span><span>();</span> <span>// *is not yet complete*</span>
+	<span>return</span> <span>42</span>
+<span>}</span>
+</code></pre></div></div>
+
+<p>For methods on your <code>public</code> API surface, you can use a “local function” to achieve the same thing without changing the exposed return type:</p>
+
+<div><div><pre><code><span>public</span> <span>ValueTask</span><span>&lt;</span><span>int</span><span>&gt;</span> <span>SomeMethod</span><span>()</span> <span>// not marked async</span>
+<span>{</span>
+	<span>return</span> <span>Impl</span><span>();</span>
+	<span>async</span> <span>PooledValueTask</span><span>&lt;</span><span>int</span><span>&gt;()</span> <span>Impl</span><span>()</span>
+	<span>{</span>
+		<span>await</span> <span>Task</span><span>.</span><span>Yield</span><span>();</span> <span>// *is not yet complete*</span>
+		<span>return</span> <span>42</span>
+	<span>}</span>
+<span>}</span>
+</code></pre></div></div>
+
+<p>(all of the <code>Pooled*</code> types have <code>implicit</code> conversion operators to their more well-recognized brethren).</p>
+
+<p>And that’s it! That’s all you have to do. The “catch” (there’s always a catch) is that awaiting the same pending operation <em>more than once</em> <strong>no longer works</strong>:</p>
+
+<div><div><pre><code><span>var</span> <span>pending</span> <span>=</span> <span>SomeIncompleteMethodAsync</span><span>();</span> <span>// note no "await" here</span>
+
+<span>var</span> <span>x</span> <span>=</span> <span>await</span> <span>pending</span><span>;</span>
+<span>var</span> <span>y</span> <span>=</span> <span>await</span> <span>pending</span><span>;</span> <span>// BOOM! await the **same result**</span>
+</code></pre></div></div>
+
+<p>In reality, <strong>this almost never happens</strong>. Usually you <code>await</code> something <em>once</em>, <em>almost always</em> right away. So… yeah.</p>
+
+<hr>
+
+<h2 id="pooledtask--pooledtaskt"><code>PooledTask</code> / <code>PooledTask&lt;T&gt;</code></h2>
+
+<p>These work very similarly to <code>PooledValueTask[&lt;T&gt;]</code>, but for the <code>Task[&lt;T&gt;]</code> API. It can’t be <em>quite</em> as frugal, as in most cases a <code>Task[&lt;T&gt;]</code>
+will still need to be allocated (unless it is the non-generic <code>PooledTask</code> signature, and the operation completes synchronously), but it
+still avoids the state-machine box etc. Note that this API <strong>is not</strong> impacted by the “you can only await it once” change (you can
+await these as many times as you like - they are, after all, <code>Task[&lt;T&gt;]</code>), but again: <em>this is used incredibly rarely anyway</em>.</p>
+
+<h2 id="fireandforget"><code>FireAndForget</code></h2>
+
+<p>Ever find yourself needing a fire-and-forget API? This adds one. All you do is declare the return type as <code>FireAndForget</code>:</p>
+
+<div><div><pre><code><span>FireAndForget</span> <span>SomeMethod</span><span>(...)</span> <span>{</span>
+   <span>// .. things before the first incomplete await happen on the calling thread</span>
+   <span>await</span> <span>SomeIncompleteMethod</span><span>();</span>
+   <span>// .. other bits continue running in the background</span>
+<span>}</span>
+</code></pre></div></div>
+
+<p>As soon as the method uses <code>await</code> against an incomplete operation, the calling
+task regains control as though it were complete; the rest of the operation continues in the background. The caller can simply <code>await</code>
+the fire-and-forget method with confidence that it only runs synchronously to the first incomplete operation. If you’re not in an <code>async</code>
+method, you can use “discard” to tell the compiler not to tell you to <code>await</code> it:</p>
+
+<div><div><pre><code><span>_</span> <span>=</span> <span>SomeFireAndForgetMethodAsync</span><span>();</span>
+</code></pre></div></div>
+
+<p>You won’t get unobserved-task-exception problems. If you want to see any exceptions that happen, there is an event <code>FireAndForget.Exception</code>
+that you can subscribe to. Otherwise, they just evaporate.</p>
+
+<hr>
+
+<h2 id="configuredyieldawaitable"><code>ConfiguredYieldAwaitable</code></h2>
+
+<p>Related to <code>FireAndForget</code> - when you <code>await Task.Yield()</code> it always respects the sync-context/task-scheduler; sometimes <em>you don’t want to</em>.
+For many awaitables there is a <code>.ConfigureAwait(continueOnCapturedContext: false)</code> method that you can use to suppress this, but
+not on <code>Task.Yield()</code>… <em>until now</em>. Usage is, as you would expect:</p>
+
+<div><div><pre><code><span>await</span> <span>Task</span><span>.</span><span>Yield</span><span>().</span><span>ConfigureAwait</span><span>(</span><span>false</span><span>);</span>
+</code></pre></div></div>
+
+<hr>
+
+<h2 id="valuetaskcompletionsourcet"><code>ValueTaskCompletionSource&lt;T&gt;</code></h2>
+
+<p>Do you make use of <code>TaskCompletionSource&lt;T&gt;</code>? Do you hate that this adds another allocation <em>on top of</em> the <code>Task&lt;T&gt;</code> that you actually wanted?
+<code>ValueTaskCompletionSource&lt;T&gt;</code> is your friend. It uses smoke and magic to work like <code>TaskCompletionSource&lt;T&gt;</code>, but without the extra
+allocation (unless it discovers that the magic isn’t working for your system). Usage:</p>
+
+<div><div><pre><code><span>var</span> <span>source</span> <span>=</span> <span>ValueTaskCompletionSource</span><span>&lt;</span><span>int</span><span>&gt;.</span><span>Create</span><span>();</span>
+<span>// ...</span>
+<span>source</span><span>.</span><span>TrySetResult</span><span>(</span><span>42</span><span>);</span> <span>// etc</span>
+</code></pre></div></div>
+
+<p>The main difference here is that you now have a <code>struct</code> instead of a <code>class</code>. If you want to test whether an instance is a <em>real</em> value
+(as opposed to the <code>default</code>), check <code>.HasTask</code>.</p>
+
+<hr>
+
+<h2 id="pooledvaluetasksource--pooledvaluetasksourcet"><code>PooledValueTaskSource</code> / <code>PooledValueTaskSource&lt;T&gt;</code></h2>
+
+<p>These again work like <code>TaskCompletionSource&lt;T&gt;</code>, but a: for <code>ValueType[&lt;T&gt;]</code>, and b: with the same zero-allocation features that
+<code>PooledValueTask</code> / <code>PooledValueTask&lt;T&gt;</code> exhibit. Once again, the “catch” is that you can only await their <code>.Task</code> <em>once</em>. Usage:</p>
+
+<div><div><pre><code><span>var</span> <span>source</span> <span>=</span> <span>PooledValueTaskSource</span><span>&lt;</span><span>int</span><span>&gt;.</span><span>Create</span><span>();</span>
+<span>// ...</span>
+<span>source</span><span>.</span><span>TrySetResult</span><span>(</span><span>42</span><span>);</span> <span>// etc</span>
+</code></pre></div></div>
+
+<hr>
+
+<h2 id="lazytaskcompletionsource--lazytaskcompletionsourcet"><code>LazyTaskCompletionSource / LazyTaskCompletionSource&lt;T&gt;</code></h2>
+
+<p>Sometimes, you have an API where you <em>aren’t sure</em> whether someone is subscribing to the <code>Task</code>/<code>Task&lt;T&gt;</code> results - for example
+you have properties like:</p>
+
+<div><div><pre><code><span>public</span> <span>Task</span> <span>SomeStepCompleted</span> <span>{</span> <span>get</span><span>;</span> <span>}</span>
+</code></pre></div></div>
+
+<p>It would be a shame to allocate a <code>Task</code> for this <em>just in case</em>, so <code>LazyTaskCompletionSource[&lt;T&gt;]</code> allows you to <em>rent</em> state
+that can manage <em>lazily</em> creating a task. If the <code>.Task</code> is read before the value is set, a <em>source</em> is used to provide a
+pending task; if the result gets set before the value is read, then some optimizations may be possible (<code>Task.CompletedTask</code>, etc).
+And if the <code>.Task</code> is never queried: no task or source is allocated. These types are disposable; disposing them releases any
+rented state for re-use.</p>
+
+<hr>
+
+<h2 id="pool"><code>Pool</code></h2>
+
+<p>Ever need a light-weight basic pool of objects? That’s this. Nothing fancy. The first API is a simple get/put:</p>
+
+<div><div><pre><code><span>var</span> <span>obj</span> <span>=</span> <span>Pool</span><span>.</span><span>TryRent</span><span>&lt;</span><span>SomeType</span><span>&gt;()</span> <span>??</span> <span>new</span> <span>SomeType</span><span>();</span>
+<span>// ...</span>
+<span>Pool</span><span>.</span><span>Return</span><span>(</span><span>obj</span><span>);</span>
+</code></pre></div></div>
+
+<p>Note that it leaves creation to you (hence the <code>?? new SomeType()</code>), and it is the caller’s responsibility to not retain and access
+a reference object that you have notionally returned to the pool.</p>
+
+<p>Considerations:</p>
+
+<ul>
+  <li>you may wish to use <code>try</code>/<code>finally</code> to put things back into the pool even if you leave through failure</li>
+  <li>if the object might <strong>unnecessarily</strong> keep large graphs of sub-objects “reachable” (in terms of GC), you should ensure that any references are wiped before putting an object into the pool</li>
+  <li>if the object implements <code>IResettable</code>, the pool will automatically call the <code>Reset()</code> method for you before storing items in the pool</li>
+</ul>
+
+<p>A second API is exposed for use with value-types; there are a lot of scenarios in which you have some state that you need to expose
+to an API that takes <code>object</code> - especially with callbacks like <code>WaitCallback</code>, <code>SendOrPostCallback</code>, <code>Action&lt;object&gt;</code>, etc. The data
+will only be unboxed once at the receiver - so: rather than use a <em>regular</em> box, we can <em>rent</em> a box. Also, if you have multiple items of
+state that you need to convey - consider a value-tuple.</p>
+
+<div><div><pre><code><span>int</span> <span>id</span> <span>=</span> <span>...</span>
+<span>string</span> <span>name</span> <span>=</span> <span>...</span>
+<span>var</span> <span>obj</span> <span>=</span> <span>Pool</span><span>.</span><span>Box</span><span>((</span><span>id</span><span>,</span> <span>name</span><span>));</span>
+<span>// ... probably pass obj to a callback-API</span>
+</code></pre></div></div>
+
+<p>then later:</p>
+
+<div><div><pre><code><span>(</span><span>var</span> <span>id</span><span>,</span> <span>var</span> <span>name</span><span>)</span> <span>=</span> <span>Pool</span><span>.</span><span>UnboxAndReturn</span><span>&lt;(</span><span>int</span><span>,</span> <span>string</span><span>)&gt;(</span><span>obj</span><span>);</span>
+<span>// use id/name as usual</span>
+</code></pre></div></div>
+
+<p>It is the caller’s responsibility to only access the state once.</p>
+
+<p>The pool is global (<code>static</code>) and pretty modest in size. You can control it <em>a bit</em> by adding <code>[PoolSize(...)]</code> to the custom
+classes and value-types that you use.</p>
+
+
+
+      
+    </section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

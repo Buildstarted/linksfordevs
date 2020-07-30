@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Using Span for high performance interop with unmanaged libraries - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Using Span for high performance interop with unmanaged libraries - linksfor.dev(s)"/>
+    <meta property="og:description" content="2019-07-02 15:00:00"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericsink.com/entries/utf8z.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Using Span for high performance interop with unmanaged libraries</title>
+<div class="readable">
+        <h1>Using Span for high performance interop with unmanaged libraries</h1>
+            <div>Reading time: 21-27 minutes</div>
+        <div>Posted here: 03 Jul 2019</div>
+        <p><a href="https://ericsink.com/entries/utf8z.html">https://ericsink.com/entries/utf8z.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<p>2019-07-02 15:00:00</p>
+
+<p>There's so much great performance-related stuff 
+happening in the .NET world right now.</p>
+
+<p>A major character in this story is <a href="https://docs.microsoft.com/en-us/dotnet/api/system.span-1?view=netcore-2.2">Span</a>, which gives us
+a way to reduce heap allocations and copying.  Before
+we had <code>Span</code>, a common operation like <code>Substring()</code> resulted in
+an allocation and a copy.</p>
+
+<p>In this blog post I want to talk about using <code>Span</code> in the specific case
+of interop with unmanaged libraries that deal in zero-terminated 
+strings (aka null-terminated strings).</p>
+
+<h2>Layer 0:  The unmanaged function</h2>
+
+<p>Let's talk about this in layers.  The bottom layer is the unmanaged
+function itself, written in C or something that pretends to be C.  
+The kind of functions I'm talking about are ones that have
+a return value or a parameter which is a zero-terminated string.  Such
+things are quite common.  Here are a few familiar examples:</p>
+
+<pre>int puts(const char* p);
+
+FILE *fopen(const char *path, const char *mode);
+
+int sqlite3_open(const char* path, sqlite3** ppdb);
+
+char *asctime(const struct tm *tm);
+</pre>
+
+<p>With a zero-terminated string, all we have is a pointer.
+To find the length, something is going to start at that pointer and
+walk through memory until it finds a zero byte.</p>
+
+<p>(I am aware of the various (security | correctness | etc) problems associated with
+zero-terminated strings.  Nonetheless, there are many
+libraries that use them.  For the
+purpose of this blog post, we assume the unmanaged function is something
+we can't change.  It is what it is, and we have to deal with it.)</p>
+
+<p>And before we go any further, let's mention the challenges
+the arising from the the differing encodings of
+the string.  In .NET, strings are encoded in UTF-16, where
+each character is 2 bytes, and perhaps more.  Any C library
+that expects a string terminated with a zero byte is not using UTF-16.
+If it's an old-school library, it might be expecting ASCII.
+The more modern alternative is UTF-8.</p>
+
+<p>In any case, to use a .NET string with a zero-terminated string,
+we will have to do a conversion.  That conversion is another
+form of a copy, and for performance reasons, we want to keep
+those to a minimum.</p>
+
+<h2>Layer 1:  The P/Invoke definition</h2>
+
+<p>The next layer up is the P/Invoke definition.  This is
+what allows us to access the C function from .NET.</p>
+
+<p>A typical P/Invoke looks something like this:</p>
+
+<pre>// int abs(int x);
+[DllImport("msvcrt")]
+public static extern int abs(int x);
+</pre>
+
+<p>This definition says, "in a dynamic library named 'msvcrt', look for
+a function named <code>abs</code>, with a return type of <code>int</code> and one parameter
+of type <code>int</code>.</p>
+
+<p>Of course, a pointer to a zero-terminated string is a bit more
+complicated than an <code>int</code>.  How should we describe that pointer in our
+P/Invoke definition?  We actually have some choices here, so let's
+discuss the tradeoffs.</p>
+
+<h3>Alternative 1a: string</h3>
+
+<p>One thing we could do is define the P/Invoke to accept a regular
+.NET <code>string</code>:</p>
+
+<pre>[DllImport("msvcrt")]
+public static extern int puts(string s);
+</pre>
+
+<p>This approach offers convenience.  And it accomplishes what we
+probably need to do at some layer anyway, which is start with a .NET 
+<code>string</code>, convert it to UTF-8, get a pointer for it, and pass it to 
+the C code.</p>
+
+<p>Well actually:  The default marshaling for a string is zero-terminated, 
+but with ANSI encoding.  To get UTF-8, we would have to do this:</p>
+
+<pre>[DllImport("msvcrt")]
+public static extern int puts([MarshalAs(UnmanagedType.LPUTF8Str)] string s);
+</pre>
+
+<p>Convenient or not, from the perspective of performance, I am not fond of this
+at all.  The problem is that the UTF-16 to UTF-8 conversion is
+done every time we call this function.</p>
+
+<p>What if this function is called from a loop with the same string
+every time?</p>
+
+<pre>foreach (var item in collection)
+{
+    puts("Item: ");
+    puts(item.ToString());
+    puts("\n");
+}
+</pre>
+
+<p>In this (admittedly-contrived) example, we are writing a collection of
+items to stdout, one per line.  And each line starts with a prefix
+and ends with a newline.  And those two <code>puts()</code> calls are sad, because
+the conversion of the same strings to UTF-8 is going to be done every
+time.  That's a piece of work we would rather do outside the loop,
+so it can be done just once.  And in order to do that, we need a
+P/Invoke definition that somehow accepts the already-converted UTF-8 data.</p>
+
+<h3>Alternative 1b: byte[]</h3>
+
+<p>So at the C# layer, a string converted to UTF-8 is just an array of bytes, right?
+Maybe the P/Invoke definition should look like this:</p>
+
+<pre>[DllImport("msvcrt")]
+public static extern int puts(byte[] s);
+</pre>
+
+<p>Compared to the previous idea, this is a big improvement, because
+we have the flexibility to do the encoding conversion separately.</p>
+
+<p>Which reminds me, we need a utility function for that conversion.
+Here's the one from SQLitePCLRaw:</p>
+
+<pre>using System.Text;
+
+public static byte[] to_utf8_with_z(this string s)
+{
+    if (s == null)
+    {
+        return null;
+    }
+
+    int len = Encoding.UTF8.GetByteCount(s);
+    var ba = new byte[len + 1];
+    var wrote = Encoding.UTF8.GetBytes(s, 0, s.Length, ba, 0);
+    ba[wrote] = 0;
+
+    return ba;
+}
+</pre>
+
+<p>BTW, my apologies for the snake case naming.  For various reasons,
+SQLitePCLRaw mostly follows the naming conventions of SQLite, which
+I admit isn't very friendly to .NET folks.</p>
+
+<p>Anyway, using <code>byte[]</code> as the parameter type in the P/Invoke definition 
+means we could write that loop like this:</p>
+
+<pre>var ba_front = "Item: ".to_utf8_with_z();
+var ba_back = "\n".to_utf8_with_z();
+foreach (var item in collection)
+{
+    puts(ba_front);
+    puts(item.ToString());
+    puts(ba_back);
+}
+</pre>
+
+<p>But we still have problems.  What if we have UTF-8 data
+that is not in a byte array?  What if our UTF-8 data is
+in a byte array, but it's not alone in there?  We can't
+do a slice without an allocation and a copy.</p>
+
+<p>Putting <code>byte[]</code> in the P/Invoke definition means that it
+carries an assumption about using the heap.  We don't want
+that assumption, because it may not always be true, and
+when it's not, we would have to do an allocation + copy
+to make it true.</p>
+
+<h3>Alternative 1c: IntPtr or byte*</h3>
+
+<p>Another option is to make our P/Invoke look like this:</p>
+
+<pre>[DllImport("msvcrt")]
+public static extern int puts(IntPtr s);
+</pre>
+
+<p>or like this:</p>
+
+<pre>[DllImport("msvcrt")]
+unsafe public static extern int puts(byte* s);
+</pre>
+
+<p>These two are essentially equivalent.
+I personally prefer to use <code>byte*</code>, because I think it's more
+clear.  Using <code>byte*</code> does require the <code>unsafe</code> keyword, but
+I see no reason to avoid that
+when calling unmanaged code, which is inherently "unsafe"
+anyway.</p>
+
+<p>But either way, this version of the P/Invoke definition is
+taking a pointer, just like the underlying C function.
+This gives us more flexibility than <code>byte[]</code>, because the P/Invoke no
+longer assumes the use of managed memory.</p>
+
+<p>However, the cost of that flexibility, 
+in the case where we <i>are</i> using managed memory,
+is that the caller now has more work to do.  If we're going to pass
+a pointer to managed memory down to unmanaged code, we need
+to "pin" it, to prevent the garbage collector from moving it
+around.  When the P/Invoke definition had the parameter type as <code>byte[]</code>, the marshaling
+code was doing the pin/unpin for us.  But with a pointer, we have
+to do it ourselves.</p>
+
+<p>So now our example loop (shown with <code>IntPtr</code>) has gotten worse:</p>
+
+<pre>var ba_front = "Item: ".to_utf8_with_z();
+GCHandle pinned_front = GCHandle.Alloc(ba_front, GCHandleType.Pinned);
+IntPtr ptr_front = pinned_front.AddrOfPinnedObject();
+
+var ba_back = "\n".to_utf8_with_z();
+GCHandle pinned_back = GCHandle.Alloc(ba_back, GCHandleType.Pinned);
+IntPtr ptr_back = pinned_back.AddrOfPinnedObject();
+
+foreach (var item in collection)
+{
+    puts(ptr_front);
+    puts(item.ToString());
+    puts(ptr_back);
+}
+
+pinned_front.Free();
+pinned_back.Free();
+</pre>
+
+<p>Nonetheless, using a pointer is my preferred form of this P/Invoke definition.  
+Just a simple equivalent to the C function, nothing more
+and nothing less.  I don't want marshaling to do anything for me.
+I want to fhift all the problems of pinning and allocation and
+encoding up to a higher layer.</p>
+
+<p>So I finish this section and move forward with the following implementation of Layer 1:</p>
+
+<pre>static class Layer1
+{
+    // int puts(const char* p);
+    [DllImport("msvcrt")]
+    unsafe public static extern int puts(byte* s);
+}
+</pre>
+
+<p>Let's talk about that next layer up.</p>
+
+<h2>Layer 2:  The one just above the P/Invoke</h2>
+
+<p>What is the goal for this layer?  Well that kinda
+depends on what I chose for the type of the
+parameter in the P/Invoke definition back in Layer 1.</p>
+
+<p>If I had left the P/Invoke definition doing the <code>string</code> marshaling,
+I probably wouldn't need another layer at all.</p>
+
+<p>If I had chosen the P/Invoke definition with parameter type of <code>byte[]</code>,
+maybe I would now want a layer that takes a <code>string</code> and
+does the conversion.</p>
+
+<p>But since I chose <code>byte*</code>, I forced myself into a situation
+where I need another layer just to get <code>unsafe</code>
+out of my public API.  The <code>unsafe</code> doesn't belong in
+a public C# API.  I may be crazy, but I'm not <i>that</i> crazy.</p>
+
+<p>So is Layer 2 where I go ahead and express that string 
+parameter in terms of an actual .NET <code>string</code>?  Or <code>byte[]</code>?</p>
+
+<p>Yeah maybe.  But I'd like to put that off as long as
+possible.  Instead, I'm asking myself, "What is the 
+thinnest useful layer of abstraction I can put here?"</p>
+
+<p>What about a <code>Span</code>?</p>
+
+<pre>static class Layer2
+{
+    public static int puts(ReadOnlySpan&lt;byte&gt; s)
+    {
+        unsafe
+        {
+            fixed (var p = s)
+            {
+                return Layer1.puts(p);
+            }
+        }
+    }
+}
+</pre>
+
+<p>The nice thing about a <code>Span</code> is that it brings the advantages we saw with <code>byte[]</code> except without those
+pesky assumptions about whether the memory is managed or not.  <code>Span</code> can represent
+unmanaged memory, or part of a managed array, or memory on the stack.</p>
+
+<p>That said, for the case where a <code>Span</code> represents managed memory,
+we still have to pin it.  The <code>fixed</code> block shown above is what
+does that.  <code>Span</code> supports <a href="https://github.com/dotnet/csharplang/blob/master/proposals/csharp-7.3/pattern-based-fixed.md">the fixed pattern</a>, aka GetPinnableReference().</p>
+
+<p><code>Span</code> is looking like the best option so far, but it still
+has some problems.</p>
+
+<h2>Problems with Span</h2>
+
+<p>For our case where the underlying C function needs a string with a zero terminator, <code>Span</code> is not a perfect solution, and
+all of its problems are related to the <code>Length</code> property.</p>
+
+<p>A <code>Span</code> is an encapsulation of a pointer and a length.</p>
+
+<p>But Layer 0 and Layer 1 only care about the pointer.  Anything else (<code>string</code>, <code>byte[]</code>, <code>Span</code>) is for the benefit 
+of the layers above, and makes no difference to the underlying C function.</p>
+
+<p>So the fact that the <code>Length</code> is part of Layer 2's public API but 
+will be unused should be a clue that
+we are headed for trouble.</p>
+
+<p>And here is the troubling question:  In <code>Layer2.puts()</code> as shown above, for the <code>ReadOnlySpan&lt;byte&gt;</code> parameter,
+is the zero terminator included in the <code>Length</code>?</p>
+
+<p>Suppose the string is <code>"hello"</code>.  Because this is a string with all ASCII characters, 
+it's the same as UTF-8, so that's 5 bytes of actual string data 
+plus one byte for the zero terminator. 
+We could pass a <code>Span</code> of length 5 or 6.</p>
+
+<p>Again, the layers below won't care.  Either 5 or 6
+will still work.  Heck, we could use a completely wrong length like 1,
+and Layer 0 will still end up getting the same pointer.</p>
+
+<p>And if the <code>Length</code> doesn't matter, why is it there?</p>
+
+<p>Let's look more closely at the possibilities.
+What exactly does that <code>ReadOnlySpan&lt;byte&gt;</code> parameter mean?
+I see 3 alternatives.</p>
+
+<h3>Alternative 2a: zero terminator unknown</h3>
+
+<p>In this alternative, the <code>Span.Length</code> contains just the string data, 
+and there may or may not be zero terminator after it.</p>
+
+<p>I mention this one because it is the way other .NET <code>Span</code>-based 
+APIs work.  When you see a <code>ReadOnlySpan&lt;byte&gt;</code> as a parameter
+of a method and that parameter refers to a string data, it
+is customary to assume that there is no zero terminator
+inside the <code>Span</code>, and that there may not be one immediately
+after the <code>Span</code>.  Simply put, in the world of .NET, zero-terminated
+strings are just not really a thing.</p>
+
+<p>And yet, even though this interpretation is the common .NET practice,
+in our case, this might be the worst possible option.</p>
+
+<p>The contract of our C function in Layer 0 requires the zero terminator.  
+So the C# layer has to make sure there is one.
+And if it is not going to pass that expectation up to its
+caller, then it will need to allocate a new buffer with one extra byte, copy the data, and set the zero terminator at the end.</p>
+
+<p>Which would defeat the whole point of using <code>Span</code>.</p>
+
+<h3>Alternative 2b: zero terminator unfficial</h3>
+
+<p>In this alternative, the <code>Span.Length</code> contains just the string data, but 
+(wink wink) we all know there is actually a zero byte just beyond the end of the 
+<code>Span</code>.</p>
+
+<p>In my opinion, this is dreadful.  
+When I see a <code>Span</code>, I assume the code using it will not go
+beyond the end.</p>
+
+<p>The contract of our function requires the ending zero.
+What if I want to insert a check on the C# side to make sure
+it's there?  Such as:</p>
+
+<pre>static class Layer2
+{
+    public static int puts(ReadOnlySpan&lt;byte&gt; s)
+    {
+        // Look at the byte immediately after the Span to
+        // make sure the zero terminator is there.
+        if (s[s.Length] != 0) // BZZZT! WRONG!
+        {
+            throw new Exception("Zero terminator required");
+        }
+
+        unsafe
+        {
+            fixed (var p = s)
+            {
+                return Layer1.puts(p);
+            }
+        }
+    }
+}
+</pre>
+
+<p>But I can't, because C# (rightfully) won't let me go beyond the
+end of the <code>Span</code>.</p>
+
+<p>Worse, eventually somebody is going to pass a <code>Span</code> that
+doesn't have the unofficial zero byte after it, because that's
+what would be the common practice for <code>Span&lt;byte&gt;</code>, and the compiler
+has no way to prevent them from doing it.  And then we will
+end up with a memory corruption.</p>
+
+<h3>Alternative 2c: zero terminator included</h3>
+
+<p>In this alternative, the <code>Span.Length</code> includes the zero terminator.</p>
+
+<p>In some ways, this seems less bad than the other two.
+We won't need an extra allocation + copy, since we know the zero terminator
+is already there.  And now we're being honest about that zero byte's
+presence by including it in the <code>Length</code>.</p>
+
+<p>And if we ignore enough context, doing it this way kinda makes sense.  
+The zero byte is a documented and required part of the block of bytes the 
+function expects. 
+The length of the zero-terminated block of memory that 
+represents <code>"hello"</code> is 6.</p>
+
+<p>But including the zero byte in the length seems wrong because, well,
+it just is.  Everywhere I go, whenever zero-terminated strings are used, the
+zero byte is never considered part of the length.
+The zero byte is not part of the string data -- it's just a memory marker. 
+If we called <code>strlen()</code> on the pointer, it would return a length which did not include the zero. 
+If we passed this pointer to <code>System.Text.Encoding.UTF8.GetString()</code>,
+the length we provide should not include the zero byte. 
+The length of the string <code>"hello"</code> is 5.</p>
+
+<p>Another way of illustrating this impedance mismatch is to
+think about slicing.  Spans support <code>Slice()</code>, but
+slicing doesn't work on a zero-terminated string.
+Or rather, if you slice a zero-terminated string, you 
+may end up with another string that is zero-terminated,
+or you may end up with one that is not, depending on
+whether your slice includes the end of the range or not.
+So slicing is not a particularly useful operation for a
+zero-terminated string, because it cannot reliably return
+the same type.</p>
+
+<h2>More trouble in the other direction</h2>
+
+<p>So far, we've mostly been talking about calling a C function with a
+zero-terminated string as a parameter.  But what about zero-terminated strings being 
+returned from a C function up to .NET?</p>
+
+<p>Again, we just get a pointer.  We need to look for a zero byte to 
+find the length.  One or two layers up, should we use a <code>Span</code> here too?</p>
+
+<p>And if so, when we construct a <code>ReadOnlySpan&lt;byte&gt;</code> for that piece of memory, again, do we include the zero byte in the <code>Length</code> or not?</p>
+
+<p>In this case, a big difference is that .NET stuff doesn't need or want
+that zero terminator.
+Initially, the zero byte is important, because that's how the unmanaged code is providing
+us a way to get the length.   But once we know the length, the zero byte is not likely to be important to the .NET layer,
+which will typically not use it.</p>
+
+<p>In fact, if we did include the zero terminator in these cases,
+then almost every piece of code using that <code>Span</code> would need to subtract one from the Length.
+And should it check to make sure the last byte actually is a 
+zero before doing so?</p>
+
+<p>So maybe for these strings flowing in the other directon we should just not do zero terminators?  But what if we need to receive a value from unmanaged code and pass it back down to a C function that requires
+a zero terminator?  So then are we back to needing an allocation + copy?</p>
+
+<h2>Maybe Span is the wrong answer for this case?</h2>
+
+<p>So right now the situation seems bleak.  I appear to be convincing
+myself that <code>Span</code> should not be used with zero-terminated strings.
+I envision myself staying bitter and spiteful for the rest
+of my career as I watch all the other .NET kids get to use <code>Span</code> but
+those of us working with unmanaged libraries cannot.
+I want to use <code>Span</code>.  I really do.
+But it seems like all the possible approaches are bad.  
+</p>
+
+<p>Probably the least bad option was Alternative 2c, which was "<code>ReadOnlySpan&lt;byte&gt;</code> where the <code>Length</code> includes the zero terminator".
+But that approach is just so inconsistent with common practices that it
+will cause confusion (and therefore, bugs).
+I find myself wishing I could somehow use this approach
+without anybody finding out about it.</p>
+
+<p>As it turns out, that's the solution I have settled on:
+A <code>Span</code> that is hidden away where nobody can see it.</p>
+
+<h2>Like a <code>Span</code>, but not</h2>
+
+<p>In <a href="https://github.com/ericsink/SQLitePCL.raw">SQLitePCLRaw</a> I have to deal with this issue a lot,
+as quite a few SQLite functions follow the pattern of
+accepting or returning a zero-terminated string.</p>
+
+<p>During the development of my 2.0 release, as I started <code>Span</code>-ifying the <code>ISQLite3Provider</code> interface, 
+I kept <a href="https://github.com/ericsink/SQLitePCL.raw/issues/273">bumping into</a> the kind of problems described here in this blog post.</p>
+
+<p>But (with help and feedback from others) the solution I ended up 
+with seems quite elegant.  It's a new type I call <code>utf8z</code>.</p>
+
+<pre>public readonly ref struct utf8z
+{
+    // this Span will contain a zero terminator byte
+    // if sp.Length is 0, it represents a null string
+    // if sp.Length is 1, the only byte must be zero, and it is an empty string
+    readonly ReadOnlySpan&lt;byte&gt; sp;
+</pre>
+
+<p>Simply, I have encapsulated a <code>ReadOnlySpan&lt;byte&gt;</code>
+inside another type.</p>
+
+<p>At first I wasn't sure if this would be possible.  
+A <code>Span</code> is a C# 7.2 <code>ref struct</code>, a value type which can only
+be used in certain ways.  A <code>ref struct</code> can only be
+on the stack, which basically means it can only be a parameter or a local.  It can't be on the heap, which means
+it also can't be a parameter or a local that might end up on the heap.  
+For example, an <code>async</code> method
+cannot have a <code>Span</code> parameter, because an <code>async</code> method actually
+gets compiled into a state machine which is implemented using the heap.</p>
+
+<p>But C# will happily let you put a <code>ref struct</code> inside another <code>ref struct</code>.</p>
+
+<p>So in my case, I can use my shameful and confusing "<code>Span</code> with a zero terminator inside"
+and keep it hidden away from the world by making it <code>private</code>.  Then I add stuff
+to the <code>utf8z</code> public API to expose only the things that are valid and needed.</p>
+
+<p>The first thing I need is a constructor:</p>
+
+<pre>    utf8z(ReadOnlySpan&lt;byte&gt; a)
+    {
+        sp = a;
+    }
+</pre>
+
+<p>I kept this simple.  Just take a <code>Span</code> as
+a parameter and store it away in the member field.  No
+error checking.
+And for that reason, this constructor is private.  It is
+trusting its caller to make sure
+that the last byte of the <code>Span</code> is a zero terminator, so we don't want
+just any rando calling it.</p>
+
+<p>The <code>utf8z</code> public API will expose only things that are not capable
+of violating the rules.  For example, there is a static method to
+get a <code>utf8z</code> from a .NET string:</p>
+
+<pre>    public static utf8z FromString(string s)
+    {
+        if (s == null)
+        {
+            return new utf8z(ReadOnlySpan&lt;byte&gt;.Empty);
+        }
+        else
+        {
+            return new utf8z(s.to_utf8_with_z());
+        }
+    }
+</pre>
+
+<p>If we need a public method to get a <code>utf8z</code> from a
+<code>Span</code>, that method should include a check
+for the zero terminator:</p>
+
+<pre>    public static utf8z FromSpan(ReadOnlySpan&lt;byte&gt; a)
+    {
+        if (
+            (a.Length &gt; 0)
+            &amp;&amp; (a[a.Length - 1] != 0)
+            )
+        {
+            throw new ArgumentException("zero terminator required");
+        }
+        return new utf8z(a);
+    }
+</pre>
+
+<p>We also need a way to convert a <code>utf8z</code> into a pointer
+which can be passed to P/Invoke.  In other words, we need
+<code>utf8z</code> to implement "the fixed pattern".  Fortunately, we can
+just pass this responsibility on to the encapsulated <code>Span</code>:</p>
+
+<pre>    public ref readonly byte GetPinnableReference()
+    {
+        return ref sp.GetPinnableReference();
+    }
+</pre>
+
+<p>Finally, we need a convenient way to
+convert a <code>utf8z</code> to a .NET <code>string</code>:</p>
+
+<pre>    public string utf8_to_string()
+    {
+        if (sp.Length == 0)
+        {
+            return null;
+        }
+
+        unsafe
+        {
+            fixed (byte* q = sp)
+            {
+                return Encoding.UTF8.GetString(q, sp.Length - 1);
+            }
+        }
+    }
+</pre>
+
+<p>Note that I did not use an override of <code>ToString()</code> for this, 
+as Microsoft <a href="https://docs.microsoft.com/en-us/dotnet/api/system.object.tostring?view=netcore-2.2#notes-to-inheritors">guidelines</a> say that <code>ToString()</code> should never return
+null.  And I want <code>utf8z</code> to have a clearly-defined ability to 
+represent a null.  <code>Span</code> is a value type, so it is not nullable.
+The implementation of <code>Span.GetPinnableReference()</code> returns null for an empty <code>Span</code>, but
+that's not precise enough for interacting with unmanaged code,
+where an empty string is different from a null.
+(Once again, in the world of C, sometimes pointers
+are NULL.  It is what it is, and sometimes we just have to deal with it.)
+</p>
+
+<p>And that's it.  My implementation of Layer 2 looks like this:</p>
+
+<pre>static class Layer2
+{
+    public static int puts(utf8z s)
+    {
+        unsafe
+        {
+            fixed (var p = s)
+            {
+                return Layer1.puts(p);
+            }
+        }
+    }
+}
+</pre>
+
+<h2>Use of utf8z in SQLitePCLRaw 2.0</h2>
+
+<p>In the <code>ISQLite3Provider</code> interface, I now use 
+an actual <code>Span</code> only in cases where the usage is consistent with
+the associated expecations for same.</p>
+
+<p>And everywhere a zero-terminated string appears as a parameter or a
+return value, <code>utf8z</code> is used.</p>
+
+<p>In other words, a zero-terminated UTF-8 string is a different type
+than a length-specified UTF-8 string.  So the error using the wrong one can be caught at compile time, which I think is a huge win.</p>
+
+<p>It isn't always feasible to get this kind of type safety for code down at this level,
+because adding a memory allocation would kill performance.  But in this case,
+<code>ref struct</code> FTW.</p>
+
+<h2>On the horizon</h2>
+
+<p>We should allow ourselves to think of a future where .NET programming
+is done with UTF-8 instead of UTF-16.  Discussion and progress toward a
+new <code>Utf8String</code> type appears to be underway:</p>
+
+<p><a href="https://github.com/dotnet/corefxlab/issues/2368"></a>https://github.com/dotnet/corefxlab/issues/2368</p>
+
+<p>I am glad that the link above includes the words "like ensuring a null terminator (important for p/invoke scenarios)".
+Even if we all agree to dislike zero-terminated strings, our need to deal with them is not
+going away anytime soon.</p>
+
+
+
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

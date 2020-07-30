@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Executing .NET Core functions in a separate process - Red Hat Developer - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Executing .NET Core functions in a separate process - Red Hat Developer - linksfor.dev(s)"/>
+    <meta property="article:author" content="By Tom Deseyn July 17, 2019September 3, 2019"/>
+    <meta property="og:description" content="We show how to execute .NET Core code easily in a separate process using Tmds.ExecFunction and explain why doing so is useful."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://developers.redhat.com/blog/2019/07/17/executing-net-core-functions-in-a-separate-process/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Executing .NET Core functions in a separate process - Red Hat Developer</title>
+<div class="readable">
+        <h1>Executing .NET Core functions in a separate process - Red Hat Developer</h1>
+            <div>by By Tom Deseyn July 17, 2019September 3, 2019</div>
+            <div>Reading time: 5-6 minutes</div>
+        <div>Posted here: 18 Jul 2019</div>
+        <p><a href="https://developers.redhat.com/blog/2019/07/17/executing-net-core-functions-in-a-separate-process/">https://developers.redhat.com/blog/2019/07/17/executing-net-core-functions-in-a-separate-process/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="primary">
+		<main id="main" role="main">
+
+		
+			
+<article id="post-609757">
+    <div>
+		        <!-- .entry-meta -->
+        
+        <p><img width="1916" height="1040" src="https://developers.redhat.com/blog/wp-content/uploads/2019/07/forking-road-pixabay.jpg" alt="Executing .NET Core functions in a separate process" srcset="https://developers.redhat.com/blog/wp-content/uploads/2019/07/forking-road-pixabay.jpg 1916w, https://developers.redhat.com/blog/wp-content/uploads/2019/07/forking-road-pixabay-300x163.jpg 300w, https://developers.redhat.com/blog/wp-content/uploads/2019/07/forking-road-pixabay-768x417.jpg 768w, https://developers.redhat.com/blog/wp-content/uploads/2019/07/forking-road-pixabay-1024x556.jpg 1024w" sizes="(max-width: 1916px) 100vw, 1916px"></p><p>In this article, we’ll take a look at <code><a href="https://github.com/tmds/Tmds.ExecFunction" target="_blank" rel="noopener noreferrer">Tmds.ExecFunction</a></code>, which is a library that allows developers to easily execute a .NET Core function in a separate process.</p>
+<h2>Use cases</h2>
+<p>Before we get to the code, let’s cover a few scenarios where it makes sense to execute a function as a separate process. Processes have some global state, like environment variables and the working directory. Most of the time, this global state doesn’t cause issues: When it is meaningful, libraries provide an API that allows the user to override the values. For testing, though, it’s a different story. To verify the application is properly using the global state as a default, we need to modify it. This factor is an issue because the state is shared with the test host process and the other tests running in that process. We can solve this issue by running code in a separate process that we can fully control.</p>
+<p>The second class of use cases occurs when we want code to run with a different lifetime from the parent process. For example, suppose we want to start a process and ensure it doesn’t outlive the .NET parent (even on crashes). We could do this by putting a small process in between that monitors the parent, and kills the child when the parent has terminated. Another example is to implement <a href="http://thelinuxjedi.blogspot.com/2014/02/why-use-double-fork-to-daemonize.html" target="_blank" rel="noopener noreferrer">double forking</a>, which is used in script-based <code>init</code> managers to make sure the daemon outlives the shell that launched it. Most distributions (like <a href="https://getfedora.org/" target="_blank" rel="noopener noreferrer">Fedora</a> and <a href="https://www.redhat.com/en/technologies/linux-platforms/enterprise-linux" target="_blank" rel="noopener noreferrer">Red Hat Enterprise Linux</a>) are now using <code>systemd</code> as their <code>init</code> manager, which doesn’t need daemons to double fork.</p>
+<h2><code>Tmds.ExecFunction</code></h2>
+<p><code>Tmds.ExecFunction</code> is a library inspired by .NET Core’s <code><a href="https://github.com/dotnet/arcade/tree/6a34948f7bdbc3ceb2fb16441b49f7748a462646/src/Microsoft.DotNet.RemoteExecutor/src/Microsoft.DotNet.RemoteExecutor" target="_blank" rel="noopener noreferrer">RemoteExecutor</a></code>, which is used in <a href="https://github.com/dotnet/corefx/" target="_blank" rel="noopener noreferrer">.NET Core’s class library</a> for writing tests that need a separate process. This library is available on <a href="https://www.nuget.org/" target="_blank" rel="noopener noreferrer">NuGet.org</a>, so we can add it to our project using:</p>
+<pre>dotnet add package Tmds.ExecFunction</pre>
+<p>Now, let’s use it:</p>
+<pre>ExecFunction.Run(() =&gt; Console.WriteLine("Hello world!"));</pre>
+<p>We are using <code>ExecFunction.Run</code> and passing it a lambda that prints <code>Hello world!</code> That lambda is executed in a separate process. The <code>Run</code> method then returns when the child has terminated. <code>ExecFunction</code> also provides a <code>Start</code> method that returns a <code>System.Diagnostics.Process</code> and then returns immediately when the process starts. A <code>RunAsync</code> method is also provided, which returns a <code>Task</code> that completes when the process terminates.</p>
+<p>The function we pass can have a .NET <code>Main</code> signature: a <code>void</code>/<code>string[]</code> argument and a <code>void</code>/<code>int</code>/<code>Task</code>/<code>Task</code> return type.</p>
+<p>For example, we can pass some arguments:</p>
+<pre>ExecFunction.Run(
+    (string[] args) =&gt; Console.WriteLine($"Hello {args[0]}"),
+    new string[] { "world!" });
+</pre>
+<p>We can also control the environment variables, working directory, etc. by passing a configuration function:</p>
+<pre>ExecFunction.Run(
+    () =&gt; Console.WriteLine($"HOME={Environment.GetEnvironmentVariable("HOME")}"),
+    o =&gt; o.StartInfo.Environment["HOME"] = "/tmp");
+</pre>
+<p>The <code>FunctionExecutor</code> class makes it easy to reuse the same configuration for multiple invocations, as well. For example, we can use it as follows in <a href="https://xunit.net/" target="_blank" rel="noopener noreferrer">xUnit</a> tests:</p>
+<pre>private FunctionExecutor Executor = new FunctionExecutor(
+    o =&gt;
+    {
+            o.StartInfo.RedirectStandardError = true;
+            o.OnExit = p =&gt;
+            {
+                    if (p.ExitCode != 0)
+                    {
+                string message = $"Function execution failed with exit code: {p.ExitCode}" + Environment.NewLine +
+                                p.StandardError.ReadToEnd();
+                throw new Xunit.Sdk.XunitException(message);
+                    }
+            };
+    });
+
+[Fact]
+public void Test()
+{
+    Executor.Run(
+        () =&gt;
+        {
+                Assert.Equal("/tmp", Environment.GetEnvironmentVariable("HOME"));
+        },
+        o =&gt; o.StartInfo.Environment["HOME"] = "/tmp"
+    );
+}
+</pre>
+<p>So far, we’ve been assuming you use the <code>dotnet</code> executable to host your application; for example, by starting xUnit tests using <code>dotnet test</code>. To make <code>ExecuteFunction</code> work from an application host (that is, you built your application into a native binary), we need to add a hook in the <code>Main</code> function:</p>
+<pre>static int Main(string[] args)
+{
+    if (ExecFunction.IsExecFunctionCommand(args))
+    {
+            return ExecFunction.Program.Main(args);
+    }
+    else
+    {
+            ExecFunction.Run(() =&gt; System.Console.WriteLine("Hello world!"));
+            return 0;
+    }
+}
+</pre>
+<h2>Conclusion</h2>
+<p>In this article, we’ve shown how to execute .NET Core code easily in a separate process using <code><a href="https://github.com/tmds/Tmds.ExecFunction" target="_blank" rel="noopener noreferrer">Tmds.ExecFunction</a></code>, and when doing so can be useful. Now, explore what you can make this library do.</p>
+
+			</div><!-- .entry-content -->
+
+
+
+
+	<!-- .entry-footer -->
+</article><!-- #post-## -->
+			
+
+
+
+		
+		</main><!-- #main -->
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+How to get the best out of your Yubikey with GPG - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="How to get the best out of your Yubikey with GPG - linksfor.dev(s)"/>
+    <meta property="og:description" content="I&#x2019;ve been using a set of Yubikeys for some time now, not just for 2FA but for SSH authentication, remote code signing and password storage too."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://callanbryant.co.uk/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - How to get the best out of your Yubikey with GPG</title>
+<div class="readable">
+        <h1>How to get the best out of your Yubikey with GPG</h1>
+            <div>Reading time: 16-21 minutes</div>
+        <div>Posted here: 27 Jun 2020</div>
+        <p><a href="https://callanbryant.co.uk/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/">https://callanbryant.co.uk/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>May 19, 2020 - 14 min read</p><p>I’ve been using a set of Yubikeys for some time now, not just for 2FA but for
+SSH authentication, remote code signing and password storage too. It’s worked
+so well (and required such significant effort to get working) that I thought
+I’d write about how I did it and what makes my approach secure.</p><p>GPG, or GnuPG – now in version 2.x implements the
+<a href="https://www.openpgp.org/">OpenPGP</a> email encryption standard and allows the
+use of hardware smartcards such as the Yubikey 5.</p><p>This guide is applicable to most Linux distribution and MacOS. I’m currently
+using Ubuntu 20.04 and MacOS Mojave.</p><figure><a href="https://callanbryant.co.uk/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/yubikeys.cover.jpg" target="_blank"><img src="https://d33wubrfki0l68.cloudfront.net/a4ad2f29d1bfd599a830b16adbee23631849949b/dafd0/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/yubikeys.cover_hub5723e7ad27fc7d1f4d7b4f5981ba5ba_3453956_1280x720_fit_q75_lanczos.jpg" width="960" height="720" alt="My 3 yubikeys"></a><figcaption>My 3 yubikeys</figcaption></figure><p>A reference implementation of a system that supports this all automatically can
+be found in <a href="https://github.com/naggie/dotfiles/">my dotfiles</a>.</p><h2 id="initialisation">Initialisation</h2><p>To start, you’ll need to install <code>ykman</code> and <code>gnupg</code> together with the right
+interface software; <code>pcscd</code> and <code>scdaemon</code> on Ubuntu.</p><p>In order to use your Yubikey for everything in this article, it has to contain
+the only copy of your GPG private keys; GPG must have the public parts and be
+configured to use the Yubikey as an OpenPGP smartcard.</p><p>With OpenPGP/gnupg there are many different possible key topologies and crypto
+settings. What you want will depend on what you need the configuration for.</p><h3 id="openpgp-setup">OpenPGP setup</h3><p>I recommend you follow this setup process in livecd session in order to
+mitigate the risk of the private keys being intercepted by a bad actor before
+they are copied to the yubikey.<sup id="fnref:1"><a href="#fn:1" role="doc-noteref">1</a></sup></p><p>GnuPG2 classifies keys by their capability; you’ll notice (some of) the
+characters <code>[CSEA]</code> alongside listed secret keys with GnuPG2. Whilst
+fundamentally the private keys are just a number of bits, GnuPG2 can earmark
+each key with one or more capabilities upon generation such that it can only
+ever be used for the allocated purpose thereafter. The key capabilities are:
+<code>[C]ertificaiton</code>, <code>[S]igning</code>, <code>[E]ncryption</code> and <code>[A]uthentication</code>.</p><p>As I understand, it is simply good cryptographic practice to have
+single-purpose keys; you should not, for instance, use the same key to
+authenticate as you should to encrypt. The reasoning behind this is presumably
+to mitigate some kind of theoretical attack.</p><p>GnuPG2 historically has in interface designed for (unusual) humans, not
+machines; until recently it was difficult to script. Since version 2.2, there
+is an interface to generate and set up keys in non-interactive mode. As such I
+created a script called
+<a href="https://github.com/naggie/dotfiles/blob/master/scripts/gpg-keygen">gpg-keygen</a>
+to generate the following topology for you:</p><ol><li>One master key (<code>CS</code>) (4096 bit RSA)</li><li><code>S</code> subkey (4096 bit RSA)</li><li><code>E</code> subkey (4096 bit RSA)</li><li><code>A</code> subkey (4096 bit RSA)</li></ol><p>To use it, run the script in an empty directory. The master key has a longer
+validity and can be used to revoke compromised keys<sup id="fnref:2"><a href="#fn:2" role="doc-noteref">2</a></sup> as well as create new,
+certified subkeys. Store it encrypted (with all the other generated files) on a
+flash drive in a physical safe a with a backup copy in another safe; it’s
+sensitive.</p><figure><a href="https://callanbryant.co.uk/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/gpg-keygen.png" target="_blank"><img src="https://d33wubrfki0l68.cloudfront.net/819b906979383fc3c3ee29679423c767842ac7e5/e44de/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/gpg-keygen.png" width="558" height="485" alt="Output of gpg-keygen"></a><figcaption>Output of gpg-keygen</figcaption></figure><p>The remaining 3 keys are for signing, encryption and authentication
+respectively. They are as big as a Yubikey 5 will allow, and are of the RSA
+type as the Yubikey 5 does not support eliptic curves.<sup id="fnref:3"><a href="#fn:3" role="doc-noteref">3</a></sup></p><figure><a href="https://callanbryant.co.uk/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/files-output.png" target="_blank"><img src="https://d33wubrfki0l68.cloudfront.net/fae8136c2207c1f960cf69639969c6dbf0091f96/2d9e8/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/files-output.png" width="345" height="270" alt="Files generated by gpg-keygen"></a><figcaption>Files generated by gpg-keygen</figcaption></figure><p>Next, you’ll need to copy the contents of <code>gnupghome</code> to <code>~/.gnupg</code> – on the
+live session. GnuPG2 should then be able to load and use the keys, though
+before use the private subkeys need to be moved to the Yubikey.</p><p>Now is a good time to change the default OpenPGP user and admin pin from
+<code>123456</code> and <code>123435678</code> respectively. Steps:</p><ol><li>Run <code>gpg2 --card-edit &lt;email&gt;</code></li><li>Enter <code>admin</code></li><li>Enter <code>passwd</code> – change PIN and admin PIN as prompted</li></ol><p>To move the keys, use <code>gpg --edit-key &lt;email&gt;</code> and enter the following
+commands:</p><ol><li><code>toggle</code></li><li>For each key (<code>S</code>,<code>E</code>,<code>A</code>) select one by toggling the asterisk one at a
+time with the <strong>key</strong> command (1,2,3 respectively)</li><li>When a key is selected, run <code>keytocard</code> to copy the key to the
+correct slot on the yuibkey (there are 3, one each for S,E,A)</li><li><code>save</code> then exit. If you don’t save, the private keys will persist
+locally which defeats the purpose of using the yubikey.</li></ol><p>The private keys are now on your yubikey, and no longer exist in <code>~/.gnupg</code>.
+The next step is to harvest the public parts of the key to initialise your
+target machine.</p><p>In order to use your new identity on the target machine, you’ll need to import
+the public keys and give the master key “ultimate trust.” This might sound odd,
+but this means GPG will implicitly trust any sub-key certified by your master
+key so you can use them.</p><p>I prefer a clean-room approach in this case to ensure that not private keys are
+copied to the target machine; in addition it makes it clear what steps are
+necessary to set up new machines, too. Bear in mind that if you use the
+web-of-trust and intend to keep other peoples public keys in GnuPG, you’ll need
+to transfer them separately.</p><p>To make GPG trust your master key ultimately, you’ll need to use the
+<code>trusted-key</code> setting in <code>~/.gnupg/gpg.conf</code>. On the live session, you’ll
+notice a file called <code>gpg-keyid.txt</code> which contains your master key ID<sup id="fnref:3"><a href="#fn:3" role="doc-noteref">3</a></sup>. You can
+append it to your GPG config file with this scriptable example from my
+dotfiles,
+<a href="https://github.com/naggie/dotfiles/blob/master/user-configuration-naggie.sh#L39">user-configuration-naggie.sh</a>:</p><pre><code>cat &lt;&lt;EOF &gt;&gt; ~/.gnupg/gpg.conf
+trusted-key 9D37503A7DA6F9B6
+EOF
+</code></pre><p>Of course you should substitute my key ID for yours.</p><p>Next, you’ll need to import the public portions of your newly generated keys.
+These can be found in <code>gpg-pubkeys.asc</code> on the live session in ASCII-guarded
+format. It was exported by my <code>gpg-keygen</code> script using <code>gpg2 --export --armor &gt; gpg-pubkeys.asc</code>.
+The keys can be piped into <code>gpg2 --quiet --import</code> – see
+<a href="https://github.com/naggie/dotfiles/blob/master/user-configuration-naggie.sh#L43">https://github.com/naggie/dotfiles/blob/master/user-configuration-naggie.sh#L43</a> for reference.</p><p>Finally, tt’s important to install a <a href="https://github.com/naggie/dotfiles/blob/master/home/.gnupg/gpg.conf">hardened
+gpg.conf</a>
+to <code>~/.gnupg/gpg.conf</code>. GnuPG2, by default, will use some relatively weak
+ciphers presumably for the sake of compatibility.</p><figure><a href="https://callanbryant.co.uk/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/gpg-list-secret-keys.png" target="_blank"><img src="https://d33wubrfki0l68.cloudfront.net/5d406a02f9836d699e9ba5714912a814aca7e445/1dba8/blog/how-to-get-the-best-out-of-your-yubikey-with-gpg/gpg-list-secret-keys.png" width="522" height="316" alt="The resulting key topology loaded into GnuPG2. Note the > which indicates the private key is on the yubikey. The keys also have ultimate trust."></a><figcaption>The resulting key topology loaded into GnuPG2. Note the &gt; which indicates the private key is on the yubikey. The keys also have ultimate trust.</figcaption></figure><h3 id="general-yubikey-settings">General Yubikey settings</h3><p>I recommend disabling OTP mode (unless you like injecting random OTP
+passwords into chat or the terminal all the time). <code>ykpersonalise</code> can do
+this, but can become locked out as it relies on OTP mode. To disable OTP
+mode: <code>ykman mode FIDO+CCID</code>.</p><p>It’s important to enable touch-to-everything; this is a fundamental concept –
+malicious programs are incapable of physically pressing a button.</p><ol><li><code>ykman openpgp touch enc on</code> – decrypting passwords will now require a touch</li><li><code>ykman openpgp touch aut on</code> – after this you’ll have to touch the yubikey to use SSH</li><li><code>ykman openpgp touch sig on</code> – signing commits will now require a touch</li></ol><h2 id="ssh-authentication">SSH authentication</h2><p>There are now actually three ways of using your Yubikey to authenticate to an
+OpenSSH server:</p><ol><li>Using it as an OpenPGP Smartcard with gnupg2 as an
+<a href="https://en.wikipedia.org/wiki/Ssh-agent">SSH-agent</a> (covered here)</li><li><a href="https://developers.yubico.com/PIV/Guides/SSH_with_PIV_and_PKCS11.html">Using it in PIV
+mode</a><sup id="fnref:4"><a href="#fn:4" role="doc-noteref">4</a></sup></li><li>Using it as a U2F device with <a href="https://www.openssh.com/txt/release-8.2">OpenSSH 8.2+</a></li></ol><p>In terms of convenience, if you control the server U2F mode might be the best;
+certainly the least expensive as U2F devices are prolific. Using the PIV mode
+is a good option of you don’t want to mess with GPG.<sup id="fnref:5"><a href="#fn:5" role="doc-noteref">5</a></sup></p><p>In order to use option (1), after setting up GnuPG as per the previous section you’ll have to:</p><ol><li>Export your <code>authentication</code> public key in SSH format. You can do this with
+<code>gpg2 --export-ssh-key &lt;email&gt;</code> and copy it to <code>~/.ssh/authorized_keys</code> on
+your remote machines as normal.</li><li>Configure your environment to use GnuPG2 as an SSH agent (only locally,
+overriding system agent)</li></ol><p>To set up GPG as an ssh agent, I recommend use of the following function in
+your <code>.bashrc/</code> or <code>.zshrc</code>. It can even be set as a <code>precmd</code> hook to
+automatically update the environment – see the section on Tmux below.</p><div><pre><code data-lang="bash"><span>function</span> _update_agents <span>{</span>
+    <span># take over SSH keychain (with gpg-agent soon) but only on local machine, not remote ssh machine</span>
+    <span># keychain used in a non-invasive way where it's up to you to add your keys to the agent.</span>
+    <span>if</span> <span>[</span> ! <span>"</span>$SSH_CONNECTION<span>"</span> <span>]</span> <span>&amp;&amp;</span> which gpg-connect-agent &amp;&gt;/dev/null; <span>then</span>
+        export SSH_AUTH_SOCK<span>=</span><span>$(</span>gpgconf --list-dirs | grep agent-ssh-socket | cut -f <span>2</span> -d :<span>)</span>
+        <span># start GPG agent, and update TTY. For the former only, omit updatestartuptty</span>
+        <span># ssh-agent protocol can't tell gpg-agent/pinentry what tty to use, so tell it</span>
+        <span># if GPG agent has locked up or there is a stale remote agent, remove</span>
+        <span># the stale socket and possible local agent.</span>
+        <span>if</span> ! timeout -k <span>2</span> <span>1</span> gpg-connect-agent updatestartuptty /bye &gt; /dev/null; <span>then</span>
+            echo <span>"Removing stale GPG agent"</span>
+            socket<span>=</span><span>$(</span>gpgconf --list-dirs | grep agent-socket | cut -f <span>2</span> -d :<span>)</span>
+            test -S $socket <span>&amp;&amp;</span> rm $socket
+            killall -KILL gpg-agent 2&gt; /dev/null
+            <span># try again</span>
+            timeout -k <span>2</span> <span>1</span> gpg-connect-agent updatestartuptty /bye &gt; /dev/null
+        <span>fi</span>
+    <span>fi</span>
+<span>}</span></code></pre></div><p>This function overrides the system SSH agent and replaces it with a GPG agent
+– <em>but only if the current session isn’t a remote one</em> in order to make sure
+agent forwarding is not clobbered. Running any GnuPG2 command will start a
+daemonised agent if one is not running.</p><p>As described in the comments, there’s also a bit of code to automatically
+recover an hung agent; unfortunately this is necessary to recover from dead
+sockets that happen time to time.</p><p>Note that GPG can ingest regular SSH keys into its own store with <code>ssh-add</code> –
+assuming you’re running a GPG agent. However, these keys won’t end up on the
+Yubikey.</p><h2 id="gpg-agent-forwarding">GPG agent forwarding</h2><p>If you’re developing on a remote machine, you’re probably familiar with
+forwarding your SSH agent to allow the use of Git with local SSH credentials.
+GPG is capable of a similar mechanism, allowing commits on a remote machine to
+be signed using your local Yubikey. GPG uses a unix socket for the agent
+connection, and a special restricted “extra”
+socket for remote use. The <a href="https://wiki.gnupg.org/AgentForwarding">official
+guide</a> suggests 2 methods, depending on
+whether your version of OpenSSH supports unix socket forwarding or not. <em>Both
+methods are flawed:</em></p><ol><li>The first method (recommended for OpenSSH older than 6.7) suggests using
+<code>netcat</code> to forward the unix socket over a TCP socket. This is insecure,
+because anyone else on the remote host could connect to the forwarded TCP
+port and use your forwarded agent. This might be OK if you’re the only use
+on a given server but it clearly isn’t generally.</li><li>OpenSSH 6.7 and above can forward unix sockets, so the next recommendation
+is to do so natively. However, the location of the local and remote sockets
+is dependent on the version of GPG, your OS, and your username. As such, a
+common workaround is to inspect every remote host and add a configuration
+to the SSH config per host. It also requires server configuration to delete
+the stale remote socket automatically. Both are manual steps.</li></ol><p>Worse, if you use the remote machine locally too (I do for my workshop PC)
+you’ll find that the stale socket can interfere with any local GPG agent.</p><h3 id="a-better-solution">A better solution</h3><p>My solution (after a fair bit of experimentation) was to create an SSH wrapper
+that probes the remote host to discover the correct location of the socket
+before killing any remote GPG agent and connecting the intended session.
+Combined with a pre-command hook that wires up the correct SSH, GPG and X
+sockets, the result is a seamless experience. See the section on tmux for more
+information.</p><div><pre><code data-lang="bash"><span>function</span> gssh <span>{</span>
+    echo <span>"Preparing host for forwarded GPG agent..."</span> &gt;&amp;<span>2</span>
+
+    <span># prepare remote for agent forwarding, get socket</span>
+    <span># Remove the socket in this pre-command as an alternative to requiring</span>
+    <span># StreamLocalBindUnlink to be set on the remote SSH server.</span>
+    <span># Find the path of the agent socket remotely to avoid manual configuration</span>
+    <span># client side. The location of the socket varies per version of GPG,</span>
+    <span># username, and host OS.</span>
+    remote_socket<span>=</span><span>$(</span>cat <span>&lt;&lt;'EOF' | command ssh -T "$@" bash
+</span><span>        set -e
+</span><span>        socket=$(gpgconf --list-dirs | grep agent-socket | cut -f 2 -d :)
+</span><span>        # killing agent works over socket, which might be dangling, so time it out.
+</span><span>        timeout -k 2 1 gpgconf --kill gpg-agent || true
+</span><span>        test -S $socket &amp;&amp; rm $socket
+</span><span>        echo $socket
+</span><span>EOF</span>
+<span>)</span>
+    <span>if</span> <span>[</span> ! $? -eq <span>0</span> <span>]</span>; <span>then</span>
+        echo <span>"Problem with remote GPG. use ssh -A </span>$@<span> for ssh with agent forwarding only."</span> &gt;&amp;<span>2</span>
+        <span>return</span>
+    <span>fi</span>
+
+    <span>if</span> <span>[</span> <span>"</span>$SSH_CONNECTION<span>"</span> <span>]</span>; <span>then</span>
+        <span># agent on this host is forwarded, allow chaining</span>
+        local_socket<span>=</span><span>$(</span>gpgconf --list-dirs | grep agent-socket | cut -f <span>2</span> -d :<span>)</span>
+    <span>else</span>
+        <span># agent on this host is running locally, use special remote socket</span>
+        local_socket<span>=</span><span>$(</span>gpgconf --list-dirs | grep agent-extra-socket | cut -f <span>2</span> -d :<span>)</span>
+    <span>fi</span>
+
+    <span>if</span> <span>[</span> ! -S $local_socket <span>]</span>; <span>then</span>
+        echo <span>"Could not find suitable local GPG agent socket"</span> 2&gt;&amp;<span>1</span>
+        <span>return</span>
+    <span>fi</span>
+
+    echo <span>"Connecting..."</span> &gt;&amp;<span>2</span>
+    ssh -A -R $remote_socket:$local_socket <span>"</span>$@<span>"</span>
+<span>}</span></code></pre></div><p><code>$SSH_CONNECTION</code> is set only when the session is remote; in which case the
+special remote socket is used, else the full local one. This allows chaining of
+agent forwarding so you can still use your local GPG via a bastion host.</p><p>I call my wrapper <code>gssh</code> rather than wrapping the <code>ssh</code> command. Being separate
+from the normal <code>ssh</code> command, it allow allows you to be mindful about when you
+forward your mgent – forwarding your GPG agent carries similar risks to
+forwarding your SSH agent – an administrator on the remote host could use your
+local GPG agent to further mitigate the risk, enable touch settings on your
+yubikey as documented below.</p><h3 id="configuration-for-code-signing">Configuration for code signing</h3><p>To enable code signing with Git + Github:</p><ol><li>Upload the output of <code>gpg --export --armor &lt;email&gt;</code> (your GPG public keys)
+to <a href="https://github.com/settings/keys">https://github.com/settings/keys</a>.</li><li>Tell git which key to use: <code>git config --global user.signingkey &lt;email&gt;</code></li><li>Tell git to sign always: <code>git config --global commit.gpgsign true</code></li></ol><h2 id="password-management">Password management</h2><p>I use <a href="https://www.passwordstore.org/">the standard unix password manager</a>
+which is compatible with GnuPG2 out of the box. It is powered by git so syncing
+passwords is easy. I use
+<a href="https://github.com/browserpass/browserpass-extension">browserpass</a> to reduce
+the effort required when used with Firefox. Documentation is very good and
+usage is straightforward, so I won’t detail the steps here.</p><p>My <a href="https://github.com/naggie/dotfiles">dotfiles</a> copy the passwords over to my
+PCs when provisioning and synchronising – so long as my yubikey is connected,
+even new PCs can clone and decrypt my password repository.</p><p>One piece of advice: make sure touch to decrypt is enabled, such that passwords
+cannot be decrypted without your human approval. To do this, see the first
+section on initialisation.</p><h2 id="seamless-tmux-integration">Seamless tmux integration</h2><p>When using <a href="https://github.com/tmux/tmux/wiki">tmux</a> you’ll find that it’s
+necessary to re-spawn existing shells in order to use SSH agent / X forwarding
+when reconnecting. This is irritating, so I’ve written bash and ZSH <code>precmd</code>
+hooks to take care of updating the environment transparently before every
+command.</p><p><code>precmd</code> hooks allow the execution of shell commands immediately before each
+interactive command is run. This gives us the opportunity to modify the
+environment of the command to be run. Helpfully this means we can make sure the
+GPG, SSH and X forwarding is set up always, regardless of how old a particular
+tmux shell is.</p><p>Zsh has a <code>precmd</code> hook by default, bash does not – though it’s possible with
+<a href="https://github.com/rcaloras/bash-preexec">bash-preexec</a>.</p><p>To enable this behaviour, simply set <code>_update_agents</code> (defined above) to be
+called by the <code>precmd</code> hook after a new function <code>_tmux_update_env</code>:</p><div><pre><code data-lang="bash">    <span>function</span> _tmux_update_env <span>{</span>
+        <span># tmux must be running</span>
+        <span>[</span> <span>"</span>$TMUX<span>"</span> <span>]</span> <span>||</span> <span>return</span>
+
+        <span># update current shell to parent tmux shell (useful for new SSH connections, x forwarding, etc)</span>
+        eval <span>$(</span>tmux show-environment -s | grep <span>'DISPLAY|SSH_CONNECTION|SSH_AUTH_SOCK'</span><span>)</span>
+    <span>}</span>
+
+    <span>function</span> preexec<span>()</span> <span>{</span>
+        _tmux_update_env
+        _update_agents
+    <span>}</span></code></pre></div><p>This new function inspects the environment of the new parent tmux client and
+relays the appropriate X and SSH variables.</p><h2 id="conclusion">Conclusion</h2><p>Using GnuPG2 with a Yubikey can be secure and convenient. The set up is rather
+involved, but scripting it all as part of managing
+<a href="https://wiki.archlinux.org/index.php/Dotfiles">dotfiles</a> means it becomes
+quick and easy.</p><p>Thanks to my <a href="https://github.com/naggie/dotfiles">dotfiles</a> I’m able to get a
+new installation running and configured within 30 minutes unattended –
+packages are installed, followed by system configuration and finally user
+configuration. As part of user configuration, GPG is set up to use my identity
+with the private keys on my Yubikey. See
+<a href="https://github.com/naggie/dotfiles/blob/master/user-configuration-naggie.sh#L44">user-configuration-naggie.sh</a>
+to see how this is done.</p><p>Historically I had to set up a new or existing SSH/GPG identity after the
+provisioning; this was a rather tedious step considering the number of servers
+and services I have and use; as a compromise the SSH key could be moved on a
+flash drive, but that’s not ideal. The solution is to automate the association
+of the private keys on my Yubikey with their respective public keys within my
+gnupg2 database.</p><p>I now have a convenient way of securely accessing secrets upon provisioning a
+new host. Now, my dotfiles will detect my yubikey and initialise the following:</p><ul><li>My notes, a git repository in <code>~/notes</code> (I have a script to push/pull to prevent commit fatigue)</li><li>My task management database to <code>~/.dstask</code> (powered by <a href="https://github.com/naggie/dstask">dstask</a>)</li><li>My passwords to <code>~/.password-store</code> (using the <a href="https://www.passwordstore.org/">standard unix password manager</a> detailed above)</li></ul><hr><p>See also:
+<a href="https://github.com/naggie/dotfiles/blob/master/etc/yubikey.md">yubikey.md</a> for
+some older, more general notes on the uses of yubikeys. In addition, my
+<a href="https://github.com/naggie/dotfiles">dotfiles</a> repository implements all of
+this automatically so can be used as a reference.</p><section role="doc-endnotes"><hr><ol><li id="fn:1" role="doc-endnote"><p>I’m not aware of a method to generate the private portion on the GPG keys
+on the yubikey itself when there is a master key involved. <a href="#fnref:1" role="doc-backlink">↩︎</a></p></li><li id="fn:2" role="doc-endnote"><p>If you’re using the GPG
+<a href="https://en.wikipedia.org/wiki/Web_of_trust">web-of-trust</a>. I’m not really,
+as my web is not really a web. More of a strand. <a href="#fnref:2" role="doc-backlink">↩︎</a></p></li><li id="fn:3" role="doc-endnote"><p>I’ve since learned they do, v5+
+<a href="https://www.yubico.com/blog/whats-new-in-yubikey-firmware-5-2-3/">https://www.yubico.com/blog/whats-new-in-yubikey-firmware-5-2-3/</a> <a href="#fnref:3" role="doc-backlink">↩︎</a></p></li><li id="fn:4" role="doc-endnote"><p>There’s also <a href="https://github.com/FiloSottile/yubikey-agent">https://github.com/FiloSottile/yubikey-agent</a> to take care
+of all that! <a href="#fnref:4" role="doc-backlink">↩︎</a></p></li><li id="fn:5" role="doc-endnote"><p>I wouldn’t judge, GnuPG seems esoteric and requires patience to set up
+reliably. But hey, that’s what this guide is for.. <a href="#fnref:5" role="doc-backlink">↩︎</a></p></li></ol></section></div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

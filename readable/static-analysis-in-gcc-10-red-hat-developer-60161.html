@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Static analysis in GCC 10 - Red Hat Developer - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Static analysis in GCC 10 - Red Hat Developer - linksfor.dev(s)"/>
+    <meta property="article:author" content="By David Malcolm March 26, 2020March 25, 2020"/>
+    <meta property="og:description" content="Discover the new -fanalyzer option coming to GCC 10 that provides a static analysis pass to identify problems at compile-time, rather than at runtime."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://developers.redhat.com/blog/2020/03/26/static-analysis-in-gcc-10/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Static analysis in GCC 10 - Red Hat Developer</title>
+<div class="readable">
+        <h1>Static analysis in GCC 10 - Red Hat Developer</h1>
+            <div>by By David Malcolm March 26, 2020March 25, 2020</div>
+            <div>Reading time: 16-20 minutes</div>
+        <div>Posted here: 28 Mar 2020</div>
+        <p><a href="https://developers.redhat.com/blog/2020/03/26/static-analysis-in-gcc-10/">https://developers.redhat.com/blog/2020/03/26/static-analysis-in-gcc-10/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div id="primary">
+		<main id="main" role="main">
+
+		
+			
+<article id="post-689087">
+    <div>
+		        <!-- .entry-meta -->
+        
+        <p><img width="535" height="523" src="https://developers.redhat.com/blog/wp-content/uploads/2020/02/heckert_gnu.transparent.png" alt="Static analysis in GCC 10" srcset="https://developers.redhat.com/blog/wp-content/uploads/2020/02/heckert_gnu.transparent.png 535w, https://developers.redhat.com/blog/wp-content/uploads/2020/02/heckert_gnu.transparent-300x293.png 300w" sizes="(max-width: 535px) 100vw, 535px"></p><p>I work at Red Hat on <a href="https://gcc.gnu.org/">GCC, the GNU Compiler Collection</a>. For the next major release of GCC, <a href="https://gcc.gnu.org/gcc-10/changes.html" target="_blank" rel="noopener noreferrer">GCC 10</a>, I’ve been implementing a new <code>-fanalyzer</code> option: A static analysis pass to identify various problems at compile-time, rather than at runtime.</p>
+<p>My thinking here is that it’s best to catch problems as early as possible as the code is written, using the compiler the code is written in as part of the compile-edit-debug cycle, rather than having static analysis as an extra tool “on the side” (perhaps proprietary). Hence, it seems worthwhile to have a static analyzer built into the compiler that can see exactly the same code as the compiler sees—because it <i>is</i> the compiler.</p>
+
+<p>This issue is, of course, a huge problem to tackle. For this release, I’ve focused on the kinds of problems seen in C code—and, in particular <a href="https://cwe.mitre.org/data/definitions/415.html" target="_blank" rel="noopener noreferrer">double-free bugs</a>—but with a view toward creating a framework that we can expand on in subsequent releases (when we can add more checks and support languages other than C).</p>
+<p>My hope is that the analyzer provides a decent amount of extra checking while not being too expensive. I’ve aimed for <code>-fanalyzer</code> to “merely” double the compile time as a reasonable trade-off for the extra checks. I haven’t succeeded yet, as you’ll see below, but I’m working on it.</p>
+<p>Right now the code is in GCC’s master branch for GCC 10 and can be tried out on <a href="http://godbolt.org/" target="_blank" rel="noopener noreferrer">Compiler Explorer, aka godbolt.org</a>. It works well for small and medium-sized examples, but there are bugs that mean it’s not ready for production use. I’m working hard on fixing things in the hope that the feature will be meaningfully usable for C code by the time of GCC 10’s release (likely in April).</p>
+<h2>Diagnostic paths</h2>
+<p>Here’s the simplest possible example of a double-free bug:</p>
+<div>
+<pre><span>#include</span> <span>&lt;stdlib.h&gt;</span>
+
+<span>void</span> <span>test</span>(<span>void</span> <span>*</span>ptr)
+{
+  free(ptr);
+  free(ptr);
+}
+</pre>
+</div>
+<p>GCC 10 with <code>-fanalyzer</code> reports it as follows:</p>
+<pre>$ gcc -c -fanalyzer double-free-1.c
+<span>double-free-1.c:</span> In function ‘<span>test</span>’:
+<span>double-free-1.c:6:3:</span> <span><span>warning: </span></span>double-‘<span>free</span>’ of ‘<span>ptr</span>’ [<span><span>CWE-415</span></span>] [<span><span>-Wanalyzer-double-free</span></span>]
+    6 |   <span><span>free(ptr)</span></span>;
+      |   <span><span>^~~~~~~~~</span></span>
+  ‘<span>test</span>’: events 1-2
+    <span><span>|</span></span>
+    <span><span>|</span></span>    5 |   <span><span>free(ptr)</span></span>;
+    <span><span>|</span></span>      |   <span><span>^~~~~~~~~</span></span>
+    <span><span>|</span></span>      |   <span><span>|</span></span>
+    <span><span>|</span></span>      |   <span><span>(1)</span></span> first ‘<span>free</span>’ here
+    <span><span>|</span></span>    6 |   <span><span>free(ptr)</span></span>;
+    <span><span>|</span></span>      |   <span><span>~~~~~~~~~</span></span>
+    <span><span>|</span></span>      |   <span><span>|</span></span>
+    <span><span>|</span></span>      |   <span><span>(2)</span></span> second ‘<span>free</span>’ here; first ‘<span>free</span>’ was at <span><span>(1)</span></span>
+    <span><span>|</span></span>
+</pre>
+<p>This response shows that GCC has learned some new tricks; first, the ability for diagnostics to have <a href="https://cwe.mitre.org/" target="_blank" rel="noopener noreferrer">Common Weakness Enumeration (CWE) identifiers</a>. In this example, the double-free diagnostic is tagged with <a href="https://cwe.mitre.org/data/definitions/415.html">CWE-415</a>. This tag hopefully makes the output more clear, improves precision, and gives you something simple to type into search engines. So far, only diagnostics from <code>-fanalyzer</code> have been tagged with CWE weakness identifiers.</p>
+<p>If you’re using GCC 10 with a suitable terminal (e.g. recent gnome-terminal), the CWE identifier is a clickable hyperlink, taking you to a <a href="https://cwe.mitre.org/data/definitions/415.html" target="_blank" rel="noopener noreferrer">description of the problem</a>.&nbsp;Speaking of hyperlinks, for many releases, when GCC emits a warning it prints the option controlling that warning. As of GCC 10, that option text is now a clickable hyperlink (again, assuming a <a href="https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda" target="_blank" rel="noopener noreferrer">sufficiently capable terminal</a>), which should take you to the documentation for that option (for any warning, not just the ones relating to the analyzer).</p>
+<p>Second, GCC diagnostics can now have a chain of events associated with them, describing a path through the code that triggers the problem. Given the lack of control flow in the above example, it has just two events, but you can see how the second event refers to the first event in its description.</p>
+<p>Here’s a more involved example. Can you see the issue in the following code? (Hint: It’s not a double-free this time):</p>
+<div>
+<pre><span>#include</span> <span>&lt;setjmp.h&gt;</span>
+<span>#include</span> <span>&lt;stdlib.h&gt;</span>
+
+<span>static</span> <span>jmp_buf</span> env;
+
+<span>static</span> <span>void</span> <span>inner</span>(<span>void</span>)
+{
+  longjmp(env, <span>1</span>);
+}
+
+<span>static</span> <span>void</span> <span>middle</span>(<span>void</span>)
+{
+  <span>void</span> <span>*</span>ptr <span>=</span> malloc(<span>1024</span>);
+  inner();
+  free(ptr);
+}
+
+<span>void</span> <span>outer</span>(<span>void</span>)
+{
+  <span>int</span> i;
+
+  i <span>=</span> setjmp(env);
+  <span>if</span> (i <span>==</span> <span>0</span>)
+    middle();
+}
+</pre>
+</div>
+<p>Here’s what GCC’s <code>-fanalyzer</code> reports, which shows the interprocedural control flow via ASCII art:</p>
+<pre>$ gcc -c -fanalyzer longjmp-demo.c
+<span>longjmp-demo.c:</span> In function ‘<span>inner</span>’:
+<span>longjmp-demo.c:8:3:</span> <span><span>warning: </span></span>leak of ‘<span>ptr</span>’ [<span><span>CWE-401</span></span>] [<span><span>-Wanalyzer-malloc-leak</span></span>]
+    8 |   <span><span>longjmp(env, 1)</span></span>;
+      |   <span><span>^~~~~~~~~~~~~~~</span></span>
+  ‘<span>outer</span>’: event 1
+    <span><span>|</span></span>
+    <span><span>|</span></span>   18 | void <span><span>outer</span></span>(void)
+    <span><span>|</span></span>      |      <span><span>^~~~~</span></span>
+    <span><span>|</span></span>      |      <span><span>|</span></span>
+    <span><span>|</span></span>      |      <span><span>(1)</span></span> entry to ‘<span>outer</span>’
+    <span><span>|</span></span>
+  ‘<span>outer</span>’: event 2
+    <span><span>|</span></span>
+    <span><span>|</span></span>   22 |   i = <span><span>setjmp</span></span>(env);
+    <span><span>|</span></span>      |       <span><span>^~~~~~</span></span>
+    <span><span>|</span></span>      |       <span><span>|</span></span>
+    <span><span>|</span></span>      |       <span><span>(2)</span></span> ‘<span>setjmp</span>’ called here
+    <span><span>|</span></span>
+  ‘<span>outer</span>’: events 3-5
+    <span><span>|</span></span>
+    <span><span>|</span></span>   23 |   if <span><span>(</span></span>i == 0)
+    <span><span>|</span></span>      |      <span><span>^</span></span>
+    <span><span>|</span></span>      |      <span><span>|</span></span>
+    <span><span>|</span></span>      |      <span><span>(3)</span></span> following ‘<span>true</span>’ branch (when ‘<span>i == 0</span>’)...
+    <span><span>|</span></span>   24 |     <span><span>middle()</span></span>;
+    <span><span>|</span></span>      |     <span><span>~~~~~~~~</span></span>
+    <span><span>|</span></span>      |     <span><span>|</span></span>
+    <span><span>|</span></span>      |     <span><span>(4)</span></span> ...to here
+    <span><span>|</span></span>      |     <span><span>(5)</span></span> calling ‘<span>middle</span>’ from ‘<span>outer</span>’
+    <span><span>|</span></span>
+    <span><span>+--&gt; </span></span>‘<span>middle</span>’: events 6-8
+           <span><span>|</span></span>
+           <span><span>|</span></span>   11 | static void <span><span>middle</span></span>(void)
+           <span><span>|</span></span>      |             <span><span>^~~~~~</span></span>
+           <span><span>|</span></span>      |             <span><span>|</span></span>
+           <span><span>|</span></span>      |             <span><span>(6)</span></span> entry to ‘<span>middle</span>’
+           <span><span>|</span></span>   12 | {
+           <span><span>|</span></span>   13 |   void *ptr = <span><span>malloc(1024)</span></span>;
+           <span><span>|</span></span>      |               <span><span>~~~~~~~~~~~~</span></span>
+           <span><span>|</span></span>      |               <span><span>|</span></span>
+           <span><span>|</span></span>      |               <span><span>(7)</span></span> allocated here
+           <span><span>|</span></span>   14 |   <span><span>inner()</span></span>;
+           <span><span>|</span></span>      |   <span><span>~~~~~~~</span></span>
+           <span><span>|</span></span>      |   <span><span>|</span></span>
+           <span><span>|</span></span>      |   <span><span>(8)</span></span> calling ‘<span>inner</span>’ from ‘<span>middle</span>’
+           <span><span>|</span></span>
+           <span><span>+--&gt; </span></span>‘<span>inner</span>’: events 9-11
+                  <span><span>|</span></span>
+                  <span><span>|</span></span>    6 | static void <span><span>inner</span></span>(void)
+                  <span><span>|</span></span>      |             <span><span>^~~~~</span></span>
+                  <span><span>|</span></span>      |             <span><span>|</span></span>
+                  <span><span>|</span></span>      |             <span><span>(9)</span></span> entry to ‘<span>inner</span>’
+                  <span><span>|</span></span>    7 | {
+                  <span><span>|</span></span>    8 |   <span><span>longjmp(env, 1)</span></span>;
+                  <span><span>|</span></span>      |   <span><span>~~~~~~~~~~~~~~~</span></span>
+                  <span><span>|</span></span>      |   <span><span>|</span></span>
+                  <span><span>|</span></span>      |   <span><span>(10)</span></span> ‘<span>ptr</span>’ leaks here; was allocated at <span><span>(7)</span></span>
+                  <span><span>|</span></span>      |   <span><span>(11)</span></span> rewinding from ‘<span>longjmp</span>’ in ‘<span>inner</span>’...
+                  <span><span>|</span></span>
+    <span><span>&lt;-------------+</span></span>
+    <span><span>|</span></span>
+  ‘<span>outer</span>’: event 12
+    <span><span>|</span></span>
+    <span><span>|</span></span>   22 |   i = <span><span>setjmp</span></span>(env);
+    <span><span>|</span></span>      |       <span><span>^~~~~~</span></span>
+    <span><span>|</span></span>      |       <span><span>|</span></span>
+    <span><span>|</span></span>      |       <span><span>(12)</span></span> ...to ‘<span>setjmp</span>’ in ‘<span>outer</span>’ (saved at <span><span>(2)</span></span>)
+    <span><span>|</span></span>
+</pre>
+<p>The above is rather verbose, though perhaps it needs to be to convey what’s going on, given the use of <code>setjmp</code> and <code>longjmp</code>. I hope the description is reasonably clear: There’s a memory leak that occurs when the call to <code>longjmp</code> unwinds the stack back to <code>outer</code> past the cleanup point in <code>middle</code>, without invoking the cleanup.</p>
+<p>If you don’t like the ASCII art above, you can view the events as separate “note” diagnostics with <code>-fdiagnostics-path-format=separate-events</code>:</p>
+<pre>$ gcc -c -fanalyzer -fdiagnostics-path-format=separate-events longjmp-demo.c
+<span>longjmp-demo.c:</span> In function ‘<span>inner</span>’:
+<span>longjmp-demo.c:8:3:</span> <span><span>warning: </span></span>leak of ‘<span>ptr</span>’ [<span><span>CWE-401</span></span>] [<span><span>-Wanalyzer-malloc-leak</span></span>]
+    8 |   <span><span>longjmp(env, 1)</span></span>;
+      |   <span><span>^~~~~~~~~~~~~~~</span></span>
+<span>longjmp-demo.c:18:6:</span> <span><span>note: (1)</span></span> entry to ‘outer’
+   18 | void <span><span>outer</span></span>(void)
+      |      <span><span>^~~~~</span></span>
+In file included from <span>longjmp-demo.c:1</span>:
+<span>longjmp-demo.c:22:7:</span> <span><span>note: (2)</span></span> ‘setjmp’ called here
+   22 |   i = <span><span>setjmp</span></span>(env);
+      |       <span><span>^~~~~~</span></span>
+<span>longjmp-demo.c:23:6:</span> <span><span>note: (3)</span></span> following ‘true’ branch (when ‘i == 0’)...
+   23 |   if <span><span>(</span></span>i == 0)
+      |      <span><span>^</span></span>
+<span>longjmp-demo.c:24:5:</span> <span><span>note: (4)</span></span> ...to here
+   24 |     <span><span>middle()</span></span>;
+      |     <span><span>^~~~~~~~</span></span>
+<span>longjmp-demo.c:24:5:</span> <span><span>note: (5)</span></span> calling ‘middle’ from ‘outer’
+<span>longjmp-demo.c:11:13:</span> <span><span>note: (6)</span></span> entry to ‘middle’
+   11 | static void <span><span>middle</span></span>(void)
+      |             <span><span>^~~~~~</span></span>
+<span>longjmp-demo.c:13:15:</span> <span><span>note: (7)</span></span> allocated here
+   13 |   void *ptr = <span><span>malloc(1024)</span></span>;
+      |               <span><span>^~~~~~~~~~~~</span></span>
+<span>longjmp-demo.c:14:3:</span> <span><span>note: (8)</span></span> calling ‘inner’ from ‘middle’
+   14 |   <span><span>inner()</span></span>;
+      |   <span><span>^~~~~~~</span></span>
+<span>longjmp-demo.c:6:13:</span> <span><span>note: (9)</span></span> entry to ‘inner’
+    6 | static void <span><span>inner</span></span>(void)
+      |             <span><span>^~~~~</span></span>
+<span>longjmp-demo.c:8:3:</span> <span><span>note: (10)</span></span> ‘ptr’ leaks here; was allocated at (7)
+    8 |   <span><span>longjmp(env, 1)</span></span>;
+      |   <span><span>^~~~~~~~~~~~~~~</span></span>
+<span>longjmp-demo.c:8:3:</span> <span><span>note: (11)</span></span> rewinding from ‘longjmp’ in ‘inner’...
+In file included from <span>longjmp-demo.c:1</span>:
+<span>longjmp-demo.c:22:7:</span> <span><span>note: (12)</span></span> ...to ‘setjmp’ in ‘outer’ (saved at (2))
+   22 |   i = <span><span>setjmp</span></span>(env);
+      |       <span><span>^~~~~~</span></span>
+</pre>
+<p>or turn them off altogether with <code>-fdiagnostics-path-format=none</code>. There’s also a JSON output format.</p>
+<p>All of the new diagnostics have a <code>-Wanalyzer-SOMETHING</code> name: We’ve already seen <code>-Wanalyzer-double-free</code> and <code>-Wanalyzer-malloc-leak</code> above. These diagnostics are all enabled when <code>-fanalyzer</code> is enabled, but they can be selectively disabled via the <code>-Wno-analyzer-SOMETHING</code> variants (e.g., via pragmas).</p>
+<h2>What are the new warnings?</h2>
+<p>As well as double-free detection, there are checks for <code>malloc</code> and <code>fopen</code> leaks:</p>
+<div>
+<pre><span>#include</span> <span>&lt;stdio.h&gt;</span>
+<span>#include</span> <span>&lt;stdlib.h&gt;</span>
+
+<span>void</span> <span>test</span>(<span>const</span> <span>char</span> <span>*</span>filename)
+{
+  <span>FILE</span> <span>*</span>f <span>=</span> fopen(filename, <span>"r"</span>);
+  <span>void</span> <span>*</span>p <span>=</span> malloc(<span>1024</span>);
+  <span>/* do stuff */</span>
+}
+</pre>
+</div>
+<pre>$ gcc -c -fanalyzer leak.c
+<span>leak.c:</span> In function ‘<span>test</span>’:
+<span>leak.c:9:1:</span> <span><span>warning: </span></span>leak of ‘<span>p</span>’ [<span><span>CWE-401</span></span>] [<span><span>-Wanalyzer-malloc-leak</span></span>]
+    9 | <span><span>}</span></span>
+      | <span><span>^</span></span>
+  ‘<span>test</span>’: events 1-2
+    <span><span>|</span></span>
+    <span><span>|</span></span>    7 |   void *p = <span><span>malloc(1024)</span></span>;
+    <span><span>|</span></span>      |             <span><span>^~~~~~~~~~~~</span></span>
+    <span><span>|</span></span>      |             <span><span>|</span></span>
+    <span><span>|</span></span>      |             <span><span>(1)</span></span> allocated here
+    <span><span>|</span></span>    8 |   /* do stuff */
+    <span><span>|</span></span>    9 | <span><span>}</span></span>
+    <span><span>|</span></span>      | <span><span>~</span></span>
+    <span><span>|</span></span>      | <span><span>|</span></span>
+    <span><span>|</span></span>      | <span><span>(2)</span></span> ‘<span>p</span>’ leaks here; was allocated at <span><span>(1)</span></span>
+    <span><span>|</span></span>
+<span>leak.c:9:1:</span> <span><span>warning: </span></span>leak of FILE ‘<span>f</span>’ [<span><span>CWE-775</span></span>] [<span><span>-Wanalyzer-file-leak</span></span>]
+    9 | <span><span>}</span></span>
+      | <span><span>^</span></span>
+  ‘<span>test</span>’: events 1-2
+    <span><span>|</span></span>
+    <span><span>|</span></span>    6 |   FILE *f = <span><span>fopen(filename, "r")</span></span>;
+    <span><span>|</span></span>      |             <span><span>^~~~~~~~~~~~~~~~~~~~</span></span>
+    <span><span>|</span></span>      |             <span><span>|</span></span>
+    <span><span>|</span></span>      |             <span><span>(1)</span></span> opened here
+    <span><span>|</span></span>......
+    <span><span>|</span></span>    9 | <span><span>}</span></span>
+    <span><span>|</span></span>      | <span><span>~</span></span>
+    <span><span>|</span></span>      | <span><span>|</span></span>
+    <span><span>|</span></span>      | <span><span>(2)</span></span> ‘<span>f</span>’ leaks here; was opened at <span><span>(1)</span></span>
+    <span><span>|</span></span>
+</pre>
+<p>For using memory after it has been freed:</p>
+<div>
+<pre><span>#include</span> <span>&lt;stdlib.h&gt;</span>
+
+<span>struct</span> link { <span>struct</span> link <span>*</span>next; };
+
+<span>int</span> <span>free_a_list_badly</span>(<span>struct</span> link <span>*</span>n)
+{
+  <span>while</span> (n) {
+    free(n);
+    n <span>=</span> n<span>-&gt;</span>next;
+  }
+}
+</pre>
+</div>
+<pre>$ gcc -c -fanalyzer use-after-free.c
+<span>use-after-free.c:</span> In function ‘<span>free_a_list_badly</span>’:
+<span>use-after-free.c:9:7:</span> <span><span>warning: </span></span>use after ‘<span>free</span>’ of ‘<span>n</span>’ [<span><span>CWE-416</span></span>] [<span><span>-Wanalyzer-use-after-free</span></span>]
+    9 |     <span><span>n = n-&gt;next</span></span>;
+      |     <span><span>~~^~~~~~~~~</span></span>
+  ‘<span>free_a_list_badly</span>’: events 1-4
+    <span><span>|</span></span>
+    <span><span>|</span></span>    7 |   while <span><span>(</span></span>n) {
+    <span><span>|</span></span>      |         <span><span>^</span></span>
+    <span><span>|</span></span>      |         <span><span>|</span></span>
+    <span><span>|</span></span>      |         <span><span>(1)</span></span> following ‘<span>true</span>’ branch (when ‘<span>n</span>’ is non-NULL)...
+    <span><span>|</span></span>    8 |     <span><span>free(n)</span></span>;
+    <span><span>|</span></span>      |     <span><span>~~~~~~~</span></span>
+    <span><span>|</span></span>      |     <span><span>|</span></span>
+    <span><span>|</span></span>      |     <span><span>(2)</span></span> ...to here
+    <span><span>|</span></span>      |     <span><span>(3)</span></span> freed here
+    <span><span>|</span></span>    9 |     <span><span>n = n-&gt;next</span></span>;
+    <span><span>|</span></span>      |     <span><span>~~~~~~~~~~~</span></span>
+    <span><span>|</span></span>      |       <span><span>|</span></span>
+    <span><span>|</span></span>      |       <span><span>(4)</span></span> use after ‘<span>free</span>’ of ‘<span>n</span>’; freed at <span><span>(3)</span></span>
+    <span><span>|</span></span>
+</pre>
+<p>For freeing a non-heap pointer:</p>
+<div>
+<pre><span>#include</span> <span>&lt;stdlib.h&gt;</span>
+
+<span>void</span> <span>test</span>(<span>int</span> n)
+{
+  <span>int</span> buf[<span>10</span>];
+  <span>int</span> <span>*</span>ptr;
+
+  <span>if</span> (n <span>&lt;</span> <span>10</span>)
+    ptr <span>=</span> buf;
+  <span>else</span>
+    ptr <span>=</span> (<span>int</span> <span>*</span>)malloc(<span>sizeof</span> (<span>int</span>) <span>*</span> n);
+
+  <span>/* do stuff.  */</span>
+
+  <span>/* oops; this free should be conditionalized.  */</span>
+  free(ptr);
+}
+</pre>
+</div>
+<pre>$ gcc -c -fanalyzer heap-vs-stack.c
+<span>heap-vs-stack.c:</span> In function ‘<span>test</span>’:
+<span>heap-vs-stack.c:16:3:</span> <span><span>warning: </span></span>‘<span>free</span>’ of ‘<span>ptr</span>’ which points to memory not on the heap [<span><span>CWE-590</span></span>] [<span><span>-Wanalyzer-free-of-non-heap</span></span>]
+   16 |   <span><span>free(ptr)</span></span>;
+      |   <span><span>^~~~~~~~~</span></span>
+  ‘<span>test</span>’: events 1-4
+    <span><span>|</span></span>
+    <span><span>|</span></span>    8 |   if <span><span>(</span></span>n &lt; 10)
+    <span><span>|</span></span>      |      <span><span>^</span></span>
+    <span><span>|</span></span>      |      <span><span>|</span></span>
+    <span><span>|</span></span>      |      <span><span>(1)</span></span> following ‘<span>true</span>’ branch (when ‘<span>n &lt;= 9</span>’)...
+    <span><span>|</span></span>    9 |     <span><span>ptr = buf</span></span>;
+    <span><span>|</span></span>      |     <span><span>~~~~~~~~~</span></span>
+    <span><span>|</span></span>      |         <span><span>|</span></span>
+    <span><span>|</span></span>      |         <span><span>(2)</span></span> ...to here
+    <span><span>|</span></span>      |         <span><span>(3)</span></span> pointer is from here
+    <span><span>|</span></span>......
+    <span><span>|</span></span>   16 |   <span><span>free(ptr)</span></span>;
+    <span><span>|</span></span>      |   <span><span>~~~~~~~~~</span></span>
+    <span><span>|</span></span>      |   <span><span>|</span></span>
+    <span><span>|</span></span>      |   <span><span>(4)</span></span> call to ‘<span>free</span>’ here
+    <span><span>|</span></span>
+</pre>
+<p>For using a function that’s known to be unsafe to use inside a signal handler:</p>
+<div>
+<pre><span>#include</span> <span>&lt;stdio.h&gt;</span>
+<span>#include</span> <span>&lt;signal.h&gt;</span>
+
+<span>extern</span> <span>void</span> <span>body_of_program</span>(<span>void</span>);
+
+<span>void</span> <span>custom_logger</span>(<span>const</span> <span>char</span> <span>*</span>msg)
+{
+  fprintf(stderr, <span>"LOG: %s"</span>, msg);
+}
+
+<span>static</span> <span>void</span> <span>handler</span>(<span>int</span> signum)
+{
+  custom_logger(<span>"got signal"</span>);
+}
+
+<span>int</span> <span>main</span>(<span>int</span> argc, <span>const</span> <span>char</span> <span>*</span>argv)
+{
+  custom_logger(<span>"started"</span>);
+
+  signal(SIGINT, handler);
+
+  body_of_program();
+
+  custom_logger(<span>"stopped"</span>);
+
+  <span>return</span> <span>0</span>;
+}
+</pre>
+</div>
+<pre>$ gcc -c -fanalyzer signal.c
+<span>signal.c:</span> In function ‘<span>custom_logger</span>’:
+<span>signal.c:8:3:</span> <span><span>warning: </span></span>call to ‘<span>fprintf</span>’ from within signal handler [<span><span>CWE-479</span></span>] [<span><span>-Wanalyzer-unsafe-call-within-signal-handler</span></span>]
+    8 |   <span><span>fprintf(stderr, "LOG: %s", msg)</span></span>;
+      |   <span><span>^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~</span></span>
+  ‘<span>main</span>’: events 1-2
+    <span><span>|</span></span>
+    <span><span>|</span></span>   16 | int <span><span>main</span></span>(int argc, const char *argv)
+    <span><span>|</span></span>      |     <span><span>^~~~</span></span>
+    <span><span>|</span></span>      |     <span><span>|</span></span>
+    <span><span>|</span></span>      |     <span><span>(1)</span></span> entry to ‘<span>main</span>’
+    <span><span>|</span></span>......
+    <span><span>|</span></span>   20 |   <span><span>signal(SIGINT, handler)</span></span>;
+    <span><span>|</span></span>      |   <span><span>~~~~~~~~~~~~~~~~~~~~~~~</span></span>
+    <span><span>|</span></span>      |   <span><span>|</span></span>
+    <span><span>|</span></span>      |   <span><span>(2)</span></span> registering ‘<span>handler</span>’ as signal handler
+    <span><span>|</span></span>
+  event 3
+    <span><span>|</span></span>
+    <span><span>|</span>cc1:</span>
+    <span><span>|</span></span> <span><span>(3)</span></span>: later on, when the signal is delivered to the process
+    <span><span>|</span></span>
+    <span><span>+--&gt; </span></span>‘<span>handler</span>’: events 4-5
+           <span><span>|</span></span>
+           <span><span>|</span></span>   11 | static void <span><span>handler</span></span>(int signum)
+           <span><span>|</span></span>      |             <span><span>^~~~~~~</span></span>
+           <span><span>|</span></span>      |             <span><span>|</span></span>
+           <span><span>|</span></span>      |             <span><span>(4)</span></span> entry to ‘<span>handler</span>’
+           <span><span>|</span></span>   12 | {
+           <span><span>|</span></span>   13 |   <span><span>custom_logger("got signal")</span></span>;
+           <span><span>|</span></span>      |   <span><span>~~~~~~~~~~~~~~~~~~~~~~~~~~~</span></span>
+           <span><span>|</span></span>      |   <span><span>|</span></span>
+           <span><span>|</span></span>      |   <span><span>(5)</span></span> calling ‘<span>custom_logger</span>’ from ‘<span>handler</span>’
+           <span><span>|</span></span>
+           <span><span>+--&gt; </span></span>‘<span>custom_logger</span>’: events 6-7
+                  <span><span>|</span></span>
+                  <span><span>|</span></span>    6 | void <span><span>custom_logger</span></span>(const char *msg)
+                  <span><span>|</span></span>      |      <span><span>^~~~~~~~~~~~~</span></span>
+                  <span><span>|</span></span>      |      <span><span>|</span></span>
+                  <span><span>|</span></span>      |      <span><span>(6)</span></span> entry to ‘<span>custom_logger</span>’
+                  <span><span>|</span></span>    7 | {
+                  <span><span>|</span></span>    8 |   <span><span>fprintf(stderr, "LOG: %s", msg)</span></span>;
+                  <span><span>|</span></span>      |   <span><span>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~</span></span>
+                  <span><span>|</span></span>      |   <span><span>|</span></span>
+                  <span><span>|</span></span>      |   <span><span>(7)</span></span> call to ‘<span>fprintf</span>’ from within signal handler
+                  <span><span>|</span></span>
+</pre>
+<p>Along with&nbsp;<a href="https://gcc.gnu.org/onlinedocs/gcc/Static-Analyzer-Options.html" target="_blank" rel="noopener noreferrer">other warnings</a>.</p>
+<h2>What’s left to do?</h2>
+<p>As it stands, the checker works well on small- and medium-sized examples, but there are two problem areas I’m running into as I scale it up to real-world C code. First, there are bugs in my state-management code. Within the checker are classes for describing program state in an abstract way. The checker explores the program, building a directed graph of (point, state) pairs with logic for simplifying state and merging state at control flow join-points.</p>
+<p>In theory, if the state gets too complicated, the checker is meant to go into a least-defined state, but there are bugs with this approach that lead to the number of states at a given point exploding, which then leads to the checker running slowly, eventually hitting a safety limit, and not fully exploring the program. To fix this, I’ve been rewriting the guts of the state-management code. I hope to land the rewrite in “master” next week.</p>
+<p>Second, even if we do fully explore the program, the paths through the code generated by <code>-fanalyzer</code> are sometimes ludicrously verbose. The worst I’ve seen is a 110-event path for the use of uninitialized data reported when compiling GCC itself. I think this one was a false positive, but clearly it’s unreasonable to expect users to wade through something like that.</p>
+<p>The analyzer tries to find the shortest feasible path through the (point, state) graph, generates a chain of events from it, and then tries to simplify the chain. Effectively, it’s applying a series of peephole optimizations to the chain of events to come up with a minimal chain that expresses the problem.</p>
+<p>I recently implemented a way of filtering irrelevant control-flow edges from the path, which ought to help, and I’m working on a similar patch to eliminate redundant interprocedural edges.</p>
+<p>To give a concrete example, I tried the analyzer on a real bug (albeit one from fifteen years ago)—<a href="https://access.redhat.com/security/cve/cve-2005-1689" target="_blank" rel="noopener noreferrer">CVE-2005-1689</a>, a double-free vulnerability in krb5 1.4.1. It correctly identifies the bug with no false positives, but the output is currently 170 lines of stderr. Rather than showing the output inline here, you can see it at <a href="https://dmalcolm.fedorapeople.org/gcc/2020-02-28/recvauth.c.html" target="_blank" rel="noopener noreferrer">this link</a>.</p>
+<p>Initially, the above was 1187 lines of stderr. I fixed various bugs and implemented more simplifications to get it down to 170 lines. Part of the problem is that the <code>free</code> is being done through a <code>krb5_xfree</code> macro and the path-printing code shows how each macro is expanded each time an event occurs within a macro. Perhaps the output should only show each macro expansion once per diagnostic. Also, the first few events in each diagnostic are interprocedural logic that’s not really relevant to the user (I’m working on a fix for that). With these changes, the output should be considerably shorter.</p>
+<p>Perhaps a better interface might write out a separate HTML file, one per warning, and emit a “note” giving the location of the additional information?</p>
+<p>I want to give the end-user enough information to act on a warning, but without overwhelming them. Are there better ways of presenting this? Let me know in the comments.</p>
+<h2>Trying it out</h2>
+<p>GCC 10 will be in Fedora 32, which should be out in a couple of months.</p>
+<p>For simple code examples, you can play around with the new GCC online at <a href="https://godbolt.org/" target="_blank" rel="noopener noreferrer">godbolt.org</a> (select gcc “trunk” and add <code>-fanalyzer</code> to the compiler options).</p>
+<p>Have fun!</p>
+
+
+			</div><!-- .entry-content -->
+
+
+
+
+	<!-- .entry-footer -->
+</article><!-- #post-## -->
+			
+
+		
+		</main><!-- #main -->
+	</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Authentication and the Have I Been Pwned API - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Authentication and the Have I Been Pwned API - linksfor.dev(s)"/>
+    <meta property="article:author" content="Troy Hunt"/>
+    <meta property="og:description" content="The very first feature I added to Have I Been Pwned after I launched it back in December 2013 was the public API. My thinking at the time was that it would make the data more easily accessible to more people to go and do awesome things; build mobile clients,"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.troyhunt.com/authentication-and-the-have-i-been-pwned-api/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Authentication and the Have I Been Pwned API</title>
+<div class="readable">
+        <h1>Authentication and the Have I Been Pwned API</h1>
+            <div>by Troy Hunt</div>
+            <div>Reading time: 21-27 minutes</div>
+        <div>Posted here: 18 Jul 2019</div>
+        <p><a href="https://www.troyhunt.com/authentication-and-the-have-i-been-pwned-api/">https://www.troyhunt.com/authentication-and-the-have-i-been-pwned-api/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><section>
+            <p>The very first feature I added to Have I Been Pwned after I launched it back in December 2013 <a href="https://www.troyhunt.com/have-i-been-pwned-you-can-now-ask-api/">was the public API</a>. My thinking at the time was that it would make the data more easily accessible to more people to go and do awesome things; build mobile clients, integrate into security tools and surface more information to more people to enable them to do <em>positive and constructive things</em> with the data. I highlighted 3 really important attributes at the time of launch:</p><!--kg-card-begin: html--><blockquote>
+<p>There is no authentication.</p>
+<p>There is no rate limiting.</p>
+<p>There is no cost.</p>
+</blockquote><!--kg-card-end: html--><p>One of those changed nearly 3 years ago now - <a href="https://www.troyhunt.com/the-have-i-been-pwned-api-rate-limiting-and-commercial-use/">I had to add a rate limit</a>. The other 2 are changing today and I want to clearly explain why.</p><h3 id="identifying-abusive-api-usage">Identifying Abusive API Usage</h3><p>Let me start with a graph:</p><figure><img src="https://www.troyhunt.com/content/images/2019/06/image-2.png"></figure><p>This is executions of the V2 API that enables you to search an individual email address. There's 1.06M requests in that 24 hour period with 491k of them in the last 4 hours. Even with the rate limit of 1 request every 1,500ms per IP address enforced, that graph shows a very clear influx of requests peaking at 14k per minute. How? Well let's pull the logs from Cloudflare and see:</p><figure><img src="https://www.troyhunt.com/content/images/2019/06/image-3.png"></figure><p>This is the output of a little log analyser I wrote that breaks requests down by ASN (and other metrics) over the past hour. There were 15,573 requests from AS23969 across 82 unique IP addresses. Have a look at where those IP addresses came from:</p><figure><img src="https://www.troyhunt.com/content/images/2019/05/image-4.png"></figure><p>There is no conceivable way that this is legitimate, organic usage of the API from Thailand. <a href="https://db-ip.com/as23969">The ASN is owned by TOT Public Company Limited</a>, <a href="https://en.wikipedia.org/wiki/TOT_Public_Company_Limited">a local Thai telco</a> that somehow, has ended up with a truckload of IP addresses hitting HIBP at <em>just </em>the right rate to not trigger the rate limit. The next top ASN is <a href="https://db-ip.com/as17451">Biznet Networks in Indonesia</a>. Then <a href="https://db-ip.com/as28573">Claro in Brazil</a>. After that <a href="https://db-ip.com/as14061">there's Digital Ocean</a> and then another Indonesian telco, <a href="https://db-ip.com/as17974">Telkomnet</a>. It makes for a geographical spread that's entirely inconsistent with legitimate usage of genuine consumers (no, HIBP isn't actually big in Iran!):</p><figure><img src="https://www.troyhunt.com/content/images/2019/06/image-4.png"></figure><p>Late last year after seeing a similar pattern with a well-known hosting provider, I reached out to them to try and better understand what was going on. I provided a bunch of IP addresses which they promptly investigated and reported back to me on:</p><!--kg-card-begin: html--><blockquote>
+<p>1- All those servers were compromised. They were either running standalone VPSs or cpanel installations.</p>
+<p>2- Most of them were running WordPress or Drupal (I think only 2 were not running any of the two).</p>
+<p>3- They all had a malicious cron.php running</p>
+</blockquote><!--kg-card-end: html--><p>This helped me understand the source of the problem, but it didn't get me any closer to actually blocking the abusive behaviour. For the sake of transparency, let me talk about how I <em>tried </em>to tackle this because that will help everyone understand why I've arrived at a very different model to what I started with.</p><h3 id="combating-abuse-with-firewall-rules">Combating Abuse with Firewall Rules</h3><p>Firewall rules on Cloudflare are amazingly awesome. It takes just a few seconds to have a rule like this in place:</p><figure><img src="https://www.troyhunt.com/content/images/2019/05/image-5.png"></figure><p>Make more than 40 requests in a minute and you're in the naughty corner for a day. Only thing is, that's IP-based and per the earlier section on abusive patterns, actors with large numbers of IP addresses can largely circumvent this approach. It's still a fantastic turn-key solution that seriously raises the bar for anyone wanting to get around it, but someone determined enough will find a way.</p><p>No problems, I'll just take abusive ASNs like the Thai one above and give them the boot. I scripted a lot of them based on patterns in the log files and create a firewall rule like this:</p><figure><img src="https://www.troyhunt.com/content/images/2019/05/image-6.png"></figure><p>That works pretty quickly and is very effective, except for the fact that there's an awful lot of ASNs out there being abused. Plus, it has side-effects I'll come back to shortly too.</p><p>So how about looking at user agent strings instead? I mean could always just block the ones bad actors are using, except that was never going to work particularly well for obvious reasons (you can always define whatever one you like). That said, there were a <em>heap</em> of browser UAs which clearly were (almost) never legitimate for a client making API calls. So I blocked these as well:</p><figure><img src="https://www.troyhunt.com/content/images/2019/05/image-7.png"></figure><p>That shouldn't have come as a surprise to anyone as the API docs were actually quite clear about this:</p><blockquote>The user agent should accurately describe the nature of the API consumer such that it can be clearly identified in the request. Not doing so may result in the request being blocked.</blockquote><p>Problem is, people don't read docs and I ended up with a heap of default user agents (such as curl's) which were summarily blocked. And, of course, the user agent requirement was easily circumvented as I expected it would be and I simply started seeing randomised strings in the UA.</p><p>Another approach I toyed with (very transiently) was blocking entire countries from accessing the API. I was always really hesitant to do this, but when 90% of the API traffic was suddenly coming from a country in West Africa, for example, that was a pretty quick win.</p><p>I'm only writing about this here now because as the new model comes into place, all of this will be redundant. Plus, I wanted to shed some light on the API behaviour some people may have previously seen which they couldn't quite work out, and that brings me to the next section.</p><h3 id="the-impact-on-legitimate-usage">The Impact on Legitimate Usage</h3><p>The attempts described above to block abuse of the API also blocked a lot of good requests. I feel bad about that because it made something I'd always intended to be easily accessible difficult for some people to use. I hope that by explaining the background here, people will understand why the approaches above were taken and indeed, why the changes I'm going to talk about soon were necessary.</p><p>I got way too many emails from people about API requests being blocked to respond to. Often this was due to simply not meeting the API requirements, for example providing a descriptive UA string. Other times it was because they were on the same network as abusive users. There were also those who simply smashed through the rate limit too quickly and got themselves banned for a day. Other times, there were genuine API users in that West African country who found themselves unable to use the service. I was constantly balancing the desire to make the API easily accessible whilst simultaneously trying to ensure it wasn't taken advantage of. In the end, the path forward was clear - the API would need to be authenticated.</p><h3 id="the-new-model-authenticated-requests">The New Model: Authenticated Requests</h3><p>I held back on this for a long time because adding auth to the API adds a barrier to entry. It also adds coding effort on my end as well as management overhead. However, by earlier this year it became clear that this was the only way forward: requests would have to be auth'd. Doing this solves a <em>heap </em>of problems in one fell swoop:</p><ol><li>The rate limit could be applied to an API key thus solving the problem of abusive actors with multiple IP addresses</li><li>Abuse associated to an IP, ASN, user agent string or country no longer has to impact other requests matching the same pattern</li><li>The rate limit can be just that - a limit rather than also dishing out punishment via the 24 hour block</li></ol><p>Making an authenticated call is a piece of cake, you just add an hibp-api-key header as follows:</p><!--kg-card-begin: html--><pre><code>GET https://haveibeenpwned.com/api/v3/breachedaccount/test@example.com
+hibp-api-key: [your key]</code></pre><!--kg-card-end: html--><p>However, this wasn't going to completely solve the problem, rather it moved the challenge to the way in which API keys were provisioned. It's no good putting controls around the key itself if a bad actor could just come along and register a heap of them. Anti-automation on the form where a key can be requested is one thing, stopping someone from manually registering, say, 20 of them with different email addresses and massively amplifying their request rate is quite another. I had to raise the bar <em>just</em> high enough to dissuade people from doing this, which brings me to the financial side of things.</p><h3 id="there-s-a-us-3-50-per-month-fee-to-use-the-api">There's a US$3.50 per Month Fee to Use the API</h3><p>Clearly not everyone will be happy with this so let me spend a bit of time here explaining the rationale. This fee is first and foremost to stop abuse of the API. The actors I've seen taking advantage of it are highly unlikely to front up with a credit card and provide what amounts to personally identifiable data (i.e. make a credit card payment) in order to mass enumerate the API.</p><p>In choosing the $3.50 figure, I wanted to ensure it was a number that was inconsequential to a <em>legitimate </em>user of the service. That's about what a latte costs at my local coffee shop so spending a few bucks a month to search through billions of records seems like a pretty damn good deal, especially when that rate limit enables 57.6k requests per day.</p><p>One thing I want to be crystal clear about here is that the $3.50 fee is no way an attempt to monetise something I always wanted to provide for free. I hope the explanation above helps people understand that, and also the fact the API has run the last 5 and a half years without any auth whatsoever clearly demonstrates that financial gain has never been the intention. Plus, the service I'm using to implement auth and rate limits comes with a direct cost to me:</p><figure><img src="https://www.troyhunt.com/content/images/2019/07/image-1.png"></figure><p>This is from <a href="https://azure.microsoft.com/en-us/pricing/details/api-management/">the Azure API Management pricing page</a> which is the service I'm using to provision keys and control rate limits (I'll write a more detailed post on this later on - it's kinda awesome). I chose the $3.50 figure because it represents someone making one million calls. Some people will make much less, some much more - that rate limit represents a possible 1.785 million calls per month. Plus, there's still the costs of function executions, storage queries and egress bandwidth to consider, not to mention the slice of the $3.50 that Stripe takes for processing the payment (all charges are routed through them). The point is that the $3.50 number is pretty much bang on the mark for the cost of providing the service.</p><p>What this change does it simultaneously gives me a much higher degree of confidence the API will be used in an ethical fashion whilst also ensuring that those who use it have a much more predictable experience without me dipping deeper and deeper into my own pocket.</p><h3 id="the-api-is-revving-to-version-3-and-has-some-breaking-changes-">The API is Revving to Version 3 (and Has Some Breaking Changes)</h3><p>With this change, I'm revising the API up to version 3. All documentation on <a href="https://haveibeenpwned.com/API/v3">the API page</a> now reflects that and also reflects a few breaking changes, the first of which is obviously the requirement for auth. When using V3, any unauthenticated requests will result in an HTTP 401.</p><p>The second breaking change relates to how the versioning is done. Back in 2014, I wrote about <a href="https://www.troyhunt.com/your-api-versioning-is-wrong-which-is/">how your API versioning is wrong</a> and headlined it with this graphic:</p><!--kg-card-begin: markdown--><p><img src="https://www.troyhunt.com/content/images/2016/02/41694168readImage2.png" alt="It's not restful"></p>
+<!--kg-card-end: markdown--><p>I outlined 3 different possible ways of expressing the desired version in API calls, each with their own technical and philosophical pros and cons:</p><ol><li>Via the URL</li><li>Via a custom request header</li><li>Via the accept header</li></ol><p>After 4 and a bit years, by far and away the most popular method with an uptake of more than 90% is versioning via the URL. So that's all V3 supports. I don't care about the philosophical arguments to the contrary, I care about working software and in this case, the people have well and truly spoken. I don't want to have to maintain code and provide support for something people barely use when there's a perfectly viable alternative.</p><p>Next, I'm inverting the condition expressed in the "truncateResponse" query string. Previously, a call such as this would return all meta data for a breach:</p><!--kg-card-begin: html--><pre><code>GET https://haveibeenpwned.com/api/v2/breachedaccount/test@example.com</code></pre><!--kg-card-end: html--><p>You'd end up with not just the name of the breach, but also how many records were in it, all the impacted data classes, a big long description and a whole bunch of other largely redundant information. I say "redundant" because if you're hitting the API over and over again, you're pulling but the same info for each account that appears in the same breach. Using the "truncateResponse" parameter reduced the response size by 98% but because it wasn't the default, it wasn't used that much. I want to drive the adoption of small responses because not only are they faster for the consumer, they also reduce my bandwidth bill which is one of the most expensive components of HIBP. You can still pull back all the data for each breach if you'd like, you just need to pass "truncateResponse=false" as true is now the default. (Just a note on that: you're far better off making a single call to <a href="https://haveibeenpwned.com/API/v3#AllBreaches">get all breached sites in the system</a> then referencing that collection by breach name after querying an individual email address.)</p><p>I'm also inverting the "includeUnverified" parameter. The original logic for this was that when <a href="https://www.troyhunt.com/introducing-unverified-breaches-to-have-i-been-pwned/">I launched the concept of unverified breaches</a>, I didn't want existing consumers of the API to suddenly start getting results for breaches which may not be real. However, with the passage of time I've come across a couple of issues with this and the first is that a heap of people consumed the API with the default params (which wouldn't include unverified breaches) and then contacted me asking "why does the API return different results to the front page of HIBP?" The other issue is that I simply haven't flagged very many breaches as unverified and I've also added other classes of breach which deviate from the classic model of loading a single incident clearly attributable to a single site such as the original Adobe breach. There are now spam lists, for example, as well as credential stuffing lists and returning all data by default is much more consistent with the ethos of considering all breached data to be in scope.</p><p>The other major thing related to breaking stuff is this:</p><p><strong>Versions 1 and 2 of the API for searching breaches and pastes by email address will be disabled in 4 weeks from today on August 18.</strong></p><p>I have to do this on an aggressive time frame. Whilst I don't, all the problems mentioned above with abuse of the API continues. When we hit that August due date, the APIs will begin returning HTTP 400 "Bad Request" and that will be the end of them.</p><p>One important distinction: this <em>doesn't</em> apply to the APIs that don't pull back information about an email address; the API listing all breaches in the system, for example, is not impacted by any of the changes outlined here. It can be requested with version 3 in the path, but also with previous versions of the API. Because it returns generic, non-personal data it doesn't need to be protected in the same fashion (plus it's really aggressively cached at Cloudflare). Same too for Pwned Passwords - there's absolutely zero impact on that service.</p><p>During the next 4 weeks I'll also be getting more aggressive with locking down firewall rules on the previous versions at the first sign of misuse until they're discontinued entirely. They're an easy fix if you're blocked with V2 - get an API key and roll over to V3. Now, about that key...</p><h3 id="protecting-the-api-key-and-how-my-problem-becomes-your-problem-">Protecting the API Key (and How My Problem Becomes Your Problem)</h3><p>Now that API keys are a thing, let me touch briefly on some of the implications of this as it relates to those of you who've built apps on top of HIBP. And just for context, have a look at <a href="https://haveibeenpwned.com/API/Consumers">the API consumers page</a> to get a sense of the breadth we're talking about; I'll draw some examples out of there.</p><p>For code bases such as <a href="https://github.com/Radial01/PwnyCorral">Brad Dial's Pwny Corral</a>, it's just a matter of adding the hibp-api-key header and a configuration for the key. Users of the script will need to go through the enrolment process to get their own key then they're good to go.</p><p>In a case like <a href="https://whatismyipaddress.com/breach-check">What's My IP Address' Data Breach Check</a>, we're talking about a website with a search feature that hits their endpoint and then they call HIBP on the server side. The HIBP API key will sit privately on their end and the only thing they'll really need to do is stop people from hammering their service so it doesn't exceed the HIBP rate limit for that key. This is where it becomes their (your) problem rather than mine and that's particularly apparent in the next scenario...</p><p>Rich client apps designed for consumer usage such as <a href="https://outercorner.com/blog/2018/06/version-2.6-brings-favorites-custom-filters-and-more/">Outer Corner's Secrets app</a> will need to proxy API hits through their own service. You don't want to push the HIBP API key out with the installer plus you also need to be able to control the rate limit of <em>all </em>your customers so that it doesn't make the service unavailable for others (i.e. one user of Secrets smashes through the rate limit thus making the service unavailable for others).</p><p>One last thing on the rate limit: because it's no longer locking you out for a day if exceeded, making too many requests results in a very temporary lack of service (usually single digit seconds). If you're consuming the new auth'd API, handle HTTP 429 responses from HIBP gracefully and ask the user to try again momentarily. Now, with that said, let me give you the code to make it dead easy to both proxy those requests and control the rate at which <em>your </em>subscribers hit the service; here's how to do it with Cloudflare workers and rate limits:</p><h3 id="proxying-with-a-cloudflare-worker-and-setting-rate-limits-">Proxying With a Cloudflare Worker (and Setting Rate Limits)</h3><p>The fastest way to get up and running with proxying requests to V3 of the HIBP API is with a <a href="https://www.cloudflare.com/products/cloudflare-workers/">Cloudflare Worker</a>. This is "serverless code on the edge" or in other words, script that runs on Cloudflare's 180 edge nodes around the world such that when someone makes a request for a particular route, the script kicks in and executes. It's easiest just to have a read of the code below:</p><!--kg-card-begin: html--><div id="gist97210662">
+    <div>
+      <div>
+        <div>
+  <div id="file-sample-v3-api-worker-js">
+    
+
+  <div itemprop="text">
+      
+<table data-tab-size="8">
+      <tbody><tr>
+        <td id="file-sample-v3-api-worker-js-L1" data-line-number="1"></td>
+        <td id="file-sample-v3-api-worker-js-LC1"><span>// Assume a request such as GET https://mysite.com/search?email=test@example.com</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L2" data-line-number="2"></td>
+        <td id="file-sample-v3-api-worker-js-LC2">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L3" data-line-number="3"></td>
+        <td id="file-sample-v3-api-worker-js-LC3"><span>addEventListener</span><span>(</span><span>'fetch'</span><span>,</span> <span>event</span> <span>=&gt;</span> <span>{</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L4" data-line-number="4"></td>
+        <td id="file-sample-v3-api-worker-js-LC4">  <span>event</span><span>.</span><span>respondWith</span><span>(</span><span>fetchAndApply</span><span>(</span><span>event</span><span>.</span><span>request</span><span>)</span><span>)</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L5" data-line-number="5"></td>
+        <td id="file-sample-v3-api-worker-js-LC5"><span>}</span><span>)</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L6" data-line-number="6"></td>
+        <td id="file-sample-v3-api-worker-js-LC6">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L7" data-line-number="7"></td>
+        <td id="file-sample-v3-api-worker-js-LC7"><span>async</span> <span>function</span> <span>fetchAndApply</span><span>(</span><span>request</span><span>)</span> <span>{</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L8" data-line-number="8"></td>
+        <td id="file-sample-v3-api-worker-js-LC8">  <span>// Set your own personal HIBP API key</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L9" data-line-number="9"></td>
+        <td id="file-sample-v3-api-worker-js-LC9">  <span>let</span> <span>hibpApiKey</span> <span>=</span> <span>'[your key]'</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L10" data-line-number="10"></td>
+        <td id="file-sample-v3-api-worker-js-LC10">  </td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L11" data-line-number="11"></td>
+        <td id="file-sample-v3-api-worker-js-LC11">  <span>// Add the key to the existing request headers</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L12" data-line-number="12"></td>
+        <td id="file-sample-v3-api-worker-js-LC12">  <span>let</span> <span>requestHeaders</span> <span>=</span> <span>new</span> <span>Headers</span><span>(</span><span>request</span><span>.</span><span>headers</span><span>)</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L13" data-line-number="13"></td>
+        <td id="file-sample-v3-api-worker-js-LC13">  <span>requestHeaders</span><span>.</span><span>set</span><span>(</span><span>'Hibp-Api-Key'</span><span>,</span> <span>hibpApiKey</span><span>)</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L14" data-line-number="14"></td>
+        <td id="file-sample-v3-api-worker-js-LC14">  </td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L15" data-line-number="15"></td>
+        <td id="file-sample-v3-api-worker-js-LC15">  <span>// Extract the email being searched for</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L16" data-line-number="16"></td>
+        <td id="file-sample-v3-api-worker-js-LC16">  <span>let</span> <span>email</span> <span>=</span> <span>new</span> <span>URL</span><span>(</span><span>request</span><span>.</span><span>url</span><span>)</span><span>.</span><span>searchParams</span><span>.</span><span>get</span><span>(</span><span>'email'</span><span>)</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L17" data-line-number="17"></td>
+        <td id="file-sample-v3-api-worker-js-LC17">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L18" data-line-number="18"></td>
+        <td id="file-sample-v3-api-worker-js-LC18">  <span>// Define the HIBP URL to hit</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L19" data-line-number="19"></td>
+        <td id="file-sample-v3-api-worker-js-LC19">  <span>let</span> <span>newUrl</span> <span>=</span> <span>'https://haveibeenpwned.com/api/v3/breachedaccount/'</span> <span>+</span> <span>email</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L20" data-line-number="20"></td>
+        <td id="file-sample-v3-api-worker-js-LC20">  </td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L21" data-line-number="21"></td>
+        <td id="file-sample-v3-api-worker-js-LC21">  <span>// Construct a new request to the HIBP API</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L22" data-line-number="22"></td>
+        <td id="file-sample-v3-api-worker-js-LC22">  <span>const</span> <span>modifiedRequest</span> <span>=</span> <span>new</span> <span>Request</span><span>(</span><span>newUrl</span><span>,</span> <span>{</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L23" data-line-number="23"></td>
+        <td id="file-sample-v3-api-worker-js-LC23">    <span>method</span>: <span>request</span><span>.</span><span>method</span><span>,</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L24" data-line-number="24"></td>
+        <td id="file-sample-v3-api-worker-js-LC24">    <span>headers</span>: <span>requestHeaders</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L25" data-line-number="25"></td>
+        <td id="file-sample-v3-api-worker-js-LC25">  <span>}</span><span>)</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L26" data-line-number="26"></td>
+        <td id="file-sample-v3-api-worker-js-LC26">
+</td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L27" data-line-number="27"></td>
+        <td id="file-sample-v3-api-worker-js-LC27">  <span>// Send the request on</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L28" data-line-number="28"></td>
+        <td id="file-sample-v3-api-worker-js-LC28">  <span>return</span> <span>await</span> <span>fetch</span><span>(</span><span>modifiedRequest</span><span>)</span></td>
+      </tr>
+      <tr>
+        <td id="file-sample-v3-api-worker-js-L29" data-line-number="29"></td>
+        <td id="file-sample-v3-api-worker-js-LC29"><span>}</span></td>
+      </tr>
+</tbody></table>
+
+
+  </div>
+
+  </div>
+</div>
+
+      </div>
+      
+    </div>
+</div>
+<!--kg-card-end: html--><p>Stand up a domain on Cloudflare's free tier (if you're not on there already) then it's $5 per month to send 10M queries through your worker which is obviously way more than you can send to the HIBP API anyway. And while you're there, go and use the firewall rules to lock down a rate limit so your own API isn't hammered too much (keeping in mind some of the challenges I faced when doing this).</p><p>The point is that if you need to protect the API key and proxy requests, it's dead simple to do.</p><h3 id="but-what-if-you-just-">"But what if you just..."</h3><p>I'll get a gazillion suggestions of how I could do this differently. Every single time I talk about the mechanics of how I've built something I always do! The model described in this blog post is the best balance of a whole bunch of different factors; the sustainability of the service, the desire to limit abuse, leveraging the areas my skills lie in, the limited availability of my time and so on and so forth. There are many other factors that also aren't obvious so as much as suggestions for improvements are very welcomed, please keep in mind that they may not work in the broader sense of what's required to run this project.</p><h3 id="caveats">Caveats</h3><!--kg-card-begin: html--><p>There's a couple of these and they're largely due to me trying to make sure I get this feature out as early as possible and continue to run things on a shoestring cost wise. Firstly, there's no guarantee of support. We do <a href="https://report-uri.com/#prices">the same thing with entry-level Report URI pricing</a> and it's simply because it's enormously hard to do with the time constraints of a single person running this. That said, if anything is buggy or broken I definitely want to know about it. <del>Secondly, there's no way to retrieve or rotate the API key. If you extend the one-off subscription you'll get the same key back or if you cancel an existing subscription &nbsp;and take a new one you'll also get the same key. I'll build out better functionality around this in the future.</del></p><!--kg-card-end: html--><p><strong>Edit:</strong> You can now regenerate API keys by going to <a href="https://haveibeenpwned.com/API/Key">the API key page</a> and clicking the "regenerate key" button. This will invalidate the old key and issue a new one.</p><p>I'm sure there'll be others that pop up and I'll expand on the items above if I've missed any here.</p><h3 id="summary">Summary</h3><p>The changes I've outlined here strike a balance between making the API available for good purposes, making it harder to use for bad purposes, ensuring stability for all those in the former category and crucially, making it sustainable for me to operate. That last point in particular is critical for me both in terms of reducing abuse and reducing the overhead on me trying to achieve that objective and supporting those who ran into the previously mentioned blocks.</p><p>I expect there'll be many requests to change or evolve this model; other payment types, no payment at all for certain individuals or organisations, higher rate limits and so on and so forth. At this stage, my focus is on keeping the service sustainable as <a href="https://www.troyhunt.com/project-svalbard-the-future-of-have-i-been-pwned/">Project Svalbard</a> marches forward and once that comes to fruition, I'll be in a much better position to revisit suggestions (also, <a href="https://haveibeenpwned.uservoice.com/forums/275398-general">there's a UserVoice for that</a>). For now, I hope that this change leads to a much more sustainable service for everyone.</p><p>You can <a href="https://haveibeenpwned.com/API/Key">go and grab an API key right now</a> from the API menu on the HIBP website:</p><!--kg-card-begin: markdown--><p><a href="https://haveibeenpwned.com/API/Key"><img src="https://www.troyhunt.com/content/images/2019/07/image-2.png" alt="Foo"></a></p>
+<!--kg-card-end: markdown--><p><strong>Edit:</strong> Just to be <em>crystal </em>clear, this doesn't impact <a href="https://haveibeenpwned.com/Passwords">Pwned Passwords</a>. Cloudflare picks up pretty much all the costs for running that so the service is still freely accessible.</p>
+
+            <section>
+                <a href="https://www.troyhunt.com/tag/have-i-been-pwned-3f/">Have I Been Pwned</a>
+            </section>
+        </section></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

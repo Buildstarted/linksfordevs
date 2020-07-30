@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Utf8String design proposal &#xB7; Issue #2350 &#xB7; dotnet/corefxlab - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Utf8String design proposal &#xB7; Issue #2350 &#xB7; dotnet/corefxlab - linksfor.dev(s)"/>
+    <meta property="article:author" content="ahsonkhan"/>
+    <meta property="og:description" content="Utf8String design discussion - last edited 14-Sep-19 Utf8String design overview Audience and scenarios Utf8String and related concepts are meant for modern internet-facing applications that need to..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/dotnet/corefxlab/issues/2350"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Utf8String design proposal &#xB7; Issue #2350 &#xB7; dotnet/corefxlab</title>
+<div class="readable">
+        <h1>Utf8String design proposal &#xB7; Issue #2350 &#xB7; dotnet/corefxlab</h1>
+            <div>by ahsonkhan</div>
+            <div>Reading time: 57-72 minutes</div>
+        <div>Posted here: 05 Sep 2019</div>
+        <p><a href="https://github.com/dotnet/corefxlab/issues/2350">https://github.com/dotnet/corefxlab/issues/2350</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div disabled="" sortable="">
+<div>
+          
+<h2>Utf8String design overview</h2>
+<h3>Audience and scenarios</h3>
+<p><code>Utf8String</code> and related concepts are meant for modern internet-facing applications that need to speak "the language of the web" (or i/o in general, really). Currently applications spend some amount of time transcoding into formats that aren't particularly useful, which wastes CPU cycles and memory.</p>
+<p>A naive way to accomplish this would be to represent UTF-8 data as <code>byte[]</code> / <code>Span&lt;byte&gt;</code>, but this leads to a usability pit of failure. Developers would then become dependent on situational awareness and code hygiene to be able to know whether a particular <code>byte[]</code> instance is meant to represent binary data or UTF-8 textual data, leading to situations where it's very easy to write code like <code>byte[] imageData = ...; imageData.ToUpperInvariant();</code>. This defeats the purpose of using a typed language.</p>
+<p>We want to expose enough functionality to make the <code>Utf8String</code> type <em>usable</em> and <em>desirable</em> by our developer audience, but it's not intended to serve as a full drop-in replacement for its sibling type <code>string</code>. For example, we might add <code>Utf8String</code>-related overloads to existing APIs in the <code>System.IO</code> namespace, but we wouldn't add an overload <code>Assembly.LoadFrom(Utf8String assemblyName)</code>.</p>
+<p>In addition to networking and i/o scenarios, it's expected that there will be an audience who will want to use <code>Utf8String</code> for interop scenarios, especially when interoperating with components written in Rust or Go. Both of these languages use UTF-8 as their native string representation, and providing a type which can be used as a data exchange type for that audience will make their scenarios a bit easier.</p>
+<p>Finally, we should afford power developers the opportunity to improve their throughput and memory utilization by limiting data copying where feasible. This doesn't imply that we must be allocation-free or zero-copy for every scenario. But it does imply that we should investigate common operations and consider alternative ways of performing these tasks as long as it doesn't compromise the usability of the mainline scenarios.</p>
+<p>It's important to call out that <code>Utf8String</code> is not intended to be a replacement for <code>string</code>. The standard UTF-16 <code>string</code> will remain the core primitive type used throughout the .NET ecosystem and will enjoy the largest supported API surface area. We expect that developers who use <code>Utf8String</code> in their code bases will do so deliberately, either because they're working in one of the aforementioned scenarios or because they find other aspects of <code>Utf8String</code> (such as its API surface or behavior guarantees) desirable.</p>
+<h3>Design decisions and type API</h3>
+<p>To make internal <code>Utf8String</code> implementation details easier, and to allow consumers to better reason about the type's behavior, the <code>Utf8String</code> type maintains the following invariants:</p>
+<ul>
+<li>
+<p>Instances are <strong>immutable</strong>. Once data is copied to the <code>Utf8String</code> instance, it is unchanging for the lifetime of the instance. All members on <code>Utf8String</code> are thread-safe.</p>
+</li>
+<li>
+<p>Instances are <strong>heap-allocated</strong>. This is a standard reference type, like <code>string</code> and <code>object</code>.</p>
+</li>
+<li>
+<p>The backing data is <strong>guaranteed well-formed UTF-8</strong>. It can be round-tripped through <code>string</code> (or any other Unicode-compatible encoding) and back without any loss of fidelity. It can be passed verbatim to any other component whose contract requires that it operate only on well-formed UTF-8 data.</p>
+</li>
+<li>
+<p>The backing data is <strong>null-terminated</strong>. If the <code>Utf8String</code> instance is pinned, the resulting <code>byte*</code> can be passed to any API which takes a <code>LPCUTF8STR</code> parameter. (Like <code>string</code>, <code>Utf8String</code> instances can contain embedded nulls.)</p>
+</li>
+</ul>
+<p>These invariants help shape the proposed API and usage examples as described throughout this document.</p>
+<div><pre>[<span>Serializable</span>]
+<span>public</span> <span>sealed</span> <span>class</span> <span>Utf8String</span> : <span>IComparable</span>&lt;<span>Utf8String</span>&gt;, <span>IEquatable</span>&lt;<span>Utf8String</span>&gt;, <span>ISerializable</span>
+{
+    <span>public</span> <span>static</span> <span>readonly</span> <span>Utf8String</span> <span>Empty</span>; <span><span>//</span> matches String.Empty</span>
+
+    <span><span>/*</span></span>
+<span>     * CTORS AND FACTORIES</span>
+<span>     *</span>
+<span>     * These ctors all have "throw on invalid data" behavior since it's intended that data should</span>
+<span>     * be faithfully retained and should be round-trippable back to its original encoding.</span>
+<span>     <span>*/</span></span>
+
+    <span>public</span> <span>Utf8String</span>(byte[]? value, <span>int</span> <span>startIndex</span>, <span>int</span> <span>length</span>);
+    <span>public</span> <span>Utf8String</span>(char[]? value, <span>int</span> <span>startIndex</span>, <span>int</span> <span>length</span>);
+    <span>public</span> <span>Utf8String</span>(<span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>value</span>);
+    <span>public</span> <span>Utf8String</span>(<span>ReadOnlySpan</span>&lt;<span>char</span>&gt; <span>value</span>);
+    <span>public</span> <span>Utf8String</span>(<span>string</span> <span>value</span>) { }
+
+    <span><span>//</span> These ctors expect null-terminated UTF-8 or UTF-16 input.</span>
+    <span><span>//</span> They'll compute strlen / wcslen on the caller's behalf.</span>
+
+    <span>public</span> <span>unsafe</span> <span>Utf8String</span>(byte* value);
+    <span>public</span> <span>unsafe</span> <span>Utf8String</span>(char* value);
+
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>Create</span>&lt;<span>TState</span>&gt;(<span>int</span> <span>length</span>, <span>TState</span> <span>state</span>, <span>SpanAction</span>&lt;<span>byte</span>, <span>TState</span>&gt; <span>action</span>);
+
+    <span><span>//</span> "Try" factories are non-throwing equivalents of the above methods. They use a try pattern instead</span>
+    <span><span>//</span> of throwing if invalid input is detected.</span>
+
+    <span>public</span> <span>static</span> <span>bool</span> <span>TryCreateFrom</span>(<span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>buffer</span>, <span>out</span> <span>Utf8String</span>? <span>value</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>TryCreateFrom</span>(<span>ReadOnlySpan</span>&lt;<span>char</span>&gt; <span>buffer</span>, <span>out</span> <span>Utf8String</span>? <span>value</span>);
+
+    <span><span>//</span> "Loose" factories also perform validation, but if an invalid sequence is detected they'll</span>
+    <span><span>//</span> silently fix it up by performing U+FFFD substitution in the returned Utf8String instance</span>
+    <span><span>//</span> instead of throwing.</span>
+
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>CreateFromLoose</span>(<span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>buffer</span>);
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>CreateFromLoose</span>(<span>ReadOnlySpan</span>&lt;<span>char</span>&gt; <span>buffer</span>);
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>CreateLoose</span>&lt;<span>TState</span>&gt;(<span>int</span> <span>length</span>, <span>TState</span> <span>state</span>, <span>SpanAction</span>&lt;<span>byte</span>, <span>TState</span>&gt; <span>action</span>);
+
+    <span><span>//</span> "Unsafe" factories skip validation entirely. It's up to the caller to uphold the invariant</span>
+    <span><span>//</span> that Utf8String instances only ever contain well-formed UTF-8 data.</span>
+
+    [<span>RequiresUnsafe</span>]
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>UnsafeCreateWithoutValidation</span>(<span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>utf8Contents</span>);
+    [<span>RequiresUnsafe</span>]
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>UnsafeCreateWithoutValidation</span>&lt;<span>TState</span>&gt;(<span>int</span> <span>length</span>, <span>TState</span> <span>state</span>, <span>SpanAction</span>&lt;<span>byte</span>, <span>TState</span>&gt; <span>action</span>);
+
+    <span><span>/*</span></span>
+<span>     * ENUMERATION</span>
+<span>     *</span>
+<span>     * Since there's no this[int] indexer on Utf8String, these properties allow enumeration</span>
+<span>     * of the contents as UTF-8 code units (Bytes), as UTF-16 code units (Chars), or as</span>
+<span>     * Unicode scalar values (Runes). The enumerable struct types are defined at the bottom</span>
+<span>     * of this type.</span>
+<span>     <span>*/</span></span>
+
+    <span>public</span> <span>ByteEnumerable</span> <span>Bytes</span> { <span>get</span>; }
+    <span>public</span> <span>CharEnumerable</span> <span>Chars</span> { <span>get</span>; }
+    <span>public</span> <span>RuneEnumerable</span> <span>Runes</span> { <span>get</span>; }
+
+    <span><span>//</span> Also allow iterating over extended grapheme clusters (not yet ready).</span>
+    <span><span>//</span> public GraphemeClusterEnumerable GraphemeClusters { get; }</span>
+
+    <span><span>/*</span></span>
+<span>     * COMPARISON</span>
+<span>     *</span>
+<span>     * All comparisons are Ordinal unless the API takes a parameter such</span>
+<span>     * as a StringComparison or CultureInfo.</span>
+<span>     <span>*/</span></span>
+
+    <span><span>//</span> The "AreEquivalent" APIs compare UTF-8 data against UTF-16 data for equivalence, where</span>
+    <span><span>//</span> equivalence is defined as "the texts would transcode as each other".</span>
+    <span><span>//</span> (Shouldn't these methods really be on a separate type?)</span>
+
+    <span>public</span> <span>static</span> <span>bool</span> <span>AreEquivalent</span>(<span>Utf8String</span>? <span>utf8Text</span>, <span>string</span>? <span>utf16Text</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>AreEquivalent</span>(<span>Utf8Span</span> <span>utf8Text</span>, <span>ReadOnlySpan</span>&lt;<span>char</span>&gt; <span>utf16Text</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>AreEquivalent</span>(<span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>utf8Text</span>, <span>ReadOnlySpan</span>&lt;<span>char</span>&gt; <span>utf16Text</span>);
+    
+    <span>public</span> <span>int</span> <span>CompareTo</span>(<span>Utf8String</span>? <span>other</span>);
+    <span>public</span> <span>int</span> <span>CompareTo</span>(<span>Utf8String</span>? <span>other</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> <span>override</span> <span>bool</span> <span>Equals</span>(<span>object</span>? <span>obj</span>); <span><span>//</span> 'obj' must be Utf8String, not string</span>
+    <span>public</span> <span>static</span> <span>bool</span> <span>Equals</span>(<span>Utf8String</span>? <span>left</span>, <span>Utf8String</span>? <span>right</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>Equals</span>(<span>Utf8String</span>? <span>left</span>, <span>Utf8String</span>? <span>right</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>bool</span> <span>Equals</span>(<span>Utf8String</span>? <span>value</span>);
+    <span>public</span> <span>bool</span> <span>Equals</span>(<span>Utf8String</span>? <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> <span>static</span> <span>bool</span> <span>operator</span> <span>!=</span>(<span>Utf8String</span>? <span>left</span>, <span>Utf8String</span>? <span>right</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>operator</span> <span>==</span>(<span>Utf8String</span>? <span>left</span>, <span>Utf8String</span>? <span>right</span>);
+
+    <span><span>/*</span></span>
+<span>     * SEARCHING</span>
+<span>     *</span>
+<span>     * Like comparisons, all searches are Ordinal unless the API takes a</span>
+<span>     * parameter dictating otherwise.</span>
+<span>     <span>*/</span></span>
+    
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>char</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Rune</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Utf8String</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Utf8String</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>char</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Rune</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Utf8String</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Utf8String</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>char</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Rune</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Utf8String</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Utf8String</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span><span>//</span> TryFind is the equivalent of IndexOf. It returns a Range instead of an integer</span>
+    <span><span>//</span> index because there's no this[int] indexer on the Utf8String type, and encouraging</span>
+    <span><span>//</span> developers to slice by integer indices will almost certainly lead to bugs.</span>
+    <span><span>//</span> More on this later.</span>
+
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>char</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Rune</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Utf8String</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Utf8String</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>char</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Rune</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Utf8String</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Utf8String</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+
+    <span><span>/*</span></span>
+<span>     * SLICING</span>
+<span>     *</span>
+<span>     * All slicing operations uphold the "well-formed data" invariant and</span>
+<span>     * validate that creating the new substring instance will not split a</span>
+<span>     * multi-byte UTF-8 subsequence. This check is O(1).</span>
+<span>     <span>*/</span></span>
+
+    <span>public</span> <span>Utf8String</span> <span>this</span>[<span>Range</span> <span>range</span>] { <span>get</span>; }
+
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOn</span>(<span>char</span> <span>separator</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOn</span>(<span>char</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOn</span>(<span>Rune</span> <span>separator</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOn</span>(<span>Rune</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOn</span>(<span>Utf8String</span> <span>separator</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOn</span>(<span>Utf8String</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOnLast</span>(<span>char</span> <span>separator</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOnLast</span>(<span>char</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOnLast</span>(<span>Rune</span> <span>separator</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOnLast</span>(<span>Rune</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOnLast</span>(<span>Utf8String</span> <span>separator</span>);
+    <span>public</span> (<span>Utf8String</span> <span>Before</span>, <span>Utf8String</span>? <span>After</span>) <span>SplitOnLast</span>(<span>Utf8String</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span><span>/*</span></span>
+<span>     * INSPECTION &amp; MANIPULATION</span>
+<span>     <span>*/</span></span>
+
+    <span><span>//</span> some number of overloads to help avoid allocation in the common case</span>
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>Concat</span>&lt;<span>T</span>&gt;(<span>params</span> <span>IEnumerable</span>&lt;<span>T</span>&gt; <span>values</span>);
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>Concat</span>&lt;<span>T0</span>, <span>T1</span>&gt;(<span>T0</span> <span>value0</span>, <span>T1</span> <span>value1</span>);
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>Concat</span>&lt;<span>T0</span>, <span>T1</span>, <span>T2</span>&gt;(<span>T0</span> <span>value0</span>, <span>T1</span> <span>value1</span>, <span>T2</span> <span>value2</span>);
+
+    <span>public</span> <span>bool</span> <span>IsAscii</span>();
+
+    <span>public</span> <span>bool</span> <span>IsNormalized</span>(<span>NormalizationForm</span> <span>normalizationForm</span> <span>=</span> <span>NormalizationForm</span>.<span>FormC</span>);
+
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>Join</span>&lt;<span>T</span>&gt;(<span>char</span> <span>separator</span>, <span>params</span> <span>IEnumerable</span>&lt;<span>T</span>&gt; <span>values</span>);
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>Join</span>&lt;<span>T</span>&gt;(<span>Rune</span> <span>separator</span>, <span>params</span> <span>IEnumerable</span>&lt;<span>T</span>&gt; <span>values</span>);
+    <span>public</span> <span>static</span> <span>Utf8String</span> <span>Join</span>&lt;<span>T</span>&gt;(<span>Utf8String</span>? <span>separator</span>, <span>params</span> <span>IEnumerable</span>&lt;<span>T</span>&gt; <span>values</span>);
+
+    <span>public</span> <span>Utf8String</span> <span>Normalize</span>(<span>NormalizationForm</span> <span>normalizationForm</span> <span>=</span> <span>NormalizationForm</span>.<span>FormC</span>);
+
+    <span><span>//</span> Do we also need Insert, Remove, etc.?</span>
+
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>char</span> <span>oldChar</span>, <span>char</span> <span>newChar</span>); <span><span>//</span> Ordinal</span>
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>char</span> <span>oldChar</span>, <span>char</span> <span>newChar</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>char</span> <span>oldChar</span>, <span>char</span> <span>newChar</span>, <span>bool</span> <span>ignoreCase</span>, <span>CultureInfo</span> <span>culture</span>);
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>Rune</span> <span>oldRune</span>, <span>Rune</span> <span>newRune</span>); <span><span>//</span> Ordinal</span>
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>Rune</span> <span>oldRune</span>, <span>Rune</span> <span>newRune</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>Rune</span> <span>oldRune</span>, <span>Rune</span> <span>newRune</span>, <span>bool</span> <span>ignoreCase</span>, <span>CultureInfo</span> <span>culture</span>);
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>Utf8String</span> <span>oldText</span>, <span>Utf8String</span> <span>newText</span>); <span><span>//</span> Ordinal</span>
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>Utf8String</span> <span>oldText</span>, <span>Utf8String</span> <span>newText</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>Utf8String</span> <span>Replace</span>(<span>Utf8String</span> <span>oldText</span>, <span>Utf8String</span> <span>newText</span>, <span>bool</span> <span>ignoreCase</span>, <span>CultureInfo</span> <span>culture</span>);
+
+    <span>public</span> <span>Utf8String</span> <span>ToLower</span>(<span>CultureInfo</span> <span>culture</span>);
+    <span>public</span> <span>Utf8String</span> <span>ToLowerInvariant</span>();
+
+    <span>public</span> <span>Utf8String</span> <span>ToUpper</span>(<span>CultureInfo</span> <span>culture</span>);
+    <span>public</span> <span>Utf8String</span> <span>ToUpperInvariant</span>();
+
+    <span><span>//</span> The Trim* APIs only trim whitespace for now. When we figure out how to trim</span>
+    <span><span>//</span> additional data we can add the appropriate overloads.</span>
+
+    <span>public</span> <span>Utf8String</span> <span>Trim</span>();
+    <span>public</span> <span>Utf8String</span> <span>TrimStart</span>();
+    <span>public</span> <span>Utf8String</span> <span>TrimEnd</span>();
+
+    <span><span>/*</span></span>
+<span>     * PROJECTING</span>
+<span>     <span>*/</span></span>
+
+    <span>public</span> <span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>AsBytes</span>(); <span><span>//</span> perhaps an extension method instead?</span>
+    <span>public</span> <span>static</span> <span>explicit</span> <span>operator</span> <span>ReadOnlySpan</span>&lt;<span>byte</span>&gt;(<span>Utf8String</span>? <span>value</span>);
+    <span>public</span> <span>static</span> <span>implicit</span> <span>operator</span> <span>Utf8Span</span>(<span>Utf8String</span>? <span>value</span>);
+
+    <span><span>/*</span></span>
+<span>     * MISCELLANEOUS</span>
+<span>     <span>*/</span></span>
+    
+    <span>public</span> <span>override</span> <span>int</span> <span>GetHashCode</span>(); <span><span>//</span> Ordinal</span>
+    <span>public</span> <span>int</span> <span>GetHashCode</span>(<span>StringComparison</span> <span>comparisonType</span>);
+
+    <span><span>//</span> Used for pinning and passing to p/invoke. If the input Utf8String</span>
+    <span><span>//</span> instance is empty, returns a reference to the null terminator.</span>
+
+    [<span>EditorBrowsable</span>(<span>EditorBrowsableState</span>.<span>Never</span>)]
+    <span>public</span> <span>ref</span> <span>readonly</span> <span>byte</span> <span>GetPinnableReference</span>();
+
+    <span>public</span> <span>static</span> <span>bool</span> <span>IsNullOrEmpty</span>(<span>Utf8String</span>? <span>value</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>IsNullOrWhiteSpace</span>(<span>Utf8String</span>? <span>value</span>);
+
+    <span>public</span> <span>override</span> <span>string</span> <span>ToString</span>(); <span><span>//</span> transcode to UTF-16</span>
+
+    <span><span>/*</span></span>
+<span>     * SERIALIZATION</span>
+<span>     * (Throws an exception on deserialization if data is invalid.)</span>
+<span>     <span>*/</span></span>
+    
+    <span><span>//</span> Could also use an IObjectReference if we didn't want to implement the deserialization ctor.</span>
+    <span>private</span> <span>Utf8String</span>(<span>SerializationInfo</span> <span>info</span>, <span>StreamingContext</span> <span>context</span>);
+    void ISerializable.<span>GetObjectData</span>(<span>SerializationInfo</span> <span>info</span>, <span>StreamingContext</span> <span>context</span>);
+
+    <span><span>/*</span></span>
+<span>     * HELPER NESTED STRUCTS</span>
+<span>     <span>*/</span></span>
+
+    <span>public</span> <span>readonly</span> <span>struct</span> <span>ByteEnumerable</span> : <span>IEnumerable</span>&lt;<span>byte</span>&gt; { <span><span>/*</span> ... <span>*/</span></span> }
+    <span>public</span> <span>readonly</span> <span>struct</span> <span>CharEnumerable</span> : <span>IEnumerable</span>&lt;<span>char</span>&gt; { <span><span>/*</span> ... <span>*/</span></span> }
+    <span>public</span> <span>readonly</span> <span>struct</span> <span>RuneEnumerable</span> : <span>IEnumerable</span>&lt;<span>Rune</span>&gt; { <span><span>/*</span> ... <span>*/</span></span> }
+}
+
+<span>public</span> <span>static</span> <span>class</span> <span>MemoryExtensions</span>
+{
+    <span>public</span> <span>static</span> <span>ReadOnlyMemory</span>&lt;<span>byte</span>&gt; <span>AsMemory</span>(<span>Utf8String</span> <span>value</span>);
+    <span>public</span> <span>static</span> <span>ReadOnlyMemory</span>&lt;<span>byte</span>&gt; <span>AsMemory</span>(<span>Utf8String</span> <span>value</span>, <span>int</span> <span>offset</span>);
+    <span>public</span> <span>static</span> <span>ReadOnlyMemory</span>&lt;<span>byte</span>&gt; <span>AsMemory</span>(<span>Utf8String</span> <span>value</span>, <span>int</span> <span>offset</span>, <span>int</span> <span>count</span>);
+}</pre></div>
+<h2>Non-allocating types</h2>
+<p>While <code>Utf8String</code> is an allocating, heap-based, null-terminated type; there are scenarios where a developer may want to represent a segment (or "slice") of UTF-8 data from an existing buffer without incurring an allocation.</p>
+<p>The <code>Utf8Segment</code> (alternative name: <code>Utf8Memory</code>) and <code>Utf8Span</code> types can be used for this purpose. They represent a view into UTF-8 data, with the following guarantees:</p>
+<ul>
+<li>They are <em>immutable</em> views into <em>immutable</em> data.</li>
+<li>They are <em>guaranteed</em> well-formed UTF-8 data. (Tearing will be covered shortly.)</li>
+</ul>
+<p>These types have <code>Utf8String</code>-like methods hanging off of them as instance methods where appropriate. Additionally, they can be projected as <code>ROM&lt;byte&gt;</code> and <code>ROS&lt;byte&gt;</code> for developers who want to deal with the data at the raw binary level or who want to call existing extension methods on the <code>ROM</code> and <code>ROS</code> types.</p>
+<p>Since <code>Utf8Segment</code> and <code>Utf8Span</code> are standalone types distinct from <code>ROM</code> and <code>ROS</code>, they can have behaviors that developers have come to expect from string-like types. For example, <code>Utf8Segment</code> (unlike <code>ROM&lt;char&gt;</code> or <code>ROM&lt;byte&gt;</code>) can be used as a key in a dictionary without jumping through hoops:</p>
+<div><pre><span>Dictionary</span>&lt;<span>Utf8Segment</span>, <span>int</span>&gt; <span>dict</span> <span>=</span> ...;
+
+<span>Utf8String</span> <span>theString</span> <span>=</span> <span>u</span><span><span>"</span>hello world<span>"</span></span>;
+<span>Utf8Segment</span> <span>segment</span> <span>=</span> <span>theString</span>.<span>AsMemory</span>(<span>0</span>, <span>5</span>); <span><span>//</span> u"hello"</span>
+
+<span>if</span> (<span>dict</span>.<span>TryGetValue</span>(<span>segment</span>, <span>out</span> <span>int</span> <span>value</span>))
+{
+    <span>Console</span>.<span>WriteLine</span>(<span>value</span>);
+}</pre></div>
+<p><code>Utf8Span</code> instances can be compared against each other:</p>
+<div><pre><span>Utf8Span</span> <span>data1</span> <span>=</span> ...;
+<span>Utf8Span</span> <span>data2</span> <span>=</span> ...;
+
+<span>int</span> <span>hashCode</span> <span>=</span> <span>data1</span>.<span>GetHashCode</span>(); <span><span>//</span> Marvin32 hash</span>
+
+<span>if</span> (<span>data1</span> <span>==</span> <span>data2</span>) { <span><span>/*</span> ordinal comparison of contents <span>*/</span></span> }</pre></div>
+<p>An alternative design that was considered was to introduce a type <code>Char8</code> that would represent an 8-bit code unit - it would serve as the elemental type of <code>Utf8String</code> and its slices. However, <code>ReadOnlyMemory&lt;Char8&gt;</code> and <code>ReadOnlySpan&lt;Char8&gt;</code> were a bit unweildy for a few reasons.</p>
+<p>First, there was confusion as to what <code>ROS&lt;Char8&gt;</code> actually meant when the developer could use <code>ROS&lt;byte&gt;</code> for everything. Was <code>ROS&lt;Char8&gt;</code> actually providing guarantees that <code>ROS&lt;byte&gt;</code> couldn't? (No.) When would I ever want to use a lone <code>Char8</code> by itself rather than as part of a larger sequence? (You probably wouldn't.)</p>
+<p>Second, it introduced a complication that if you had a <code>ROM&lt;Char8&gt;</code>, it couldn't be converted to a <code>ROM&lt;byte&gt;</code>. This impacted the ability to perform text manipulation and then act on the data in a binary fashion, such as sending it across the network.</p>
+<h3>Creating segment types</h3>
+<p>Segment types can be created safely from <code>Utf8String</code> backing objects. As mentioned earlier, we enforce that data in the UTF-8 segment types is well-formed. This implies that an instance of a segment type cannot represent data that has been sliced in the middle of a multibyte boundary. Calls to slicing APIs will throw an exception if the caller tries to slice the data in such a manner.</p>
+<p>The <code>Utf8Segment</code> type introduces additional complexity in that it could be torn in a multi-threaded application, and that tearing may invalidate the well-formedness assumption by causing the torn segment to begin or end in the middle of a multi-byte UTF-8 subsequence. To resolve this issue, any instance method on <code>Utf8Segment</code> (including its projection to <code>ROM&lt;byte&gt;</code>) must first validate that the instance has not been torn. If the instance has been torn, an exception is thrown. This check is <em>O(1)</em> algorithmic complexity.</p>
+<p>It is possible that the developer will want to create a <code>Utf8Segment</code> or <code>Utf8Span</code> instance from an existing buffer (such as a pooled buffer). There are zero-cost APIs to allow this to be done; however, they are unsafe because they easily allow the developer to violate invariants held by these types.</p>
+<p>If the developer wishes to call the unsafe factories, they must maintain the following three invariants hold.</p>
+<ol>
+<li>
+<p>The provided buffer (<code>ROM&lt;byte&gt;</code> or <code>ROS&lt;byte&gt;</code>) remains "alive" and immutable for the duration of the <code>Utf8Segment</code> or <code>Utf8Span</code>'s existence. Whichever component receives a <code>Utf8Segment</code> or <code>Utf8Span</code> - however the instance has been created - must never observe that the underlying contents change or that dereferencing the contents might result in an AV or other undefined behavior.</p>
+</li>
+<li>
+<p>The provided buffer contains only well-formed UTF-8 data, and the boundaries of the buffer do not split a multibyte UTF-8 sequence.</p>
+</li>
+<li>
+<p>For <code>Utf8Segment</code> in particular, the caller <strong>must not</strong> create a <code>Utf8Segment</code> instance wrapped around a <code>ROM&lt;byte&gt;</code> in circumstances where the component which receives the newly created <code>Utf8Segment</code> might tear it. The reason for this is that the "check that the <code>Utf8Segment</code> instance was not torn across a multi-byte subsequence" protection is only reliable when the <code>Utf8Segment</code> instance is backed by a <code>Utf8String</code>. The <code>Utf8Segment</code> type makes a best effort to offer protection for other backing buffers, but this protection is not ironclad in those scenarios. This could lead to a violation of invariant (2) immediately above.</p>
+</li>
+</ol>
+<p>The type design here - including the constraints placed on segment types and the elimination of the <code>Char8</code> type - also draws inspiration from the Go, Swift, and Rust communities.</p>
+<div><pre><span>public</span> <span>readonly</span> <span>ref</span> <span>struct</span> <span>Utf8Span</span>
+{
+    <span>public</span> <span>Utf8Span</span>(<span>Utf8String</span>? <span>value</span>);
+
+    <span><span>//</span> This "Unsafe" ctor wraps a Utf8Span around an arbitrary span. It is non-copying.</span>
+    <span><span>//</span> The caller must uphold Utf8Span's invariants: that it's immutable and well-formed</span>
+    <span><span>//</span> for the lifetime that any component might be consuming the Utf8Span instance.</span>
+    <span><span>//</span> Consumers (and Utf8Span's own internal APIs) rely on this invariant, and</span>
+    <span><span>//</span> violating it could lead to undefined behavior at runtime.</span>
+
+    [<span>RequiresUnsafe</span>]
+    <span>public</span> <span>static</span> <span>Utf8Span</span> <span>UnsafeCreateWithoutValidation</span>(<span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>buffer</span>);
+
+    <span><span>//</span> The equality operators and GetHashCode() operate on the underlying buffers.</span>
+    <span><span>//</span> Two Utf8Span instances containing the same data will return equal and have</span>
+    <span><span>//</span> the same hash code, even if they're referencing different memory addresses.</span>
+
+    [<span>EditorBrowsable</span>(<span>EditorBrowsableState</span>.<span>Never</span>)]
+    [<span>Obsolete</span>(<span><span>"</span>Equals(object) on Utf8Span will always throw an exception. Use Equals(Utf8Span) or == instead.<span>"</span></span>)]
+    <span>public</span> <span>override</span> <span>bool</span> <span>Equals</span>(<span>object</span>? <span>obj</span>);
+    <span>public</span> <span>bool</span> <span>Equals</span>(<span>Utf8Span</span> <span>other</span>);
+    <span>public</span> <span>bool</span> <span>Equals</span>(<span>Utf8Span</span> <span>other</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>Equals</span>(<span>Utf8Span</span> <span>left</span>, <span>Utf8Span</span> <span>right</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>Equals</span>(<span>Utf8Span</span> <span>left</span>, <span>Utf8Span</span> <span>right</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>override</span> <span>int</span> <span>GetHashCode</span>();
+    <span>public</span> <span>int</span> <span>GetHashCode</span>(<span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>operator</span> <span>!=</span>(<span>Utf8Span</span> <span>left</span>, <span>Utf8Span</span> <span>right</span>);
+    <span>public</span> <span>static</span> <span>bool</span> <span>operator</span> <span>==</span>(<span>Utf8Span</span> <span>left</span>, <span>Utf8Span</span> <span>right</span>);
+
+    <span><span>//</span> Unlike Utf8String.GetPinnableReference, Utf8Span.GetPinnableReference returns</span>
+    <span><span>//</span> null if the span is zero-length. This is because we're not guaranteed that the</span>
+    <span><span>//</span> backing data has a null terminator at the end, so we don't know whether it's</span>
+    <span><span>//</span> safe to dereference the element just past the end of the span.</span>
+
+    <span>public</span> <span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>Bytes</span> { <span>get</span>; }
+    <span>public</span> <span>bool</span> <span>IsEmpty</span> { <span>get</span>; }
+    [<span>EditorBrowsable</span>(<span>EditorBrowsableState</span>.<span>Never</span>)]
+    <span>public</span> <span>ref</span> <span>readonly</span> <span>byte</span> <span>GetPinnableReference</span>();
+
+    <span><span>//</span> For the most part, Utf8Span's remaining APIs mirror APIs already on Utf8String.</span>
+    <span><span>//</span> There are some exceptions: methods like ToUpperInvariant have a non-allocating</span>
+    <span><span>//</span> equivalent that allows the caller to specify the buffer which should</span>
+    <span><span>//</span> contain the result of the operation. Like Utf8String, all APIs are assumed</span>
+    <span><span>//</span> Ordinal unless the API takes a parameter which provides otherwise.</span>
+
+    <span>public</span> <span>static</span> <span>Utf8Span</span> <span>Empty</span> { <span>get</span>; }
+
+    <span>public</span> <span>ReadOnlySpan</span>&lt;<span>byte</span>&gt; <span>Bytes</span> { <span>get</span>; } <span><span>//</span> returns ROS&lt;byte&gt;, not custom enumerable</span>
+    <span>public</span> <span>CharEnumerable</span> <span>Chars</span> { <span>get</span>; }
+    <span>public</span> <span>RuneEnumerable</span> <span>Runes</span> { <span>get</span>; }
+
+    <span><span>//</span> Also allow iterating over extended grapheme clusters (not yet ready).</span>
+    <span><span>//</span> public GraphemeClusterEnumerable GraphemeClusters { get; }</span>
+
+    <span>public</span> <span>int</span> <span>CompareTo</span>(<span>Utf8Span</span> <span>other</span>);
+    <span>public</span> <span>int</span> <span>CompareTo</span>(<span>Utf8Span</span> <span>other</span>, <span>StringComparison</span> <span>comparison</span>);
+
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>char</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Rune</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Utf8Span</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>Contains</span>(<span>Utf8Span</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>char</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Rune</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Utf8Span</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>EndsWith</span>(<span>Utf8Span</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+
+    <span>public</span> <span>bool</span> <span>IsAscii</span>();
+
+    <span>public</span> <span>bool</span> <span>IsEmptyOrWhiteSpace</span>();
+
+    <span>public</span> <span>bool</span> <span>IsNormalized</span>(<span>NormalizationForm</span> <span>normalizationForm</span> <span>=</span> <span>NormalizationForm</span>.<span>FormC</span>);
+
+    <span>public</span> <span>Utf8String</span> <span>Normalize</span>(<span>NormalizationForm</span> <span>normalizationForm</span> <span>=</span> <span>NormalizationForm</span>.<span>FormC</span>);
+    <span>public</span> <span>int</span> <span>Normalize</span>(<span>Span</span>&lt;<span>byte</span>&gt; <span>destination</span>, <span>NormalizationForm</span> <span>normalizationForm</span> <span>=</span> <span>NormalizationForm</span>.<span>FormC</span>);
+
+    <span>public</span> <span>Utf8Span</span> <span>this</span>[<span>Range</span> <span>range</span>] { <span>get</span>; }
+
+    <span>public</span> <span>SplitResult</span> <span>SplitOn</span>(<span>char</span> <span>separator</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOn</span>(<span>char</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOn</span>(<span>Rune</span> <span>separator</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOn</span>(<span>Rune</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOn</span>(<span>Utf8String</span> <span>separator</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOn</span>(<span>Utf8String</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> <span>SplitResult</span> <span>SplitOnLast</span>(<span>char</span> <span>separator</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOnLast</span>(<span>char</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOnLast</span>(<span>Rune</span> <span>separator</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOnLast</span>(<span>Rune</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOnLast</span>(<span>Utf8String</span> <span>separator</span>);
+    <span>public</span> <span>SplitResult</span> <span>SplitOnLast</span>(<span>Utf8String</span> <span>separator</span>, <span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>char</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>char</span> <span>value</span>, System.<span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Rune</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Utf8Span</span> <span>value</span>);
+    <span>public</span> <span>bool</span> <span>StartsWith</span>(<span>Utf8Span</span> <span>value</span>, <span>StringComparison</span> <span>comparison</span>);
+
+    <span>public</span> <span>int</span> <span>ToChars</span>(<span>Span</span>&lt;<span>char</span>&gt; <span>destination</span>);
+
+    <span>public</span> <span>Utf8String</span> <span>ToLower</span>(<span>CultureInfo</span> <span>culture</span>);
+    <span>public</span> <span>int</span> <span>ToLower</span>(<span>Span</span>&lt;<span>byte</span>&gt; <span>destination</span>, <span>CultureInfo</span> <span>culture</span>);
+
+    <span>public</span> <span>Utf8String</span> <span>ToLowerInvariant</span>();
+    <span>public</span> <span>int</span> <span>ToLowerInvariant</span>(<span>Span</span>&lt;<span>byte</span>&gt; <span>destination</span>);
+
+    <span>public</span> <span>override</span> <span>string</span> <span>ToString</span>();
+
+    <span>public</span> <span>Utf8String</span> <span>ToUpper</span>(<span>CultureInfo</span> <span>culture</span>);
+    <span>public</span> <span>int</span> <span>ToUpper</span>(<span>Span</span>&lt;<span>byte</span>&gt; <span>destination</span>, <span>CultureInfo</span> <span>culture</span>);
+
+    <span>public</span> <span>Utf8String</span> <span>ToUpperInvariant</span>();
+    <span>public</span> <span>int</span> <span>ToUpperInvariant</span>(<span>Span</span>&lt;<span>byte</span>&gt; <span>destination</span>);
+
+    <span>public</span> <span>Utf8String</span> <span>ToUtf8String</span>();
+
+    <span><span>//</span> Should we also have Trim* overloads that return a range instead</span>
+    <span><span>//</span> of the span directly? Does this actually enable any new scenarios?</span>
+
+    <span>public</span> <span>Utf8Span</span> <span>Trim</span>();
+    <span>public</span> <span>Utf8Span</span> <span>TrimStart</span>();
+    <span>public</span> <span>Utf8Span</span> <span>TrimEnd</span>();
+
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>char</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Rune</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Utf8Span</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFind</span>(<span>Utf8Span</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>char</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>char</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Rune</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Rune</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Utf8Span</span> <span>value</span>, <span>out</span> <span>Range</span> <span>range</span>);
+    <span>public</span> <span>bool</span> <span>TryFindLast</span>(<span>Utf8Span</span> <span>value</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>Range</span> <span>range</span>);
+
+    <span><span>/*</span></span>
+<span>     * HELPER NESTED STRUCTS</span>
+<span>     <span>*/</span></span>
+
+    <span>public</span> <span>readonly</span> <span>ref</span> <span>struct</span> <span>CharEnumerable</span> { <span><span>/*</span> pattern match for 'foreach' <span>*/</span></span> }
+    <span>public</span> <span>readonly</span> <span>ref</span> <span>struct</span> <span>RuneEnumerable</span> { <span><span>/*</span> pattern match for 'foreach' <span>*/</span></span> }
+
+    <span>public</span> <span>readonly</span> <span>ref</span> <span>struct</span> <span>SplitResult</span>
+    {
+        <span>private</span> <span>SplitResult</span>();
+
+        [<span>EditorBrowsable</span>(<span>EditorBrowsable</span>.<span>Never</span>)]
+        <span>public</span> <span>void</span> <span>Deconstruct</span>(<span>out</span> <span>Utf8Span</span> <span>before</span>, <span>out</span> <span>Utf8Span</span> <span>after</span>);
+    }
+}
+
+<span>public</span> <span>readonly</span> <span>struct</span> <span>Utf8Segment</span> : <span>IComparable</span>&lt;<span>Utf8Segment</span>&gt;, <span>IEquatable</span>&lt;<span>Utf8Segment</span>&gt;
+{
+    <span>private</span> <span>readonly</span> <span>ReadOnlyMemory</span>&lt;<span>byte</span>&gt; <span>_data</span>;
+
+    <span>public</span> <span>Utf8Span</span> <span>Span</span> { <span>get</span>; }
+
+    <span><span>//</span> Not all span-based APIs are present. APIs on Utf8Span that would</span>
+    <span><span>//</span> return a new Utf8Span (such as Trim) should be present here, but</span>
+    <span><span>//</span> other APIs that return bool / int (like Contains, StartsWith)</span>
+    <span><span>//</span> should only be present on the Span type to discourage heavy use</span>
+    <span><span>//</span> of APIs hanging directly off of this type.</span>
+
+    <span>public</span> <span>override</span> <span>bool</span> <span>Equals</span>(<span>object</span>? <span>other</span>); <span><span>//</span> ok to call</span>
+    <span>public</span> <span>bool</span> <span>Equals</span>(<span>Utf8Segment</span> <span>other</span>); <span><span>//</span> defaults to Ordinal</span>
+    <span>public</span> <span>bool</span> <span>Equals</span>(<span>Utf8Segment</span> <span>other</span>, <span>StringComparison</span> <span>comparison</span>);
+
+    <span>public</span> <span>override</span> <span>int</span> <span>GetHashCode</span>(); <span><span>//</span> Ordinal</span>
+    <span>public</span> <span>int</span> <span>GetHashCode</span>(<span>StringComparison</span> <span>comparison</span>);
+
+    <span><span>//</span> Caller is responsible for ensuring:</span>
+    <span><span>//</span> - Input buffer contains well-formed UTF-8 data.</span>
+    <span><span>//</span> - Input buffer is immutable and accessible for the lifetime of this Utf8Segment instance.</span>
+    <span>public</span> <span>static</span> <span>Utf8Segment</span> <span>UnsafeCreateWithoutValidation</span>(<span>ReadOnlyMemory</span>&lt;<span>byte</span>&gt; <span>data</span>);
+}</pre></div>
+<h3>Supporting types</h3>
+<p>Like <code>StringComparer</code>, there's also a <code>Utf8StringComparer</code> which can be passed into the <code>Dictionary&lt;,&gt;</code> and <code>HashSet&lt;&gt;</code> constructors. This <code>Utf8StringComparer</code> also implements <code>IEqualityComparer&lt;Utf8Segment&gt;</code>, which allows using <code>Utf8Segment</code> instances directly as the keys inside dictionaries and other collection types.</p>
+<p>The <code>Dictionary&lt;,&gt;</code> class is also being enlightened to understand that these types have both non-randomized and randomized hash code calculation routines. This allows dictionaries instantiated with <em>TKey = <code>Utf8String</code></em> or <em>TKey = <code>Utf8Segment</code></em> to enjoy the same performance optimizations as dictionaries instantiated with <em>TKey = <code>string</code></em>.</p>
+<p>Finally, the <code>Utf8StringComparer</code> type has convenience methods to compare <code>Utf8Span</code> instances against one another. This will make it easier to compare texts using specific cultures, even if that specific culture is not the current thread's active culture.</p>
+<div><pre><span>public</span> <span>abstract</span> <span>class</span> <span>Utf8StringComparer</span> : <span>IComparer</span>&lt;<span>Utf8Segment</span>&gt;, <span>IComparer</span>&lt;<span>Utf8String</span>?&gt;, <span>IEqualityComparer</span>&lt;<span>Utf8Segment</span>&gt;, <span>IEqualityComparer</span>&lt;<span>Utf8String</span>?&gt;
+{
+    <span>private</span> <span>Utf8StringComparer</span>(); <span><span>//</span> all implementations are internal</span>
+
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>CurrentCulture</span> { <span>get</span>; }
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>CurrentCultureIgnoreCase</span> { <span>get</span>; }
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>InvariantCulture</span> { <span>get</span>; }
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>InvariantCultureIgnoreCase</span> { <span>get</span>; }
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>Ordinal</span> { <span>get</span>; }
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>OrdinalIgnoreCase</span> { <span>get</span>; }
+
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>Create</span>(<span>CultureInfo</span> <span>culture</span>, <span>bool</span> <span>ignoreCase</span>);
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>Create</span>(<span>CultureInfo</span> <span>culture</span>, <span>CompareOptions</span> <span>options</span>);
+    <span>public</span> <span>static</span> <span>Utf8StringComparer</span> <span>FromComparison</span>(<span>StringComparison</span> <span>comparisonType</span>);
+
+    <span>public</span> <span>abstract</span> <span>int</span> <span>Compare</span>(<span>Utf8Segment</span> <span>x</span>, <span>Utf8Segment</span> <span>y</span>);
+    <span>public</span> <span>abstract</span> <span>int</span> <span>Compare</span>(<span>Utf8String</span>? <span>x</span>, <span>Utf8String</span>? <span>y</span>);
+    <span>public</span> <span>abstract</span> <span>int</span> <span>Compare</span>(<span>Utf8Span</span> <span>x</span>, <span>Utf8Span</span> <span>y</span>);
+    <span>public</span> <span>abstract</span> <span>bool</span> <span>Equals</span>(<span>Utf8Segment</span> <span>x</span>, <span>Utf8Segment</span> <span>y</span>);
+    <span>public</span> <span>abstract</span> <span>bool</span> <span>Equals</span>(<span>Utf8String</span>? <span>x</span>, <span>Utf8String</span>? <span>y</span>);
+    <span>public</span> <span>abstract</span> <span>bool</span> <span>Equals</span>(<span>Utf8Span</span> <span>x</span>, <span>Utf8Span</span> <span>y</span>);
+    <span>public</span> <span>abstract</span> <span>int</span> <span>GetHashCode</span>(<span>Utf8Segment</span> <span>obj</span>);
+    <span>public</span> <span>abstract</span> <span>int</span> <span>GetHashCode</span>(<span>Utf8String</span> <span>obj</span>);
+    <span>public</span> <span>abstract</span> <span>int</span> <span>GetHashCode</span>(<span>Utf8Span</span> <span>obj</span>);
+}</pre></div>
+<h2>Manipulating UTF-8 data</h2>
+<h3>CoreFX and Azure scenarios</h3>
+<ul>
+<li>
+<p>What exchange types do we use when passing around UTF-8 data into and out of Framework APIs?</p>
+</li>
+<li>
+<p>How do we generate UTF-8 data in a low-allocation manner?</p>
+</li>
+<li>
+<p>How do we apply a series of transformations to UTF-8 data in a low-allocation manner?</p>
+<ul>
+<li>
+<p>Leave everything as <code>Span&lt;byte&gt;</code>, use a special <code>Utf8StringBuilder</code> type, or something else?</p>
+</li>
+<li>
+<p>Do we need to support UTF-8 string interpolation?</p>
+</li>
+<li>
+<p>If we have builders, who is ultimately responsible for lifetime management?</p>
+</li>
+<li>
+<p>Perhaps should look at <code>ValueStringBuilder</code> for inspiration.</p>
+</li>
+<li>
+<p>A <code>MutableUtf8Buffer</code> type would be promising, but we'd need to be able to generate <code>Utf8Span</code> slices from it, and if the buffer is being modified continually the spans could end up holding invalid data. Example below:</p>
+<div><pre><span>MutableUtf8Buffer</span> <span>buffer</span> <span>=</span> <span>GetBuffer</span>();
+<span>Utf8Span</span> <span>theSpan</span> <span>=</span> <span>buffer</span>[<span>0</span>..<span>1</span>];
+
+<span>buffer</span>.<span>InsertAt</span>(<span>0</span>, <span>utf8</span>(<span><span>"</span>💣<span>"</span></span>)); <span><span>//</span> U+1F483 ([ F0 9F 92 A3 ])</span>
+
+<span><span>//</span> 'theSpan' now contains only the first byte ([ F0 ]).</span>
+<span><span>//</span> Trying to use it could corrupt the application.</span>
+<span><span>//</span></span>
+<span><span>//</span> Any such mutable UTF-8 type would necessarily be unsafe. This</span>
+<span><span>//</span> also matches Rust's semantics: direct byte manipulation can only</span>
+<span><span>//</span> take place within an unsafe context.</span>
+<span><span>//</span> See:</span>
+<span><span>//</span> * https://doc.rust-lang.org/std/string/struct.String.html#method.as_mut_vec</span>
+<span><span>//</span> * https://doc.rust-lang.org/std/primitive.str.html#method.as_bytes_mut</span></pre></div>
+</li>
+</ul>
+</li>
+<li>
+<p>Some folks will want to perform operations in-place.</p>
+</li>
+</ul>
+<h3>Sample operations on arbitrary buffers</h3>
+<p>(Devs may want to perform these operations on arbitrary byte buffers, even if those buffers aren't guaranteed to contain valid UTF-8 data.)</p>
+<ul>
+<li>
+<p>Validate that buffer contains well-formed UTF-8 data.</p>
+</li>
+<li>
+<p>Convert ASCII data to upper / lower in-place, leaving all non-ASCII data untouched.</p>
+</li>
+<li>
+<p>Split on byte patterns. (Probably shouldn't split on runes or UTF-8 string data, since we can't guarantee data is well-formed UTF-8.)</p>
+</li>
+</ul>
+<p>These operations could be on the newly-introduced <code>System.Text.Unicode.Utf8</code> static class. They would take <code>ROS&lt;byte&gt;</code> and <code>Span&lt;byte&gt;</code> as input parameters because they can operate on arbitrary byte buffers. Their runtime performance would be subpar compared to similar methods on <code>Utf8String</code>, <code>Utf8Span</code>, or other types where we can guarantee that no invalid data will be seen, as the APIs which operate on raw byte buffers would need to be defensive and would probably operate over the input in an iterative fashion rather than in bulk. One potential behavior could be skipping over invalid data and leaving it unchanged as part of the operation.</p>
+<h3>Sample <code>Utf8StringBuilder</code> implementation for private use</h3>
+<div><pre><span>internal</span> <span>ref</span> <span>struct</span> <span>Utf8StringBuilder</span>
+{
+    <span>public</span> <span>void</span> <span>Append</span>&lt;<span>T</span>&gt;(<span>T</span> <span>value</span>) <span>where</span> <span>T</span> : <span>IUtf8Formattable</span>;
+    <span>public</span> <span>void</span> <span>Append</span>&lt;<span>T</span>&gt;(<span>T</span> <span>value</span>, <span>string</span> <span>format</span>, <span>CultureInfo</span> <span>culture</span>) <span>where</span> <span>T</span> : <span>IUtf8Formattable</span>;
+
+    <span>public</span> <span>void</span> <span>Append</span>(<span>Utf8String</span> <span>value</span>);
+    <span>public</span> <span>void</span> <span>Append</span>(<span>Utf8Segment</span> <span>value</span>);
+    <span>public</span> <span>void</span> <span>Append</span>(<span>Utf8Span</span> <span>value</span>);
+
+    <span><span>//</span> Some other Append methods, resize methods, etc.</span>
+    <span><span>//</span> Methods to query the length.</span>
+
+    <span>public</span> <span>Utf8String</span> <span>ToUtf8String</span>();
+
+    <span>public</span> <span>void</span> <span>Dispose</span>(); <span><span>//</span> when done with the instance</span>
+}
+
+<span><span>//</span> Would be implemented by numeric types (int, etc.),</span>
+<span><span>//</span> DateTime, String, Utf8String, Guid, other primitives,</span>
+<span><span>//</span> Uri, and anything else we might want to throw into</span>
+<span><span>//</span> interpolated data.</span>
+<span>internal</span> <span>interface</span> <span>IUtf8Formattable</span>
+{
+    <span>void</span> <span>Append</span>(<span>ref</span> <span>Utf8StringBuilder</span> <span>builder</span>);
+    <span>void</span> <span>Append</span>(<span>ref</span> <span>Utf8StringBuilder</span> <span>builder</span>, <span>string</span> <span>format</span>, <span>CultureInfo</span> <span>culture</span>);
+}</pre></div>
+<h2>Code samples and metadata representation</h2>
+<p>The C# compiler could detect support for UTF-8 strings by looking for the existence of the <code>System.Utf8String</code> type and the appropriate helper APIs on <code>RuntimeHelpers</code> as called out in the samples below. If these APIs don't exist, then the target framework does not support the concept of UTF-8 strings.</p>
+<h3>Literals</h3>
+<p>Literal UTF-8 strings would appear as regular strings in source code, but would be prefixed by a <em>u</em> as demonstrated below. The <em>u</em> prefix would denote that the return type of this literal string expression should be <code>Utf8String</code> instead of <code>string</code>.</p>
+<div><pre><span>Utf8String</span> <span>myUtf8String</span> <span>=</span> <span>u</span><span><span>"</span>A literal string!<span>"</span></span>;</pre></div>
+<pre lang="txt"><code>// Normal ldstr to literal UTF-16 string in PE string table, followed by
+// call to helper method which translates this to a UTF-8 string literal.
+// The end result of these calls is that a Utf8String instance sits atop
+// the stack.
+
+ldstr "A literal string!"
+call class System.Utf8String System.Runtime.CompilerServices.RuntimeHelpers.InitializeUtf8StringLiteral(string)
+</code></pre>
+<p>The <em>u</em> prefix would also be combinable with the <em>@</em> prefix and the <em>$</em> prefix (more on this below).</p>
+<p>Additionally, literal UTF-8 strings <strong>must</strong> be well-formed Unicode strings.</p>
+<div><pre><span><span>//</span> Below line would be a compile-time error since it contains ill-formed Unicode data.</span>
+<span>Utf8String</span> <span>myUtf8String</span> <span>=</span> <span>u</span><span><span>"</span>A malformed <span>\u</span>d800 literal string!<span>"</span></span>;</pre></div>
+<p>Three alternative designs were considered. One was to use RVA statics (through <code>ldsflda</code>) instead of literal UTF-16 strings (through <code>ldstr</code>) before calling a "load from RVA" method on <code>RuntimeHelpers</code>. The overhead of using RVA statics is somewhat greater than the overhead of using the normal UTF-16 string table, so the normal UTF-16 string literal table should still be the more optimized case for small-ish strings, which we believe to be the common case.</p>
+<p>Another alternative considered was to introduce a new opcode <code>ldstr.utf8</code>, which would act as a UTF-8 equivalent to the normal <code>ldstr</code> opcode. This would be a breaking change to the .NET tooling ecosystem, and the ultimate decision was that there would be too much pain to the ecosystem to justify the benefit.</p>
+<p>The third alternative considered was to smuggle UTF-8 data in through a normal UTF-16 string in the string table, then call a <code>RuntimeHelpers</code> method to reinterpret the contents. This would result in a "garbled" string for anybody looking at the raw IL. While that in itself isn't terrible, there is the possibility that smuggling UTF-8 data in this manner could result in a literal string which has ill-formed UTF-16 data. Not all .NET tooling is resilient to this. For example, xunit's test runner produces failures if it sees attributes initialized from literal strings containing ill-formed UTF-16 data. There is a risk that other tooling would behave similarly, potentially modifying the DLL in such a manner that errors only manifest themselves at runtime. This could result in difficult-to-diagnose bugs.</p>
+<p>We may wish to reconsider this decision in the future. For example, if we see that it is common for developers to use large UTF-8 literal strings, maybe we'd want to dynamically switch to using RVA statics for such strings. This would lower the resulting DLL size. However, this would add extra complexity to the compilation process, so we'd want to tread lightly here.</p>
+<h3>Constant handling</h3>
+<div><pre><span>class</span> <span>MyClass</span>
+{
+    <span>public</span> <span>const</span> <span>Utf8String</span> <span>MyConst</span> <span>=</span> <span>u</span><span><span>"</span>A const string!<span>"</span></span>;
+}</pre></div>
+<pre lang="txt"><code>// Literal field initialized to literal UTF-16 value. The runtime doesn't care about
+// this (modulo FieldInfo.GetRawConstantValue, which perhaps we could fix up), so
+// only the C# compiler would need to know that this is a UTF-8 constant and that
+// references to it should get the same (ldstr, call) treatment as stated above.
+
+.field public static literal class System.Utf8String MyConst = "A const string!";
+</code></pre>
+<h3>String concatenation</h3>
+<p>There would be APIs on <code>Utf8String</code> which mirror the <code>string.Concat</code> APIs. The compiler should special-case the <code>+</code> operator to call the appropriate overload n-ary overload of <code>Concat</code>.</p>
+<div><pre><span>Utf8String</span> <span>a</span> <span>=</span> ...;
+<span>Utf8String</span> <span>b</span> <span>=</span> ...;
+
+<span>Utf8String</span> <span>c</span> <span>=</span> <span>a</span> <span>+</span> <span>u</span><span><span>"</span>, <span>"</span></span> <span>+</span> <span>b</span>; <span><span>//</span> calls Utf8String.Concat(...)</span></pre></div>
+<p>Since we expect use of <code>Utf8String</code> to be "deliberate" when compared to <code>string</code> (see the beginning of this document), we should consider that a developer who is using UTF-8 wants to stay in UTF-8 during concatenation operations. This means that if there's a line which involves the concatenation of both a <code>Utf8String</code> and a <code>string</code>, the final type post-concatenation should be <code>Utf8String</code>.</p>
+<div><pre><span>Utf8String</span> <span>a</span> <span>=</span> ...;
+<span>string</span> <span>b</span> <span>=</span> ...;
+
+<span>Utf8String</span> <span>concatFoo</span> <span>=</span> <span>a</span> <span>+</span> <span>b</span>;
+<span>string</span> <span>concatBar</span> <span>=</span> (<span>object</span>)<span>a</span> <span>+</span> <span>b</span>; <span><span>//</span> compiler can't statically determine that any argument is Utf8String</span></pre></div>
+<p>This is still open for discussion, as the behavior may be surprising to people. Another alternative is to produce a build warning if somebody tries to mix-and-match UTF-8 strings and UTF-16 strings in a single concatenation expression.</p>
+<p>If string interpolation is added in the future, this shouldn't result in ambiguity. The <code>$</code> interpolation operator will be applied to a literal <code>Utf8String</code> or a literal <code>string</code>, and that would dictate the overall return type of the operation.</p>
+<h3>Equality comparisons</h3>
+<p>There are standard <code>==</code> and <code>!=</code> operators defined on the <code>Utf8String</code> class.</p>
+<div><pre><span>public</span> <span>static</span> <span>bool</span> <span>operator</span> ==(<span>Utf8String</span> <span>a</span>, <span>Utf8String</span> <span>b</span>);
+<span>public</span> <span>static</span> <span>bool</span> <span>operator</span> <span>!=</span>(<span>Utf8String</span> <span>a</span>, <span>Utf8String</span> <span>b</span>);</pre></div>
+<p>The C# compiler should special-case when either side of an equality expression is known to be a literal null object, and if so the compiler should emit a referential check against the null object instead of calling the operator method. This matches the <code>if (myString == null)</code> behavior that the <code>string</code> type enjoys today.</p>
+<p>Additionally, equality / inequality comparisons between <code>Utf8String</code> and <code>string</code> should produce compiler warnings, as they will never succeed.</p>
+<div><pre><span>Utf8String</span> <span>a</span> <span>=</span> ...;
+<span>string</span> <span>b</span> <span>=</span> ...;
+
+<span><span>//</span> Below line should produce a warning since it will end up being the equivalent</span>
+<span><span>//</span> of Object.ReferenceEquals, which will only succeed if both arguments are null.</span>
+<span><span>//</span> This probably wasn't what the developer intended to check.</span>
+
+<span>if</span> (<span>a</span> <span>==</span> <span>b</span>) { <span><span>/*</span> ... <span>*/</span></span> }</pre></div>
+<p>I attempted to define <code>operator ==(Utf8String a, string b)</code> so that I could slap <code>[Obsolete]</code> on it and generate the appropriate warning, but this had the side effect of disallowing the user to write the code <code>if (myUtf8String == null)</code> since the compiler couldn't figure out which overload of <code>operator ==</code> to call. This was also one of the reasons I had opened <a data-error-text="Failed to load issue title" data-id="420835723" data-permission-text="Issue title is private" data-url="https://github.com/dotnet/csharplang/issues/2340" data-hovercard-type="issue" data-hovercard-url="/dotnet/csharplang/issues/2340/hovercard" href="https://github.com/dotnet/csharplang/issues/2340">dotnet/csharplang#2340</a>.</p>
+<h3>Marshaling behaviors</h3>
+<p>Like the <code>string</code> type, the <code>Utf8String</code> type shall be marshalable across p/invoke boundaries. The corresponding unmanaged type shall be <code>LPCUTF8</code> (equivalent to a <code>BYTE*</code> pointing to null-terminated UTF-8 data) unless a different unmanaged type is specified in the p/invoke signature.</p>
+<p>If a different <code>[MarshalAs]</code> representation is specified, the stub routine creates a temporary copy in the desired representation, performs the p/invoke, then destroys the temporary copy or allows the GC to reclaim the temporary copy.</p>
+<div><pre><span>class</span> <span>NativeMethods</span>
+{
+    [<span>DllImport</span>]
+    <span>public</span> <span>static</span> <span>extern</span> <span>int</span> <span>MyPInvokeMethod</span>(
+        [<span>In</span>] <span>Utf8String</span> <span>marshaledAsLPCUTF8</span>,
+        [<span>In</span>, <span>MarshalAs</span>(<span>UnmanagedType</span>.<span>LPUTF8Str</span>)] <span>Utf8String</span> <span>alsoMarshaledAsLPCUTF8</span>,
+        [<span>In</span>, <span>MarshalAs</span>(<span>UnmanagedType</span>.<span>LPWStr</span>)] <span>Utf8String</span> <span>marshaledAsLPCWSTR</span>,
+        [<span>In</span>, <span>MarshalAs</span>(<span>UnmanagedType</span>.<span>BStr</span>)] <span>Utf8String</span> <span>marshaledAsBSTR</span>);
+}</pre></div>
+<p>If a <code>Utf8String</code> must be marshaled from native-to-managed (e.g., a reverse p/invoke takes place on a delegate which has a <code>Utf8String</code> parameter), the stub routine is responsible for fixing up invalid UTF-8 data before creating the <code>Utf8String</code> instance (or it may let the <code>Utf8String</code> constructor perform the fixup automatically).</p>
+<p>Unmanaged routines must not modify the contents of any <code>Utf8String</code> instance marshaled across the p/invoke boundary. <code>Utf8String</code> instances are assumed to be immutable once created, and violating this assumption could cause undefined behaviors within the runtime.</p>
+<p>There is no default marshaling behavior for <code>Utf8Segment</code> or <code>Utf8Span</code> since they are not guaranteed to be null-terminated. If in the future the runtime allows marshaling <code>{ReadOnly}Span&lt;T&gt;</code> across a p/invoke boundary (presumably as a non-null-terminated array equivalent), library authors may fetch the underlying <code>ReadOnlySpan&lt;byte&gt;</code> from the <code>Utf8Segment</code> or <code>Utf8Span</code> instance and directly marshal that span across the p/invoke boundary.</p>
+<h3>Automatic coercion of UTF-16 literals to UTF-8 literals</h3>
+<p>If possible, it would be nice if UTF-16 literals (not arbitrary <code>string</code> instances) could be automatically coerced to UTF-8 literals (via the <code>ldstr / call</code> routines mentioned earlier). This coercion would only be considered if attempting to leave the data as a <code>string</code> would have caused a compilation error. This could help eliminate some errors resulting from developers forgetting to put the <em>u</em> prefix in front of the string literal, and it could make the code cleaner. Some examples follow.</p>
+<div><pre><span><span>//</span> String literal being assigned to a member / local of type Utf8String.</span>
+<span>public</span> <span>const</span> <span>Utf8String</span> <span>MyConst</span> <span>=</span> <span><span>"</span>A literal!<span>"</span></span>;
+
+<span>public</span> <span>void</span> <span>Foo</span>(<span>string</span> <span>s</span>);
+<span>public</span> <span>void</span> <span>Foo</span>(<span>Utf8String</span> <span>s</span>);
+
+<span>public</span> <span>void</span> <span>FooCaller</span>()
+{
+    <span><span>//</span> Calls Foo(string) since it's an exact match.</span>
+    <span>Foo</span>(<span><span>"</span>A literal!<span>"</span></span>);
+}
+
+<span>public</span> <span>void</span> <span>Bar</span>(<span>object</span> <span>o</span>);
+<span>public</span> <span>void</span> <span>Bar</span>(<span>Utf8String</span> <span>s</span>);
+
+<span>public</span> <span>void</span> <span>BarCaller</span>()
+{
+    <span><span>//</span> Calls Bar(object), passing in the string literal,</span>
+    <span><span>//</span> since it's the closest match.</span>
+    <span>Bar</span>(<span><span>"</span>A literal!<span>"</span></span>);
+}
+
+<span>public</span> <span>void</span> <span>Baz</span>(<span>int</span> <span>i</span>);
+<span>public</span> <span>void</span> <span>Baz</span>(<span>Utf8String</span> <span>s</span>);
+
+<span>public</span> <span>void</span> <span>BazCaller1</span>()
+{
+    <span><span>//</span> Calls Baz(Utf8String), passing in the UTF-8 literal,</span>
+    <span><span>//</span> since there's no closer match.</span>
+    <span>Baz</span>(<span><span>"</span>A literal!<span>"</span></span>);
+}
+
+<span>public</span> <span>void</span> <span>BazCaller2</span>(<span>string</span> <span>someInput</span>)
+{
+    <span><span>//</span> Compiler error. The input isn't a literal, so no auto-coercion</span>
+    <span><span>//</span> takes place. Dev should call Baz(new Utf8String(someInput)).</span>
+    <span>Baz</span>(<span>someInput</span>);
+}
+
+<span>public</span> <span>void</span> <span>Quux</span>&lt;<span>T</span>&gt;(<span>ReadOnlySpan</span>&lt;<span>T</span>&gt; <span>value</span>);
+<span>public</span> <span>void</span> <span>Quux</span>(<span>Utf8String</span> <span>s</span>);
+
+<span>public</span> <span>void</span> <span>QuuxCaller</span>()
+{
+    <span><span>//</span> Calls Quux&lt;char&gt;(ReadOnlySpan&lt;char&gt;), passing in the string literal,</span>
+    <span><span>//</span> since string satisfies the constraints.</span>
+    <span>Quux</span>(<span><span>"</span>A literal!<span>"</span></span>);
+}
+
+<span>public</span> <span>void</span> <span>Glomp</span>(<span>Utf8Span</span> <span>value</span>);
+
+<span>public</span> <span>void</span> <span>GlompCaller</span>()
+{
+    <span><span>//</span> Calls Glomp(Utf8Span), passing in the UTF-8 literal, since there's</span>
+    <span><span>//</span> no closer match and Utf8String can be implicitly cast to Utf8Span.</span>
+    <span>Glomp</span>(<span><span>"</span>A literal!<span>"</span></span>);
+}</pre></div>
+<h3>UTF-8 String interpolation</h3>
+<p>The string interpolation feature is undergoing significant churn (see <a data-error-text="Failed to load issue title" data-id="417412970" data-permission-text="Issue title is private" data-url="https://github.com/dotnet/csharplang/issues/2302" data-hovercard-type="issue" data-hovercard-url="/dotnet/csharplang/issues/2302/hovercard" href="https://github.com/dotnet/csharplang/issues/2302">dotnet/csharplang#2302</a>). I envision that when a final design is chosen, there would be a UTF-8 counterpart for symmetry. The internal <code>IUtf8Formattable</code> interface as proposed above is being designed partly with this feature in mind in order to allow single-allocation <code>Utf8String</code> interpolation.</p>
+<h3><code>ustring</code> contextual language keyword</h3>
+<p>For simplicity, we may want to consider a contextual language keyword which corresponds to the <code>System.Utf8String</code> type. The exact name is still up for debate, as is whether we'd want it at all, but we could consider something like the below.</p>
+<div><pre><span>Utf8String</span> <span>a</span> <span>=</span> <span>u</span><span><span>"</span>Some UTF-8 string.<span>"</span></span>;
+
+<span><span>//</span> 'ustring' and 'System.Utf8String' are aliases, as shown below.</span>
+
+<span>ustring</span> <span>b</span> <span>=</span> <span>a</span>;
+<span>Utf8String</span> <span>c</span> <span>=</span> <span>b</span>;</pre></div>
+<p>The name <code>ustring</code> is intended to invoke "Unicode string". Another leading candidate was <code>utf8</code>. We may wish not to ship with this keyword support in v1 of the <code>Utf8String</code> feature. If we opt not to do so we should be mindful of how we might be able to add it in the future without introducing breaking changes.</p>
+<p>An alternative design to use a <code>u</code> suffix instead of a <code>u</code> prefix. I'm mostly impartial to this, but there is a nice symmetry to having the characters <code>u</code>, <code>$</code>, and <code>@</code> all available as prefixes on literal strings.</p>
+<p>We could also drop the <code>u</code> prefix entirely and rely solely on type targeting:</p>
+<div><pre><span>ustring</span> <span>a</span> <span>=</span> <span><span>"</span>Literal string type-targeted to UTF-8.<span>"</span></span>;
+<span>object</span> <span>b</span> <span>=</span> (<span>ustring</span>)<span><span>"</span>Another literal string type-targeted to UTF-8.<span>"</span></span>;</pre></div>
+<p>This has implications for string interpolation, as it wouldn't be possible to prepend both the <code>(ustring)</code> coercion hint and the <code>$</code> interpolation operator simultaneously.</p>
+<h3>Switching and pattern matching</h3>
+<p>If a value whose type is statically known to be <code>Utf8String</code> is passed to a <code>switch</code> statement, the corresponding <code>case</code> statements should allow the use of literal <code>Utf8String</code> values.</p>
+<div><pre><span>Utf8String</span> <span>value</span> <span>=</span> ...;
+
+<span>switch</span> (<span>value</span>)
+{
+    <span>case</span> <span>u</span><span><span>"</span>Some literal<span>"</span></span>: <span><span>/*</span> ... <span>*/</span></span>
+    <span>case</span> <span>u</span><span><span>"</span>Some other literal<span>"</span></span>: <span><span>/*</span> ... <span>*/</span></span>
+    <span>case</span> <span><span>"</span>Yet another literal<span>"</span></span>: <span><span>/*</span> target typing also works <span>*/</span></span>
+}</pre></div>
+<p>Since pattern matching operates on input values of arbitrary types, I'm pessimistic that pattern matching will be able to take advantage of target typing. This may instead require that developers specify the <code>u</code> prefix on <code>Utf8String</code> literals if they wish such values to participate in pattern matching.</p>
+<h2>A brief interlude on indexers and <code>IndexOf</code></h2>
+<p><code>Utf8String</code> and related types do not expose an elemental indexer (<code>this[int]</code>) or a typical <code>IndexOf</code> method because they're trying to rid the developer of the notion that bytewise indices into UTF-8 buffers can be treated equivalently as charwise indices into UTF-16 buffers. Consider the naïve implementation of a typical "string split" routine as presented below.</p>
+<div><pre><span>void</span> <span>SplitString</span>(<span>string</span> <span>source</span>, <span>string</span> <span>target</span>, <span>StringComparison</span> <span>comparisonType</span>, <span>out</span> <span>string</span> <span>beforeTarget</span>, <span>out</span> <span>string</span> <span>afterTarget</span>)
+{
+    <span><span>//</span> Locates 'target' within 'source', splits on it, then populates the two out parameters.</span>
+    <span><span>//</span> ** NOTE ** This code has a bug, as will be explained in detail below.</span>
+
+    <span>int</span> <span>index</span> <span>=</span> <span>source</span>.<span>IndexOf</span>(<span>target</span>, <span>comparisonType</span>);
+    <span>if</span> (<span>index</span> <span>&lt;</span> <span>0</span>) { <span>throw</span> <span>new</span> <span>Exception</span>(<span><span>"</span>Target string not found!<span>"</span></span>); }
+
+    <span>beforeTarget</span> <span>=</span> <span>source</span>.<span>Substring</span>(<span>0</span>, <span>index</span>);
+    <span>afterTarget</span> <span>=</span> <span>source</span>.<span>Substring</span>(<span>index</span> <span>+</span> <span>target</span>.<span>Length</span>, <span>source</span>.<span>Length</span> <span>-</span> <span>index</span> <span>-</span> <span>target</span>.<span>Length</span>);
+}</pre></div>
+<p>One subtlety of the above code is that when culture-sensitive or case-insensitive comparers are used (such as <em>OrdinalIgnoreCase</em> in the above example), the target string doesn't have to be an exact char-for-char match of a sequence present in the source string. For example, consider the UTF-16 string "GREEN" (<code>[ 0047 0052 0045 0045 004E ]</code>). Performing an <em>OrdinalIgnoreCase</em> search for the substring "e" (<code>[ 0065 ]</code>) will result in a match, as 'e' (<code>U+0065</code>) and 'E' (<code>U+0045</code>) compare as equal under an <em>OrdinalIgnoreCase</em> comparer.</p>
+<p>As another example, consider the UTF-16 string "preſs" (<code>[ 0070 0072 0065 017F 0073 ]</code>), whose fourth character is the <em>Latin long s</em> 'ſ' (<code>U+017F</code>). Performing an <em>OrdinalIgnoreCase</em> search for the substring "S" (<code>[ 0053 ]</code>) will result in a match, as 'ſ' (<code>U+017F</code>) and 'S' (<code>U+0053</code>) compare as equal under an <em>OrdinalIgnoreCase</em> comparer.</p>
+<p>There are also scenarios where the length of the match within the search string might not be equal to the length of the target string. Consider the UTF-16 string "encyclopædia" (<code>[ 0065 006E 0063 0079 0063 006C 006F 0070 00E6 0064 0069 0061 ]</code>), whose ninth character is the ligature 'æ' (<code>U+00E6</code>). Performing an <em>InvariantCultureIgnoreCase</em> search for the substring "ae" (<code>[ 0061 0065 ]</code>) will result in a match at index 8, as "æ" (<code>[ 00E6 ]</code>) and "ae" (<code>[ 0061 0065 ]</code>) compare as equal under an <em>InvariantCultureIgnoreCase</em> comparer.</p>
+<p>This result is interesting and should give us pause. Since <code>"æ".Length == 1</code> and <code>"ae".Length == 2</code>, the arithmetic at the end of the method will actually result in the wrong substrings being returned to the caller.</p>
+<div><pre><span>beforeTarget</span> <span>=</span> <span>source</span>.<span>Substring</span>(<span>0</span>, <span>8</span> <span><span>/*</span> index <span>*/</span></span>); <span><span>//</span> = "encyclop"</span>
+<span>afterTarget</span> <span>=</span> <span>source</span>.<span>Substring</span>(
+    <span>10</span> <span><span>/*</span> index + target.Length <span>*/</span></span>,
+    <span>2</span> <span><span>/*</span> source.Length - index - target.Length <span>*/</span></span>); <span><span>//</span> = "ia" (expected "dia"!)</span></pre></div>
+<p>Due to the nature of UTF-16 (used by <code>string</code>), when performing an <em>Ordinal</em> or an <em>OrdinalIgnoreCase</em> comparison, the length of the matched substring within the source will always have a <code>char</code> count equal to <code>target.Length</code>. The length mismatch as demonstrated by "encyclopædia" above can only happen with a culture-sensitive comparer or any of the <em>InvariantCulture</em> comparers.</p>
+<p>However, in UTF-8, these same guarantees do not hold. Under UTF-8, only when performing an <em>Ordinal</em> comparison is there a guarantee that the length of the matched substring within the source will have a <code>byte</code> count equal to the target. All other comparers - including <em>OrdinalIgnoreCase</em> - have the behavior that the byte length of the matched substring can change (either shrink or grow) when compared to the byte length of the target string.</p>
+<p>As an example of this, consider the string "preſs" from earlier, but this time in its UTF-8 representation (<code>[ 70 72 65 C5 BF 73 ]</code>). Performing an <em>OrdinalIgnoreCase</em> for the target UTF-8 string "S" <code>([ 53 ]</code>) will match on the <code>([ C5 BF ]</code>) portion of the source string. (This is the UTF-8 representation of the letter 'ſ'.) To properly split the source string along this search target, the caller need to know not only where the match was, <em>but also how long the match was within the original source string</em>.</p>
+<p>This fundamental problem is why <code>Utf8String</code> and related types don't expose a standard <code>IndexOf</code> function or a standard <code>this[int]</code> indexer. It's still possible to index directly into the underlying byte buffer by using an API which projects the data as a <code>ROS&lt;byte&gt;</code>. But for splitting operations, these types instead offer a simpler API that performs the split on the caller's behalf, handling the length adjustments appropriately. For callers who want the equivalent of <code>IndexOf</code>, the types instead provide <code>TryFind</code> APIs that return a <code>Range</code> instead of a typical integral index value. This <code>Range</code> represents the matching substring within the original source string, and new C# language features make it easy to take this result and use it to create slices of the original source input string.</p>
+<p>This also addresses feedback that was given in a previous prototype: users weren't sure how to interpret the result of the <code>IndexOf</code> method. (Is it a byte count? Is it a char count? Is it something else?) Similarly, there was confusion as to what parameters should be passed to a <code>this[int]</code> indexer or a <code>Substring(int, int)</code> method. By having the APIs promote use of <code>Range</code> and related C# language features, this confusion should subside. Power developers can inspect the <code>Range</code> instance directly to extract raw byte offsets if needed, but most devs shouldn't need to query such information.</p>
+<h2>API usage samples</h2>
+<p><strong>Scenario:</strong> Split an incoming string of the form "LastName, FirstName" into individual <em>FirstName</em> and <em>LastName</em> components.</p>
+<div><pre><span><span>//</span> Using Utf8String input and producing Utf8String instances</span>
+<span>void</span> <span>SplitSample</span>(<span>ustring</span> <span>input</span>)
+{
+    <span><span>//</span> Method 1: Use the SplitOn API to find the ',' char, then trim manually.</span>
+
+    (<span>ustring</span> <span>lastName</span>, <span>ustring</span> <span>firstName</span>) <span>=</span> <span>input</span>.<span>Split</span>(<span>','</span>);
+    <span>if</span> (<span>firstName</span> <span>is</span> <span>null</span>) { <span><span>/*</span> ERROR: no ',' detected in input <span>*/</span></span> }
+
+    <span>lastName</span> <span>=</span> <span>lastName</span>.<span>Trim</span>();
+    <span>firstName</span> <span>=</span> <span>firstName</span>.<span>Trim</span>();
+
+    <span><span>//</span> Method 2: Use the SplitOn API to find the ", " target string, assuming no trim needed.</span>
+
+    (<span>ustring</span> <span>lastName</span>, <span>ustring</span> <span>firstName</span>) <span>=</span> <span>input</span>.<span>Split</span>(<span>u</span><span><span>"</span>, <span>"</span></span>);
+    <span>if</span> (<span>firstName</span> <span>is</span> <span>null</span>) { <span><span>/*</span> ERROR: no ", " detected in input <span>*/</span></span> }
+}
+
+<span><span>//</span> Using Utf8Span input and producing Utf8Span instances</span>
+<span>void</span> <span>SplitSample</span>(<span>Utf8Span</span> <span>input</span>)
+{
+    <span><span>//</span> Method 1: Use the SplitOn API to find the ',' char, then trim manually.</span>
+
+    (<span>Utf8Span</span> <span>lastName</span>, <span>Utf8Span</span> <span>firstName</span>) <span>=</span> <span>input</span>.<span>Split</span>(<span>','</span>);
+    <span>lastName</span> <span>=</span> <span>lastName</span>.<span>Trim</span>();
+    <span>firstName</span> <span>=</span> <span>firstName</span>.<span>Trim</span>();
+    <span>if</span> (<span>firstName</span>.<span>IsEmpty</span>) { <span><span>/*</span> ERROR: trailing ',', or no ',' detected in input <span>*/</span></span> }
+
+    <span><span>//</span> Method 2: Use the SplitOn API to find the ", " target string, assuming no trim needed.</span>
+
+    (<span>Utf8Span</span> <span>lastName</span>, <span>Utf8Span</span> <span>firstName</span>) <span>=</span> <span>input</span>.<span>Split</span>(<span><span>"</span>, <span>"</span></span>);
+    <span>if</span> (<span>firstName</span>.<span>IsEmpty</span>) { <span><span>/*</span> ERROR: trailing ", ", or no ", " detected in input <span>*/</span></span> }
+}</pre></div>
+<p>Additionally, the <code>SplitResult</code> struct returned by <code>Utf8Span.Split</code> implements both a standard <code>IEnumerable&lt;T&gt;</code> pattern and the C# <em>deconstruct</em> pattern, which allows it to be used separately from enumeration for simple cases where only a small handful of values are returned.</p>
+<div><pre><span>Utf8Span</span> <span>str</span> <span>=</span> ...;
+
+<span><span>//</span> The result of Utf8Span.Split can be used in an enumerator</span>
+
+<span>foreach</span> (<span>Utf8Span</span> <span>substr</span> <span>in</span> <span>str</span>.<span>Split</span>(<span>','</span>))
+{
+    <span><span>/*</span> operate on substr <span>*/</span></span>
+}
+
+<span><span>//</span> Or it can be used in tuple deconstruction</span>
+<span><span>//</span> (See docs for description of behavior for each arity.)</span>
+
+(<span>Utf8Span</span> <span>before</span>, <span>Utf8Span</span> <span>after</span>) <span>=</span> <span>str</span>.<span>Split</span>(<span>','</span>);
+(<span>Utf8Span</span> <span>part1</span>, <span>Utf8Span</span> <span>part2</span>, <span>Utf8Span</span> <span>part3</span>, ...) <span>=</span> <span>str</span>.<span>Split</span>(<span>','</span>);</pre></div>
+<p><strong>Scenario:</strong> Split a comma-delimited input into substrings, then perform an operation with each substring.</p>
+<div><pre><span><span>//</span> Using Utf8String input and producing Utf8String instances</span>
+<span><span>//</span> The Utf8Span code would look  identical (sub. 'Utf8Span' for 'ustring')</span>
+
+<span>void</span> <span>SplitSample</span>(<span>ustring</span> <span>input</span>)
+{
+    <span>while</span> (<span>input</span>.<span>Length</span> <span>&gt;</span> <span>0</span>)
+    {
+        <span><span>//</span> 'TryFind' is the 'IndexOf' equivalent. It returns a Range instead</span>
+        <span><span>//</span> of an integer index because there's no this[int] indexer on Utf8String.</span>
+
+        <span>if</span> (<span>!</span><span>input</span>.<span>TryFind</span>(<span>','</span>, <span>out</span> <span>Range</span> <span>matchedRange</span>))
+        {
+            <span><span>//</span> The remainder of the input string is empty, but no comma</span>
+            <span><span>//</span> was found in the remaining portion. Process the remainder</span>
+            <span><span>//</span> of the input string, then finish.</span>
+
+            <span>ProcessValue</span>(<span>input</span>);
+            <span>break</span>;
+        }
+
+        <span><span>//</span> We found a comma! Substring and process.</span>
+        <span><span>//</span> The 'matchedRange' local contains the range for the ',' that we found.</span>
+
+        <span>ProcessValue</span>(<span>input</span>[..<span>matchedRange</span>.<span>Start</span>]); <span><span>//</span> fetch segment to the left of the comma, then process it</span>
+        <span>input</span> <span>=</span> <span>input</span>[<span>matchedRange</span>.<span>End</span>..]; <span><span>//</span> set 'input' to the remainder of the input string and loop</span>
+    }
+
+    <span><span>//</span> Could also have an IEnumerable&lt;ustring&gt;-returning version if we wanted, I suppose.</span>
+}</pre></div>
+<h2>Miscellaneous topics and open questions</h2>
+<p><strong>What about comparing UTF-16 and UTF-8 data?</strong></p>
+<p>Currently there is a set of APIs <code>Utf8String.AreEquivalent</code> which will decode sequences of UTF-16 and UTF-8 data and compare them for ordinal equality. The general code pattern is below.</p>
+<div><pre><span>ustring</span> <span>a</span> <span>=</span> ...;
+<span>string</span> <span>b</span> <span>=</span> ...;
+
+<span><span>//</span> The below line fails to compile because there's no operator==(Utf8String, string) defined.</span>
+
+<span>bool</span> <span>result</span> <span>=</span> (<span>a</span> <span>==</span> <span>b</span>);
+
+<span><span>//</span> The below line is probably what the developer intended to write.</span>
+
+<span>bool</span> <span>result</span> <span>=</span> <span>ustring</span>.<span>AreEquivalent</span>(<span>a</span>, <span>b</span>);
+
+<span><span>//</span> The below line should compile since literal strings can be type targeted to Utf8String.</span>
+
+<span>bool</span> <span>result</span> <span>=</span> (<span>a</span> <span>==</span> <span><span>"</span>Hello!<span>"</span></span>);</pre></div>
+<p>Do we want to add an <code>operator==(Utf8String, string)</code> overload which would allow easy <code>==</code> comparison of UTF-8 and UTF-16 data? There are three main downsides to this which caused me to vote no, but I'm open to reconsideration.</p>
+<ol>
+<li>
+<p>The compiler would need to special-case <code>if (myUtf8String == null)</code>, which would now be ambiguous between the two overloads. (If the compiler is already special-casing null checks, this is a non-issue.)</p>
+</li>
+<li>
+<p>The performance of UTF-16 to UTF-8 comparison is much worse than the performance of UTF-16 to UTF-16 (or UTF-8 to UTF-8) comparison. When the representation is the same on both sides, certain shortcuts can be implemented to avoid the <em>O(n)</em> comparison, and even the <em>O(n)</em> comparison itself can be implemented as a simple <em>memcmp</em> operation. When the representations are heterogeneous, the opportunity for taking shortcuts is much more restricted, and the <em>O(n)</em> comparison itself has a higher constant factor. Developers might not expect such a performance characteristic from an equality operator.</p>
+</li>
+<li>
+<p>Comparing a <code>Utf8String</code> against a literal string would no longer go through the fast path, as target typing would cause the compiler to emit a call to <code>operator==(Utf8String, string)</code> instead of <code>operator==(Utf8String, Utf8String)</code>. The comparison itself would then have the lower performance described by bullet (2) above.</p>
+</li>
+</ol>
+<p>One potential upside to having such a comparison is that it would prevent developers from using the antipattern <code>if (myUtf8String.ToString() == someString)</code>, which would result in unnecessary allocations. If we are concerned about this antipattern one way to address it would be through a Code Analyzer.</p>
+<p><strong>What if somebody passes invalid data to the "skip validation" factories?</strong></p>
+<p>When calling the "unsafe" APIs, callers are fully responsible for ensuring that the invariants are maintained. Our debug builds could double-check some of these invariants (such as the initial <code>Utf8String</code> creation consisting only of well-formed data). We could also consider allowing applications to opt-in to these checks at runtime by enabling an MDA or other diagnostic facility. But as a guiding principle, when "unsafe" APIs are called the Framework should trust the developer and should have as little overhead as possible.</p>
+<p><strong>Consider consolidating the unsafe factory methods under a single unsafe type.</strong></p>
+<p>This would prevent pollution of the type's normal API surface and could help write tools which audit use of a single "unsafe" type.</p>
+<p>Some of the methods may need to be extension methods instead of normal static factories. (Example: Unsafe slicing routines, should we choose to expose them.)</p>
+<h2>Potential APIs to enlighten</h2>
+<h3><em>System</em> namespace</h3>
+<p>Include <code>Utf8String</code> / <code>Utf8Span</code> overloads on <code>Console.WriteLine</code>. Additionally, perhaps introduce an API <code>Console.ReadLineUtf8</code>.</p>
+<h3><em>System.Data.*</em> namepace</h3>
+<p>Include generalized support for serializing Utf8String properties as a primitive with appropriate mapping to <code>nchar</code> or <code>nvarchar</code>.</p>
+<h3><em>System.Diagnostics.*</em> namespace</h3>
+<p>Enlighten <code>EventSource</code> so that a caller can write <code>Utf8String</code> / <code>Utf8Span</code> instances cheaply. Additionally, some types like <code>ActivitySpanId</code> already have <code>ROS&lt;byte&gt;</code> ctors; overloads can be introduced here.</p>
+<h3><em>System.Globalization.*</em> namespace</h3>
+<p>The <code>CompareInfo</code> type has many members which operate on <code>string</code> instances. These should be spanified foremost, and <code>Utf8String</code> / <code>Utf8Span</code> overloads should be added. Good candidates are <code>Compare</code>, <code>GetHashCode</code>, <code>IndexOf</code>, <code>IsPrefix</code>, and <code>IsSuffix</code>.</p>
+<p>The <code>TextInfo</code> type has members which should be treated similarly. <code>ToLower</code> and <code>ToUpper</code> are good candidates. Can we get away without enlightening <code>ToTitleCase</code>?</p>
+<h3><em>System.IO.*</em> namespace</h3>
+<p><code>BinaryReader</code> and <code>BinaryWriter</code> should have overloads which operate on <code>Utf8String</code> and <code>Utf8Span</code>. These overloads could potentially be cheaper than the normal <code>string</code> / <code>ROS&lt;char&gt;</code> based overloads, since the reader / writer instances may in fact be backed by UTF-8 under the covers. If this is the case then writing is simple projection, and reading is validation (faster than transcoding).</p>
+<p><code>File</code>: <code>WriteAllLines</code>, <code>WriteAllText</code>, <code>AppendAllText</code>, etc. are good candidates for overloads to be added. On the read side, there's <code>ReadAllTextUtf8</code> and <code>ReadAllLinesUtf8</code>.</p>
+<p><code>TextReader.ReadLine</code> and <code>TextWriter.Write</code> are also good candidates to overload. This follows the same general premise as <code>BinaryReader</code> and <code>BinaryWriter</code> as mentioned above.</p>
+<p>Should we also enlighten <code>SerialPort</code> or GPIO APIs? I'm not sure if UTF-8 is a bottleneck here.</p>
+<h3><em>System.Net.Http.*</em> namespace</h3>
+<p>Introduce <code>Utf8StringContent</code>, which automatically sets the <em>charset</em> header. This type already exists in the <em>System.Utf8String.Experimental</em> package.</p>
+<h3><em>System.Text.*</em> namespace</h3>
+<p><code>UTF8Encoding</code>: Overload candidates are <code>GetChars</code>, <code>GetString</code>, and <code>GetCharCount</code> (of <code>Utf8String</code> or <code>Utf8Span</code>). These would be able to skip validation after transcoding as long as the developer hasn't subclassed the type.</p>
+<p><code>Rune</code>: Add <code>ToUtf8String</code> API. Add <code>IsDefined</code> API to query the OS's NLS tables (could help with databases and other components that need to adhere to strict case / comparison processing standards).</p>
+<p><code>TextEncoder</code>: Add <code>Encode(Utf8String): Utf8String</code> and <code>FindFirstIndexToEncode(Utf8Span): Index</code>. This is useful for HTML-escaping, JSON-escaping, and related operations.</p>
+<p><code>Utf8JsonReader</code>: Add read APIs (<code>GetUtf8String</code>) and overloads to both the ctor and <code>ValueTextEquals</code>.</p>
+<p><code>JsonEncodedText</code>: Add an <code>EncodedUtf8String</code> property.</p>
+<p>Regex is a bit of a special case because there has been discussion about redoing the regex stack all-up. If we did proceed with redoing the stack, then it would make sense to add first-class support for UTF-8 here.</p>
+      </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>

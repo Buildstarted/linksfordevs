@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+[wsl2] filesystem performance is much slower than wsl1 in /mnt &#xB7; Issue #4197 &#xB7; microsoft/WSL - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="[wsl2] filesystem performance is much slower than wsl1 in /mnt &#xB7; Issue #4197 &#xB7; microsoft/WSL - linksfor.dev(s)"/>
+    <meta property="article:author" content="therealkenc"/>
+    <meta property="og:description" content="I decided to open this as a separate issue because although it&amp;#39;s related to the generic issue of filesystem performance it&amp;#39;s directly related to WSL 2 while the other issues are for WSL 1 a..."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://github.com/microsoft/WSL/issues/4197"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - [wsl2] filesystem performance is much slower than wsl1 in /mnt &#xB7; Issue #4197 &#xB7; microsoft/WSL</title>
+<div class="readable">
+        <h1>[wsl2] filesystem performance is much slower than wsl1 in /mnt &#xB7; Issue #4197 &#xB7; microsoft/WSL</h1>
+            <div>by therealkenc</div>
+            <div>Reading time: 6-7 minutes</div>
+        <div>Posted here: 17 Apr 2020</div>
+        <p><a href="https://github.com/microsoft/WSL/issues/4197">https://github.com/microsoft/WSL/issues/4197</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div disabled="" sortable="">
+<div>
+          <p>In WSL1, file performance was slow compared to Linux because it had to emulate Linux behavior on top of the Windows IO subsystem, which has a very different design than Linux and is slow for many operations that are extremely fast in Linux and therefore used a lot by Linux tools. This was the case for both the "internal" Linux file system, and the Windows file systems mounted in /mnt, because they both use regular NTFS files.</p>
+<p>With WSL2, the Linux file system is now an ext4 partition in a VHD. It cuts Windows out of the loop except for having to read/write from/to the VHD file, so that's much, much faster.</p>
+<p>Windows files are now accessed across the VM boundary, however. In WSL1, we could just call the NT kernel from our lxcore.sys kernel driver, and that was that. In WSL2, every operation has to send data to the host, exit the VM, wait for the host to perform the operation (which still involves emulating Linux behavior and the cost of Windows IO operations), send data back to the VM, trigger an interrupt in the VM, schedule the virtual processor to run, and continue executing in the VM.</p>
+<p>Essentially, Windows files are now a "remote" file system. To access them, we use the 9p file system protocol, a protocol also used by QEMU to provide host file access, and the same protocol we already used to provide Linux file access through \wsl$. Communication is done over Hyper-V sockets, which is faster than a real network, but it still has many of the same drawbacks as a network file system.</p>
+<p>To make matter worse, to ensure the same behavior as WSL1, we don't use any caching. Typically network file system like NFS or SMB will cache both file data and attributes for some amount of time to avoid too many round trips to the server. We are in the unique position where the host and the guest are tightly integrated through things like interop. It's entirely possible that you have a script which runs a git command in WSL followed immediately by some Windows tool. In that case, any cache inconsistency between the host and the VM could cause incorrect behavior, or worse, data loss. Even the 1 second attribute cache used by NFS could be problematic for this reason.</p>
+<p>Caching is also problematic because the Linux 9p client only has two real caching modes: none and loose (there's also mmap, which enables caching only for read-write memory mapped files, and fscache, which is irrelevant in this discussion). WSL2 actually uses mmap (because using the "none" option makes certain mmap operations fail entirely). If we wanted to use caching, the only option is "loose", which means Linux will cache data and attributes essentially forever (until the kernel evicts them due to memory pressure), and will never try to refresh from the host, which is obviously not desirable.</p>
+<p>Without caching, it means every "stat" operation has to make a round-trip to the host (multiple, actually, partially because of how Linux VFS works, and partially because of how 9p works). It also means that reading/writing files is done using direct IO, which means that the buffer size used by the application is what's used when talking to the host. An application that's using 32KB buffers to read a file will therefore be significantly faster than one that's using 4KB buffers, because it has to do fewer round trips. This will be true for increased buffer sizes up to the maximum message size for 9p, which is slightly under 64KB.</p>
+<p>You can actually enable caching by adding the "cache=loose" option to your mount options in /etc/wsl.conf (note: if you do this and convert back to WSL1, DrvFs will fail to mount because it doesn't recognize that option, so you'll have to remove it again). But if you do this, then <strong>all bets are off</strong>. There is no consistency whatsoever. It's only safe to do this for drives that you <strong>only</strong> access from Linux (and if that's the case, you should really just move your files to the Linux file system). Also note that because the Linux 9p client does not intelligently implement cache read-ahead, reading files will always use the page size for each round-trip, which is 4KB on most kernels. So reading a file that's not yet in the cache can actually be slower if the application was using a large buffer size, though once the file is in the cache, reading it again will be extremely fast of course.</p>
+<p>So, that gives you an idea of why this is slow. This isn't unique to us; cross-VM file access always tends to be slow, and a lot of solutions employ caching to hide that, which is fine because most VMs can't just run executables on the host operating on the same files the way WSL2 can with interop. Unfortunately, we don't have that luxury.</p>
+<p>We are constantly working to improve this. We already have an improvement in the pipeline that will reduce the round-trip cost significantly. Unfortunately, despite our best efforts, that improvement was not ready for the upcoming 2004 release of Windows. We are also looking at alternatives to 9p and other improvements we could make to get us closer to at least WSL1 DrvFs performance. And that work is going on in parallel with ongoing efforts to make IO performance in Windows better in general, which we would also benefit from of course.</p>
+<p>Is this work going as fast as we, or you, would want? No, unfortunately not. These are hard problems and they take time to solve. We really wanted to have a better story for the initial release of WSL2, but unfortunately, reality just didn't allow it.</p>
+<p>So yes, for now the most important thing is: <strong>if it's at all possible, store your projects in the Linux file system in WSL2.</strong> This will be much faster than anything in WSL1, and gives you the full benefit of WSL2.</p>
+<p>We understand that there are cases where you can't do that. All I can tell you is that we know about it, we're not happy with where we are either, and we're working on it as fast as we can. We ask you to be understanding, and know that we will be working on it regardless of whether you keep posting in this thread or not. :)</p>
+      </div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by buildstarted &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
