@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Life, part 29 - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Life, part 29 - linksfor.dev(s)"/>
+    <meta property="og:description" content="We&#x2019;ve built the foundation of the QuickLife algorithm; now let&#x2019;s make it go fast. This is going to be a longer episode than usual because we have a large volume of code to get through t&#x2026;"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://ericlippert.com/2020/08/03/life-part-29/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Life, part 29</title>
+<div class="readable">
+        <h1>Life, part 29</h1>
+            <div>Reading time: 13-17 minutes</div>
+        <div>Posted here: 03 Aug 2020</div>
+        <p><a href="https://ericlippert.com/2020/08/03/life-part-29/">https://ericlippert.com/2020/08/03/life-part-29/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+		<p>We’ve built the foundation of the QuickLife algorithm; now let’s make it go fast. This is going to be a longer episode than usual because we have a large volume of code to get through to perform a relatively straightforward task, and we won’t get through all of it today. Code for this episode is <a href="https://github.com/ericlippert/ConwaysLife/tree/episode29">here</a>.</p>
+<hr>
+<p>Abrash and Stafford’s algorithms both achieved significant wins by maintaining neighbour counts and updating them when something changes. Hensel’s QuickLife algorithm does not count neighbours at all! The neighbour counting has been entirely moved to the construction of the lookup table. So there cannot be any savings there.</p>
+<p>Stafford’s algorithm achieved a significant win by tracking what changes from one tick to the next, but there is a flaw in that plan — or, maybe it would be better to say, there is an opportunity for further optimization.</p>
+<p>Suppose we have the simplest possible always-changing grid: a single blinker.</p>
+<p><a href="https://ericlippert.files.wordpress.com/2020/04/blinker.gif"><img data-attachment-id="6850" data-permalink="https://ericlippert.com/2020/04/20/life-part-2/blinker/" data-orig-file="https://ericlippert.files.wordpress.com/2020/04/blinker.gif" data-orig-size="262,197" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;0&quot;}" data-image-title="blinker" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/04/blinker.gif?w=262" data-large-file="https://ericlippert.files.wordpress.com/2020/04/blinker.gif?w=262" src="https://ericlippert.files.wordpress.com/2020/04/blinker.gif?w=584" alt=""></a></p>
+<p>Four cells change on every tick: two are born and two die. Stafford’s algorithm works on triples; for every tick we need to consider on the order of a dozen triples that <em>might</em> be changing next.</p>
+<p>Now consider the gear we have built so far for QuickLife: we have the state of one even and one odd generation saved. <strong>Who cares whether there is a difference between the even generation and the odd generation? In the example above every even generation is the same as every other, and every odd generation is the same as every other.</strong></p>
+<p>Period-two oscillators are extremely common in Life, but from QuickLife’s perspective, given that it saves two generations in every Quad4, period-two oscillators could be treated as still Lifes! And remember that of course that still Lifes are also period-two oscillators; they just have the same state in both cycles.</p>
+<p>In short: If we know that for some region of a quad4 the next even generation is the same as the previous even generation, then we can skip <em>all</em> computations on that region, and similarly for the odd generations. That works right up until the point where some “active” cells in a neighbouring region get close enough to the stable region to destabilize it.</p>
+<p>It seems like there is a powerful optimization available here; how are we going to achieve it?</p>
+<p>Let’s start by crisping up the state that we are tracking. We will be considering rectangular “regions” of a Quad3, and classifying them into three buckets:</p>
+<ul>
+<li><strong>Active</strong> — a cell changed value from the <em>previous</em> generation to the <em>next</em> generation. That is, if we are currently in generation <strong>3</strong>, stepping to even generation <strong>4</strong>, then we check to see whether the region in question is the same as it was in generation <strong>2</strong>.</li>
+<li><strong>Stable</strong> — a region which is not active; every cell in the region is going to be the same in the <em>next</em> generation as it was in the <em>previous</em> generation.</li>
+<li><strong>Dead</strong> — a region which is stable, and moreover, every cell in the region is dead</li>
+</ul>
+<p>Notice that there is a subtlety here: a region can be entirely dead cells but <em>is still considered active if it just recently became all dead</em>. A region does not become classified as dead until it is <em>both</em> stable and all dead cells.</p>
+<p>What regions do we care about? For odd generation Quad3s we will classify the following regions as dead, stable or active:</p>
+<ul>
+<li>The entire Quad3</li>
+</ul>
+<p><a href="https://ericlippert.files.wordpress.com/2020/08/acorn-418-1.jpg"><img data-attachment-id="7712" data-permalink="https://ericlippert.com/2020/08/03/life-part-29/acorn-418-1/" data-orig-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-1.jpg" data-orig-size="150,152" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;1&quot;}" data-image-title="acorn 418 – 1" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-1.jpg?w=150" data-large-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-1.jpg?w=150" src="https://ericlippert.files.wordpress.com/2020/08/acorn-418-1.jpg?w=584" alt=""></a></p>
+<p>That is, did anything at all in these 64 cells change? and if not, are any of them alive?</p>
+<ul>
+<li>The 2×8 eastern edge:</li>
+</ul>
+<p><a href="https://ericlippert.files.wordpress.com/2020/08/acorn-418-2.jpg"><img data-attachment-id="7714" data-permalink="https://ericlippert.com/2020/08/03/life-part-29/acorn-418-2/" data-orig-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-2.jpg" data-orig-size="150,152" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;1&quot;}" data-image-title="acorn 418 – 2" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-2.jpg?w=150" data-large-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-2.jpg?w=150" src="https://ericlippert.files.wordpress.com/2020/08/acorn-418-2.jpg?w=584" alt=""></a></p>
+<ul>
+<li>The 8×2 southern edge:</li>
+</ul>
+<p><a href="https://ericlippert.files.wordpress.com/2020/08/acorn-418-3.jpg"><img data-attachment-id="7715" data-permalink="https://ericlippert.com/2020/08/03/life-part-29/acorn-418-3/" data-orig-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-3.jpg" data-orig-size="150,152" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;1&quot;}" data-image-title="acorn 418 – 3" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-3.jpg?w=150" data-large-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-3.jpg?w=150" src="https://ericlippert.files.wordpress.com/2020/08/acorn-418-3.jpg?w=584" alt=""></a></p>
+
+<ul>
+<li>And finally, the 2×2 southeastern corner:</li>
+</ul>
+<p><a href="https://ericlippert.files.wordpress.com/2020/08/acorn-418-4.jpg"><img data-attachment-id="7716" data-permalink="https://ericlippert.com/2020/08/03/life-part-29/acorn-418-4/" data-orig-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-4.jpg" data-orig-size="150,152" data-comments-opened="1" data-image-meta="{&quot;aperture&quot;:&quot;0&quot;,&quot;credit&quot;:&quot;&quot;,&quot;camera&quot;:&quot;&quot;,&quot;caption&quot;:&quot;&quot;,&quot;created_timestamp&quot;:&quot;0&quot;,&quot;copyright&quot;:&quot;&quot;,&quot;focal_length&quot;:&quot;0&quot;,&quot;iso&quot;:&quot;0&quot;,&quot;shutter_speed&quot;:&quot;0&quot;,&quot;title&quot;:&quot;&quot;,&quot;orientation&quot;:&quot;1&quot;}" data-image-title="acorn 418 – 4" data-image-description="" data-medium-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-4.jpg?w=150" data-large-file="https://ericlippert.files.wordpress.com/2020/08/acorn-418-4.jpg?w=150" src="https://ericlippert.files.wordpress.com/2020/08/acorn-418-4.jpg?w=584" alt=""></a></p>
+<p>For the even generation Quad3s, we will track the same stuff, except different. For evens, we track the state of:</p>
+<ul>
+<li>The entire Quad3</li>
+<li>The 2×8 western edge</li>
+<li>The 8×2 northern edge</li>
+<li>The 2×2 northwest corner</li>
+</ul>
+<p>That sounds like a lot of information to deal with: we’ve got three possible states for each of four regions of each of eight Quad3s in a Quad4. <strong>Of course, we’re going to deal with it by twiddling bits, and of course I am going to encapsulate every bit operation into a helper method with a sensible name.</strong></p>
+<p>Our bit format will be as follows.</p>
+<ul>
+<li>Each of the eight Quad3s in a Quad4 will have eight bits of state data.</li>
+<li>Those 64 bits will be stored in two uints, one for the evens, one for the odds, and they will be fields of Quad4.</li>
+<li>Bits 0-7 will be for the SE Quad3, bits 8-15 the NE, 16-23 the SW and 24-31 the NW</li>
+</ul>
+<p>Pretty straightforward so far. What does each of the eight bits in the byte associated with a Quad3 mean? We consider the bits in pairs.</p>
+<ul>
+<li>bits 0 and 4 give the state of the SE (odd) or NW (even) corner</li>
+<li>bits 1 and 5 give the state of the south/north edge</li>
+<li>bits 2 and 6 give the state of the east/west edge</li>
+<li>bits 3 and 7 give the state of the Quad3 as a whole</li>
+<li>If both bits are off, then the region is <strong>active</strong></li>
+<li>If both bits are on, then the region is <strong>dead</strong></li>
+<li>If the lower bit is on and the higher is off, then the region is <strong>stable</strong></li>
+<li>The higher bit is never turned on if the lower bit is off.</li>
+</ul>
+<p>This scheme has some nice properties:</p>
+<ul>
+<li>If you want to check for “not active” you just have to look at the low bit</li>
+<li>If you want to check for “dead” you just have to look at the high bit</li>
+<li>If you want to set a region to “stable” and it is already marked “dead”, that’s OK, it stays dead</li>
+<li>And so on</li>
+</ul>
+<p>But because I am only going to access these bits via helper functions, it really doesn’t matter what the format is so long as we get all the transitions correct.</p>
+<p>I’m going to make a helper struct for the setters, solely to make the code easier to read. (Why just the setters? We will see in the next episode. Foreshadowing!) We will never store one of these, so there is no reason to make it wrap a byte instead of a uint; no reason to make the runtime truncate it on each operation.</p>
+<pre>struct Quad3State
+{
+  readonly private uint b;
+  public Quad3State(int b) =&gt; this.b = (uint)b;
+  public Quad3State(uint b) =&gt; this.b = b;
+  public Quad3State SetAllRegionsActive() =&gt; 
+    new Quad3State(0x00);
+  public Quad3State SetVerticalEdgeAndQuadActive() =&gt; 
+    new Quad3State(b &amp; 0x33);
+  public Quad3State SetHorizontalEdgeAndQuadActive() =&gt; 
+    new Quad3State(b &amp; 0x55);
+  public Quad3State SetQuad3Active() =&gt; 
+    new Quad3State(b &amp; 0x77);
+  public Quad3State SetAllRegionsStable() =&gt; 
+    new Quad3State(b | 0xf);
+  public Quad3State SetVerticalEdgeStable() =&gt; 
+    new Quad3State(b | 0x04);
+  public Quad3State SetHorizontalEdgeStable() =&gt; 
+    new Quad3State(b | 0x02);
+  public Quad3State SetCornerStable() =&gt; 
+    new Quad3State(b | 0x01);
+  public Quad3State SetAllRegionsDead() =&gt; 
+    new Quad3State(0xff);
+  public Quad3State SetVerticalEdgeDead() =&gt; 
+    new Quad3State(b | 0x44);
+  public Quad3State SetHorizontalEdgeDead() =&gt; 
+    new Quad3State(b | 0x22);
+  public Quad3State SetCornerDead() =&gt; 
+    new Quad3State(b | 0x11);
+  public static explicit operator uint(Quad3State s) =&gt; s.b;
+}</pre>
+<p>A few things to notice here:</p>
+<ul>
+<li>Calling a “set stable” helper keeps the “dead” bit set if it is already set, which is what we want. If we’ve deduced that a region is stable and we already know it is dead, that’s fine.</li>
+<li>When we set an edge to active we set the whole Quad3 to active also, since plainly if there is activity in the edge, there is activity in the Quad3.</li>
+<li>Contradicting the previous point, when we set an edge to stable or dead, we do not set the corner contained in that edge region to stable or dead, even though obviously it is; we cannot have the entire edge be stable and its corner be unstable. It just so happens that in the original implementation, every code path on which the edge is set to stable, the corner has already been set to stable, and I will maintain this property in my port. It wouldn’t hurt to fix that here, but I wanted to match the behaviour of the original code as much as possible.</li>
+<li>There is no “set corner active” because if you’re setting the corner active, you’re setting all the regions active.</li>
+</ul>
+<p>All right, we have our helper to set state for a Quad3. We need eight state bytes, one for each of the eight Quad3s in a Quad4. We declare our state words as fields in Quad4:</p>
+<pre>private uint evenstate;
+private uing oddstate;</pre>
+<p>And make eight helpers to shift the state bits in and out:</p>
+<pre>private Quad3State EvenSEState
+{
+  get =&gt; new Quad3State(evenstate &amp; 0x000000ff);
+  set =&gt; evenstate = (evenstate &amp; 0xffffff00) | (uint)value;
+}
+...</pre>
+<p>Suppose we’re on an odd generation and we’ve just computed the next (even) generation for the NW Quad3. We have the previous even generation in hand; how are we going to know which setters to call? We need to figure out two things:</p>
+<ul>
+<li>Given an old Quad3 and a new one, which regions of the new one are different?</li>
+<li>Of the regions that are not different, which of them are all dead?</li>
+</ul>
+<p>I mentioned in a previous episode that I was one day going to add more code to the “step a Quad3” methods in Quad4, and that day has come. Remember that the original code was:</p>
+<pre>private void StepOddNW()
+{
+  evenNW = Step9Quad2ToQuad3Odd( ... );
+}</pre>
+<p>The new method is:</p>
+<pre>private void StepOddNW()
+{
+  Quad3 newEvenNW = Step9Quad2ToQuad3Odd( ... );
+  EvenNWState = evenNW.UpdateEvenQuad3State(newEvenNW, EvenNWState);
+  evenNW = newEvenNW;
+}</pre>
+<p>That is: compute the next even generation, update the state bits by comparing the <em>previous</em> even generation to the <em>next</em> even generation, and then set the new state bits and new even NW Quad3.</p>
+<p>How does the UpdateEvenQuad3State work? Plainly we have to compare the previous generation’s Quad3 to the newly computed Quad3, and in particular we will need to know if any of its regions are dead.</p>
+<p><span>Let’s start with solving the even simpler problem: which regions are composed of all dead cells? I’m going to add these helper functions to Quad3:</span></p>
+<pre>bool AllDead =&gt; (NW | NE | SW | SE).Dead;
+bool NorthwestCornerDead =&gt; NW.NW.Dead;
+bool SoutheastCornerDead =&gt; SE.SE.Dead;
+bool NorthEdgeDead =&gt; (NW | NE).NorthEdge.Dead;
+bool WestEdgeDead =&gt; (SW | NW).WestEdge.Dead;
+bool SouthEdgeDead =&gt; (SW | SE).SouthEdge.Dead;
+bool EastEdgeDead =&gt; (NE | SE).EastEdge.Dead;</pre>
+<p>That is, OR together the relevant portions of each component Quad2, mask out the irrelevant portions, and check whatever is left for deadness.</p>
+<p>Notice that I’ve made these private; we’ll put all the code that needs these in Quad3. (I told you these helper types were not going to stay simple!)</p>
+<p>How will we compute what parts are stable? If we have a previous Quad3 in hand and a new Quad3, we need to know what regions are unchanged. The XOR operation gives us that on bits; XOR is one if the bits are different and zero if they are the same. I’ll add an XOR operation to Quad2, just like we have an OR operation already:</p>
+<pre>public static Quad2 operator ^(Quad2 x, Quad2 y) =&gt; 
+  new Quad2((ushort)(x.cells ^ y.cells));</pre>
+<p>Remember that my goal for this series is to make the code as clear as possible by making it read like “business domain” code rather than “mechanism domain” code. I need to know what regions of a Quad3 have changed, so I’m going to do that by making a new struct called “change report” that gives a pleasant, readable interface overtop of the bit-twidding mechanisms. In Quad3:</p>
+<pre>private Quad3ChangeReport Compare(Quad3 q) =&gt; 
+  new Quad3ChangeReport(this, q);</pre>
+<p>The implementation is basically just a rename of the operations we just added to Quad3!</p>
+<pre>private struct Quad3ChangeReport
+{
+  public Quad3ChangeReport(Quad3 x, Quad3 y)
+  {
+    q3 = new Quad3(x.NW ^ y.NW, x.NE ^ y.NE, x.SW ^ y.SW, x.SE ^ y.SE);
+  }
+  private readonly Quad3 q3;
+  public bool NoChange =&gt; q3.AllDead;
+  public bool NorthwestCornerNoChange =&gt; q3.NorthwestCornerDead;
+  public bool SoutheastCornerNoChange =&gt; q3.SoutheastCornerDead;
+  public bool NorthEdgeNoChange =&gt; q3.NorthEdgeDead;
+  public bool WestEdgeNoChange =&gt; q3.WestEdgeDead;
+  public bool SouthEdgeNoChange =&gt; q3.SouthEdgeDead;
+  public bool EastEdgeNoChange =&gt; q3.EastEdgeDead;
+}</pre>
+<p>Adding a few extra lines of code in order to make the call sites readable is very worthwhile in my opinion. Remember, the jitter is pretty smart and will inline these operations, and if it doesn’t, well, it is easier to make a readable program more performant than an unreadable one.</p>
+<p>Note also that this struct is nested inside Quad3, so that it can use the private helper methods I just added. I don’t often program with nested types, but this is an ideal use case; it is an implementation detail of a method of the outer type.</p>
+<p>We’ve digressed slightly from the question at hand: how do we update state bits given old state bits, an old Quad3 and a new Quad3?</p>
+<p>I know the following method looks a little bit hard to read, but imagine how it looks with every one of those bit-twiddling operations written out as a bit operation with a hexadecimal mask! Believe me, it is more understandable when you can read the business logic in English:</p>
+<pre>public Quad3State UpdateEvenQuad3State(Quad3 newQ3, Quad3State s)
+{
+  Quad3ChangeReport changes = newQ3.Compare(this);
+  if (changes.NorthwestCornerNoChange)
+  {
+    if (newQ3.NorthwestCornerDead)
+      s = s.SetCornerDead();
+    else
+      s = s.SetCornerStable();
+    if (changes.NorthEdgeNoChange)
+    {
+      if (newQ3.NorthEdgeDead)
+        s = s.SetHorizontalEdgeDead();
+      else
+        s = s.SetHorizontalEdgeStable();
+    }
+    else
+    {
+      s = s.SetHorizontalEdgeAndQuadActive();
+    }
+    if (changes.WestEdgeNoChange)
+    {
+      if (newQ3.WestEdgeDead)
+        s = s.SetVerticalEdgeDead();
+      else
+        s = s.SetVerticalEdgeStable();
+      if (changes.NoChange)
+      {
+        if (newQ3.AllDead)
+          s = s.SetAllRegionsDead();
+        else
+          s = s.SetAllRegionsStable();
+      }
+      else
+      {
+        s = s.SetQuad3Active();
+      }
+    }
+    else
+    {
+      s = s.SetVerticalEdgeAndQuadActive();
+    }
+  }
+  else
+  {
+    s = s.SetAllRegionsActive();
+  }
+  return s;
+}
+</pre>
+<p>If you trace all the logic through you’ll see that with only a handful of bit operations we manage to correctly update the eight state bits for the even-cycle Quad3.</p>
+<p>We then cut-n-paste this code to do the same thing to the odd cycle, just looking at the opposite edges and corners; obviously I’ll omit that.</p>
+<p>Once again we’ve managed to write a whole lot of bit-twiddling code; we now know at the end of every tick whether each of thirty-two regions of a Quad4 had any change from how they were two generations previous.</p>
+<p>How are we going to use this information to save time?</p>
+<p><strong>Next time on FAIC:</strong> We’ll write getters to read out the state we’ve just written, and draw a bunch more diagrams.</p>
+
+			</div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
