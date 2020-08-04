@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Shawn Wildermuth&#x27;s Blog - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Shawn Wildermuth&#x27;s Blog - linksfor.dev(s)"/>
+    <meta property="og:description" content=".NET Core Console Apps  - A Better Way? - Shawn Wildermuth"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="http://wildermuth.com/2020/08/02/NET-Core-Console-Apps---A-Better-Way"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Shawn Wildermuth&#x27;s Blog</title>
+<div class="readable">
+        <h1>Shawn Wildermuth&#x27;s Blog</h1>
+            <div>Reading time: 5-6 minutes</div>
+        <div>Posted here: 04 Aug 2020</div>
+        <p><a href="http://wildermuth.com/2020/08/02/NET-Core-Console-Apps---A-Better-Way">http://wildermuth.com/2020/08/02/NET-Core-Console-Apps---A-Better-Way</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+    <p><img src="https://wilderminds.blob.core.windows.net/img/console.jpg" alt="Console">I was at a customer site last week and a lot of their integration code is a set of console apps that are run on timers to import and export data. This isn't an uncommon use-case.</p>
+<p>I've got a couple of these lying around myself. I realized that I didn't know of a good exemplar of doing simple console apps using .NET Core in a way that is closer to ASP.NET Core (e.g. dependency injection, lifetime management, cancellation, etc.). So I decided to re-write an old console app I have.</p>
+<p>Welcome to <a href="https://github.com/shawnwildermuth/pinger">Pinger</a>. <a href="https://github.com/shawnwildermuth/pinger">Pinger</a> was a simple console app I wrote ages ago to ping a range of addresses. I am sure this exists in other places, but sometimes you just want to write it. So I took the core logic of the old, .NET version and ported it to .NET Core, but with some additional services to make the code simple.</p>
+<p>Dependency Injection was one of my main wants so I started simple and just created my own service collection:</p>
+<pre><code>ServiceCollection coll <span>=</span> new <span>ServiceCollection</span><span>(</span><span>)</span><span>;</span>
+coll<span>.</span><span>AddSingleton</span><span>(</span>options<span>)</span><span>;</span>
+coll<span>.</span>AddTransient<span>&lt;</span>PingerService<span>&gt;</span><span>(</span><span>)</span><span>;</span>
+
+var provider <span>=</span> coll<span>.</span><span>BuildServiceProvider</span><span>(</span><span>)</span><span>;</span>
+
+var svc <span>=</span> provider<span>.</span>GetService<span>&lt;</span>PingerService<span>&gt;</span><span>(</span><span>)</span><span>;</span>
+svc<span>.</span><span>Run</span><span>(</span><span>)</span><span>;</span>
+
+</code></pre>
+<p>This was fine, but I decided that I wanted more features. Luckily, the hosting in .NET Core 3.1 supports this. If you add a reference to the Microsoft.Extensions.Hosting assembly, you can use the default hosting:</p>
+<pre><code>&gt; dotnet add package Microsoft.Extensions.Hosting
+</code></pre>
+<pre><code>Host<span>.</span><span>CreateDefaultBuilder</span><span>(</span><span>)</span>
+  <span>.</span><span>RunConsoleAsync</span><span>(</span><span>)</span><span>.</span><span>Wait</span><span>(</span><span>)</span><span>;</span>
+</code></pre>
+<p>By default, we get dependency injection, support for configuration files, and logging. Note that the RunConsoleAsync is on the builder, not after "Build()" method. Not sure why, but this is what works. But how does the code actually run? We need to setup our services first:</p>
+<pre><code>Host<span>.</span><span>CreateDefaultBuilder</span><span>(</span><span>)</span>
+  <span>.</span><span>ConfigureServices</span><span>(</span><span>(</span>b<span>,</span> c<span>)</span> <span>=</span><span>&gt;</span>
+  <span>{</span>
+    c<span>.</span>AddHostedService<span>&lt;</span>PingerService<span>&gt;</span><span>(</span><span>)</span><span>;</span>
+  <span>}</span><span>)</span>
+  <span>.</span><span>RunConsoleAsync</span><span>(</span><span>)</span><span>.</span><span>Wait</span><span>(</span><span>)</span><span>;</span>
+</code></pre>
+<p>By adding a hosted service (which has to derive from IHostedService), you get start and stop methods to handle the code that your project is actually doing:</p>
+<pre><code>  internal class PingerService <span>:</span> IHostedService
+  <span>{</span>
+    private readonly ILogger<span>&lt;</span>PingerService<span>&gt;</span> _logger<span>;</span>
+
+    public <span>PingerService</span><span>(</span>ILogger<span>&lt;</span>PingerService<span>&gt;</span> logger<span>)</span>
+    <span>{</span>
+      _logger <span>=</span> logger<span>;</span>
+    <span>}</span>
+
+    public Task <span>StartAsync</span><span>(</span>CancellationToken cancellationToken<span>)</span>
+    <span>{</span>
+      <span>return</span> Task<span>.</span>CompletedTask<span>;</span>
+    <span>}</span>
+
+    public Task <span>StopAsync</span><span>(</span>CancellationToken cancellationToken<span>)</span>
+    <span>{</span>
+      <span>return</span> Task<span>.</span>CompletedTask<span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Because we're using <em>RunConsoleAsync</em> it will close the console app after all hosted services are complete. The rest of this is just plumbing that you don't have to worry about. But I wasn't finished. I wanted to handle the console command parsing too. To do this, I'm using the CommandLineParser:</p>
+<pre><code>&gt; dotnet add package CommandLineParser 
+</code></pre>
+<p>With the parser, you can just use the parser to take the arguments and turn them into the options. This starts by creating an object that describes the options (I'm using it for a very simple case):</p>
+<pre><code>public class Options
+<span>{</span>
+  <span>[</span><span>Value</span><span>(</span><span>0</span><span>,</span> MetaName <span>=</span> <span>"first"</span><span>,</span> Required <span>=</span> true<span>,</span> HelpText <span>=</span> <span>"Starting IP Address (or DNS Name)"</span><span>)</span><span>]</span>
+  public string FirstAddress <span>{</span> get<span>;</span> set<span>;</span> <span>}</span>
+
+  <span>[</span><span>Value</span><span>(</span><span>1</span><span>,</span> MetaName <span>=</span> <span>"last"</span><span>,</span>  Required <span>=</span> false<span>,</span> HelpText <span>=</span> <span>"Ending IP Address (or DNS Name)"</span><span>)</span><span>]</span>
+  public string LastAddress <span>{</span> get<span>;</span> set<span>;</span> <span>}</span>
+
+  <span>[</span><span>Option</span><span>(</span><span>'r'</span><span>,</span> <span>"repeats"</span><span>,</span> Required <span>=</span> false<span>,</span> HelpText <span>=</span> <span>"Number of times to repeat the pings"</span><span>)</span><span>]</span>
+  public <span>int</span> Repeats <span>{</span> get<span>;</span> set<span>;</span> <span>}</span> <span>=</span> <span>1</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>In this case, I just want a start and ending IP address and optionally specify if we should ping each IP multiple times. Then I can use the parser in the program.cs:</p>
+<pre><code>Parser<span>.</span>Default<span>.</span>ParseArguments<span>&lt;</span>Options<span>&gt;</span><span>(</span>args<span>)</span>
+  <span>.</span><span>WithParsed</span><span>(</span>options <span>=</span><span>&gt;</span>
+  <span>{</span>
+      Host<span>.</span><span>CreateDefaultBuilder</span><span>(</span><span>)</span>
+        <span>.</span><span>ConfigureServices</span><span>(</span><span>(</span>b<span>,</span> c<span>)</span> <span>=</span><span>&gt;</span>
+        <span>{</span>
+          c<span>.</span><span>AddSingleton</span><span>(</span>options<span>)</span><span>;</span>
+          c<span>.</span>AddHostedService<span>&lt;</span>PingerService<span>&gt;</span><span>(</span><span>)</span><span>;</span>
+        <span>}</span><span>)</span>
+        <span>.</span><span>RunConsoleAsync</span><span>(</span><span>)</span><span>.</span><span>Wait</span><span>(</span><span>)</span><span>;</span>
+  <span>}</span><span>)</span><span>;</span>
+</code></pre>
+<p>This just parses the options and if it's not a good set of options, it just displays the help text. Otherwise, it executes the WithParsed lambda function to do the other work. I'm adding the options object as a singleton so that the PingerService (or anything that uses it) can ask for the Options object as a dependency.</p>
+<p>That's really it. The example is a little bit more complex than that. You can view all the code (or fork it) at:</p>
+<blockquote>
+<p><a href="https://github.com/shawnwildermuth/pinger">https://github.com/shawnwildermuth/pinger</a></p>
+</blockquote>
+<p>If you think there is something I'm missing, please reply in the comments. I want to have a good example to show students.</p>
+
+  </div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
