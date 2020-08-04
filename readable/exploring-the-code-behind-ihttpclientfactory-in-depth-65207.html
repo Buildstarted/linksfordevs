@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Exploring the code behind IHttpClientFactory in depth - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Exploring the code behind IHttpClientFactory in depth - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I look in depth at the code behind the default implementation of IHttpClientFactory and see how it manages HttpClient handler lifetimes."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1>
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Exploring the code behind IHttpClientFactory in depth</title>
+<div class="readable">
+        <h1>Exploring the code behind IHttpClientFactory in depth</h1>
+            <div>Reading time: 18-23 minutes</div>
+        <div>Posted here: 04 Aug 2020</div>
+        <p><a href="https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/">https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+<div>
+<p>In this post I take a look at the code in the default implementation of <code>IHttpClientFactory</code> in ASP.NET Core—<code>DefaultHttpClientFactory</code>. We'll see how it ensures that <code>HttpClient</code> instances created with the factory <a href="https://aspnetmonsters.com/2016/08/2016-08-27-httpclientwrong/">prevent socket exhaustion</a>, while also ensuring that <a href="https://byterot.blogspot.com/2016/07/singleton-httpclient-dns.html">DNS changes are respected</a>.</p>
+<blockquote>
+<p>This post assumes you already have a general idea of <code>IHttpClientFactory</code> and what it's used for, so if it's new to you, take a look at <a href="https://www.stevejgordon.co.uk/introduction-to-httpclientfactory-aspnetcore">Steve Gordon's series on IHttpClientFactory</a>, or <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/http-requests">see the docs</a>.</p>
+</blockquote>
+<p>The code in this post is based on <a href="https://github.com/dotnet/runtime/blob/065bf96e5c298352c790b9a82564d57a745725f5/src/libraries/Microsoft.Extensions.Http/src/DefaultHttpClientFactory.cs">the HEAD of the master branch</a> of <a href="https://github.com/dotnet/runtime">https://github.com/dotnet/runtime</a> at the time of writing, after .NET 5 preview 7. But the code hasn't changed significantly for 2 years, so I don't expect it to change much soon! </p>
+<blockquote>
+<p>I've taken a couple of liberties with the code by removing null checks, in-lining some trivial methods, and removing some code that's tangential to this discussion. For the original code, <a href="https://github.com/dotnet/runtime/blob/065bf96e5c298352c790b9a82564d57a745725f5/src/libraries/Microsoft.Extensions.Http/src/DefaultHttpClientFactory.cs">see GitHub</a>.</p>
+</blockquote>
+<h2 id="a-brief-overview-of-ihttpclientfactory">A brief overview of IHttpClientFactory<a href="#a-brief-overview-of-ihttpclientfactory"></a></h2>
+<p><code>IHttpClientFactory</code> allows you to create <code>HttpClient</code> instances for interacting with HTTP APIs, using best practices to avoid common issues. Before <code>IHttpClientFactory</code>, it was common to fall into one of two traps when creating <code>HttpClient</code> instances:</p>
+<ul>
+<li><em>Create and dispose of new <code>HttpClient</code> instances as required</em>. <a href="https://aspnetmonsters.com/2016/08/2016-08-27-httpclientwrong/">This can lead to socket exhaustion</a> due to the TIME_WAIT period required after closing a connection.</li>
+<li><em>Create a singleton <code>HttpClient</code> for the lifetime of the application</em>. This can lead to <a href="https://byterot.blogspot.com/2016/07/singleton-httpclient-dns.html">issues when the DNS record for the HTTP API you're using changes</a>—the changes will not be respected by the <code>HttpClient</code>.</li>
+</ul>
+<p><code>IHttpClientFactory</code> was added in .NET Core 2.1, and solves this issue by separating the management of <code>HttpClient</code>, from the the <code>HttpMessageHandler</code> chain that is used to send the message. In reality, it is the lifetime of the <code>HttpClientHandler</code> at the <em>end</em> of the pipeline that is the important thing to manage, as this is the handler that actually makes the connection</p>
+<p><img src="https://andrewlock.net/content/images/2020/httpclientfactory_01.png" alt="HttpClient and HttpClientHandler pipeline"></p>
+<p>In addition to simply managing the handler lifetimes, <code>IHttpClientFactory</code> also makes it easy to customise the generated <code>HttpClient</code> and message handler pipeline using an <code>IHttpClientBuilder</code>. This allows you to "pre-configure" a named of typed <code>HttpClient</code> that is created using the factory, for example to set the base address or add default headers:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddHttpClient</span><span>(</span><span>"github"</span><span>,</span> c <span>=</span><span>&gt;</span>
+    <span>{</span>
+        c<span>.</span>BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"https://api.github.com/"</span><span>)</span><span>;</span>
+    <span>}</span><span>)</span>
+    <span>.</span><span>ConfigureHttpClient</span><span>(</span>c <span>=</span><span>&gt;</span> 
+    <span>{</span>
+        c<span>.</span>DefaultRequestHeaders<span>.</span><span>Add</span><span>(</span><span>"Accept"</span><span>,</span> <span>"application/vnd.github.v3+json"</span><span>)</span><span>;</span>
+        c<span>.</span>DefaultRequestHeaders<span>.</span><span>Add</span><span>(</span><span>"User-Agent"</span><span>,</span> <span>"HttpClientFactory-Sample"</span><span>)</span><span>;</span>
+    <span>}</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>You can add multiple configuration functions at the <code>HttpClient</code> level, but you can <em>also</em> add additional <code>HttpMessageHandler</code>s to the pipeline. Steve shows how you can create your own handlers in <a href="https://www.stevejgordon.co.uk/httpclientfactory-aspnetcore-outgoing-request-middleware-pipeline-delegatinghandlers">in his series</a>. To add message handlers to a named client, use <code>IHttpClientBuilder.AddHttpMessageHandler&lt;&gt;</code>, and register the handler with the DI container:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    services<span>.</span><span>AddHttpClient</span><span>(</span><span>"github"</span><span>,</span> c <span>=</span><span>&gt;</span>
+    <span>{</span>
+        c<span>.</span>BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"https://api.github.com/"</span><span>)</span><span>;</span>
+    <span>}</span><span>)</span>
+    <span>.</span><span><span>AddHttpMessageHandler</span><span>&lt;</span><span>TimingHandler</span><span>&gt;</span></span><span>(</span><span>)</span> 
+    <span>.</span><span><span>AddHttpMessageHandler</span><span>&lt;</span><span>ValidateHeaderHandler</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span> 
+
+    
+    services<span>.</span><span><span>AddTransient</span><span>&lt;</span><span>TimingHandler</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span><span>AddTransient</span><span>&lt;</span><span>ValidateHeaderHandler</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>When you call <code>ConfigureHttpClient()</code> or <code>AddHttpMessageHandler()</code> to configure your HttpClient, you're actually adding configuration messages to a named <code>IOptions</code> instance, <code>HttpClientFactoryOptions</code>. <a href="https://andrewlock.net/using-multiple-instances-of-strongly-typed-settings-with-named-options-in-net-core-2-x/">You can read more about <em>named options</em> here</a>, but the details aren't too important for this post.</p>
+<p>That handles <em>configuring</em> the <code>IHttpClientFactory</code>. To use the factory, and create an <code>HttpClient</code>, you first obtain an instance of the singleton <code>IHttpClientFactory</code>, and then you call <code>CreateClient(name)</code>, providing the name of the client to create.</p>
+<blockquote>
+<p>If you don't provide a name to <code>CreateClient()</code>, the factory will use the default name, <code>""</code> (the empty string).</p>
+</blockquote>
+<pre><code><span>public</span> <span>class</span> <span>MyService</span>
+<span>{</span>
+    
+    <span>private</span> <span>readonly</span> <span>IHttpClientFactory</span> _factory<span>;</span>
+    <span>public</span> <span>MyService</span><span>(</span><span>IHttpClientFactory</span> factory<span>)</span>
+    <span>{</span>
+        _factory <span>=</span> factory<span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>async</span> <span>Task</span> <span>DoSomething</span><span>(</span><span>)</span>
+    <span>{</span>
+        
+        <span>HttpClient</span> client <span>=</span> _factory<span>.</span><span>CreateClient</span><span>(</span><span>"github"</span><span>)</span><span>;</span>
+
+        
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>The remainder of this post focus on what happens behind the scenes when you call <code>CreateClient()</code>.</p>
+<h2 id="creating-an-httpclient-and-httpmessagehandler">Creating an HttpClient and HttpMessageHandler<a href="#creating-an-httpclient-and-httpmessagehandler"></a></h2>
+<p>The <code>CreateClient()</code> method, shown below, is how you typically interact with the <code>IHttpClientFactory</code>. I discuss this method below. </p>
+<pre><code>
+<span>private</span> <span>readonly</span> IOptionsMonitor<span>&lt;</span>HttpClientFactoryOptions<span>&gt;</span> _optionsMonitor
+
+<span>public</span> <span>HttpClient</span> <span>CreateClient</span><span>(</span><span>string</span> name<span>)</span>
+<span>{</span>
+    <span>HttpMessageHandler</span> handler <span>=</span> <span>CreateHandler</span><span>(</span>name<span>)</span><span>;</span>
+    <span>var</span> client <span>=</span> <span>new</span> <span>HttpClient</span><span>(</span>handler<span>,</span> disposeHandler<span>:</span> <span>false</span><span>)</span><span>;</span>
+
+    <span>HttpClientFactoryOptions</span> options <span>=</span> _optionsMonitor<span>.</span><span>Get</span><span>(</span>name<span>)</span><span>;</span>
+    <span>for</span> <span>(</span><span>int</span> i <span>=</span> <span>0</span><span>;</span> i <span>&lt;</span> options<span>.</span>HttpClientActions<span>.</span>Count<span>;</span> i<span>++</span><span>)</span>
+    <span>{</span>
+        options<span>.</span>HttpClientActions<span>[</span>i<span>]</span><span>(</span>client<span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>return</span> client<span>;</span>
+<span>}</span>
+</code></pre>
+<p>This is a relatively simple method on the face of it. We start by creating the <code>HttpMessageHandler</code> pipeline by calling <code>CreateHandler(name)</code>, and passing in the name of the client to create. We'll look into that method shortly, as it's where most of the magic happens around handler pooling and lifetimes. </p>
+<p>Once you have a handler, a new instance of <code>HttpClient</code> is created and passed to the handler. The important thing to note is the <code>disposeHandler: false</code> argument. This ensures that disposing the <code>HttpClient</code> <em>doesn't</em> dispose the handler pipeline, as the <code>IHttpClientFactory</code> will handle that itself.</p>
+<p>Finally, the latest <code>HttpClientFactoryOptions</code> for the named client are fetched from the <code>IOptionsMonitor</code> instance. This contains the configuration functions for the <code>HttpClient</code> that were added in <code>Startup.ConfigureServices()</code>, and sets things like the <code>BaseAddress</code> and default headers.</p>
+<blockquote>
+<p><a href="https://andrewlock.net/creating-singleton-named-options-with-ioptionsmonitor/">I discussed using <code>IOptionsMonitor</code> in a previous post</a>. It is useful when you want to load named options in a singleton context, where you can't use the simpler <code>IOptionsSnapshot</code> interface. It also has other change-detection capabilities that aren't used in this case.</p>
+</blockquote>
+<p>Finally, the <code>HttpClient</code> is returned to the caller. Let's look at the <code>CreateHandler()</code> method now and see how the <code>HttpMessageHandler</code> pipeline is created. There's quite a few layers to get through, so we'll walk through it step-by-step.</p>
+<pre><code>
+<span>readonly</span> ConcurrentDictionary<span>&lt;</span><span>string</span><span>,</span> Lazy<span>&lt;</span>ActiveHandlerTrackingEntry<span>&gt;</span><span>&gt;</span> _activeHandlers<span>;</span><span>;</span>
+
+<span>readonly</span> Func<span>&lt;</span><span>string</span><span>,</span> Lazy<span>&lt;</span>ActiveHandlerTrackingEntry<span>&gt;</span><span>&gt;</span> _entryFactory <span>=</span> <span>(</span>name<span>)</span> <span>=</span><span>&gt;</span>
+    <span>{</span>
+        <span>return</span> <span>new</span> <span><span>Lazy</span><span>&lt;</span><span>ActiveHandlerTrackingEntry</span><span>&gt;</span></span><span>(</span><span>(</span><span>)</span> <span>=</span><span>&gt;</span>
+        <span>{</span>
+            <span>return</span> <span>CreateHandlerEntry</span><span>(</span>name<span>)</span><span>;</span>
+        <span>}</span><span>,</span> LazyThreadSafetyMode<span>.</span>ExecutionAndPublication<span>)</span><span>;</span>
+    <span>}</span><span>;</span>
+
+<span>public</span> <span>HttpMessageHandler</span> <span>CreateHandler</span><span>(</span><span>string</span> name<span>)</span>
+<span>{</span>
+    <span>ActiveHandlerTrackingEntry</span> entry <span>=</span> _activeHandlers<span>.</span><span>GetOrAdd</span><span>(</span>name<span>,</span> _entryFactory<span>)</span><span>.</span>Value<span>;</span>
+
+    entry<span>.</span><span>StartExpiryTimer</span><span>(</span>_expiryCallback<span>)</span><span>;</span>
+
+    <span>return</span> entry<span>.</span>Handler<span>;</span>
+<span>}</span>
+</code></pre>
+<p>The <code>CreateHandler()</code> method does two things:</p>
+<ul>
+<li>It gets or creates an <code>ActiveHandlerTrackingEntry</code></li>
+<li>It stars a timer on the entry</li>
+</ul>
+<p>The <code>_activeHandlers</code> field is a <code>ConcurrentDictionary&lt;&gt;</code>, keyed on the name of the client (e.g. <code>"gitHub"</code>). The dictionary values are <code>Lazy&lt;ActiveHandlerTrackingEntry&gt;</code>. Using <code>Lazy&lt;&gt;</code> here is <a href="https://andrewlock.net/making-getoradd-on-concurrentdictionary-thread-safe-using-lazy/">a neat trick I've blogged about previously to make the <code>GetOrAdd</code> function thread safe</a>. The job of actually creating the handler occurs in <code>CreateHandlerEntry</code> (which we'll see shortly) which creates an <code>ActiveHandlerTrackingEntry</code>.</p>
+<p>The <code>ActiveHandlerTrackingEntry</code> is <em>mostly</em> an immutable object containing an <code>HttpMessageHandler</code> and a DI <code>IServiceScope</code>. In reality it also contains an internal timer that is used with the <code>StartExpiryTimer()</code> method to call the provided <code>callback</code> when the timer of length <code>Lifetime</code> expires.</p>
+<pre><code><span>internal</span> <span>class</span> <span>ActiveHandlerTrackingEntry</span>
+<span>{</span>
+    <span>public</span> <span>LifetimeTrackingHttpMessageHandler</span> Handler <span>{</span> <span>get</span><span>;</span> <span>private</span> <span>set</span><span>;</span> <span>}</span>
+    <span>public</span> <span>TimeSpan</span> Lifetime <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> Name <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>IServiceScope</span> Scope <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>void</span> <span>StartExpiryTimer</span><span>(</span><span>TimerCallback</span> callback<span>)</span>
+    <span>{</span>
+        
+        
+        
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>So the <code>CreateHandler</code> method either creates a new <code>ActiveHandlerTrackingEntry</code>, or retrieves the entry from the dictionary, and starts the timer. In the next section we'll look at how the <code>CreateHandlerEntry()</code> method creates the <code>ActiveHandlerTrackingEntry</code> instances:</p>
+<h2 id="creating-and-tracking-httpmessagehandlers-in-createhandlerentry">Creating and tracking HttpMessageHandlers in CreateHandlerEntry<a href="#creating-and-tracking-httpmessagehandlers-in-createhandlerentry"></a></h2>
+<p>The <code>CreateHandlerEntry</code> method is where the <code>HttpClient</code> handler pipelines are created. It's a somewhat complex method, so I'll show it first, and then talk through it afterwards. The version shown below is somewhat simplified <a href="https://github.com/dotnet/runtime/blob/065bf96e5c298352c790b9a82564d57a745725f5/src/libraries/Microsoft.Extensions.Http/src/DefaultHttpClientFactory.cs#L151">compared to the real version</a>, but it maintains all the salient points. </p>
+<pre><code>
+<span>private</span> <span>readonly</span> <span>IServiceProvider</span> _services<span>;</span>
+
+
+<span>private</span> <span>readonly</span> IHttpMessageHandlerBuilderFilter<span>[</span><span>]</span> _filters<span>;</span>
+
+<span>private</span> <span>ActiveHandlerTrackingEntry</span> <span>CreateHandlerEntry</span><span>(</span><span>string</span> name<span>)</span>
+<span>{</span>
+    <span>IServiceScope</span> scope <span>=</span> _services<span>.</span><span>CreateScope</span><span>(</span><span>)</span><span>;</span> 
+    <span>IServiceProvider</span> services <span>=</span> scope<span>.</span>ServiceProvider<span>;</span>
+    <span>HttpClientFactoryOptions</span> options <span>=</span> _optionsMonitor<span>.</span><span>Get</span><span>(</span>name<span>)</span><span>;</span>
+
+    <span>HttpMessageHandlerBuilder</span> builder <span>=</span> services<span>.</span><span><span>GetRequiredService</span><span>&lt;</span><span>HttpMessageHandlerBuilder</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+    builder<span>.</span>Name <span>=</span> name<span>;</span>
+
+    
+    
+    Action<span>&lt;</span>HttpMessageHandlerBuilder<span>&gt;</span> configure <span>=</span> Configure<span>;</span>
+    <span>for</span> <span>(</span><span>int</span> i <span>=</span> _filters<span>.</span>Length <span>-</span> <span>1</span><span>;</span> i <span>&gt;=</span> <span>0</span><span>;</span> i<span>--</span><span>)</span>
+    <span>{</span>
+        configure <span>=</span> _filters<span>[</span>i<span>]</span><span>.</span><span>Configure</span><span>(</span>configure<span>)</span><span>;</span>
+    <span>}</span>
+
+    <span>configure</span><span>(</span>builder<span>)</span><span>;</span>
+
+    
+    <span>var</span> handler <span>=</span> <span>new</span> <span>LifetimeTrackingHttpMessageHandler</span><span>(</span>builder<span>.</span><span>Build</span><span>(</span><span>)</span><span>)</span><span>;</span>
+
+    <span>return</span> <span>new</span> <span>ActiveHandlerTrackingEntry</span><span>(</span>name<span>,</span> handler<span>,</span> scope<span>,</span> options<span>.</span>HandlerLifetime<span>)</span><span>;</span>
+
+    <span>void</span> <span>Configure</span><span>(</span><span>HttpMessageHandlerBuilder</span> b<span>)</span>
+    <span>{</span>
+        <span>for</span> <span>(</span><span>int</span> i <span>=</span> <span>0</span><span>;</span> i <span>&lt;</span> options<span>.</span>HttpMessageHandlerBuilderActions<span>.</span>Count<span>;</span> i<span>++</span><span>)</span>
+        <span>{</span>
+            options<span>.</span>HttpMessageHandlerBuilderActions<span>[</span>i<span>]</span><span>(</span>b<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>There's quite a lot to unpack here. The method starts by creating a new <code>IServiceScope</code> using the root DI container. This creates a DI scope, so that scoped services can be sourced from the associated <code>IServiceProvider</code>. We also retrieve the <code>HttpClientFactoryOptions</code> for the requested <code>HttpClient</code> name, which contains the specific handler configuration for this instance.</p>
+<p>The next item retrieved from the container is an <code>HttpMessageHandlerBuilder</code>, which by default is <a href="https://github.com/dotnet/runtime/blob/6072e4d3a7a2a1493f514cdf4be75a3d56580e84/src/libraries/Microsoft.Extensions.Http/src/DefaultHttpMessageHandlerBuilder.cs">a <code>DefaultHttpMessageHandlerBuilder</code></a>. This is used to build the handler pipeline, by creating a "primary" handler, which is the <code>HttpClientHandler</code> that is responsible for making the socket connection and sending the request. You can add additional <code>DelegatingHandler</code>s that wrap the primary server, creating a pipeline for requests and responses.</p>
+<p><img src="https://andrewlock.net/content/images/2020/httpclientfactory_01.png" alt="Image of the delegating handlers and primary handler"></p>
+<p>The <code>DelegatingHandler</code>s are added to the builder using a slightly complicated arrangement, that is very reminiscent of how the middleware pipeline in an ASP.NET Core app is built:</p>
+<ul>
+<li>The <code>Configure()</code> local method builds a pipeline of <code>DelegatingHandler</code>s, based on the configuration you provided in <code>Startup.ConfigureServices()</code>.</li>
+<li><code>IHttpMessageHandlerBuilderFilter</code> are <em>filters</em> that are injected into the <code>IHttpClientFactory</code> constructor. They are used to add <em>additional</em> handlers into the <code>DelegatingHandler</code> pipeline. </li>
+</ul>
+<p><code>IHttpMessageHandlerBuilderFilter</code> are directly analogous to the <code>IStartupFilter</code>s used by the ASP.NET Core middleware pipeline, <a href="https://andrewlock.net/exploring-istartupfilter-in-asp-net-core/">which I've talked about previously</a>. A single <code>IHttpMessageHandlerBuilderFilter</code> is registered by default, the <code>LoggingHttpMessageHandlerBuilderFilter</code>. <a href="https://github.com/dotnet/runtime/blob/6072e4d3a7a2a1493f514cdf4be75a3d56580e84/src/libraries/Microsoft.Extensions.Http/src/Logging/LoggingHttpMessageHandlerBuilderFilter.cs">This filter</a> adds two additional handlers to the <code>DelegatingHandler</code> pipeline:</p>
+<ul>
+<li><code>LoggingScopeHttpMessageHandler</code> at the start (outside) of the pipeline, which starts a new <a href="https://docs.microsoft.com/aspnet/core/fundamentals/logging/#log-scopes">logging scope</a>.</li>
+<li>A <code>LoggingHttpMessageHandler</code> at the end (inside) of the pipeline, just before the request is sent to the primary <code>HttpClientHandler</code>, which records logs about the request and response.</li>
+</ul>
+<p>Finally, the whole pipeline is wrapped in <a href="https://github.com/dotnet/runtime/blob/6072e4d3a7a2a1493f514cdf4be75a3d56580e84/src/libraries/Microsoft.Extensions.Http/src/LifetimeTrackingHttpMessageHandler.cs">a <code>LifetimeTrackingHttpMessageHandler</code>, which is a "noop" <code>DelegatingHandler</code></a>. We'll come back to the purpose of this handler later.</p>
+<p>The code (and probably my description) for <code>CreateHandlerEntry</code> is definitely somewhat hard to follow, but the end result for an <code>HttpClient</code> configured with two custom handlers (as demonstrated at the start of this post) is a handler pipeline that looks something like the following:</p>
+<p><img src="https://andrewlock.net/content/images/2020/httpclientfactory_02.png" alt="The final build handler pipeline"></p>
+<p>Once the handler pipeline is complete, it is saved in a new <code>ActiveHandlerTrackingEntry</code> instance, along with the DI <code>IServiceScope</code> used to create it, and given the lifetime defined in <code>HttpClientFactoryOptions</code> (two minutes by default).</p>
+<p>This entry is returned to the caller (the <code>CreateHandler()</code> method), added to the <code>ConcurrentDictionary&lt;&gt;</code> of handlers, added to a new <code>HttpClient</code> instance (in the <code>CreateClient()</code> method), and returned to the original caller. </p>
+<p>For the next two minutes, every time you call <code>CreateClient()</code>, you will get a <em>new</em> instance of <code>HttpClient</code>, but which has the <em>same</em> handler pipeline as was originally created.</p>
+<blockquote>
+<p>Each <em>named</em> or <em>typed</em> client gets its own message handler pipeline. i.e. two instances of the <code>"github"</code> named client will have the same handler chain, but the <code>"api"</code> named client would have a different handler chain.</p>
+</blockquote>
+<p>The next challenge is cleaning up and disposing the handler chain once the two minute timer has expired. This requires some careful handling, as you'll see in the next section.</p>
+<h2 id="cleaning-up-expired-handlers-">Cleaning up expired handlers.<a href="#cleaning-up-expired-handlers-"></a></h2>
+<p>After two minutes, the timer stored in the <code>ActiveHandlerTrackingEntry</code> entry will expire, and fire the <code>callback</code> method passed into <code>StartExpiryTimer()</code>: <code>ExpiryTimer_Tick()</code>.</p>
+<p><code>ExpiryTimer_Tick</code> is responsible for removing the active handler entry from the <code>ConcurrentDictionary&lt;&gt;</code> pool, and adding it to a queue of expired handlers:</p>
+<pre><code>
+<span>readonly</span> ConcurrentQueue<span>&lt;</span>ExpiredHandlerTrackingEntry<span>&gt;</span> _expiredHandlers<span>;</span>
+
+
+<span>internal</span> <span>void</span> <span>ExpiryTimer_Tick</span><span>(</span><span>object</span> state<span>)</span>
+<span>{</span>
+    <span>var</span> active <span>=</span> <span>(</span>ActiveHandlerTrackingEntry<span>)</span>state<span>;</span>
+
+     _activeHandlers<span>.</span><span>TryRemove</span><span>(</span>active<span>.</span>Name<span>,</span> <span>out</span> Lazy<span>&lt;</span>ActiveHandlerTrackingEntry<span>&gt;</span> found<span>)</span><span>;</span>
+
+    <span>var</span> expired <span>=</span> <span>new</span> <span>ExpiredHandlerTrackingEntry</span><span>(</span>active<span>)</span><span>;</span>
+    _expiredHandlers<span>.</span><span>Enqueue</span><span>(</span>expired<span>)</span><span>;</span>
+
+    <span>StartCleanupTimer</span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>Once the <code>active</code> handler is removed from the <code>_activeHandlers</code> collection, it will no longer be handed out with new <code>HttpClient</code>s when your call <code>CreateClient()</code>. But there are potentially <code>HttpClient</code>s out there which are still using the <code>active</code> handler. The <code>IHttpClientFactory</code> has to wait for all the <code>HttpClient</code> instances that reference this handler to be cleaned up before it can dispose the handler pipeline.</p>
+<p>The problem is, how can <code>IHttpClientFactory</code> track that the handler is no longer referenced? The key is the use of the "noop" <code>LifetimeTrackingHttpMessageHandler</code>, and the <code>ExpiredHandlerTrackingEntry</code>.</p>
+<p>The <code>ExpiredHandlerTrackingEntry</code>, shown below, <a href="https://docs.microsoft.com/dotnet/api/system.weakreference">creates a <code>WeakReference</code></a> to the <code>LifetimeTrackingHttpMessageHandler</code>. As I showed in the previous section, the <code>LifetimeTrackingHttpMessageHandler</code> is the "outermost" handler in the chain, so it is the handler that is <em>directly</em> referenced by the <code>HttpClient</code>. </p>
+<pre><code><span>internal</span> <span>class</span> <span>ExpiredHandlerTrackingEntry</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>WeakReference</span> _livenessTracker<span>;</span>
+
+    
+    
+    <span>public</span> <span>ExpiredHandlerTrackingEntry</span><span>(</span><span>ActiveHandlerTrackingEntry</span> other<span>)</span>
+    <span>{</span>
+        Name <span>=</span> other<span>.</span>Name<span>;</span>
+        Scope <span>=</span> other<span>.</span>Scope<span>;</span>
+
+        _livenessTracker <span>=</span> <span>new</span> <span>WeakReference</span><span>(</span>other<span>.</span>Handler<span>)</span><span>;</span>
+        InnerHandler <span>=</span> other<span>.</span>Handler<span>.</span>InnerHandler<span>;</span>
+    <span>}</span>
+
+    <span>public</span> <span>bool</span> CanDispose <span>=</span><span>&gt;</span> <span>!</span>_livenessTracker<span>.</span>IsAlive<span>;</span>
+
+    <span>public</span> <span>HttpMessageHandler</span> InnerHandler <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>string</span> Name <span>{</span> <span>get</span><span>;</span> <span>}</span>
+    <span>public</span> <span>IServiceScope</span> Scope <span>{</span> <span>get</span><span>;</span> <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Using <code>WeakReference</code> to the <code>LifetimeTrackingHttpMessageHandler</code> means that the <em>only direct references</em> to the outermost handler in the chain are in <code>HttpClient</code>s. Once all these <code>HttpClient</code>s have been collected by the garbage collector, the <code>LifetimeTrackingHttpMessageHandler</code> will have no references, and so will <em>also</em> be disposed. The <code>ExpiredHandlerTrackingEntry</code> can detect that via the <code>WeakReference.IsAlive</code> property.</p>
+<blockquote>
+<p>Note that the <code>ExpiredHandlerTrackingEntry</code> <em>does</em> maintain a reference to the rest of the handler pipeline, so that it can properly dispose the inner handler chain, as well as the DI <code>IServiceScope</code>.</p>
+</blockquote>
+<p>After an entry is added to the <code>_expiredHandlers</code> queue, a timer is started by <code>StartCleanupTimer()</code> which fires after 10 seconds. This calls the <code>CleanupTimer_Tick()</code> method, which checks to see whether all the references to the handler have expired. If so, the handler chain and <code>IServiceScope</code> are disposed. If not, they are added back onto the queue, and the clean-up timer is started again:</p>
+<pre><code><span>internal</span> <span>void</span> <span>CleanupTimer_Tick</span><span>(</span><span>)</span>
+<span>{</span>
+    
+    <span>StopCleanupTimer</span><span>(</span><span>)</span><span>;</span>
+
+    
+    <span>int</span> initialCount <span>=</span> _expiredHandlers<span>.</span>Count<span>;</span>
+    <span>for</span> <span>(</span><span>int</span> i <span>=</span> <span>0</span><span>;</span> i <span>&lt;</span> initialCount<span>;</span> i<span>++</span><span>)</span>
+    <span>{</span>
+        _expiredHandlers<span>.</span><span>TryDequeue</span><span>(</span><span>out</span> <span>ExpiredHandlerTrackingEntry</span> entry<span>)</span><span>;</span>
+
+        <span>if</span> <span>(</span>entry<span>.</span>CanDispose<span>)</span>
+        <span>{</span>
+            
+            <span>try</span>
+            <span>{</span>
+                entry<span>.</span>InnerHandler<span>.</span><span>Dispose</span><span>(</span><span>)</span><span>;</span>
+                entry<span>.</span>Scope<span>?</span><span>.</span><span>Dispose</span><span>(</span><span>)</span><span>;</span>
+            <span>}</span>
+            <span>catch</span> <span>(</span><span>Exception</span> ex<span>)</span>
+            <span>{</span>
+                
+            <span>}</span>
+        <span>}</span>
+        <span>else</span>
+        <span>{</span>
+            
+            
+            _expiredHandlers<span>.</span><span>Enqueue</span><span>(</span>entry<span>)</span><span>;</span>
+        <span>}</span>
+    <span>}</span>
+
+    
+    <span>if</span> <span>(</span>_expiredHandlers<span>.</span>Count <span>&gt;</span> <span>0</span><span>)</span>
+    <span>{</span>
+        <span>StartCleanupTimer</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>The method presented above is pretty simple - it loops through each of the <code>ExpiredHandlerTrackingEntry</code> entries in the queue, and checks if all references to the <code>LifetimeTrackingHttpMessageHandler</code> handlers have been removed. If they have, the handler chain (everything that was <em>inside</em> the lifetime tracking handler) is disposed, as is the DI <code>IServiceScope</code>. </p>
+<p>If there are still live references to any of the <code>LifetimeTrackingHttpMessageHandler</code> handlers, the entries are put back in the queue, and the cleanup timer is started again. Every 10 seconds another cleanup sweep is run.</p>
+<blockquote>
+<p>I simplified the <code>CleanupTimer_Tick()</code> method shown above <a href="https://github.com/dotnet/runtime/blob/065bf96e5c298352c790b9a82564d57a745725f5/src/libraries/Microsoft.Extensions.Http/src/DefaultHttpClientFactory.cs#L260">compared to the original</a>. The original adds additional logging, and uses locking to ensure only a single thread runs the cleanup at a time.</p>
+</blockquote>
+<p>That brings us to the end of this deep dive in the internals of <code>IHttpClientFactory</code>! <code>IHttpClientFactory</code> shows the <em>correct</em> way to manage <code>HttpClient</code> and <code>HttpMessageHandler</code>s in your application. Having read through the code, it's understandable that noone got this completely right for so long - there's a lot of tricky gotchas there! If you've made it this far, I suggest going and <a href="https://github.com/dotnet/runtime/blob/065bf96e5c298352c790b9a82564d57a745725f5/src/libraries/Microsoft.Extensions.Http/src/DefaultHttpClientFactory.cs">looking through the original code</a>, I highlighted (what I consider) the most important points in this post, but you can learn a lot from reading other people's code!</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I looked at the source code behind the default <code>IHttpClientFactory</code> implementation in .NET Core 3.1, <code>DefaultHttpClientFactory</code>. I showed how the factory stores an active <code>HttpMessageHandler</code> pipeline for each configured named or typed client, with each new <code>HttpClient</code> getting a reference to the same pipeline. I showed that the handler pipeline is built in a similar way to the ASP.NET Core middleware pipeline, using handlers. Finally, I showed how the factory tracks whether any <code>HttpClient</code>s reference a pipeline instance by using a <code>WeakReference</code> to the handler.</p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
