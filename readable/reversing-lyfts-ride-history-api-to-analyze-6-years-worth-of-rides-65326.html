@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Reversing Lyft&#x2019;s ride history API to analyze 6 years worth of rides - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.min.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Reversing Lyft&#x2019;s ride history API to analyze 6 years worth of rides - linksfor.dev(s)"/>
+    <meta property="article:author" content="JonLuca DeCaro"/>
+    <meta property="og:description" content="A couple years back I built Uber Trip Stat&#x2019;s (now renamed to RideShare Trip Stats after a C&amp;D from Uber), because I was interested in how much money I had spent on Uber over the last few years. Luckily Uber&#x2019;s web portal lets you see all your past rides, and it was fairly trivial to reverse the API through Chrome. The Chrome Extension just injects some javascript into the page, makes a few requests to get the entirety of your ride history"/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.jonlu.ca/posts/reversing-lyft?ref=hna20"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1 style="margin: unset">
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Reversing Lyft&#x2019;s ride history API to analyze 6 years worth of rides</title>
+<div class="readable">
+        <h1>Reversing Lyft&#x2019;s ride history API to analyze 6 years worth of rides</h1>
+            <div>by JonLuca DeCaro</div>
+            <div>Reading time: 6-7 minutes</div>
+        <div>Posted here: 06 Aug 2020</div>
+        <p><a href="https://blog.jonlu.ca/posts/reversing-lyft?ref=hna20">https://blog.jonlu.ca/posts/reversing-lyft?ref=hna20</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div><p>A couple years back I built <a href="https://chrome.google.com/webstore/detail/rideshare-trip-stats/kddlnbejbpknoedebeojobofnbdfhpnm?hl=en" target="_blank" rel="noopener noreferrer">Uber Trip Stat’s (now renamed to RideShare Trip Stats after a C&amp;D from Uber)</a>, because I was interested in how much money I had spent on Uber over the last few years. Luckily Uber’s <a href="https://riders.uber.com/trips" target="_blank" rel="noopener noreferrer">web portal</a> lets you see all your past rides, and it was fairly trivial to reverse the API through Chrome. The Chrome Extension just injects some javascript into the page, makes a few requests to get the entirety of your ride history</p><p>Lyft, on the other hand, only lets you see the ride history in their app. Their mobile web portal has a nice “(COMING SOON)” sign next to the ride history tab, implying their web team just hasn’t built it out yet.</p><picture><source srcset="/images/no-lyft-history.webp" type="image/webp"><source srcset="/images/no-lyft-history.png" type="image/png"><img alt="Lyfts current mobile web landing page" src="https://blog.jonlu.ca/images/no-lyft-history.png"></picture><h2 id="burpsuite">BurpSuite</h2><p>I fired up BurpSuite and got the root CA installed - fortunately, Lyft doesn’t do TLS stapling, so I was able to pretty quickly find the route.</p><picture><source srcset="/images/lyft-route.webp" type="image/webp"><source srcset="/images/lyft-route.png" type="image/png"><img alt="Lyfts ride history route" src="https://blog.jonlu.ca/images/lyft-route.png"></picture><p>Unfortunately, while nearly every other route uses JSON, this one only returned serialized protobuf responses.</p><picture><source srcset="/images/lyft-protobuf.webp" type="image/webp"><source srcset="/images/lyft-protobuf.png" type="image/png"><img alt="Lyfts protobuf" src="https://blog.jonlu.ca/images/lyft-protobuf.png"></picture><p>The response comes back as raw protobuf responses, in which we don’t actually have the original schemas.</p><picture><source srcset="/images/lyft-encoded.webp" type="image/webp"><source srcset="/images/lyft-encoded.png" type="image/png"><img alt="Lyfts protobuf encoded" src="https://blog.jonlu.ca/images/lyft-encoded.png"></picture><h2 id="generating-protobuf-schemas">Generating protobuf schemas</h2><p>Blackbox protobuf is a Burp Suite extension for decoding and modifying arbitrary protobuf messages without the protobuf type definition. It generates simple json with the types and structure of the responses, and allows you to manually name each entry with a template.</p><picture><source srcset="/images/lyft-protobuf-json.webp" type="image/webp"><source srcset="/images/lyft-protobuf-json.png" type="image/png"><img alt="Lyfts protobuf as a json schema" src="https://blog.jonlu.ca/images/lyft-protobuf-json.png"></picture><p>You could create a mapping from JSON to this protobuf schema, and label each type. Some of these fields seem fairly straight forward - a start index field and a count of entries, a price and currency field, timestamp fields, etc.</p><p>There was one that was a bit confusing though:</p><p>This didn’t seem to match up with anything in the responses. After a while I figured out that it had something to do with distance - my one cancelled ride didn’t have the <code>19</code> entry.</p><p>Dividing 16980 by the reported distance of 10.55 gave 1609, which seemed awfully close to a constant that I didn’t quite remember.. Turns out it’s the number of meters in a mile.</p><p>By this point I probably had 3/4 of the protobuf definitions in place in a best-guess way.</p><h2 id="when-we-couldve-just-got-json">When we could’ve just got JSON…</h2><p>I looked back at the request after about half an hour of trying to reverse the protobuf and realized there might be a way easier way of getting what we want - the Accept HTTP header. I tried changing the HTTP <code>Accept</code> header from <code>application/x-protobuf,application/json</code> to just <code>application/json</code> with the hopes that their API supported named keys with raw JSON. This worked, and we got valid JSON responses with labeled keys.</p><picture><source srcset="/images/lyft-json.webp" type="image/webp"><source srcset="/images/lyft-json.png" type="image/png"><img alt="Lyft's labeled JSON responses" src="https://blog.jonlu.ca/images/lyft-json.png"></picture><p>A sample ride entry looks like:</p><div><div><pre><code>{
+    "distance": 16980,
+    "driver_first_name": "Sirak",
+    "driver_photo_url": "https://lyftapi.s3.amazonaws.com/production/photos/320x200/&lt;url omitted&gt;.jpg",
+    "dropoff_timestamp": 1594796962,
+    "is_business_ride": false,
+    "pickup_timestamp": 1594795587,
+    "request_timestamp": 1594794781,
+    "ride_distance": {
+        "unit": "miles",
+        "value": 10.55
+    },
+    "ride_id": "&lt;id omitted&gt;",
+    "ride_state": "processed",
+    "ride_type": "standard",
+    "ride_type_label": "",
+    "timezone": "UTC-07:00",
+    "total_money": {
+        "amount": 1478,
+        "currency": "USD",
+        "exponent": 2
+    },
+    "vehicle_image_url": "https://s3.amazonaws.com/lyftapi/production/photos/2019/kia/optima/white/transparent/640x400/01534b5b03aabc69756790e3c8dd7e69.png"
+}
+</code></pre></div></div><p>It also looks like they paginate by adding a new URL param, <code>start_time_ms</code>.</p><p>Converting the request over to python gave me this:</p><div><div><pre><code><span>import</span> <span>requests</span>
+<span>import</span> <span>json</span>
+
+<span>headers</span> <span>=</span> <span>{</span>
+    <span>'authority'</span><span>:</span> <span>'ride.lyft.com'</span><span>,</span>
+    <span>'dnt'</span><span>:</span> <span>'1'</span><span>,</span>
+    <span>'upgrade-insecure-requests'</span><span>:</span> <span>'1'</span><span>,</span>
+    <span>'user-agent'</span><span>:</span> <span>'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'</span><span>,</span>
+    <span>'accept'</span><span>:</span> <span>'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9'</span><span>,</span>
+    <span>'sec-fetch-site'</span><span>:</span> <span>'none'</span><span>,</span>
+    <span>'sec-fetch-mode'</span><span>:</span> <span>'navigate'</span><span>,</span>
+    <span>'sec-fetch-user'</span><span>:</span> <span>'?1'</span><span>,</span>
+    <span>'sec-fetch-dest'</span><span>:</span> <span>'document'</span><span>,</span>
+    <span>'accept-language'</span><span>:</span> <span>'en-US,en;q=0.9,it;q=0.8,la;q=0.7'</span><span>,</span>
+    <span>'cookie'</span><span>:</span> <span>'&lt;my_cookie&gt;'</span><span>,</span>
+<span>}</span>
+
+<span>data</span> <span>=</span> <span>[]</span>
+<span>def</span> <span>write_out</span><span>(</span><span>data</span><span>):</span>
+    <span>print</span><span>(</span><span>len</span><span>(</span><span>data</span><span>))</span>
+    <span>with</span> <span>open</span><span>(</span><span>'data2.json'</span><span>,</span> <span>'w'</span><span>)</span><span>as</span> <span>out</span><span>:</span>
+        <span>out</span><span>.</span><span>write</span><span>(</span><span>json</span><span>.</span><span>dumps</span><span>(</span><span>data</span><span>))</span>
+        <span>out</span><span>.</span><span>close</span><span>()</span>
+
+<span>start_time</span> <span>=</span> <span>'1596409699026'</span>
+<span>while</span> <span>True</span><span>:</span>
+	<span>print</span><span>(</span><span>f'Starting request with start time $</span><span>{</span><span>start_time</span><span>}</span><span>'</span><span>)</span>
+    <span>params</span> <span>=</span> <span>(</span>
+        <span>(</span><span>'source'</span><span>,</span> <span>'ride_history_list'</span><span>),</span>
+        <span>(</span><span>'limit'</span><span>,</span> <span>'50'</span><span>),</span>
+        <span>(</span><span>'start_time_ms'</span><span>,</span> <span>start_time</span><span>),</span>
+    <span>)</span>
+
+    <span>resp</span> <span>=</span> <span>requests</span><span>.</span><span>get</span><span>(</span><span>'https://ride.lyft.com/v1/ridehistory'</span><span>,</span> <span>headers</span><span>=</span><span>headers</span><span>,</span> <span>params</span><span>=</span><span>params</span><span>)</span>
+    <span>try</span><span>:</span>
+	    <span>response</span> <span>=</span> <span>json</span><span>.</span><span>loads</span><span>(</span><span>resp</span><span>.</span><span>text</span><span>)</span>
+	    <span>data</span> <span>+=</span> <span>response</span><span>[</span><span>'data'</span><span>]</span>
+	    <span>write_out</span><span>(</span><span>data</span><span>)</span>
+	    <span>if</span> <span>not</span> <span>response</span><span>[</span><span>'has_more'</span><span>]:</span>
+	        <span>break</span>
+	    <span>start_time</span> <span>=</span> <span>str</span><span>(</span><span>data</span><span>[</span><span>-</span><span>1</span><span>][</span><span>'request_timestamp'</span><span>])</span> <span>+</span> <span>'000'</span>
+	<span>except</span><span>:</span>
+		<span>print</span><span>(</span><span>resp</span><span>.</span><span>text</span><span>)</span>
+
+</code></pre></div></div><p>This allowed me to query all my rides and save them out to a json file, where I could run my analysis.</p><h2 id="lyft-history">Lyft History</h2><p>I then started up Jupyter notebook and got to analyzing the data.</p><picture><source srcset="/images/lyft-jupyter.webp" type="image/webp"><source srcset="/images/lyft-jupyter.png" type="image/png"><img alt="Lyft's analysis" src="https://blog.jonlu.ca/images/lyft-jupyter.png"></picture><p>I’ve spent $4,584 on Lyft in the last 6 years (my first ride was on September 20th, 2014, according to this data). This was spent across 571 rides, averaging $8 per ride. However, I only paid for 377 rides (as my University would cover a lot of the local Lyfts).</p><p>My most expensive Lyft cost $71.89, and my cheapest was $0.36 (probably some credit or promotion?).</p><p>I’ve traveled 4,155 kilometers in that time, or 2,580 miles. I paid, on average, $1.88 per mile.</p><p>This is ~3x the cost of actually owning the average Sedan, but I’d argue this has been worth it for my lifestyle and amount of travel - spending less than $5000 for 6 years worth of travel is pretty good, in my opinion!</p></div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
