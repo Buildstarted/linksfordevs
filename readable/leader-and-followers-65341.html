@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Leader and Followers - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.min.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Leader and Followers - linksfor.dev(s)"/>
+    <meta property="og:description" content="A coordinator to track replication across a set of servers."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1 style="margin: unset">
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Leader and Followers</title>
+<div class="readable">
+        <h1>Leader and Followers</h1>
+            <div>Reading time: 12-15 minutes</div>
+        <div>Posted here: 07 Aug 2020</div>
+        <p><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html">https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<div>
+
+
+
+
+<p>A coordinator to track replication across a set of servers.</p>
+
+<p>06 August 2020</p>
+
+<section>
+<h2>Problem</h2>
+
+<p>To achieve fault tolerance in systems which manage data, the data
+    needs to be replicated on multiple servers. 
+    </p>
+
+<p>
+      It's also important to give some guarantee about consistency to clients. 
+      When data is updated on multiple servers, a decision about when to make it visible to clients is required.
+      Write and read <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/quorum.html">Quorum</a> is not sufficient, as some failure scenarios can cause clients to see data inconsistently.
+      Each individual server does not know about the state of data on the other servers in the quorum,
+      It's only when data is read from multiple servers, the inconsistencies can be resolved. 
+      In some cases, this is not enough. Stronger guarantees are needed about the data that is sent to the clients.
+    </p>
+</section>
+
+<section>
+<h2>Solution</h2>
+
+<p>Select one server amongst the cluster as leader. The leader is responsible for taking 
+    decisions on behalf of the entire cluster and propagating the decisions to all the other servers. 
+    </p>
+
+<p>Every server at startup looks for an existing leader. If no leader is
+    found, it triggers a leader election. The servers accept requests only after
+    a leader is selected successfully. Only the leader handles the client
+    requests. If a request is sent to a follower server, the follower can forward it to
+    the leader server.</p>
+
+<section id="LeaderElection">
+<h2>Leader Election</h2>
+
+<div id="election.png"><p><img src="https://martinfowler.com/articles/patterns-of-distributed-systems/election.png"></p><p>Figure 1: Election</p>
+</div>
+
+
+
+<div id="votes.png"><p><img src="https://martinfowler.com/articles/patterns-of-distributed-systems/votes.png"></p><p>Figure 2: Votes</p>
+</div>
+
+
+
+<div id="leader-heartbeat.png"><p><img src="https://martinfowler.com/articles/patterns-of-distributed-systems/leader-heartbeat.png"></p><p>Figure 3: Leader Heartbeats</p>
+</div>
+
+
+
+<p>
+
+          For smaller clusters of three to five nodes, like in the systems which implement consensus, leader election
+          can be implemented within the data cluster itself without dependending on any external system.
+          Leader election happens at server startup. Every server starts a leader election at startup 
+          and tries to elect a leader. The system does not accept any client requests unless a leader is elected.
+          As explained in the <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/generation.html">Generation Clock</a> pattern, every leader election also needs to update the generation number.
+          The server can always be in one of the three states, Leader, Follower or Looking For Leader (or Candidate)
+        </p>
+
+<pre>public enum ServerRole {
+    LOOKING_FOR_LEADER,
+    FOLLOWING,
+    LEADING;
+}
+</pre>
+
+<p><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/heartbeat.html">HeartBeat</a> mechanism is used to detect if an existing leader has failed, so that new leader election can be started.
+</p>
+
+
+
+<p>  
+          New leader election is started by sending each of the peer servers a message requesting a vote.
+        </p>
+
+<p>class ReplicationModule…
+</p>
+
+<pre>  private void startLeaderElection() {
+      replicationState.setGeneration(replicationState.getGeneration() + 1);
+      registerSelfVote();
+      requestVoteFrom(followers);
+  }</pre>
+
+<section id="ElectionAlgorithm">
+<h3> Election Algorithm </h3>
+
+
+
+<p>
+            There are two factors which are considered while electing a leader.
+           </p>
+
+<ul>
+<li>
+                Because these systems are mostly used for data replication, it puts some extra restrictions on which
+                servers can win the election. Only servers, which are the 'most up to
+                date' can be a legitimate leader. For example, in typical consensus based systems,
+                The ‘most up to date’ is defined by two things:
+                
+<ul>
+<li>The latest <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/generation.html">Generation Clock</a></li>
+
+<li>The latest log index in <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/wal.html">Write-Ahead Log</a></li>
+</ul>
+</li>
+
+<li>
+              If all the servers are equally upto date, then the leader is chosen based following criterias:
+              
+<ul>
+<li> Some implementation specific criteria, like which server is ranked better or has higher id. (e.g. <a href="https://zookeeper.apache.org/doc/r3.4.13/zookeeperInternals.html#sc_atomicBroadcast">Zab</a>) </li>
+
+<li> If care is taken to make sure only one server asks for a vote at a time, then whichever server starts the election before others. (e.g. <a href="https://raft.github.io/">Raft</a>) </li>
+</ul>
+</li>
+</ul>
+
+<p>Once a server is voted for in a given <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/generation.html">Generation Clock</a>, the same vote is returned for that generation always. This makes sure that some other server requesting a vote for the same generation is not elected,
+           when a successful election has already happened.
+           The handling of vote request happens as following:</p>
+
+<p>class ReplicationModule…
+</p>
+
+<pre>  VoteResponse handleVoteRequest(VoteRequest voteRequest) {
+      VoteTracker voteTracker = replicationState.getVoteTracker();
+      Long requestGeneration = voteRequest.getGeneration();
+      if (replicationState.getGeneration() &gt; requestGeneration) {
+          return rejectVote();
+
+      } else if (replicationState.getGeneration() &lt; requestGeneration) {
+          becomeFollower(requestGeneration);
+          voteTracker.registerVote(voteRequest.getServerId());
+          return grantVote();
+      }
+
+      return handleVoteRequestForSameGeneration(voteRequest);
+  }
+
+  private VoteResponse handleVoteRequestForSameGeneration(VoteRequest voteRequest) {
+      Long requestGeneration = voteRequest.getGeneration();
+      VoteTracker voteTracker = replicationState.getVoteTracker();
+
+      if (voteTracker.alreadyVoted()) {
+          return voteTracker.grantedVoteForSameServer(voteRequest.getServerId()) ?
+                  grantVote():rejectVote();
+
+      }
+
+      if (voteRequest.getLogIndex() &gt;= (Long) wal.getLastLogEntryId()) {
+          becomeFollower(requestGeneration);
+          voteTracker.registerVote(voteRequest.getServerId());
+          return grantVote();
+      }
+
+      return rejectVote();
+  }
+
+  private void becomeFollower(Long generation) {
+      replicationState.setGeneration(generation);
+      transitionTo(ServerRole.FOLLOWING);
+  }
+
+  private VoteResponse grantVote() {
+      return VoteResponse.granted(serverId(),
+              replicationState.getGeneration(),
+              wal.getLastLogEntryId());
+  }
+
+  private VoteResponse rejectVote() {
+      return VoteResponse.rejected(serverId(),
+              replicationState.getGeneration(),
+              wal.getLastLogEntryId());
+  }</pre>
+
+<p>
+            The server which receives votes from the majority of the servers, transitions to leader state.
+            The majority is determined as discussed in <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/quorum.html">Quorum</a>.
+            Once elected, the leader continuously sends <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/heartbeat.html">HeartBeat</a> to all the followers. 
+            If followers do not get a heartbeat in specified time interval, a new leader election is triggered.
+          </p>
+</section>
+
+<section id="LeaderElectionUsingExternallinearizableStore">
+<h3>Leader Election using External <a href="https://jepsen.io/consistency/models/linearizable">[Linearizable]</a> Store</h3>
+
+<p>Running a leader election within a data cluster works well for smaller clusters. 
+        For large data clusters, which can be upto few thousand nodes, it's easier to use an external store like Zookeeper or etcd. 
+        (which internally use consensus and provide linearizability guarantees). 
+        These large clusters typically have a server which is marked as a master or a controller node, 
+        which makes all the decisions on behalf of the entire cluster. 
+        There are three functionalities needed for implementing a leader election: </p>
+
+<ul>
+<li>A compareAndSwap instruction to set a key atomically. </li>
+
+<li>A heartbeat implementation to expire the key if no heartbeat is received from the elected leader, so that a new election can be triggered.</li>
+
+<li>A notification mechanism to notify all the interested servers if a key expires.</li>
+</ul>
+
+<p>
+        For electing the leader, each server uses the compareAndSwap instruction to try and create a key in the external store, 
+        and whichever server succeeds first, is elected as a leader. Depending on the external store used, 
+        the key is created with a small time to live. The elected leader repeatedly updates the key before 
+        the time to live value. Every server can set a watch on this key, and servers get notified if the key expires without getting updated from the existing 
+        leader within the time to live setting.
+        e.g. <a href="https://etcd.io/">etcd</a> allows a compareAndSwap operation, by allowing a set key operation only if the key does not exist previously.
+        
+        In <a href="https://zookeeper.apache.org/">Zookeeper</a> there is no explicit compareAndSwap kind of operation supported, 
+        but it can be implemented by trying to create a node, and expecting an exception if the node already exists.
+        There is no explicit time to live either, but zookeeper has a concept of ephemeral node. The node exists until the
+        server has an active session with zookeeper, else the node is removed and everyone who is watching that node is notified.
+        For example, Zookeeper can be used to elect leader as following:
+        </p>
+
+<p>class ServerImpl…
+</p>
+
+<pre>  public void startup() {
+      zookeeperClient.subscribeLeaderChangeListener(this);
+      elect();
+  }
+
+  public void elect() {
+      var leaderId = serverId;
+      try {
+          zookeeperClient.tryCreatingLeaderPath(leaderId);
+          this.currentLeader = serverId;
+          onBecomingLeader();
+      } catch (ZkNodeExistsException e) {
+          //back off
+          this.currentLeader = zookeeperClient.getLeaderId();
+      }
+  }</pre>
+
+<p> All other servers watch for the liveness of the existing leader. 
+          When it is detected that the existing leader is down, a new leader election is triggered. 
+          The failure detection happens using the same external linearizable store used for the leader election.
+          This external store also has facilities to implement group membership and failure detection mechanisms.
+          For example, extending the above Zookeeper based implementation, a change listener can be configured with Zookeeper 
+          which is triggered when a change in the existing leader node happens.</p>
+
+<p>class ZookeeperClient…
+</p>
+
+<pre>  public void subscribeLeaderChangeListener(IZkDataListener listener) {
+      zkClient.subscribeDataChanges(LeaderPath, listener);
+  }</pre>
+
+<p>
+          Every server in the cluster subscribes for this change, and whenever the callback is triggered, 
+          a new election is triggered again the same way shown above.
+           </p>
+
+<p>class ServerImpl…
+</p>
+
+<pre>  @Override
+  public void handleDataDeleted(String dataPath) throws Exception {
+      elect();
+  }</pre>
+
+<div id="zookeeper-leader-election.png"><p><img src="https://martinfowler.com/articles/patterns-of-distributed-systems/zookeeper-leader-election.png" width="600"></p><p>Figure 4: Zookeeper Based Election</p>
+</div>
+
+
+
+<p>
+            Systems like <a href="https://etcd.io/">etcd</a> or <a href="https://www.consul.io/">Consul</a> can be used the same way to implement leader election. 
+           </p>
+</section>
+
+<section id="WhyQuorumReadwritesAreNotEnoughForStrongConsistencyGuarantees">
+<h3>Why Quorum read/writes are not enough for strong consistency guarantees</h3>
+
+<p>It might look like Quorum read/write, provided by Dynamo style databases like Cassandra, is enough for getting strong consistency in case of server failures.  
+          But that is not the case. Consider the following example. 
+          Let's say we have a cluster with three servers. 
+          Variable x is stored on all three servers. (It has a replication factor of 3).
+          Value of x = 1 at startup.</p>
+
+<ul>
+<li>Let’s say writer1 writes x = 2, with replication factor of 3. The write request is sent to all the three servers.
+              The write is successful on server1 but fails for server2 and server3. (either a network glitch or writer1 just went into a long garbage collection pause after sending the write request to server1.).</li>
+
+<li>Client c1 reads the value of x from server1 and server2. It gets the latest value of x=2 because server1 has the latest value. </li>
+
+<li>Client c2 triggers a read for x. But Server1 goes down temporarily. So c1 reads it from server2, server3, which have old values for x, x=1. 
+              So c2 gets the old value even when it read it after c1 read the latest value.</li>
+</ul>
+
+<p>
+          This way two consecutive reads show the latest values disappearing. Once server1 comes back up, subsequent reads will give the latest value. 
+          And assuming the read repair or anti entropy process is running, the rest of the servers will get the latest value as well ‘eventually’.
+          But there is no guarantee provided by the storage cluster to make sure that once a particular value is visible to any clients, all subsequent reads will continue to get that value even if a server fails.         
+        </p>
+</section>
+</section>
+</section>
+
+<section>
+<h2>Examples</h2>
+
+<ul>
+<li>
+            For systems which implement consensus, it's important that only one
+            server coordinates activities for the replication process. As
+            noted in the paper <a href="https://lamport.azurewebsites.net/pubs/paxos-simple.pdf">Paxos Made
+            Simple</a>, it's important for the liveness of the system.
+         </li>
+
+<li>
+            In <a href="https://raft.github.io/">Raft</a> and <a href="https://zookeeper.apache.org/doc/r3.4.13/zookeeperInternals.html#sc_atomicBroadcast">Zab</a> consensus algorithms, leader election is an explicit phase that happens at the startup or on the leader failure            
+         </li>
+
+<li><a href="http://pmg.csail.mit.edu/papers/vr-revisited.pdf">Viewstamp Replication</a> algorithm has a concept of Primary, similar to leader in other algorithms
+         </li>
+
+<li><a href="https://kafka.apache.org/">Kafka</a> has a <a href="https://cwiki.apache.org/confluence/display/KAFKA/Kafka+Controller+Internals">Controller </a> which is responsible for taking all the decisions on behalf of the rest of the cluster. It reacts to events from Zookeeper and 
+           for each partition in Kafka, there is a designated leader broker and follower brokers. The leader and follower selection is done by the Controller broker.
+         </li>
+</ul>
+</section>
+
+<nav>
+<p>This page is part of:</p>
+
+<p>Patterns of Distributed Systems</p>
+<img src="https://martinfowler.com/articles/patterns-of-distributed-systems/card.png">
+<p><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/index.html">Main Narrative Article</a></p>
+
+<p>Patterns</p>
+
+<ul>
+<li>Consistent Core †</li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/generation.html">Generation Clock</a></li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/heartbeat.html">HeartBeat</a></li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/high-watermark.html">High-Water Mark</a></li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html">Leader and Followers</a></li>
+
+<li>Low-Water Mark †</li>
+
+<li>Quorum †</li>
+
+<li>Request Pipeline †</li>
+
+<li>Segmented Log †</li>
+
+<li>Single Socket Channel †</li>
+
+<li>Singular Update Queue †</li>
+
+<li>State Watch †</li>
+
+<li>Time Bound Lease †</li>
+
+<li>Write-Ahead Log †</li>
+</ul>
+
+<p>† pattern in progress</p>
+</nav>
+
+<p>
+<details id="SignificantRevisions">
+<summary>Significant Revisions</summary>
+</details>
+</p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
