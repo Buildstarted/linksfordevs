@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+An alternative to ConfigureAwait(false) everywhere - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.min.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="An alternative to ConfigureAwait(false) everywhere - linksfor.dev(s)"/>
+    <meta property="article:author" content="kexugit"/>
+    <meta property="og:description" content="One of the general recommendations you may often read is to use ConfigureAwait(false) in library code. This is so that when the library is used, it does not block the synchronization context in use by the application (e.g. the UI thread). If the library doesn&#x2019;t know anything about the app, it doesn&#x2019;t depend on the application&#x2019;s context and doesn&#x2019;t need to run within it. This makes sense but it ends up truly meaning that you have to put ConfigureAwait(false) on every async call in your entire library. To me, that seems ...excessive."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://docs.microsoft.com/en-us/archive/blogs/benwilli/an-alternative-to-configureawaitfalse-everywhere"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1 style="margin: unset">
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - An alternative to ConfigureAwait(false) everywhere</title>
+<div class="readable">
+        <h1>An alternative to ConfigureAwait(false) everywhere</h1>
+            <div>by kexugit</div>
+            <div>Reading time: 7-9 minutes</div>
+        <div>Posted here: 07 Aug 2020</div>
+        <p><a href="https://docs.microsoft.com/en-us/archive/blogs/benwilli/an-alternative-to-configureawaitfalse-everywhere">https://docs.microsoft.com/en-us/archive/blogs/benwilli/an-alternative-to-configureawaitfalse-everywhere</a></p>
+        <hr/>
+<div id="readability-page-1" class="page">
+
+
+	<div data-bi-name="body">
+
+		<div>
+
+			
+
+			<section>
+				<div>
+
+
+				<div id="main-column">
+
+					<main id="main" role="main" data-bi-name="content" lang="en-us" dir="ltr">
+
+
+
+						
+
+						<ul data-bi-name="page info" lang="en-us" dir="ltr">
+							<li>
+								<time data-article-date="" aria-label="Article review date" datetime="2017-02-09T00:00:00.000Z" data-article-date-source="ms.date">02/09/2017</time>
+							</li>
+								<li>5 minutes to read</li>
+						</ul>
+
+						<nav id="center-doc-outline" data-bi-name="intopic toc" role="navigation" aria-label="Article Outline">
+							<h3>In this article</h3>
+						<ol><li><a href="#regular-asyncawait">Regular async/await</a></li><li><a href="#shallow-coverage-with-configureawaitfalse">Shallow coverage with ConfigureAwait(false)</a></li><li><a href="#full-coverage-with-configureawaitfalse">Full coverage with ConfigureAwait(false)</a></li><li><a href="#going-manual-without-configureawaitfalse">Going manual without ConfigureAwait(false)</a></li><li><a href="#additional-notes">Additional notes</a></li></ol></nav>
+
+						<!-- <content> -->
+							<p>One of the general recommendations you may often read is to use ConfigureAwait(false) in library code. This is so that when the library is used, it does not block the synchronization context in use by the application (e.g. the UI thread). If the library doesn’t know anything about the app, it doesn’t depend on the application’s context and doesn’t need to run within it. This makes sense but it ends up truly meaning that you have to put ConfigureAwait(false) on every async call in your entire library. To me, that seems ...excessive.</p>
+<p>As I see it, If you are using ConfigureAwait(), you probably really care about it and want it to actually work. Unfortunately, because async methods might actually complete synchronously, the call to ConfigureAwait() might not affect anything. That means you have to put it on the next async call too, and so on, until it is on every single method in your library.</p>
+<p>Tagging <em>every single call</em> with a decorator method has always bothered me as inelegant and it clutters my code. It’s also something that can easily be forgotten when updating or adding new code. But there is also another more hidden potential issue – <strong>the first async call tree</strong>. The first time you attempt to await an async method, it doesn’t get the benefit of ConfigureAwait(false). Look at this code</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image0023.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image002_thumb3.png" alt="clip_image002" title="clip_image002" data-linktype="external"></a></p>
+<p>The first call to FindWorkAsync() has to run <em>before</em> we get a Task to configure. That means that everything that happens inside the first call happens on our caller’s context. That means if any long running actions happen in FindWorkAsync() or in its children, it may affect the callers context.</p>
+<p>This behavior can be seen by running <a href="https://github.com/negativeeddy/blog-examples/tree/master/ConfigureAwaitBehavior" data-linktype="external">this sample WPF application</a> <a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image004.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image004_thumb.png" alt="clip_image004" title="clip_image004" data-linktype="external"></a></p>
+<p>The number on this form is updated by a DispatchTimer every 100ms. DispatchTimers run on the UI thread. If anything blocks the UI thread, you will see that timer pause. In addition, all the buttons are disabled while the work is being done so there is a good visual indicator of when the work is finally finished (the buttons become enabled again).</p>
+<p>Using this app, lets look at a couple of scenarios and see how the it behaves...</p>
+<h2 id="regular-asyncawait"><a href="#regular-asyncawait" aria-labelledby="regular-asyncawait"></a>Regular async/await</h2>
+<p>“<strong>Run Case 0</strong>” runs a regular set of async/await calls without the use of ConfigureAwait(). This is the basic async/await code as it is usually implemented.</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image006.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image006_thumb.png" alt="clip_image006" title="clip_image006" data-linktype="external"></a> <a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image008.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image008_thumb.png" alt="clip_image008" title="clip_image008" data-linktype="external"></a> <a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image010.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image010_thumb.png" alt="clip_image010" title="clip_image010" data-linktype="external"></a></p>
+<p>The whole operation takes a few seconds. While this is running, the UI periodically freezes because WorkWithoutCA() calls BlockingWorkAsync() which calls Thread.Sleep(1000). During this sleep time, the timer doesn’t change. The behavior looks like this:</p>
+<ol>
+<li>Buttons disabled</li>
+<li>UI freezes for 1 second periodically when BlockingWorkAsync() blocks synchronously on Thread.Sleep</li>
+<li>Buttons enabled</li>
+</ol>
+<h2 id="shallow-coverage-with-configureawaitfalse"><a href="#shallow-coverage-with-configureawaitfalse" aria-labelledby="shallow-coverage-with-configureawaitfalse"></a>Shallow coverage with ConfigureAwait(false)</h2>
+<p>“<strong>Run Case 1</strong>” runs the same sequence of async/await calls, except that some calls to ConfigureAwait(false) have been added to the entry of the library’s API. The ConfigureAwait(false) calls are only at the top level of our process. The lower level methods DoWorkAsync() and BlockingWorkAsync() are unchanged.</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image012.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image012_thumb.png" alt="clip_image012" title="clip_image012" data-linktype="external"></a> <a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image014.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image014_thumb.png" alt="clip_image014" title="clip_image014" data-linktype="external"></a></p>
+<p>When this runs, you will notice that the UI freezes for a short time just once. That is the first call to DoWorkAsync() which is still running on the UI thread. The 2nd and 3rd calls to DoWorkAsync() are not on the UI thread and so don’t freeze the UI</p>
+<ol>
+<li>Buttons disabled</li>
+<li>UI freezes once for 1 second during the first DoWorkAsync() call</li>
+<li>UI unfrozen for subsequent calls to DoWorkAsync()</li>
+<li>Buttons enabled</li>
+</ol>
+<p>It’s this 2nd step that I’m concerned with in this discussion. Obviously the overall behavior is much better because in this case the UI is unfrozen for a majority of the time. But if we are concerned about this at all, why aren’t we concerned about eliminating it completely? I want to push that behavior across <em>all</em> of my library’s functionality, not just stuff that happens after the first await.</p>
+<h2 id="full-coverage-with-configureawaitfalse"><a href="#full-coverage-with-configureawaitfalse" aria-labelledby="full-coverage-with-configureawaitfalse"></a>Full coverage with ConfigureAwait(false)</h2>
+<p>“<strong>Run Case 2</strong>” solves this in the way that is typically recommended. You push ConfigureAwait() all the way down the call tree.</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image016.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image016_thumb.png" alt="clip_image016" title="clip_image016" data-linktype="external"></a> <a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image018.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image018_thumb.png" alt="clip_image018" title="clip_image018" data-linktype="external"></a></p>
+<p>…</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image020.png" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image020_thumb.png" alt="clip_image020" title="clip_image020" data-linktype="external"></a></p>
+<p>The behavior is now as we desire it to be – no blocking the UI during any of the calls.</p>
+<ol>
+<li>Buttons disabled</li>
+<li>UI unfrozen for all calls to DoWorkAsync()</li>
+<li>Buttons enabled</li>
+</ol>
+<p>The main problem with this approach is that now we have a maintenance issue. Every new await needs to have ConfigureAwait(false) put on it – just in case. It also tends to clutter the code since this one thing is now <em>everywhere</em>. As a matter of style it makes the code less readable.</p>
+<p>So I am proposing an alternative…</p>
+<h2 id="going-manual-without-configureawaitfalse"><a href="#going-manual-without-configureawaitfalse" aria-labelledby="going-manual-without-configureawaitfalse"></a>Going manual without ConfigureAwait(false)</h2>
+<p>“<strong>Run Case 3</strong>”</p>
+<p>What if we did what ConfigureAwait() does for us, but we do it once at the beginning of our callstack and didn’t have to think about it again? Unfortunately, that means not using a fluent API. The fluent API of ConfigureAwait() is the reason for the “first call” problem. The snippet of code below does not use ConfigureAwait(), but uses a helper object to temporarily remove the SynchronizationContext manually (and restores it before returning to the caller).</p>
+<p><a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image022.jpg" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image022_thumb.jpg" alt="clip_image022" title="clip_image022" data-linktype="external"></a> <a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image024.jpg" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image024_thumb.jpg" alt="clip_image024" title="clip_image024" data-linktype="external"></a> <a href="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image026.jpg" data-linktype="external"><img src="https://msdnshared.blob.core.windows.net/media/2017/02/clip_image026_thumb.jpg" alt="clip_image026" title="clip_image026" data-linktype="external"></a></p>
+<p>This gives us the same behavior as Case 2 but the code is cleaner. With this technique, I no longer have to remember to put ConfigureAwait(false) all over my code which makes it easier to maintain and to read. The only thing I need to do is insert a single await on the helper object at the beginning of my public APIs and all its children will get called on the default context automatically with no changes to them at all.</p>
+<h2 id="additional-notes"><a href="#additional-notes" aria-labelledby="additional-notes"></a>Additional notes</h2>
+<ul>
+<li>The sample is available on <a href="https://github.com/negativeeddy/blog-examples/tree/master/ConfigureAwaitBehavior" data-linktype="external">my github repo</a>. That code uses some extra methods which I’ve removed in the snippets above. Those methods just print some diagnostic info out so that you can look at the debug output and see the context flowing or not existing at all the various points in the app. It also contains a Case 4 which uses Task.Run to invoke the method instead of the Case 3 wrapper. These two cases are very similar but when Task.Run is used, the method gets queued to the thread pool and will start at some later point in time. Case 3 will initiate the asynchronous method immediately.</li>
+<li>I am not advocating never using ConfigAwait(false). I’ve had very good success using it in specific targeted scenarios when we knew where the problem was and where to put ConfigureAwait(false) to resolve that problem. I am suggesting that it’s not a cure all and that blanketed use of ConfigAwait is not a good practice.</li>
+<li>I’m also open to other suggestions. After discussing this with others and looking at a few different options (one of them is in the Github history of case 3), this seems the most reasonable so far.</li>
+<li>This sample is a WPF application because its easiest to visualize for demo purposes,&nbsp;but the concept is&nbsp;applicable to any .NET library with async code&nbsp;whether running on the client, on a server, or in the cloud.</li>
+</ul>
+<p>If you have anything to add or suggest, please leave a comment below.</p>
+
+						<!-- </content> -->
+
+						</main>
+
+						<!-- recommended content page section -->
+
+							<nav data-bi-name="recommendation-bottom" hidden="" id="recommended-content-center" aria-labelledby="recommended-content-center-title">
+								<h3 id="recommended-content-center-title">Related Articles</h3>
+							</nav>
+
+						<!-- end recommended content page section -->
+
+						<!-- page rating section -->
+						<!-- end page rating section -->
+
+
+						<!-- feedback section -->
+
+						<!-- end feedback section -->
+
+						<!-- feedback report section -->
+						<!-- end feedback report section -->
+
+						
+					</div>
+
+					
+
+					<!--end of div.columns -->
+				</div>
+
+			<!--end of .primary-holder -->
+			</section>
+
+			
+		</div>
+
+		<!--end of .mainContainer -->
+	</div>
+
+	
+
+	
+
+	
+	<span id="adobe-target-experiment-container" hidden=""></span>
+
+
+</div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
