@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+DI scopes in IHttpClientFactory message handlers don&#x27;t work like you think they do - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.min.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="DI scopes in IHttpClientFactory message handlers don&#x27;t work like you think they do - linksfor.dev(s)"/>
+    <meta property="og:description" content="In this post I discuss how handler DI scopes work in IHttpClientFactory, and how they&#x27;re different to the request DI scope."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://andrewlock.net/understanding-scopes-with-ihttpclientfactory-message-handlers/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1 style="margin: unset">
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - DI scopes in IHttpClientFactory message handlers don&#x27;t work like you think they do</title>
+<div class="readable">
+        <h1>DI scopes in IHttpClientFactory message handlers don&#x27;t work like you think they do</h1>
+            <div>Reading time: 16-20 minutes</div>
+        <div>Posted here: 11 Aug 2020</div>
+        <p><a href="https://andrewlock.net/understanding-scopes-with-ihttpclientfactory-message-handlers/">https://andrewlock.net/understanding-scopes-with-ihttpclientfactory-message-handlers/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+
+<div>
+<p>In this post I discuss how dependency injection scopes work in the context of <code>IHttpClientFactory</code>. The title of this post reflects the fact that they <em>don't</em> work like I previously expected them to! </p>
+<blockquote>
+<p>This post assumes you already have a general idea of <code>IHttpClientFactory</code> and what it's used for, so if it's new to you, take a look at <a href="https://www.stevejgordon.co.uk/httpclientfactory-named-typed-clients-aspnetcore">Steve Gordon's introduction to IHttpClientFactory</a>, or <a href="https://docs.microsoft.com/en-us/aspnet/core/fundamentals/http-requests">see the docs</a>.</p>
+</blockquote>
+<p>In this post I look at how dependency injection scopes work when you're using <code>IHttpClientFactory</code>, how they relate to the "typical" request-based DI scope used in ASP.NET Core, and the implications of that for custom message handler implementations.</p>
+<p>We'll start with a very brief overview of <code>IHttpClientFactory</code> and DI scopes, and then look at how the two interact.</p>
+<h2 id="why-use-ihttpclientfactory-">Why use <code>IHttpClientFactory</code>?<a href="#why-use-ihttpclientfactory-"></a></h2>
+<p><code>IHttpClientFactory</code> allows you to create <code>HttpClient</code> instances for interacting with HTTP APIs, using best practices to avoid common issues related to socket exhaustion and not respecting DNS settings. It does this by managing the <code>HttpMessageHandler</code> chain <em>separately</em> from the <code>HttpClient</code> instances.</p>
+<p><img src="https://andrewlock.net/content/images/2020/httpclientfactory_01.png" alt="HttpClient and HttpClientHandler pipeline"></p>
+<p>You can read about <em>how</em> <code>IHttpClientFactory</code> achieves this <a href="https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/">in my previous post</a> but in brief:</p>
+<ul>
+<li><code>IHttpClintFactory</code> creates an <code>HttpMessageHandler</code> pipeline for each "named" client </li>
+<li>After 2 minutes, the <code>IHttpClientFactory</code> creates a new <code>HttpMessageHandler</code> pipeline and uses that for new <code>HttpClient</code> instances.</li>
+<li>Once the <code>HttpClient</code> instances referencing an "expired" handler pipeline have all been collected by the garbage collector, the pipeline is disposed.</li>
+<li><code>IHttpClientFactory</code> also makes it easy to add additional handlers to the handler pipeline.</li>
+</ul>
+<p>That's obviously a <em>very</em> brief summary, but if you're not already familiar with <code>IHttpClientFactory</code>, I suggest <a href="https://www.stevejgordon.co.uk/httpclientfactory-named-typed-clients-aspnetcore">reading Steve Gordon's series first</a>. </p>
+<p>To continue setting the scene, we'll take a brief look at dependency injection scopes.</p>
+<h2 id="dependency-injection-scopes-and-the-request-scope">Dependency Injection scopes and the request scope<a href="#dependency-injection-scopes-and-the-request-scope"></a></h2>
+<p>In ASP.NET Core, services can be registered with the dependency injection (DI) container with one of three lifetimes:</p>
+<ul>
+<li><em>Singleton</em>: A single instance of the service is used throughout the lifetime of the application. All requests for the service return the same instance.</li>
+<li><em>Scoped</em>: Within a defined "scope", all requests for the service return the same instance. Requests from <em>different</em> scopes will return <em>different</em> instances.</li>
+<li><em>Transient</em>: A new instance of the service is created every time it is requested. Every request for the service returns a different instance.</li>
+</ul>
+<p><em>Singleton</em> and <em>transient</em> are the simplest, as they take the lifetime of a component to an extreme. <em>Scoped</em> is slightly more complex, as the behaviour varies depending on whether you are in the context of the same scope.</p>
+<p>The pseudo code below demonstrates this - it won't compile, but hopefully you get the idea.</p>
+<pre><code><span>IServiceProvider</span> rootContainer<span>;</span>
+<span>using</span> <span>(</span><span>var</span> scope1 <span>=</span> rootContainer<span>.</span><span>CreateScope</span><span>(</span><span>)</span><span>)</span>
+<span>{</span>
+      <span>var</span> service1 <span>=</span> scope1<span>.</span>ServiceProvider<span>.</span><span><span>GetService</span><span>&lt;</span><span>ScopedService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+      <span>var</span> service2 <span>=</span> scope1<span>.</span>ServiceProvider<span>.</span><span><span>GetService</span><span>&lt;</span><span>ScopedService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+      service1<span>.</span><span>ReferenceEquals</span><span>(</span>service2<span>)</span><span>;</span> 
+<span>}</span>
+
+<span>using</span> <span>(</span><span>var</span> scope2 <span>=</span> rootContainer<span>.</span><span>CreateScope</span><span>(</span><span>)</span><span>)</span>
+<span>{</span>
+      <span>var</span> service3 <span>=</span> scope2<span>.</span>ServiceProvider<span>.</span><span><span>GetService</span><span>&lt;</span><span>ScopedService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+      service3<span>.</span><span>ReferenceEquals</span><span>(</span>service2<span>)</span><span>;</span> 
+<span>}</span>
+</code></pre>
+<p>The main question is <em>when</em> are those scopes created? </p>
+<p>In ASP.NET Core, a new scope is created for each request. So each request uses a different instance of a scoped service.</p>
+<blockquote>
+<p>A common example of this is EF Core's <code>DbContext</code> - the same instance of this class is used throughout a request, but a <em>different</em> instance is used between requests.</p>
+</blockquote>
+<p>This is by far the most common way to interact with scopes in ASP.NET Core. But there are special cases where you need to "manually" create scopes, when you are executing <em>outside</em> of the context of a request. For example:</p>
+<ul>
+<li><a href="https://andrewlock.net/the-dangers-and-gotchas-of-using-scoped-services-when-configuring-options-in-asp-net-core/">Accessing scoped services from singleton services, such as <code>IConfigureOptions</code>.</a></li>
+<li><a href="https://andrewlock.net/using-scoped-services-inside-a-quartz-net-hosted-service-with-asp-net-core/">Creating scopes for long-running processes, like <code>IHostedService</code>.</a></li>
+</ul>
+<p>It's generally pretty apparent when you're running into an issue like this, as you're trying to access <em>scoped</em> services from a <em>singleton</em> context. </p>
+<p>Where things really get interesting is when you're consuming services from scopes with overlapping lifetimes. That sounds confusing, but it's something you'll need to get your head around if you create custom <code>HttpMessageHandlers</code> for <code>IHttpClientFactory</code>!</p>
+<h2 id="httpmessagehandler-lifetime-in-ihttpclientfactory">HttpMessageHandler lifetime in IHttpClientFactory<a href="#httpmessagehandler-lifetime-in-ihttpclientfactory"></a></h2>
+<p>As we've already discussed, <code>IHttpClientFactory</code> manages the lifetime of your <code>HttpMessageHandler</code> pipeline <em>separately</em> from the <code>HttpClient</code> instances. <code>HttpClient</code> instances are created new every time, but for the 2 minutes before a handler expires, <strong>every <code>HttpClient</code> with a given <code>name</code> uses the <em>same</em> handler pipeline</strong>.</p>
+<p>I've really emphasised that, as it's something I didn't understand from the documentation and previous posts on <code>IHttpClientFactory</code>. <a href="https://docs.microsoft.com/aspnet/core/fundamentals/http-requests">The documentation</a> constantly talks about a "pool" of handlers, but that feels a bit misleading to me - there's only a <strong>single</strong> handler in the "pool" used to create new instances of <code>HttpClient</code>. That's not what I think of as a pool!</p>
+<blockquote>
+<p>The documentation isn't incorrect per-se, but it does seem a bit misleading. <a href="https://docs.microsoft.com/en-us/dotnet/architecture/microservices/implement-resilient-applications/use-httpclientfactory-to-implement-resilient-http-requests#how-to-use-typed-clients-with-ihttpclientfactory">This image seems to misrepresent the situation for example</a>. That's part of the reason for my digging into the code behind <code>IHttpClientFactory</code> and <a href="https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/">writing it up in my previous post</a>.</p>
+</blockquote>
+<p>My assumption was that a "pool" of available handlers were maintained, and that <code>IHttpClientFactory</code> would hand out an <em>unused</em> handler from this pool to new instances of <code>HttpClient</code>. </p>
+<p>That is not the case. </p>
+<p>A <em>single</em> handler pipeline will be reused across multiple calls to <code>CreateClient()</code>. After 2 minutes, this handler is "expired", and so is no longer handed out to new <code>HttpClient</code>s. At that point, you get a <em>new active</em> handler, that will be used for all subsequent <code>CreateClient()</code> calls. The <em>expired</em> handler is moved to a queue for clean up once it is no longer in use. </p>
+<p><img src="https://andrewlock.net/content/images/2020/httpclientfactory_assumptions.png" alt="An image showing my assumption and reality"></p>
+<p>The fact that the handler pipeline is shared between multiple <code>HttpClient</code> instances isn't a problem in terms of thread safety—after all, the advice prior to <code>IHttpClientFactory</code> was to use a single <code>HttpClient</code> for your application. Where things get interesting is the impact this has on DI scopes, especially if you're writing your own custom <code>HttpMessageHandler</code>s.</p>
+<h2 id="scope-duration-in-ihttpclientfactory">Scope duration in IHttpClientFactory<a href="#scope-duration-in-ihttpclientfactory"></a></h2>
+<p>This brings us to the crux of this post—the duration of a DI scope with <code>IHttpClintFactory</code>.</p>
+<p><a href="https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/#creating-and-tracking-httpmessagehandlers-in-createhandlerentry">As I showed in my previous post</a>, <code>IHttpClintFactory</code>, creates a <em>new</em> DI scope when it creates a new handler pipeline. It uses this scope to create each of the handlers in the pipeline, and <a href="https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/#creating-and-tracking-httpmessagehandlers-in-createhandlerentry">stores the scope in an <code>ActiveHandlerTrackingEntry</code> instance, along with the handler pipeline itself</a>.</p>
+<p>When the handler expires (after 2 minutes), and once all the <code>HttpClient</code> references to the handler pipeline have been garbage collected, the handler pipeline, <a href="https://andrewlock.net/exporing-the-code-behind-ihttpclientfactory/#cleaning-up-expired-handlers-">and the DI scope used to create the handler, are disposed.</a></p>
+<p>Remember, for 2 minutes, the same handler pipeline will be used for all calls to <code>CreateClient()</code> for a given named handler. That applies across <em>all</em> requests, even though each request uses it's own DI scope for the purpose of retrieving services. <em>The DI scope for the handler pipeline is completely separate to the DI scope for the request.</em></p>
+<p><img src="https://andrewlock.net/content/images/2020/scope_duration.png" alt="Image of a handler scope living longer than two requests"></p>
+<p>This was something I hadn't given much though to, given my previous misconceptions of the "pool" of handler pipelines. The next question is: does this cause us any problems? The answer (of course) is "it depends". </p>
+<p>Before we get to that, I'll provide a concrete example demonstrating the behaviour above.</p>
+<h2 id="an-example-of-unexpected-for-me-scoped-service-behaviour-in-ihttpclientfactory">An example of unexpected (for me) scoped service behaviour in <code>IHttpClientFactory</code><a href="#an-example-of-unexpected-for-me-scoped-service-behaviour-in-ihttpclientfactory"></a></h2>
+<p>Lets imagine you have some "scoped" service, that returns an ID. Each instance of the service should always return the same ID, but <em>different</em> instances should return <em>different</em> IDs. For example:</p>
+<pre><code><span>public</span> <span>class</span> <span>ScopedService</span>
+<span>{</span>
+    <span>public</span> <span>Guid</span> InstanceId <span>{</span> <span>get</span><span>;</span> <span>}</span> <span>=</span> Guid<span>.</span><span>NewGuid</span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>You also have a custom <code>HttpMessageHandler</code>. Steve discusses custom handlers in his series, so I'll just present a very basic handler below which uses the <code>ScopedService</code> defined above, and logs the <code>InstanceId</code>:</p>
+<pre><code><span>public</span> <span>class</span> <span>ScopedMessageHander</span><span>:</span> <span>DelegatingHandler</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> ILogger<span>&lt;</span>ScopedMessageHander<span>&gt;</span> _logger<span>;</span>
+    <span>private</span> <span>readonly</span> <span>ScopedService</span> _service<span>;</span>
+
+    <span>public</span> <span>ScopedMessageHander</span><span>(</span>ILogger<span>&lt;</span>ScopedMessageHander<span>&gt;</span> logger<span>,</span> <span>ScopedService</span> service<span>)</span><span>)</span>
+    <span>{</span>
+        _logger <span>=</span> logger<span>;</span>
+        _service <span>=</span> service<span>;</span>
+    <span>}</span>
+
+    <span>protected</span> <span>override</span> Task<span>&lt;</span>HttpResponseMessage<span>&gt;</span> <span>SendAsync</span><span>(</span><span>HttpRequestMessage</span> request<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span>
+    <span>{</span>
+        
+        <span>var</span> instanceId <span>=</span> scopedService<span>.</span>InstanceId<span>;</span>
+        _logger<span>.</span><span>LogInformation</span><span>(</span><span>"Service ID in handler: {InstanceId}"</span><span>,</span> <span>)</span><span>;</span>
+
+        <span>return</span> <span>base</span><span>.</span><span>SendAsync</span><span>(</span>request<span>,</span> cancellationToken<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>Next, we'll add a <em>named</em> <code>HttpClient</code> client in <code>ConfigureServices()</code>, and add our custom handler to its handler pipeline. You also have to register the <code>ScopedMessageHandler</code> as a service in the container explicitly, along with the <code>ScopedService</code> implementation:</p>
+<pre><code><span>public</span> <span>void</span> <span>ConfigureServices</span><span>(</span><span>IServiceCollection</span> services<span>)</span>
+<span>{</span>
+    
+    services<span>.</span><span>AddControllers</span><span>(</span><span>)</span><span>;</span>
+    services<span>.</span><span><span>AddScoped</span><span>&lt;</span><span>ScopedService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+    
+    services<span>.</span><span>AddHttpClient</span><span>(</span><span>"test"</span><span>,</span> client <span>=</span><span>&gt;</span>
+    <span>{</span>
+        client<span>.</span>BaseAddress <span>=</span> <span>new</span> <span>Uri</span><span>(</span><span>"https://jsonplaceholder.typicode.com"</span><span>)</span><span>;</span>
+    <span>}</span><span>)</span>
+    
+    <span>.</span><span><span>AddHttpMessageHandler</span><span>&lt;</span><span>ScopedMessageHander</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+    
+    services<span>.</span><span><span>AddTransient</span><span>&lt;</span><span>ScopedMessageHander</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+<span>}</span>
+</code></pre>
+<p>Finally, we have an API controller to test the behaviour. The controller below does two things:</p>
+<ul>
+<li>Uses an injected <code>ScopedService</code>, and logs the instance's ID</li>
+<li>Uses <code>IHttpClientFactory</code> to retrieve the <em>named client</em> <code>"test"</code>, and sends a GET request. This executes the custom handler in the pipeline, logging <em>its</em> injected <code>ScopedService</code> instance ID.</li>
+</ul>
+<pre><code><span>[</span><span>ApiController</span><span>]</span>
+<span>public</span> <span>class</span> <span>ValuesController</span> <span>:</span> <span>ControllerBase</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> <span>IHttpClientFactory</span> _factory<span>;</span>
+    <span>private</span> <span>readonly</span> <span>ScopedService</span> _service<span>;</span>
+    <span>private</span> <span>readonly</span> ILogger<span>&lt;</span>ValuesController<span>&gt;</span> _logger<span>;</span>
+    <span>public</span> <span>ValuesController</span><span>(</span><span>IHttpClientFactory</span> factory<span>,</span> <span>ScopedService</span> service<span>,</span> ILogger<span>&lt;</span>ValuesController<span>&gt;</span> logger<span>)</span>
+    <span>{</span>
+        _factory <span>=</span> factory<span>;</span>
+        _service <span>=</span> service<span>;</span>
+        _logger <span>=</span> logger<span>;</span>
+    <span>}</span>
+
+    <span>[</span><span>HttpGet</span><span>(</span><span>"values"</span><span>)</span><span>]</span>
+    <span>public</span> <span>async</span> Task<span>&lt;</span><span>string</span><span>&gt;</span> <span>GetAsync</span><span>(</span><span>)</span>
+    <span>{</span>
+        
+        <span>var</span> instanceId <span>=</span> _service<span>.</span><span>InstanceId</span>
+        _logger<span>.</span><span>LogInformation</span><span>(</span><span>"Service ID in controller {InstanceId}"</span><span>,</span> instanceId<span>)</span><span>;</span>
+
+        
+        <span>var</span> client <span>=</span> _factory<span>.</span><span>CreateClient</span><span>(</span><span>"test"</span><span>)</span><span>;</span>
+        <span>var</span> result <span>=</span> <span>await</span> client<span>.</span><span>GetAsync</span><span>(</span><span>"posts"</span><span>)</span><span>;</span>
+
+        
+        result<span>.</span><span>EnsureSuccessStatusCode</span><span>(</span><span>)</span><span>;</span>
+        <span>return</span> <span>await</span> result<span>.</span>Content<span>.</span><span>ReadAsStringAsync</span><span>(</span><span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>All this setup is designed to demonstrate the relationship between different <code>ScopedService</code>s. Lets take a look at the logs when we make two requests in quick succession</p>
+<pre><code>info: Microsoft.Hosting.Lifetime<span>[</span>0<span>]</span>
+      Application started. Press Ctrl+C to shut down.
+
+
+info: ScopedHandlers.Controllers.ValuesController<span>[</span>0<span>]</span>
+      Service ID <span>in</span> controller d553365d-2799-4618-ad3a-2a4b7dcbf15e
+info: ScopedHandlers.ScopedMessageHander<span>[</span>0<span>]</span>
+      Service ID <span>in</span> handler: 5c6b1b75-7f86-4c4f-9c90-23c6df65d6c6
+
+
+info: ScopedHandlers.Controllers.ValuesController<span>[</span>0<span>]</span>
+      Service ID <span>in</span> controller af64338f-8e50-4a1f-b751-9f0be0bbad39
+info: ScopedHandlers.ScopedMessageHander<span>[</span>0<span>]</span>
+      Service ID <span>in</span> handler: 5c6b1b75-7f86-4c4f-9c90-23c6df65d6c6
+</code></pre>
+<p>As expected for a scoped service, the "Service ID in controller" log message changes with each request. The DI scope lasts for the length of the request: each request uses a different scope, so a new <code>ScopedService</code> is injected each request.</p>
+<p>However, the <code>ScopedService</code> in the <code>ScopedMessageHander</code> is the <em>same</em> across both requests, and it's <em>different</em> to the <code>ScopedService</code> injected into the <code>ValuesController</code>. That's what we expect based on the discussion in the previous section, but it's not what I expected when I first started looking into this!</p>
+<p>After two minutes, if we send another request, you'll see the "Service ID in handler" has changed. The handler pipeline from previous requests expired, and a new handler pipeline was created:</p>
+<pre><code>
+info: ScopedHandlers.Controllers.ValuesController<span>[</span>0<span>]</span>
+      Service ID <span>in</span> controller eaa8a393-e573-48c9-8b26-9b09b180a44b
+info: ScopedHandlers.ScopedMessageHander<span>[</span>0<span>]</span>
+      Service ID <span>in</span> handler: 09ccb005-6434-4884-bc2d-6db7e0868d93
+</code></pre>
+<p>So, the question is: does it matter?</p>
+<h2 id="does-having-mis-matched-scopes-matter-">Does having mis-matched scopes matter?<a href="#does-having-mis-matched-scopes-matter-"></a></h2>
+<p>The simple answer is: probably not.</p>
+<p>If any of the following are true, then there's nothing to worry about:</p>
+<ul>
+<li><em>No custom handlers</em>. If you're not using custom <code>HttpMessageHandler</code>s, then there's nothing to worry about.</li>
+<li><em>Stateless</em>. If your custom handlers are stateless, as the vast majority of handlers will be, then the lifetime of the handler doesn't matter. </li>
+<li><em>Static dependencies</em>. Similarly, if the handler only depends on static (singleton) dependencies, then the lifetime of the handler doesn't matter here</li>
+<li><em>Doesn't need to share state with request dependencies</em>. Even if your handler requires non-singleton dependencies, as long as it doesn't need to share state with dependencies used in a request, you'll be fine.</li>
+</ul>
+<p>The only situation I think you could run into issues is:</p>
+<ul>
+<li><em>Requires sharing dependencies with request</em>. If your handler requires using the <em>same</em> dependencies as the request in which it's invoked, then you could have problems.</li>
+</ul>
+<p>The main example I can think of is EF Core. </p>
+<p>A common pattern for EF Core is <a href="https://docs.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/infrastructure-persistence-layer-implementation-entity-framework-core#implement-custom-repositories-with-entity-framework-core">a "unit of work"</a>, that creates a new EF Core <code>DbContext</code> per request, does some work, and then persists those changes at the end of the request. If your custom handler needs to coordinate with the unit of work, then you could have problems unless you do extra work.</p>
+<p>For example, imagine you have a custom handler that writes messages to an EF Core table. If you inject a <code>DbContext</code> into the custom handler, it will be a different instance of the <code>DbContext</code> than the one in your request. Additionally, this <code>DbContext</code> will last for the lifetime of the handler (2 minutes), not the short lifetime of a request.</p>
+<p>So if you're in that situation, what should you do?</p>
+<h2 id="accessing-the-request-scope-from-a-custom-httpmessagehandler">Accessing the Request scope from a custom <code>HttpMessageHandler</code><a href="#accessing-the-request-scope-from-a-custom-httpmessagehandler"></a></h2>
+<p>Luckily, there is a solution. To demonstrate, I'll customise the <code>ScopedMessageHander</code> shown previously, so that the <code>ScopedService</code> it uses comes from the <em>request</em>'s DI scope, instead of the DI scope used to create the custom handler. The key, <a href="https://docs.microsoft.com/aspnet/core/fundamentals/http-context#use-httpcontext-from-custom-components">is using <code>IHttpContextAccessor</code></a>.</p>
+<blockquote>
+<p>Note that you have to add <code>services.AddHttpContextAccessor()</code> in your <code>Startup.ConfigureServices()</code> method to make <code>IHttpContextAccessor</code> available;</p>
+</blockquote>
+<pre><code><span>public</span> <span>class</span> <span>ScopedMessageHander</span><span>:</span> <span>DelegatingHandler</span>
+<span>{</span>
+    <span>private</span> <span>readonly</span> ILogger<span>&lt;</span>ScopedMessageHander<span>&gt;</span> _logger<span>;</span>
+    <span>private</span> <span>readonly</span> <span>IHttpContextAccessor</span> _accessor<span>;</span>
+
+    <span>public</span> <span>ScopedMessageHander</span><span>(</span>ILogger<span>&lt;</span>ScopedMessageHander<span>&gt;</span> logger<span>,</span> <span>IHttpContextAccessor</span> accessor<span>)</span>
+    <span>{</span>
+        _logger <span>=</span> logger<span>;</span>
+        _accessor <span>=</span> accessor<span>;</span>
+    <span>}</span>
+
+    <span>protected</span> <span>override</span> Task<span>&lt;</span>HttpResponseMessage<span>&gt;</span> <span>SendAsync</span><span>(</span><span>HttpRequestMessage</span> request<span>,</span> <span>CancellationToken</span> cancellationToken<span>)</span>
+    <span>{</span>
+        
+        <span>var</span> httpConext <span>=</span> _accessor<span>.</span>HttpContext<span>;</span>
+
+        
+        <span>var</span> service <span>=</span> _accessor<span>.</span>HttpContext<span>.</span>RequestServices<span>.</span><span><span>GetRequiredService</span><span>&lt;</span><span>ScopedService</span><span>&gt;</span></span><span>(</span><span>)</span><span>;</span>
+
+        
+        <span>var</span> instanceId <span>=</span> service<span>.</span>InstanceId<span>;</span>
+        _logger<span>.</span><span>LogInformation</span><span>(</span><span>"Service ID in handler: {InstanceId}"</span><span>,</span> <span>)</span><span>;</span>
+
+        <span>return</span> <span>base</span><span>.</span><span>SendAsync</span><span>(</span>request<span>,</span> cancellationToken<span>)</span><span>;</span>
+    <span>}</span>
+<span>}</span>
+</code></pre>
+<p>This approach uses the <code>IHttpContextAccessor</code> to retrieve the <code>IServiceProvider</code> that is scoped to the <em>request</em>. This allows you to retrieve the <em>same</em> instance that was injected into the <code>ValuesController</code>. Consequently, for every request, the logged values are the same in both the controller and the handler:</p>
+<pre><code>info: Microsoft.Hosting.Lifetime<span>[</span>0<span>]</span>
+      Application started. Press Ctrl+C to shut down.
+
+
+info: ScopedHandlers.Controllers.ValuesController<span>[</span>0<span>]</span>
+      Service ID <span>in</span> controller eaa8a393-e573-48c9-8b26-9b09b180a44b
+info: ScopedHandlers.ScopedMessageHander<span>[</span>0<span>]</span>
+      Service ID <span>in</span> handler: eaa8a393-e573-48c9-8b26-9b09b180a44b
+
+
+info: ScopedHandlers.Controllers.ValuesController<span>[</span>0<span>]</span>
+      Service ID <span>in</span> controller c5c3087b-938d-4e11-ae49-22072a56cef6
+info: ScopedHandlers.ScopedMessageHander<span>[</span>0<span>]</span>
+      Service ID <span>in</span> handler: c5c3087b-938d-4e11-ae49-22072a56cef6
+</code></pre>
+<p>Even though the lifetime of the handler doesn't match the lifetime of the request, you can still execute the handler using services sourced from the same DI scope. This should allow you to work around any scoping issues you run into.</p>
+<h2 id="summary">Summary<a href="#summary"></a></h2>
+<p>In this post I described how DI scopes with <code>IHttpClientFactory</code>. I showed that handlers are sourced from their own scope, which is <em>separate</em> from the <em>request</em> DI scope, which is typically where you consider scopes to be sourced from. </p>
+<p>In most cases, this won't be a problem, but if an <code>HttpMessageHandler</code> requires using services from the "main" request then you can't use naïve constructor injection. Instead, you need to use <code>IHttpContextAccessor</code> to access the current request's <code>HttpContext</code> and <code>IServiceProvider</code>. </p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
