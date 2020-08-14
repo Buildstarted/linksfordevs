@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Write-Ahead Log - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.min.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Write-Ahead Log - linksfor.dev(s)"/>
+    <meta property="og:description" content="Provide durability guarantee without the storage data structures to be flushed to disk, by persisting every state change as a command to the append only log."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://martinfowler.com/articles/patterns-of-distributed-systems/wal.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1 style="margin: unset">
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Write-Ahead Log</title>
+<div class="readable">
+        <h1>Write-Ahead Log</h1>
+            <div>Reading time: 6-8 minutes</div>
+        <div>Posted here: 14 Aug 2020</div>
+        <p><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/wal.html">https://martinfowler.com/articles/patterns-of-distributed-systems/wal.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div>
+<div>
+
+
+
+
+<p>Provide durability guarantee without the storage data structures to be flushed to disk, by persisting every state change as a command to the append only log.</p>
+
+<p>12 August 2020</p>
+
+<p>aka: Commit Log</p>
+
+<section>
+<h2>Problem</h2>
+
+<p>Strong durability guarantee is needed even in the case of the server machines storing data failing. Once a server agrees to perform an action, it should do so even if it fails and restarts losing all of its in-memory state.</p>
+</section>
+
+<section>
+<h2>Solution</h2>
+
+<div id="wal.png"><p><img src="https://martinfowler.com/articles/patterns-of-distributed-systems/wal.png"></p><p>Figure 1: Write Ahead Log</p>
+</div>
+
+
+
+<p>
+      Store each state change as a command in a file on a hard disk. 
+      A single log is maintained for each server process which is sequentially appended. A single log
+      which is appended sequentially, simplifies the handling of logs at restart and
+      for subsequent online operations (when the log is appended with new commands).
+      Each log entry is given a unique identifier. The unique log identifier helps in 
+      implementing certain other operations on the log like <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/log-segmentation.html">Segmented Log</a> or cleaning the log 
+      with <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/low-watermark.html">Low-Water Mark</a> etc.
+      The log updates can be implemented with <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/singular-update-queue.html">Singular Update Queue</a></p>
+
+<p>
+      The typical log entry structure looks like following
+    </p>
+
+<p>class WALEntry…
+</p>
+
+<pre>  private final Long entryId;
+  private final byte[] data;
+  private final EntryType entryType;
+  private long timeStamp;</pre>
+
+<p>  
+    The file can be read on every restart and the state can be recovered by replaying all the log entries.    
+  </p>
+
+<p>
+    Consider a simple in memory key-value store:
+  </p>
+
+<p>class KVStore…
+</p>
+
+<pre>  private Map&lt;String, String&gt; kv = new HashMap&lt;&gt;();
+
+  public String get(String key) {
+      return kv.get(key);
+  }
+
+  public void put(String key, String value) {
+      appendLog(key, value);
+      kv.put(key, value);
+  }
+
+  private Long appendLog(String key, String value) {
+<span>      return wal.writeEntry(new SetValueCommand(key, value).serialize());</span>
+  }</pre>
+
+<p>
+     The put action is  represented as <a href="http://www.amazon.com/exec/obidos/tg/detail/-/0201633612">Command</a>, which is serialized
+     and stored in the log before updating the in memory hashmap.
+     </p>
+
+<p>class SetValueCommand…
+</p>
+
+<pre>  final String key;
+  final String value;
+
+  public SetValueCommand(String key, String value) {
+      this.key = key;
+      this.value = value;
+  }
+
+  @Override
+  public byte[] serialize() {
+      try {
+          var baos = new ByteArrayOutputStream();
+          var dataInputStream = new DataOutputStream(baos);
+          dataInputStream.writeInt(Command.SetValueType);
+          dataInputStream.writeUTF(key);
+          dataInputStream.writeUTF(value);
+          return baos.toByteArray();
+
+      } catch (IOException e) {
+          throw new RuntimeException(e);
+      }
+  }
+
+  public static SetValueCommand deserialize(InputStream is) {
+      try {
+          DataInputStream dataInputStream = new DataInputStream(is);
+          return new SetValueCommand(dataInputStream.readUTF(), dataInputStream.readUTF());
+      } catch (IOException e) {
+          throw new RuntimeException(e);
+      }
+  }</pre>
+
+<p>
+     This makes sure that once the put method returns successfully, even if the process holding the KVStore crashes, its state 
+     can be restored by reading the log file at startup.
+     </p>
+
+<p>class KVStore…
+</p>
+
+<pre>  public KVStore(Config config) {
+      this.config = config;
+      this.wal = WriteAheadLog.openWAL(config);
+<span>      this.applyLog();</span>
+  }
+
+  public void applyLog() {
+      List&lt;WALEntry&gt; walEntries = wal.readAll();
+      applyEntries(walEntries);
+  }
+
+  private void applyEntries(List&lt;WALEntry&gt; walEntries) {
+      for (WALEntry walEntry : walEntries) {
+          Command command = deserialize(walEntry);
+          if (command instanceof SetValueCommand) {
+              SetValueCommand setValueCommand = (SetValueCommand)command;
+              kv.put(setValueCommand.key, setValueCommand.value);
+          }
+      }
+  }
+
+  public void initialiseFromSnapshot(SnapShot snapShot) {
+      kv.putAll(snapShot.deserializeState());
+  }</pre>
+
+<section id="ImplementationConsiderations">
+<h2> Implementation Considerations </h2>
+
+<p> There are some important considerations while implementing Log. 
+        It's important to make sure that entries written to the log file are actually persisted on the physical media.
+        File handling libraries provided in all programming languages provide a mechanism to force the operating system to 
+        'flush' the file changes to physical media. There is a trade off to be considered while using flushing mechanism.
+     </p>
+
+<p>
+        Flushing every log write to the disk gives a strong durability guarantee (which is the main purpose of having logs in the first place), but this 
+        severely limits performance and can quickly become a bottleneck. If flushing is delayed or done asynchronously, it improves performance 
+        but there is a risk of losing entries from the log if the server crashes before entries are flushed.
+        Most implementations use techniques like Batching, to limit the impact of the flush operation.             
+    </p>
+
+<p>
+       The other consideration is to make sure that corrupted log files are detected while reading the log. To handle this, log entries are generally 
+       written with the CRC records, which then can be validated when the files are read.
+    </p>
+
+<p>
+       Single Log files can become difficult to manage and can quickly consume all the storage. To handle this issue,
+       techniques like <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/log-segmentation.html">Segmented Log</a> and <a href="https://martinfowler.com/articles/patterns-of-distributed-systems/low-watermark.html">Low-Water Mark</a> are used.
+    </p>
+
+<p>
+       The write ahead log is append-only. Because of this behaviour, in case of client communication failure and retries, logs can contain duplicate entries.
+       When the log entries are applied, it needs to make sure that the duplicates are ignored.
+       If the final state is something like a HashMap, where the updates to the same key are idempotent, no special mechanism is needed.
+       If they're not, there needs to be some mechanism implemented to mark each request with a unique identifier and detect duplicates.
+    </p>
+</section>
+</section>
+
+<section>
+<h2>Examples</h2>
+
+<ul>
+<li> The log implementation in all Consensus algorithms like <a href="https://github.com/apache/zookeeper/blob/master/zookeeper-server/src/main/java/org/apache/zookeeper/server/persistence/FileTxnLog.java"> Zookeeper </a> and <a href="https://github.com/etcd-io/etcd/blob/master/wal/wal.go">RAFT</a> is similar to write ahead log</li>
+
+<li> The storage implementation in <a href="https://github.com/axbaretto/kafka/blob/master/core/src/main/scala/kafka/log/Log.scala"> Kafka </a> follows similar structure as that of commit logs in databases</li>
+
+<li> All the databases, including the nosql databases like Cassandra use 
+                <a href="https://github.com/facebookarchive/cassandra/blob/master/src/org/apache/cassandra/db/CommitLog.java"> write ahead log technique </a> to guarantee durability</li>
+</ul>
+</section>
+
+<nav>
+<p>This page is part of:</p>
+
+<p>Patterns of Distributed Systems</p>
+<img src="https://martinfowler.com/articles/patterns-of-distributed-systems/card.png">
+<p><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/">Main Narrative Article</a></p>
+
+<p>Patterns</p>
+
+<ul>
+<li>Consistent Core †</li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/generation.html">Generation Clock</a></li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/heartbeat.html">HeartBeat</a></li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/high-watermark.html">High-Water Mark</a></li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html">Leader and Followers</a></li>
+
+<li>Low-Water Mark †</li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/quorum.html">Quorum</a></li>
+
+<li>Request Pipeline †</li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/log-segmentation.html">Segmented Log</a></li>
+
+<li>Single Socket Channel †</li>
+
+<li>Singular Update Queue †</li>
+
+<li>State Watch †</li>
+
+<li>Time Bound Lease †</li>
+
+<li><a href="https://martinfowler.com/articles/patterns-of-distributed-systems/wal.html">Write-Ahead Log</a></li>
+</ul>
+
+<p>† pattern in progress</p>
+</nav>
+
+<p>
+<details id="SignificantRevisions">
+<summary>Significant Revisions</summary>
+</details>
+</p>
+</div>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
