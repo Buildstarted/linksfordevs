@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Supporting Encrypted Content-Encoding in HttpClient - Replacing Bouncy Castle With .NET Core - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.min.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Supporting Encrypted Content-Encoding in HttpClient - Replacing Bouncy Castle With .NET Core - linksfor.dev(s)"/>
+    <meta property="article:author" content="Tomasz P&#x119;czek"/>
+    <meta property="og:description" content="Some time ago I&#x27;ve shown how to extend HttpClient with payload encryption. In this post I&#x27;m revisiting the subject with some .NET Core 3.1 goodness."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://www.tpeczek.com/2020/08/supporting-encrypted-content-encoding.html"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1 style="margin: unset">
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Supporting Encrypted Content-Encoding in HttpClient - Replacing Bouncy Castle With .NET Core</title>
+<div class="readable">
+        <h1>Supporting Encrypted Content-Encoding in HttpClient - Replacing Bouncy Castle With .NET Core</h1>
+            <div>by Tomasz P&#x119;czek</div>
+            <div>Reading time: 8-10 minutes</div>
+        <div>Posted here: 18 Aug 2020</div>
+        <p><a href="https://www.tpeczek.com/2020/08/supporting-encrypted-content-encoding.html">https://www.tpeczek.com/2020/08/supporting-encrypted-content-encoding.html</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><div itemprop="articleBody">
+<p>More than three years ago I've written about <a href="https://www.tpeczek.com/p/supporting-encrypted-content-encoding.html">supporting Encrypted Content-Encoding in HttpClient</a>. Back then I've used <em>Bouncy Castle</em> for <em>AES GCM</em> encryption and decryption. It was a logical choice as Bouncy Castle was, and in many cases still is, the go-to library for many cryptographic algorithms and protocols. But time has passed and .NET has been growing. With the release of .NET Core 3.0, we have been given built-in support for <a href="https://docs.microsoft.com/en-us/dotnet/api/system.security.cryptography.aesgcm">AES GCM</a> and I've decided to replace Bouncy Castle with it.</p>
+<h2 id="encrypting">Encrypting</h2>
+<p>AES GCM encryption with Bouncy Castle has three steps: configuration, processing, and finalization. In the configuration step, one needs to provide <em>key</em> and <em>nonce</em> (I will not describe specifics of generating nonce according to Encrypted Content-Encoding specification here, as I did it in <a href="https://www.tpeczek.com/2017/02/supporting-encrypted-content-encoding.html">encoding</a> post). The processing step is about feeding the configured cipher instance with plaintext bytes which results in filling ciphertext buffer. In the finalization step, the cipher will generate an authentication tag into the ciphertext buffer. The below code illustrates those steps.</p>
+<pre><code><span>internal</span> <span>class</span> <span>Aes128GcmCipher</span> : <span>IDisposable</span>
+{
+    ...
+
+    <span><span>public</span> <span>int</span> <span>Encrypt</span><span>(<span>byte</span>[] plainText, <span>int</span> plainTextLength, <span>byte</span>[] cipherTextBuffer, <span>ulong</span> recordSequenceNumber)</span>
+    </span>{
+        ConfigureAes128GcmCipher(_aes128GcmCipher, <span>true</span>, _key, _nonceInfoParameterHash, recordSequenceNumber);
+
+        <span>return</span> Aes128GcmCipherProcessBytes(_aes128GcmCipher, plainText, plainTextLength, cipherTextBuffer);
+    }
+
+    <span><span>private</span> <span>static</span> <span>void</span> <span>ConfigureAes128GcmCipher</span><span>(GcmBlockCipher aes128GcmCipher, <span>bool</span> forEncryption,
+        KeyParameter key, <span>byte</span>[] nonceInfoParameterHash, <span>ulong</span> recordSequenceNumber)</span>
+    </span>{
+        aes128GcmCipher.Reset();
+        AeadParameters aes128GcmParameters = <span>new</span> AeadParameters(key, <span>128</span>,
+            Aes128GcmHelper.XorNonce(nonceInfoParameterHash, recordSequenceNumber));
+        aes128GcmCipher.Init(forEncryption, aes128GcmParameters);
+    }
+
+    <span><span>private</span> <span>static</span> <span>int</span> <span>Aes128GcmCipherProcessBytes</span><span>(GcmBlockCipher aes128GcmCipher, <span>byte</span>[] bytesToProcess,
+        <span>int</span> bytesToProcessLength, <span>byte</span>[] processedBytesBuffer)</span>
+    </span>{
+        <span>int</span> processBytesCount = aes128GcmCipher.ProcessBytes(bytesToProcess, <span>0</span>, bytesToProcessLength,
+            processedBytesBuffer, <span>0</span>);
+        <span>int</span> doFinalBytesCount = aes128GcmCipher.DoFinal(processedBytesBuffer, processBytesCount);
+
+        <span>return</span> processBytesCount + doFinalBytesCount;
+    }
+
+    ...
+}
+</code></pre>
+<p>The .NET Core implementation of AES GCM has a little bit of different flow. It uses the fact that it is common to perform multiple operations with the same key, just providing unique values for the nonce. So the key is provided in cipher constructor and the encryption is just a single method call. The .NET Core implementation also has a different approach to authentication tag - it will generate it into a separate buffer, not the one for ciphertext. This means that there are potentially multiple buffers required. Thankfully the implementation supports <code>Span</code>. This means that a single buffer can be used by pointing to the right parts of it. Offset calculation is not a problem because, in the case of AES GCM, ciphertext always has the same length as plaintext, and authentication tag length is constant (the same as key length). This way implementation is simpler than with Bouncy Castle.</p>
+<pre><code><span>internal</span> <span>class</span> <span>Aes128GcmCipher</span> : <span>IDisposable</span>
+{
+    ...
+
+    <span><span>public</span> <span>int</span> <span>Encrypt</span><span>(<span>byte</span>[] plainText, <span>int</span> plainTextLength, <span>byte</span>[] cipherTextBuffer, <span>ulong</span> recordSequenceNumber)</span>
+    </span>{
+        Span cipherTextBufferSpan = cipherTextBuffer.AsSpan();
+
+        _aesGcmCipher.Encrypt(
+            Aes128GcmHelper.XorNonce(_nonceInfoParameterHash, recordSequenceNumber).AsSpan(),
+            plainText.AsSpan().Slice(<span>0</span>, plainTextLength),
+            cipherTextBufferSpan.Slice(<span>0</span>, plainTextLength),
+            cipherTextBufferSpan.Slice(plainTextLength, Aes128GcmHelper.CONTENT_ENCRYPTION_KEY_LENGTH)
+            );
+
+        <span>return</span> plainTextLength + Aes128GcmHelper.CONTENT_ENCRYPTION_KEY_LENGTH;
+    }
+
+    ...
+}
+</code></pre>
+<h2 id="decrypting">Decrypting</h2>
+<p>In general, decryption is an opposite process to encryption (yes I'm stating the obvious here). As a result, usually, there are symmetric APIs for encryption and decryption. This is not a case when it comes to Bouncy Castle. In the case of Bouncy Castle, the difference is just single boolean value.</p>
+<pre><code><span>internal</span> <span>class</span> <span>Aes128GcmCipher</span> : <span>IDisposable</span>
+{
+    ...
+
+    <span><span>public</span> <span>int</span> <span>Decrypt</span><span>(<span>byte</span>[] cipherText, <span>int</span> cipherTextLength, <span>byte</span>[] plainTextBuffer, <span>ulong</span> recordSequenceNumber)</span>
+    </span>{
+        ConfigureAes128GcmCipher(_aes128GcmCipher, <span>false</span>, _key, _nonceInfoParameterHash, recordSequenceNumber);
+
+        <span>return</span> Aes128GcmCipherProcessBytes(_aes128GcmCipher, cipherText, cipherTextLength, plainTextBuffer);
+    }
+
+    <span><span>private</span> <span>static</span> <span>void</span> <span>ConfigureAes128GcmCipher</span><span>(GcmBlockCipher aes128GcmCipher, <span>bool</span> forEncryption,
+        KeyParameter key, <span>byte</span>[] nonceInfoParameterHash, <span>ulong</span> recordSequenceNumber)</span>
+    </span>{
+        aes128GcmCipher.Reset();
+        AeadParameters aes128GcmParameters = <span>new</span> AeadParameters(key, <span>128</span>,
+            Aes128GcmHelper.XorNonce(nonceInfoParameterHash, recordSequenceNumber));
+        aes128GcmCipher.Init(forEncryption, aes128GcmParameters);
+    }
+
+    <span><span>private</span> <span>static</span> <span>int</span> <span>Aes128GcmCipherProcessBytes</span><span>(GcmBlockCipher aes128GcmCipher, <span>byte</span>[] bytesToProcess,
+        <span>int</span> bytesToProcessLength, <span>byte</span>[] processedBytesBuffer)</span>
+    </span>{
+        <span>int</span> processBytesCount = aes128GcmCipher.ProcessBytes(bytesToProcess, <span>0</span>, bytesToProcessLength,
+            processedBytesBuffer, <span>0</span>);
+        <span>int</span> doFinalBytesCount = aes128GcmCipher.DoFinal(processedBytesBuffer, processBytesCount);
+
+        <span>return</span> processBytesCount + doFinalBytesCount;
+    }
+
+    ...
+}
+</code></pre>
+<p>In the case of .NET Core implementation, things are more typical. There is a <code>Decrypt</code> method which takes nonce, ciphertext, authentication tag, and plaintext buffer. With the help of spans, usage is again very clean.</p>
+<pre><code><span>internal</span> <span>class</span> <span>Aes128GcmCipher</span> : <span>IDisposable</span>
+{
+    ...
+
+    <span><span>public</span> <span>int</span> <span>Decrypt</span><span>(<span>byte</span>[] cipherText, <span>int</span> cipherTextLength, <span>byte</span>[] plainTextBuffer, <span>ulong</span> recordSequenceNumber)</span>
+    </span>{
+        <span>int</span> textLength = cipherTextLength - Aes128GcmHelper.CONTENT_ENCRYPTION_KEY_LENGTH;
+
+        Span cipherTextSpan = cipherText.AsSpan();
+
+        _aesGcmCipher.Decrypt(
+            Aes128GcmHelper.XorNonce(_nonceInfoParameterHash, recordSequenceNumber).AsSpan(),
+            cipherTextSpan.Slice(<span>0</span>, textLength),
+            cipherTextSpan.Slice(textLength, Aes128GcmHelper.CONTENT_ENCRYPTION_KEY_LENGTH),
+            plainTextBuffer.AsSpan().Slice(<span>0</span>, textLength)
+            );
+
+        <span>return</span> textLength;
+    }
+
+    ...
+}
+</code></pre>
+<h2 id="performance">Performance</h2>
+<p>The gains I've achieved from the replacement were fewer dependencies and cleaner code (well the last one is subjective). But there is one more thing .NET Core promise to deliver - performance. So I've decided to run some benchmarks for various data sets.</p>
+<p>First, I've benchmarked the Bouncy Castle implementation running on .NET Core 3.1.</p>
+<center>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Mean</th>
+<th>Error</th>
+<th>StdDev</th>
+<th>Gen 0</th>
+<th>Gen 1</th>
+<th>Gen 2</th>
+<th>Allocated</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>EncodeSingleRecordAsync</td>
+<td>127.4 μs</td>
+<td>1.45 μs</td>
+<td>1.21 μs</td>
+<td>15.8691</td>
+<td>-</td>
+<td>-</td>
+<td>48.21 KB</td>
+</tr>
+<tr>
+<td>EncodeMultipleRecordsAsync</td>
+<td>977.3 μs</td>
+<td>14.60 μs</td>
+<td>14.34 μs</td>
+<td>80.0781</td>
+<td>-</td>
+<td>-</td>
+<td>244.8 KB</td>
+</tr>
+<tr>
+<td>DecodeSingleRecordAsync</td>
+<td>136.1 μs</td>
+<td>2.64 μs</td>
+<td>3.61 μs</td>
+<td>16.1133</td>
+<td>-</td>
+<td>-</td>
+<td>49.06 KB</td>
+</tr>
+<tr>
+<td>DecodeMultipleRecordsAsync</td>
+<td>988.3 μs</td>
+<td>19.26 μs</td>
+<td>21.41 μs</td>
+<td>78.1250</td>
+<td>-</td>
+<td>-</td>
+<td>245.38 KB</td>
+</tr>
+</tbody>
+</table>
+</center>
+<p>Second, I've benchmarked the "native" .NET Core 3.1 implementation.</p>
+<center>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Mean</th>
+<th>Error</th>
+<th>StdDev</th>
+<th>Gen 0</th>
+<th>Gen 1</th>
+<th>Gen 2</th>
+<th>Allocated</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>EncodeSingleRecordAsync</td>
+<td>8.183 μs</td>
+<td>0.1584 μs</td>
+<td>0.1760 μs</td>
+<td>0.3967</td>
+<td>-</td>
+<td>-</td>
+<td>1.26 KB</td>
+</tr>
+<tr>
+<td>EncodeMultipleRecordsAsync</td>
+<td>22.848 μs</td>
+<td>0.4465 μs</td>
+<td>0.4586 μs</td>
+<td>0.7629</td>
+<td>-</td>
+<td>-</td>
+<td>2.38 KB</td>
+</tr>
+<tr>
+<td>DecodeSingleRecordAsync</td>
+<td>8.320 μs</td>
+<td>0.1590 μs</td>
+<td>0.1487 μs</td>
+<td>0.6561</td>
+<td>-</td>
+<td>-</td>
+<td>2.05 KB</td>
+</tr>
+<tr>
+<td>DecodeMultipleRecordsAsync</td>
+<td>22.311 μs</td>
+<td>0.4149 μs</td>
+<td>0.3881 μs</td>
+<td>0.7629</td>
+<td>-</td>
+<td>-</td>
+<td>2.41 KB</td>
+</tr>
+</tbody>
+</table>
+</center>
+<p>Clearly .NET Core delivers on its promise. And I guess that is the most (probably only) important note in this post. The .NET (Core) is growing fast and it's worth watching new APIs being added as migrating to them might be really worth it.</p>
+</div></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
