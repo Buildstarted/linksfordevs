@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>
+Vulnerabilities in ATM Milano&#x27;s mobile app - linksfor.dev(s)    </title>
+    <meta charset="utf-8">
+    <link rel="alternate" type="application/rss+xml" title="Linksfor.dev(s) feed" href="https://linksfor.dev/feed.rss" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="google" value="notranslate">
+    <link rel="stylesheet" type="text/css" href="/style.min.css" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <meta property="og:title" content="Vulnerabilities in ATM Milano&#x27;s mobile app - linksfor.dev(s)"/>
+    <meta property="article:author" content="jacopo-j&#xA0;@jacopoj_&#xA0;jacopoj&#xA0;E-mail&#xA0;RSS"/>
+    <meta property="og:description" content="Some design flaws left ATM Milano&#x2019;s mobile app vulnerable to attacks: anyone could access any users&#x2019; data and tickets by just knowing their e-mail address. Meanwhile, some apparent security features made the vulnerabilities harder to spot and to exploit."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://blog.jacopojannone.com/en/post/atm-app-vulnerability/"/>
+
+<meta property="og:site_name" content="linksfor.dev(s)" />
+</head>
+<body>
+    <div class="devring" style="background: #222">
+        <div style="text-align:center">Explore other dev related sites in this ring. If you would like to join this ring <a href="https://devring.club">click here</a>.</div>
+        <div class="grid">
+            <div style="display: grid; grid-template-columns: .5fr 1fr 1fr 1fr; text-align: center;">
+                <span class="devring-title"><a href="https://devring.club/">devring.club</a></span>
+                <a href="https://devring.club/sites/1/prev" class="devring-previous">Previous</a>
+                <a href="https://devring.club/random" class="devring-random">Random</a>
+                <a href="https://devring.club/sites/1/next" class="devring-next">Next</a>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <h1 style="margin: unset">
+<a href="/" style="color:inherit">linksfor.dev(s)</a>
+        </h1>
+        <title>linksfor.dev(s) - Vulnerabilities in ATM Milano&#x27;s mobile app</title>
+<div class="readable">
+        <h1>Vulnerabilities in ATM Milano&#x27;s mobile app</h1>
+            <div>by jacopo-j&#xA0;@jacopoj_&#xA0;jacopoj&#xA0;E-mail&#xA0;RSS</div>
+            <div>Reading time: 17-22 minutes</div>
+        <div>Posted here: 18 Aug 2020</div>
+        <p><a href="https://blog.jacopojannone.com/en/post/atm-app-vulnerability/">https://blog.jacopojannone.com/en/post/atm-app-vulnerability/</a></p>
+        <hr/>
+<div id="readability-page-1" class="page"><article><p>Some design flaws left ATM Milano’s mobile app vulnerable to attacks: anyone could access any users’ data and tickets by just knowing their e-mail address. Meanwhile, some apparent security features made the vulnerabilities harder to spot and to exploit.</p>
+<h2 id="background">Background</h2>
+<p>ATM, short for Azienda Trasporti Milanesi, is the public transport company of Milan. ATM Milano’s app, available for both Android<sup id="fnref:1"><a href="#fn:1" role="doc-noteref">1</a></sup> and iOS<sup id="fnref:2"><a href="#fn:2" role="doc-noteref">2</a></sup>, provides users with some useful features, such as the ability search for bus stops and view the estimated time of arrival; receive traffic news via push notifications; look for directions to a given destination. It also allows <strong>purchasing tickets</strong> that can be used on the public transport network and which users can pay either via SMS, credit card or PayPal.</p>
+<p><img src="https://blog.jacopojannone.com/atm-app-vulnerability/en/image1.png" alt="Screenshot of ATM Milano&amp;rsquo;s app"></p>
+<p>The reason why I started looking into this app is simple. As an ATM user, I wanted to extract and document the API in order to use the features provided by the app on different platforms than those for which the app was available. Just to give you an idea, I wanted to have a widget showing the ETA of the tram that stops near my home on the desktop of my computer.</p>
+<h2 id="traffic-analysis">Traffic Analysis</h2>
+<p>As always, my reverse engineering started with an <strong>HTTPS proxy</strong> configured on the smartphone I had installed the app on, in order to have a look at the app’s traffic. Often this is all that’s needed to gather the required information and no further research is needed. This seemed the case: since the app didn’t even perform any certificate pinning<sup id="fnref:3"><a href="#fn:3" role="doc-noteref">3</a></sup>, I thought I’d finish my work in a matter of minutes.</p>
+<p>Requests made by the app during <strong>login to the reserved area</strong>, from which users can buy tickets, unexpectedly caught my attention. Let’s have a look.</p>
+<h3 id="login-request">Login Request</h3>
+<p>Everything begins with the app submitting user’s credentials to the backend, as expected.</p>
+<div><pre><code data-lang="http"><span>POST</span> <span>/v2/en/Membership/ValidateUser</span> <span>HTTP</span><span>/</span><span>1.1</span>
+<span>ContentType</span><span>:</span> <span>application/json;charset=utf-8</span>
+<span>Timestamp</span><span>:</span> <span>Tue, 12 Jun 2018 19:17:42 GMT</span>
+<span>User-Agent</span><span>:</span> <span>Android/6.0.1 (Nexus 5) it.atm.appmobile/3.4</span>
+<span>Authentication</span><span>:</span> <span>ATMApp:rDrN5r2icWXNuK1txneyDZlqiOicDYjuFan13Eaivmg=</span>
+<span>Content-Type</span><span>:</span> <span>application/json; charset=utf-8</span>
+<span>Content-Length</span><span>:</span> <span>59</span>
+<span>Host</span><span>:</span> <span>atm-be.sg.engitel.com</span>
+<span>Connection</span><span>:</span> <span>Keep-Alive</span>
+<span>Accept-Encoding</span><span>:</span> <span>gzip</span>
+
+<span>{</span>
+    <span>"username"</span><span>:</span> <span>"jacopo.j@example.com"</span><span>,</span>
+    <span>"password"</span><span>:</span> <span>"mypassword"</span>
+<span>}</span>
+</code></pre></div><p>Here is the server response:</p>
+<div><pre><code data-lang="http"><span>HTTP</span><span>/</span><span>1.1</span> <span>200</span> <span>OK</span>
+<span>Cache-Control</span><span>:</span> <span>no-cache</span>
+<span>Pragma</span><span>:</span> <span>no-cache</span>
+<span>Content-Length</span><span>:</span> <span>1</span>
+<span>Content-Type</span><span>:</span> <span>application/json; charset=utf-8</span>
+<span>Expires</span><span>:</span> <span>-1</span>
+<span>Server</span><span>:</span> <span>Microsoft-IIS/8.5</span>
+<span>Request-Context</span><span>:</span> <span>appId=cid-v1:815dcd44-dd4b-45ce-b0e0-cc8a66a1f0c5</span>
+<span>X-AspNet-Version</span><span>:</span> <span>4.0.30319</span>
+<span>X-Powered-By</span><span>:</span> <span>ASP.NET</span>
+<span>Date</span><span>:</span> <span>Tue, 12 Jun 2018 19:17:43 GMT</span>
+
+<span>0</span>
+</code></pre></div><p>Almost everything looks right so far. I say “almost” because despite looking fine at a first glance, the most observant among you will notice that something’s missing from the server response.</p>
+<p>Someone may also ask what’s the matter with that <code>0</code> in the response body. We can investigate by repeating the login with different credentials and look at the result.</p>
+<p>Here’s what it looks like:</p>
+<ul>
+<li><code>0</code> is returned when the login was successful (as in the case above).</li>
+<li><code>1</code> is returned when the username does not exist.</li>
+<li><code>4</code> is returned when the username does exist but the password is incorrect.</li>
+</ul>
+<p>Using distinct status codes for these latter two cases is quite an odd design choice, behind which there are probably some valid (yet unknown) reasons. The fact that this is the intended behavior is anyway confirmed by the app UI, which displays two different error messages in the two situations. But let’s move on.</p>
+<h3 id="wallet-request">Wallet Request</h3>
+<p>Now that we’re logged in, the app requests our wallet, that is the list of purchased tickets.</p>
+<div><pre><code data-lang="http"><span>GET</span> <span>/v2/en/ticketing/wallet</span> <span>HTTP</span><span>/</span><span>1.1</span>
+<span>ContentType</span><span>:</span> <span>application/json;charset=utf-8</span>
+<span>Timestamp</span><span>:</span> <span>Tue, 12 Jun 2018 19:17:43 GMT</span>
+<span>User-Agent</span><span>:</span> <span>Android/6.0.1 (Nexus 5) it.atm.appmobile/3.4</span>
+<span>Authentication</span><span>:</span> <span>jacopo.j@example.com:rBm2e1qft7FUZMBbHJLOLC27xzBM/IbUJ3ihiOX8LGI=</span>
+<span>Host</span><span>:</span> <span>atm-be.sg.engitel.com</span>
+<span>Connection</span><span>:</span> <span>Keep-Alive</span>
+<span>Accept-Encoding</span><span>:</span> <span>gzip</span>
+</code></pre></div><p>When I captured this request my wallet contained an unused single urban ticket.</p>
+<div><pre><code data-lang="http"><span>HTTP</span><span>/</span><span>1.1</span> <span>200</span> <span>OK</span>
+<span>Cache-Control</span><span>:</span> <span>no-cache</span>
+<span>Pragma</span><span>:</span> <span>no-cache</span>
+<span>Content-Length</span><span>:</span> <span>582</span>
+<span>Content-Type</span><span>:</span> <span>application/json; charset=utf-8</span>
+<span>Expires</span><span>:</span> <span>-1</span>
+<span>Server</span><span>:</span> <span>Microsoft-IIS/8.5</span>
+<span>Request-Context</span><span>:</span> <span>appId=cid-v1:815dcd44-dd4b-45ce-b0e0-cc8a66a1f0c5</span>
+<span>X-AspNet-Version</span><span>:</span> <span>4.0.30319</span>
+<span>X-Powered-By</span><span>:</span> <span>ASP.NET</span>
+<span>Date</span><span>:</span> <span>Tue, 12 Jun 2018 19:43:44 GMT</span>
+
+<span>[</span>
+    <span>{</span>
+        <span>"MobileTicketId"</span><span>:</span> <span>"PXSL9GUUH"</span><span>,</span>
+        <span>"ValidationTimeStamp"</span><span>:</span> <span>"1997-01-01T00:00:00"</span><span>,</span>
+        <span>"ExpirationTimeStamp"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"QrCodeData"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"ValidationGuid"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Description_ENG"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Description_IT"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Duration"</span><span>:</span> <span>90</span><span>,</span>
+        <span>"Price"</span><span>:</span> <span>1.5</span><span>,</span>
+        <span>"TariffId"</span><span>:</span> <span>2095</span><span>,</span>
+        <span>"MaxValidationsAllowed"</span><span>:</span> <span>1</span><span>,</span>
+        <span>"Description"</span><span>:</span> <span>"Single Urban Ticket"</span><span>,</span>
+        <span>"Instruction"</span><span>:</span> <span>"Valid for a single journey on the underground or rail network, including the urban rail lines of Trenord and the 'Passante Ferroviario' (Urban Railway Network)."</span><span>,</span>
+        <span>"DurationDescription"</span><span>:</span> <span>"90'"</span><span>,</span>
+        <span>"Duration_IT"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Duration_ENG"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Instruction_IT"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Instruction_ENG"</span><span>:</span> <span>null</span>
+    <span>}</span>
+<span>]</span>
+</code></pre></div>
+<p>If you didn’t notice anything missing so far, and if mentioning cookies doesn’t ring you a bell, have another look while asking yourself how a <strong>session</strong> is being maintained along those stateless requests. Or, more explicitly: how does the server make sure that users can only request their own wallet?</p>
+<p>Since cookies are nowhere to be found and there does not seem to be any other session token either, let’s focus on what looks like the only security feature in place: the <code>Authentication</code> header.</p>
+<p>It’s easy to spot that the header consists of two parts separated by a colon, the first part being the username of the logged-in user (or <code>ATMApp</code> if no user is logged in, <a href="#login-request">as seen before</a>), and the second being some base64-encoded data which changes at each request.</p>
+<p>While we don’t know the meaning of the base64-encoded data yet, one question arises: what happens if we <strong>edit a request</strong> (e.g. by using proxy tools) and replace our username with someone else’s?</p>
+<p>I decided to try. I called one of my colleagues and explained to him what I was doing; then I asked him to buy a ticket on his account and to give me the e-mail address he was registered with. I configured the proxy rewrite tool in order to replace the username in the <code>Authorization</code> header with his e-mail address, then I repeated the <a href="#wallet-request">wallet request</a>.</p>
+<p>Quite surprisingly, the server didn’t complain and handed me my colleague’s wallet, which contained the ticket he had just bought. Notice the different <code>MobileTicketId</code> (aka PNR<sup id="fnref:4"><a href="#fn:4" role="doc-noteref">4</a></sup>).</p>
+<div><pre><code data-lang="http"><span>HTTP</span><span>/</span><span>1.1</span> <span>200</span> <span>OK</span>
+<span>Cache-Control</span><span>:</span> <span>no-cache</span>
+<span>Pragma</span><span>:</span> <span>no-cache</span>
+<span>Content-Length</span><span>:</span> <span>582</span>
+<span>Content-Type</span><span>:</span> <span>application/json; charset=utf-8</span>
+<span>Expires</span><span>:</span> <span>-1</span>
+<span>Server</span><span>:</span> <span>Microsoft-IIS/8.5</span>
+<span>Request-Context</span><span>:</span> <span>appId=cid-v1:815dcd44-dd4b-45ce-b0e0-cc8a66a1f0c5</span>
+<span>X-AspNet-Version</span><span>:</span> <span>4.0.30319</span>
+<span>X-Powered-By</span><span>:</span> <span>ASP.NET</span>
+<span>Date</span><span>:</span> <span>Tue, 12 Jun 2018 20:32:12 GMT</span>
+
+<span>[</span>
+    <span>{</span>
+        <span>"MobileTicketId"</span><span>:</span> <span>"E57C41F19"</span><span>,</span>
+        <span>"ValidationTimeStamp"</span><span>:</span> <span>"1997-01-01T00:00:00"</span><span>,</span>
+        <span>"ExpirationTimeStamp"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"QrCodeData"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"ValidationGuid"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Description_ENG"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Description_IT"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Duration"</span><span>:</span> <span>90</span><span>,</span>
+        <span>"Price"</span><span>:</span> <span>1.5</span><span>,</span>
+        <span>"TariffId"</span><span>:</span> <span>2095</span><span>,</span>
+        <span>"MaxValidationsAllowed"</span><span>:</span> <span>1</span><span>,</span>
+        <span>"Description"</span><span>:</span> <span>"Single Urban Ticket"</span><span>,</span>
+        <span>"Instruction"</span><span>:</span> <span>"Valid for a single journey on the underground or rail network, including the urban rail lines of Trenord and the 'Passante Ferroviario' (Urban Railway Network)."</span><span>,</span>
+        <span>"DurationDescription"</span><span>:</span> <span>"90'"</span><span>,</span>
+        <span>"Duration_IT"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Duration_ENG"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Instruction_IT"</span><span>:</span> <span>null</span><span>,</span>
+        <span>"Instruction_ENG"</span><span>:</span> <span>null</span>
+    <span>}</span>
+<span>]</span>
+</code></pre></div><p>At this point I felt I had to dig deeper and understand the details of second part of the <code>Authorization</code> header too.</p>
+<h3 id="integrity-checks">Integrity Checks?</h3>
+<p>The first thing I noticed is that the data length was fixed, 256 bit long, and that immediately brought SHA-256 to my mind. Then I noticed a <code>Timestamp</code> header also being sent with each request, and I recognized a design pattern that is often used to authenticate requests with HMAC<sup id="fnref:5"><a href="#fn:5" role="doc-noteref">5</a></sup>. In few words, some <em>critical</em> parts of each request are joined together with the timestamp of the request and with a shared secret that is only known to the client and to the server. The result is hashed and sent to the server along with the request.</p>
+<p>Before processing it, the server can take the same parts of the request and hash them, just like the client did. If the resulting hash matches the one sent by the client, the integrity of the involved pieces of data is verified. If, on the other hand, we modify any <em>critical</em> part of the request, then the server will obtain a different hash, detect that something’s wrong and deny access. Finally, the timestamp is used to prevent requests from being repeated after some specific amount of time.</p>
+<p>Unfortunately there is no standard defining which parts of a request should be considered <em>critical</em> and thus included while computing the HMAC. What we certainly know so far is that the username of the logged-in user is not among them, because if it was then my attempt to get my colleague’s wallet would have failed. In order to dig deeper into the details of this implementation, we need to decompile the app.</p>
+<h2 id="diving-into-the-app">Diving Into the App</h2>
+<p>Extracting a smartphone app – an Android app in this case – is as easy as decompressing a <strong>zip file</strong>. I would normally use <em>jadx</em><sup id="fnref:6"><a href="#fn:6" role="doc-noteref">6</a></sup> or some similar tool in order to extract the apk file and decompile the binary in a single step. That would provide me with a good approximation of the app’s Java source code.</p>
+<p>However, in this case taking a look at the contents of the apk file reveals something interesting:</p>
+<pre><code>it.atm.appmobile.apk
+├── assemblies
+│&nbsp;&nbsp; ├── ATM.dll
+│&nbsp;&nbsp; ├── Microsoft.AppCenter.dll
+│&nbsp;&nbsp; ├── Microsoft.CSharp.dll
+│&nbsp;&nbsp; ├── Mono.Android.dll
+│&nbsp;&nbsp; ├── Mono.Security.dll
+│&nbsp;&nbsp; ├── Xamarin.Android.Arch.Core.Common.dll
+│&nbsp;&nbsp; ├── Xamarin.Android.Support.v4.dll
+...
+</code></pre><p>What are those <strong>DLL files</strong> doing there? The answer is simple: this app is made with Xamarin<sup id="fnref:7"><a href="#fn:7" role="doc-noteref">7</a></sup>, a framework by Microsoft that enables developers to write cross-platform apps in C#. This means that those DLL files make up the whole logic of the application, while the app binary is there just to create the Microsoft .NET runtime environment.</p>
+<p>This is actually great news. Binaries and libraries built for Microsoft .NET are notoriously <strong>easy to decompile</strong>, and the resulting source code is often so much close to the original one that it can be recompiled. Furthermore, several programs exist that can do the job, such as <em>dotPeek</em><sup id="fnref:8"><a href="#fn:8" role="doc-noteref">8</a></sup> and <em>dnSpy</em><sup id="fnref:9"><a href="#fn:9" role="doc-noteref">9</a></sup>. For both of them dragging-and-dropping the DLLs is all that’s needed in order to get some very nice and readable source code.</p>
+<h3 id="no-more-secrets">No More Secrets</h3>
+<p>While looking through the reconstructed sources, we can easily spot the code we’re looking for.</p>
+<p>Here’s the function that joins requests’ parameters that should be included in the HMAC computation (comments were added by me):</p>
+<div><pre><code data-lang="cs"><span>public</span> <span>string</span> <span>Autentication</span> <span>{</span>
+    <span>get</span> <span>{</span>
+        <span>return</span> <span>string</span><span>.</span><span>Format</span><span>(</span><span>"{0}
+{1}
+{2}
+{3}"</span><span>,</span> <span>new</span> <span>object</span><span>[</span><span>4</span><span>]</span> <span>{</span>
+            <span>(</span><span>object</span><span>)</span> <span>this</span><span>.</span><span>Method</span><span>,</span>              <span>//&nbsp;Request method
+</span><span></span>            <span>(</span><span>object</span><span>)</span> <span>this</span><span>.</span><span>DateUTC</span><span>,</span>             <span>// Current timestamp
+</span><span></span>            <span>(</span><span>object</span><span>)</span> <span>this</span><span>.</span><span>UriAction</span><span>.</span><span>ToLower</span><span>(),</span> <span>// Request path
+</span><span></span>            <span>(</span><span>object</span><span>)</span> <span>this</span><span>.</span><span>Parameters</span>           <span>// Query string
+</span><span></span>        <span>});</span>
+    <span>}</span>
+<span>}</span>
+</code></pre></div><p>And here’s the function that computes the actual hash, taking the shared “secret” and the output of the function above as parameters:</p>
+<div><pre><code data-lang="cs"><span>public</span> <span>static</span> <span>string</span> <span>ComputeHash</span><span>(</span><span>string</span> <span>hashedPassword</span><span>,</span> <span>string</span> <span>message</span><span>)</span> <span>{</span>
+    <span>UTF8Encoding</span> <span>utF8Encoding</span> <span>=</span> <span>new</span> <span>UTF8Encoding</span><span>();</span>
+    <span>HMACSHA256</span> <span>hmacshA256</span> <span>=</span> <span>new</span> <span>HMACSHA256</span><span>(</span><span>utF8Encoding</span><span>.</span><span>GetBytes</span><span>(</span><span>hashedPassword</span><span>.</span><span>ToUpper</span><span>()))</span>
+    <span>str</span> <span>=</span> <span>Convert</span><span>.</span><span>ToBase64String</span><span>(</span><span>hmacshA256</span><span>.</span><span>ComputeHash</span><span>(</span><span>utF8Encoding</span><span>.</span><span>GetBytes</span><span>(</span><span>message</span><span>)));</span>
+    <span>return</span> <span>str</span><span>;</span>
+<span>}</span>
+</code></pre></div><p>I put the word “secret” in quotes because the string is actually hard-coded into the app source code.</p>
+<div><pre><code data-lang="cs"><span>private</span> <span>const</span> <span>string</span> <span>AuthenticationHeaderName</span> <span>=</span> <span>"Authentication"</span><span>;</span>
+<span>private</span> <span>const</span> <span>string</span> <span>TimestampHeaderName</span> <span>=</span> <span>"Timestamp"</span><span>;</span>
+<span>private</span> <span>const</span> <span>string</span> <span>ConsumerKey</span> <span>=</span> <span>"ATMApp"</span><span>;</span>
+<span>private</span> <span>const</span> <span>string</span> <span>ConsumerSecret</span> <span>=</span> <span>"jn2ic5az"</span><span>;</span> <span>// Shared secret
+</span></code></pre></div><p>I would like to emphasize that <strong>there is no secure way</strong> to store such a secret on the client side. Hard-coding it is not bad design per se; in fact, putting it elsewhere or trying to obfuscate it wouldn’t have made the app any more secure. It would have just made my task harder.</p>
+<p>This information answers the only open question we had left. We’re dealing with an HMAC-SHA256 indeed, and now we know all the ingredients we need in order to calculate the correct hash for <strong>any request</strong>. This means we can craft new requests and customize them in every aspect, and the server will still accept them. Before knowing how the HMAC is built, instead, we couldn’t tamper with the request path and query string. I made a proof of concept that can prove this ability, and you can find it <a href="#open-source-proof-of-concept">near the end of this post</a>.</p>
+<p>We can now summarize the vulnerabilities I found.</p>
+<h2 id="vulnerabilities">Vulnerabilities</h2>
+<h3 id="an-hmac-is-the-only-security-feature-in-place">An HMAC Is the Only Security Feature in Place</h3>
+<p>As we saw, the app doesn’t keep track of a session using cookies, as it’s commonly done; instead the only security feature it implements is based on a <strong>shared “secret”</strong>. Since it’s impossible to safely store a secret on the client side, the integrity that HMAC should provide cannot be guaranteed. A malicious user could extract the secret and use it to sign custom requests, just as we did.</p>
+<h3 id="the-hmac-implementation-is-not-secure-enough">The HMAC Implementation Is Not Secure Enough</h3>
+<p>Request parameters used for HMAC generation are:</p>
+<ul>
+<li>request method (<code>GET</code>, <code>POST</code>, etc.)</li>
+<li>current timestamp</li>
+<li>request path (e.g. <code>/v2/en/ticketing/wallet</code>)</li>
+<li>query string</li>
+</ul>
+<p>Given that the username of the (possibly) logged-in user is not among them, even if the <a href="#an-hmac-is-the-only-security-feature-in-place">previous vulnerability</a> didn’t exist, it would still be possible to tamper with requests in order to retrieve data and tickets belonging to other users, as we did before.</p>
+<p>Since the server returns tickets with their PNR, it would also be possible for a malicious user to redeem tickets belonging to another user by simply entering the code on an automated ticket selling machine. Or he could directly abuse the API in order to validate the ticket and obtain the QR code to be used at the turnstiles.</p>
+<p>I could also add that the body of POST requests is also not considered in HMAC generation, potentially leaving other endpoints vulnerable to attacks.</p>
+<h3 id="the-solution">The Solution</h3>
+<p>Vulnerabilities described here have been solved by ATM with the use of JWT<sup id="fnref:10"><a href="#fn:10" role="doc-noteref">10</a></sup>. In current versions of the app, the <code>Authentication</code> header for logged-in users does not contain the plaintext username and HMAC anymore. Instead, the username is encoded in a signed token.</p>
+<div><pre><code data-lang="http"><span>GET</span> <span>/v3/en/ticketing/wallet</span> <span>HTTP</span><span>/</span><span>1.1</span>
+<span>Host</span><span>:</span> <span>atm-be.sg.engitel.com</span>
+<span>Connection</span><span>:</span> <span>keep-alive</span>
+<span>Authentication</span><span>:</span> <span>eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VybmFtZSI6ImphY29wby5qQGV4YW1wbGUuY29tIiwiaXNzIjoiQVRNQkUiLCJhdWQiOiJBVE1BcHAiLCJleHAiOjE1OTk5OTA4MzUsIm5iZiI6MTU5NzM5ODgzNX0=.Q5e4wX1m49PZsyxSViqFiDopg8ouXaRnW_FZOhIUiR8:T+TP/xbbr67dwdY6Zj3GVm3GPaGuLd/bB4b3ks+08zw=</span>
+<span>Accept</span><span>:</span> <span>*/*</span>
+<span>ContentType</span><span>:</span> <span>application/json;charset=utf-8</span>
+<span>User-Agent</span><span>:</span> <span>iOS/14.0 (iPhone) it.atm.iATMMilano/7.4.1</span>
+<span>Timestamp</span><span>:</span> <span>Mon, 17 Aug 2020 13:39:39 GMT</span>
+<span>Accept-Language</span><span>:</span> <span>en-us</span>
+<span>Accept-Encoding</span><span>:</span> <span>gzip, deflate, br</span>
+</code></pre></div><p>I won’t enter the details of JWT specifications here. Let’s just notice that the token consists of three parts joined by a single dot, and that each part is base64 encoded. The first part encodes some information about the signature algorithm used in this implementation:</p>
+<div><pre><code data-lang="json"><span>{</span>
+  <span>"typ"</span><span>:</span> <span>"JWT"</span><span>,</span>
+  <span>"alg"</span><span>:</span> <span>"HS256"</span>
+<span>}</span>
+</code></pre></div><p>The second part contains the username and some token validity constraints:</p>
+<div><pre><code data-lang="json"><span>{</span>
+  <span>"username"</span><span>:</span> <span>"jacopo.j@example.com"</span><span>,</span>
+  <span>"iss"</span><span>:</span> <span>"ATMBE"</span><span>,</span>
+  <span>"aud"</span><span>:</span> <span>"ATMApp"</span><span>,</span>
+  <span>"exp"</span><span>:</span> <span>1599990835</span><span>,</span>
+  <span>"nbf"</span><span>:</span> <span>1597398835</span>
+<span>}</span>
+</code></pre></div><p>Finally, the third part is the signature of the first two. We are once again talking about a HMAC-SHA256 signature in this case, so what’s different from before? Why is this approach more secure? The answer stands with the fact that the signed token is returned by the server during login.</p>
+<p>This means that the client <strong>never gets to know</strong> the signing secret, which is no longer <em>shared</em> but only known to the server. This makes it impossible to extract the secret and use it to sign custom requests.</p>
+<p>Even tho the use of cookies was not taken into consideration (and the API was left strictly stateless) an effective countermeasure was implemented in order to prevent users from impersonating somebody else. HMAC was left there, but it is no longer in charge of protecting the API from this kind of abuses.</p>
+<h3 id="responsible-disclosure-timeline">Responsible disclosure timeline</h3>
+<ul>
+<li><strong>May 27, 2018</strong>: I find out about the vulnerability and reach out to ATM.</li>
+<li><strong>May 29, 2018</strong>: ATM gets in touch; I show them the problems that should be addressed by the app developers.</li>
+<li><strong>June 14, 2018</strong>: I hand over to ATM a proof of concept demonstrating the ability of “stealing” tickets from other users.</li>
+<li><strong>July 11, 2018</strong>: I meet the managers of ATM’s Information Systems department at their headquarters in order to further discuss the vulnerabilities.</li>
+<li>During <strong>fall 2018</strong> ATM releases an update that fixes the vulnerabilities I found. Vulnerable endpoints are left up and running for backwards compatibility with older versions of the app.</li>
+<li>During <strong>summer 2020</strong> vulnerable endpoints are taken down.</li>
+<li><strong>August 11, 2020</strong>: I learn that vulnerabilities are not accessible anymore and that my proof of concept has stopped working.</li>
+<li><strong>August 18, 2020</strong>: I publish this post.</li>
+</ul>
+<h3 id="open-source-proof-of-concept">Open Source Proof of Concept</h3>
+<p>Along with this post I’m open sourcing the proof of concept I made for ATM, which is <a href="https://github.com/jacopo-j/atm-vuln-poc" target="_blank">available on my GitHub</a>. It’s a single PHP page that allowed to exploit vulnerabilities I found by showing the wallet of any user given his e-mail address. Of course the code is not working now that the vulnerabilities have been fixed. I still believe it may be interesting for anyone wanting to give a closer look to how they could be exploited.</p>
+<section role="doc-endnotes">
+<hr>
+<ol>
+<li id="fn:1" role="doc-endnote">
+<p><a href="https://play.google.com/store/apps/details?id=it.atm.appmobile" target="_blank">https://play.google.com/store/apps/details?id=it.atm.appmobile</a> <a href="#fnref:1" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:2" role="doc-endnote">
+<p><a href="https://apps.apple.com/us/app/iatm-milan/id415637297" target="_blank">https://apps.apple.com/us/app/iatm-milan/id415637297</a> <a href="#fnref:2" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:3" role="doc-endnote">
+<p>Certificate pinning, or public key pinning, adds a mild security layer by preventing proxies to decode requests made to the backend. <a href="https://security.stackexchange.com/questions/29988/what-is-certificate-pinning" target="_blank">Further details</a> <a href="#fnref:3" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:4" role="doc-endnote">
+<p>Passenger Name Record - it’s a code that uniquely identifies tickets on the transportation network. <a href="#fnref:4" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:5" role="doc-endnote">
+<p><a href="https://security.stackexchange.com/questions/20129/how-and-when-do-i-use-hmac" target="_blank">More in-depth information about HMAC</a> <a href="#fnref:5" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:6" role="doc-endnote">
+<p><a href="https://github.com/skylot/jadx" target="_blank">https://github.com/skylot/jadx</a> <a href="#fnref:6" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:7" role="doc-endnote">
+<p><a href="https://dotnet.microsoft.com/apps/xamarin" target="_blank">https://dotnet.microsoft.com/apps/xamarin</a> <a href="#fnref:7" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:8" role="doc-endnote">
+<p><a href="https://www.jetbrains.com/decompiler/" target="_blank">https://www.jetbrains.com/decompiler/</a> <a href="#fnref:8" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:9" role="doc-endnote">
+<p><a href="https://github.com/0xd4d/dnSpy" target="_blank">https://github.com/0xd4d/dnSpy</a> <a href="#fnref:9" role="doc-backlink">↩︎</a></p>
+</li>
+<li id="fn:10" role="doc-endnote">
+<p><a href="https://jwt.io/" target="_blank">https://jwt.io</a> <a href="#fnref:10" role="doc-backlink">↩︎</a></p>
+</li>
+</ol>
+</section></article></div></div>
+    </div>
+    <footer>
+        <div>created by <a href="https://buildstarted.com">buildstarted</a> &copy; 2020 <a href="/about">about</a></div>
+        <div>Share this page on social media: copy and paste this url https://linksfor.dev/</div>
+        <div>If you prefer RSS: <a href="https://linksfor.dev/feed.xml">https://linksfor.dev/feed.xml</a></div>
+        <div>Customer satisfaction guaranteed to be optional.</div>
+    </footer>
+    
+    <script async defer>
+        _dna = window._dna || {};
+        _dna.siteId = "linksfor.devs";
+        _dna.outlink = true;
+
+        (function() {
+            let dna = document.createElement('script');
+            dna.type = 'text/javascript';
+            dna.async = true;
+            dna.src = '//dna.buildstarted.com/t.js';
+            let s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(dna, s);
+        })();
+    </script>
+    <noscript><img src="//dna.buildstarted.com/g?siteId=linksfor.devs"/></noscript>
+</body>
+</html>
