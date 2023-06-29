@@ -7,6 +7,437 @@
     <description>Curated links for devs</description>
     <language>en</language>
     <item>
+      <title>how (not) to write a pipeline</title>
+      <link>https://cohost.org/tef/post/1764930-how-not-to-write-a</link>
+      <description>let me boldly assert that there are two types of programmer (at least as far as this post is concerned):
+
+ 1. a programmer who builds something out of message queues and calls it a pipeline
+ 2. a programmer who has had to maintain and operate a type-1 made pipeline
+
+although both types of programmer are kept awake by thoughts of code at night, only one of them is on the pager rota. every programmer gets to fuck around, but only a handful are blessed/cursed with finding out.
+
+this essay is for programmers of the second variety. i&amp;#39;m not sure what anyone else will get, but hopefully the people who have already suffered will receive validation, and maybe a few lucky people will pick up some useful framing and vocabulary to fight the good fight later.
+
+it&amp;#39;s also for people who won&amp;#39;t whine about the lack of capitalization in a rough blog post
+
+----------------------------------------
+
+
+PRELUDE: CHARACTER SELECTION
+
+you are:
+
+ * ☐ A long time industry expert, with twelve acronyms on your business card.
+ * ☐ Someone with a kanban, can-do attitude. Party planning your way to success!
+ * ☑ A well rounded burnout who got hired through word of mouth.
+
+you are
+
+ * ☐ in a small engineering team, building out features for a website
+ * ☑ employee number four and the ceo keeps writing code on weekends
+ * ☐ in a large enterprise company with an hour and a half long daily standup
+
+you are
+
+ * ☐ in charge of building out backend systems
+ * ☐ all working in the same repo
+ * ☑ accidentally in ops, after fixing one too many builds
+
+
+THE FIRE IS LIT: A PIPELINE IS COMING
+
+it&amp;#39;s 3pm, it&amp;#39;s friday, and your coworker drops a link in the company chat. it&amp;#39;s a 2000 line change request, and they&amp;#39;re desperate for a +1. despite the length, the code is relatively straight forwards. a lot of it is just yaml.
+
+there&amp;#39;s a thumbnail generator that&amp;#39;s starting to take too long. originally it just cropped and resized things down, but for some ungodly reason, there&amp;#39;s video support and transcoding now. requests to the website are timing out because this process is taking too long to complete.
+
+your coworker, bored as hell, desperate to get on with real work, volunteers as tribute to fix the bug. now the code calls &amp;quot;StartThumbNailer(user, file)&amp;quot;, a message gets put in a queue, and another process elsewhere calls &amp;quot;user, file := queue.ThumbNextNail()&amp;quot;. problem solved.
+
+alas, it isn&amp;#39;t icarus&amp;#39; fate to know his future.
+
+
+STEP 1: CLEANING UP AFTER DROPPED MESSAGES
+
+you open a dm, it&amp;#39;s best to avoid an audience. people get touchy about their code.
+
+&amp;gt; &amp;quot;This is great work, it&amp;#39;s good to prototype these things out&amp;quot;
+
+Remember: Don&amp;#39;t be a dick about it. Don&amp;#39;t squeal and wail, not matter how much you want to. People really don&amp;#39;t like being told &amp;quot;You can&amp;#39;t do it that way. You do not understand why.&amp;quot; It&amp;#39;s a bad look all round, even if it&amp;#39;s true.
+
+Establish common ground, reframe problem, work towards common goals. Then you can be a dick about it, later. Remember: It&amp;#39;s only a little bit less of a dick to be Socratic about it, and ask questions you already know the answer to, so try and be nice where you can.
+
+&amp;gt; &amp;quot;I don&amp;#39;t see a lot of error handling.&amp;quot;
+
+There&amp;#39;s never any error handling. The message broker is always running, the queue always exists, and the workers never make a mistake, either. That&amp;#39;s how prototypes look, sure, but that&amp;#39;s how pipelines will look, years later.
+
+The only thing that changes as pipelines age is the number of graphs on the ops dashboard.
+
+&amp;gt; &amp;quot;It will be good to work out precisely which things we can leave out of a first implementation. We don&amp;#39;t want to lose future feature dev time to operations.&amp;quot;
+
+You&amp;#39;re not trying to &amp;quot;shut it down&amp;quot;, you&amp;#39;re working out the minimum level of work needed to ship it. You&amp;#39;re justifying why with a business case.
+
+&amp;gt; &amp;quot;What happens when message delivery fails? Maybe there&amp;#39;s a network blip, maybe someone tripped over the cable at the data centre?&amp;quot;
+
+It&amp;#39;s important not to blame the broker, and focus more on &amp;quot;networks are bad and haunted.&amp;quot; People will just tell you the broker saves messages to disk, so they&amp;#39;re even harder to lose, ignoring the actual problem at hand.
+
+&amp;gt; &amp;quot;If the send fails, we can just log it instead of doing nothing, and I guess we can restart those thumbnail jobs by hand.&amp;quot;
+
+Again, it&amp;#39;s time to move on. A log message is fine enough for a first prototype, so don&amp;#39;t get hung up on it. A lack of error handling isn&amp;#39;t the important point. The important point is &amp;quot;how much manual work is it going to be to fix things after they go wrong?&amp;quot;
+
+&amp;gt; &amp;quot;If something else went wrong, Is there a way to tell which users are missing thumbnails? Or would we have to add logging elsewhere?&amp;quot;
+
+The answer&amp;#39;s usually something like &amp;quot;a timestamp in the database&amp;quot; or something, and another klaxon starts ringing. Resist the urge to explain why timestamps are a bad choice for now, you can revisit it later.
+
+The important bit is that &amp;quot;there&amp;#39;s some state, in a database&amp;quot;, and for now it only has two states &amp;quot;needs doing, and has been done&amp;quot;. It&amp;#39;ll end up with seven or eight states later on, and that&amp;#39;s when you&amp;#39;ll have &amp;quot;the timestamp talk&amp;quot;
+
+&amp;gt; &amp;quot;I think the important question is: Can write some .NeedsThumbnail() or .HasThumbnail() function, and then resend those messages? We can worry about the implementation details at the end.&amp;quot;
+
+That&amp;#39;s right. &amp;quot;At the end&amp;quot;. Now your coworker should realise it&amp;#39;s time for a long haul discussion about the system. Don&amp;#39;t miss your chance to recap things.
+
+ * you recognise that there&amp;#39;s limits to error handling in a prototype
+ * you&amp;#39;re worried about the manual work required to fix errors
+ * with a bit more of a plan, things can move forward
+ * working out manual steps required for recovery &amp;amp; seeing if there&amp;#39;s low hanging fruit
+
+you open a shared document. it&amp;#39;s called &amp;quot;background work: operations guide&amp;quot;, and drop a link in the change request.
+
+&amp;gt;  1. lost message
+&amp;gt; 
+&amp;gt;  * problem: the service might fail to send a message for a variety of reasons
+&amp;gt;  * solution: we can discover this through logs and alarms
+&amp;gt;  * solution: we can store some state in the database, so it&amp;#39;s easy to tell the &amp;quot;needs thumbnails&amp;quot; from &amp;quot;has thumbnails&amp;quot;
+&amp;gt;  * resolution: we can write scripts to restart lost jobs, or do it manually
+
+with some aplomb, you write up a series of headings underneath.
+
+&amp;gt;  2. duplicate messages
+&amp;gt;  3. failed thumbnailer
+&amp;gt;  4. head of line
+&amp;gt;  5. statistics / monitoring / debugging
+
+your coworker is not impressed, but hasn&amp;#39;t lost hope yet. maybe they&amp;#39;ll ship it by the end of the week. meanwhile, there&amp;#39;s a bit of a shit-eating-grin on your face.
+
+error handling sometimes means running the same thing twice. duplicate handling means avoiding just that. the statistics part is yet another &amp;quot;tricking them into using the database&amp;quot; section, broken down into smaller bite sized chunks.
+
+it is time to make your coworker eat their vegetables.
+
+
+STEP 2: HANDLING DUPLICATES
+
+the original code didn&amp;#39;t really have any deduplication. the worker assumes it&amp;#39;s the only one running for that user&amp;#39;s thumbnails.
+
+duplication is a always a problem because the recovery steps for &amp;quot;lost messages&amp;quot; involve resending potentially lost messages. for example:
+
+ * workers stop running overnight
+ * message queue builds up
+ * workers restart in morning
+ * user notices thumbnail is missing, gets manually added to queue by hand
+ * now there&amp;#39;s two messages in the queue.
+
+it isn&amp;#39;t the worst thing in the world if two processes get run at once, but no-one&amp;#39;s really sure if it will cause problems, writing to the same files at the same time.
+
+again, the point of raising this isn&amp;#39;t &amp;quot;this has to be fixed&amp;quot; but &amp;quot;we need to understand how it can fail, and how much time will we waste fixing it.&amp;quot;
+
+sometimes the answer is &amp;quot;make the process idempotent&amp;quot;, but usually the answer is &amp;quot;locks&amp;quot;, shortly followed by &amp;quot;leases&amp;quot;. you&amp;#39;ll need to timeout locks eventually, if a worker crashes midway through thumbnailing.
+
+&amp;quot;well, fuck it, we&amp;#39;ll use redis. put a worker_id, timestamp in a hash, and if that timestamp is old, or missing, i can write my own one in.&amp;quot;
+
+it&amp;#39;s not perfect by any means, but it will reduce the operations headache. you update the file and move on.
+
+sometimes the queue has a magical transactional mode, where you can hold onto a message until you&amp;#39;ve finished processing it, and after a timeout it&amp;#39;ll be available for other workers.
+
+it&amp;#39;s almost the same thing you&amp;#39;re doing with redis, but there&amp;#39;s still a little more work to do:
+
+
+STEP 3: HANDLING FAILED THUMBNAILER.
+
+&amp;gt; &amp;quot;if a worker takes a message, asks for a lease, and then crashes, how do we retry work?
+&amp;gt; Do we scan the logs by hand again? What if it crashes before being able to log anything?&amp;quot;
+
+The usual answer to &amp;quot;How do we fix it&amp;quot; is &amp;quot;Something puts the message back in the queue.&amp;quot; Your coworker points out that we can fix it in the same way as before. Putting some timestamps in the database. Writing an automated script that restarts old jobs.
+
+You nod once more, it&amp;#39;s still not the right time to argue about timestamps.
+
+&amp;gt; &amp;quot;Let&amp;#39;s call it a message pump. Since it pumps messages into the queue. Also, we should probably keep track of the last error message, and the number of attempts when we do it.&amp;quot;
+
+It&amp;#39;s ok, it&amp;#39;s only adding one JSONB column. One we&amp;#39;ll make use of later. Heh heh heh.
+
+&amp;gt; &amp;quot;There&amp;#39;s still one problem left, but I&amp;#39;m not sure it applies.&amp;quot;
+
+
+STEP 4: HANDLING HEAD OF LINE BLOCKING (OPTIONAL)
+
+thankfully your coworker was sensible, and suggested using the same automated script as before. if they&amp;#39;d chosen the fancy transactional queue, there&amp;#39;d be a little surprise for them in store: head of line blocking
+
+everyone who has worked with queues usually has a story like this, give or take some details:
+
+ 1. for error handling, we used a transactional queue: if a process failed, it returned to the queue.
+ 2. one job kept killing all the workers during a period of high load. the worker would crash, and the bad job went back to the top of the list. two people had a screaming match over zoom
+ 3. instead of limiting retries, or a time-to-live on the job message, retries are put in a new &amp;quot;error queue&amp;quot;, with their own workers
+ 4. the error queue ends up full of duplicate messages, and all progress on retries is blocked.
+
+you write &amp;quot;head of line blocking: not in scope&amp;quot; and move on. It&amp;#39;s at this point you pray for a lightbulb above your coworkers head. Handling lost messages, handling broken thumbnailer runs, ensuring two jobs don&amp;#39;t overlap, these are all interlinked. It&amp;#39;s far too easy to write error handling that causes more errors.
+
+with the error handling wrapped up, it&amp;#39;s time to move on to the last section. unfortunately for your coworker, this is where the magic happens.
+
+It&amp;#39;s finally time to talk about timestamps.
+
+
+STEP 6: DEBUGGING / INTROSPECTION
+
+now you can start asking questions like &amp;quot;How do we tell if a job has been enqueued or not? how do we tell if a job is being worked on?&amp;quot; before moving onto &amp;quot;Actually, how many states can a process be in?&amp;quot;
+
+with the queue, it&amp;#39;s not possible to find out what things are running, if anything has crashed, and instead all you have is a graph that has three settings:
+
+ * Queue&amp;#39;s empty. Fine. Or maybe it&amp;#39;s broken and no work is happening.
+ * Burst of work, but line is going down. Actually fine.
+ * Line is going up. Something is not working, and whatever it is, the problem is only getting worse.
+
+Meanwhile, the message broker queue thing as it stands only tracks two things:
+
+ * If it&amp;#39;s in the queue, this job will be assigned to a worker next.
+ * If it&amp;#39;s not in the queue, this job will not be assigned to a worker.
+
+In other words:
+
+ * We can&amp;#39;t really tell if things are working reliably, outside of a few cases
+ * The only thing we know for sure is &amp;quot;this work is about to be done&amp;quot;
+
+Your coworker points out that the timestamp thing from earlier would help, and it does. Now you can track two more things:
+
+ * When did I last send a message
+ * When did a job last complete.
+
+Notice how neither of those two states really tell you anything about what&amp;#39;s going on for a particular thumbnail job. You can kinda infer &amp;quot;this should be run&amp;quot; if the last send message is older than the job last completing. You can kinda infer &amp;quot;this ran, but i don&amp;#39;t know if it succeeded or not&amp;quot; if the last send message is earlier than the job completeing.
+
+That&amp;#39;s not a lot to infer. The underlying problem here is that a process can be in way more than two or three states, especially now error handling has come into the mix, and a handful of timestamps won&amp;#39;t fix it.
+
+To be clear: This is the time to yell about timestamps.
+
+Yell about having one field called state is way easier than started_at last_active_at completed_at last_error_at, and a nasty series of comparisons. A field with three booleans and a truth table isn&amp;#39;t any better, either.
+
+After sketching things out with your coworker, you decide that a job can be in several different states:
+
+ * initialised: an id or record exists but there&amp;#39;s no data inside
+ * created: everything needed to start the job is available.
+ * enqueued: in the process of being assigned to a worker
+ * active: a worker is doing the job
+ * failed: a worker encountered a known error, and can be restarted
+ * panic: a worker encountered an unknown error
+ * timeout: a worker failed to complete the job
+ * skipped: no work actually needed
+
+&amp;gt; &amp;quot;We&amp;#39;ll probably combine some of them together, but it&amp;#39;s good practice to split things up as much as possible.&amp;quot;
+
+
+STEP 7: BUILD A REVISED PLAN
+
+Now you&amp;#39;ve committed to tracking state in the database, it&amp;#39;s time to clean up the proposal.
+
+ * we&amp;#39;ll have a table of thumbnail jobs in the database
+ * each one has a state field, a free text field, and a jsonb column for error handling and other details
+
+&amp;gt; &amp;quot;We could have a table of thumbnail changes in the database, that gets a new record every time the state changes. It might be more work now, but it&amp;#39;s probably easier to have one DB migration than two.&amp;quot;
+
+ * workers read from a queue to find new work, and use a redis lock to exclude others
+ * there&amp;#39;s a message pump that reads from the database and writes to the queue
+ * we don&amp;#39;t need to persist any messages in the queue
+
+It all feels a little overkill, but it really does make a big difference. Unlike before, there&amp;#39;s handling in place for all sorts of errors. It&amp;#39;s easy to recover from a crashed queue, you just empty it and restart the workers. Plus one quite lovely feature: the message pump can check the queue length, and alert if things stop going down. There&amp;#39;s no need to configure an alerting system.
+
+It&amp;#39;s not a lot of code to write. The redis lock code (in lua) is somewhere on stack overflow. The database migration is a pain in the ass to deploy, but it&amp;#39;s not difficult to write. Your coworker even adds in the second table, and starts collecting statistical data in the jsonb field to show off.
+
+
+INTERMISSION: YOU HAVE NOT BUILT A PIPELINE, YET
+
+it&amp;#39;s a good point to sigh and take a break. you&amp;#39;ve successfully got a coworker to build a reliable, robust system. one that has automated ways to handle failures, one that doesn&amp;#39;t require human intervention on the regular, and one that doesn&amp;#39;t remind you of all the awful systems you&amp;#39;ve suffered so far.
+
+it&amp;#39;s a good moment to take a step back and ask &amp;quot;how come it worked out this time&amp;quot;
+
+ * your coworker actually believes you when you share your experience
+ * you aren&amp;#39;t forcing people to reinvent your exact solution
+ * not every issue is fixed, despite being identified
+ * it wasn&amp;#39;t about someone being right, or someone being wrong, it was about lowering operational costs
+
+sure enough, sometimes it doesn&amp;#39;t work out
+
+ * your coworker doesn&amp;#39;t care about the operational cost
+ * no-one&amp;#39;s getting a bonus for taking time to ship things carefully
+ * the right thing will only matter at scale, and by that time, who knows what we&amp;#39;ll be needing
+
+sometimes it&amp;#39;s a little bit like solving a race condition. no-one believes it can be fixed, and when people ask for help, they just want to move the problem elsewhere. turns out &amp;quot;have you tried explicitly ordering the operations on the shared mutable state&amp;quot; is not a popular answer, despite being correct. people hate eating their vegetables.
+
+even so, you do win the argument eventually.
+
+the queue keeps exploding, duplicate messages keep breaking everything. the error handling caused a denial of service. things tend to steer towards &amp;quot;tracking the state of a job&amp;quot;.
+
+the broker grows from &amp;quot;a new central point of failure that always needs more disks&amp;quot; into &amp;quot;a lightweight service discovery and work assignment service&amp;quot;, and instead of &amp;quot;just fire and regret a message&amp;quot; you have &amp;quot;the queue buffers the results of a more expensive database query.&amp;quot;
+
+in fact, we could get rid of the queue entirely, and just use a load balancer
+
+ * workers connect to a load balancer instead of a broker
+ * scheduler sends http request for each item of work until told to slow down
+ * jobs complete in the background and update the database
+
+we could even get rid of the load balancer, too:
+
+ * workers connect to the scheduler, and ask for the next job to perform
+ * scheduler hands out jobs one by one as workers scale up or finish tasks
+ * like before, scheduler amortises the expensive database query
+ * but now? you don&amp;#39;t need a lock server
+
+in some ways, you&amp;#39;ve just moved the queue and locking data structures inside the scheduler, they haven&amp;#39;t really gone away. it does, however, let us do a variety of nice things:
+
+ * like before, the scheduler can be killed and restarted, as all state is kept in the database
+ * scheduler can even spin up more workers as and when required by the load
+ * scheduler can offer api for starting jobs, listing jobs, getting status, or watching for changes
+ * workers can even report back to the scheduler instead of to the database directly, which lets scheduler check worker is trying to update an active job.
+
+the best part? the system doesn&amp;#39;t really look much like a pipeline.
+
+now the message pump, the lock, the queue, the worker registration, and the worker assignment, and the recovery processes are all happening in the same place, it feels quite different from slapping messages into a queue and hoping for the best.
+
+it might feel like more work than wrapping shit together in redis, but in some ways there&amp;#39;s less complexity going around. as far as the worker is concerned, there&amp;#39;s no lock manager, there&amp;#39;s no queue, there&amp;#39;s no database, just a scheduler api for getting a job and another for progress updates.
+
+it&amp;#39;s almost important enough to recap
+
+ * keep all the process state in a database table
+ * use a text field for state, there&amp;#39;s a lot of them
+ * use another table if you want to track changes
+ * scheduler amortises expensive database queries
+ * scheduler keeps track of which worker is active on what
+ * workers poll scheduler to be assigned work
+ * workers update scheduler, not database, with progress updates / heartbeat messages
+ * scheduler orders work to be done by most overdue
+
+[that last one is how you handle restarting errored jobs or missing jobs]
+
+intermission almost over, and we&amp;#39;re nearly halfway to the (non) goal.
+
+
+ROUND 2: OH NO, MORE PIPELINE!
+
+even if you don&amp;#39;t go full tilt and implement the all-in-one scheduler, it might feel like the battle is won. with just a message pump, you&amp;#39;re handling all sorts of errors automatically, and it didn&amp;#39;t take two sprints to write.
+
+there&amp;#39;s just one problem: someone has suggested splitting up the thumbnailer into seperate processes. that same someone suggests tying the parts back together with a message broker. the pipeline is back, and the same problems are back too.
+
+not just head of line blocking, but the whole &amp;quot;have you tried reading the logs&amp;quot; school of state management.
+
+it&amp;#39;s at this point that you start to ask &amp;quot;why does everyone keep doing it this way?&amp;quot; and it doesn&amp;#39;t take too long to realise that the answer is unix. when people think about batch processing, they think about being at the command line, and chaining up steps together in a unix pipeline
+
+and much like a pipeline, you end up writing something different to make things robust.
+
+at some point, the unix pipeline fails, and you&amp;#39;re faced with re-running the entire thing again, or repeating that time honoured unix tradition of breaking up the pipeline a series of Makefile steps, using temporary files for each program&amp;#39;s input and output.
+
+pipelines aren&amp;#39;t really designed for reliability, and in some ways, they&amp;#39;re not really designed for task level parallelism either: it&amp;#39;s a lot easier to run a 1000 calls to process(item) than it is to run one worker pool for each step in process and wire them up together with queues.
+
+anyway, back to the problem at hand: someone has had the bright idea of connecting things up with a message broker. this time, it&amp;#39;s a new coworker, and the argument&amp;#39;s a bit different. sure enough, there&amp;#39;s the same old story about service discover, or &amp;quot;free error handling for a problem created by using a broker&amp;quot; stuff you heard the last time, but now there&amp;#39;s &amp;quot;can scale up and down each worker queue to adjust for load&amp;quot; too
+
+i&amp;#39;ve already elaborated at length about why &amp;quot;don&amp;#39;t join things together with queues&amp;quot; elsewhere, and this post is already quite lengthy in the &amp;quot;don&amp;#39;t use a queue to store background work&amp;quot; department, so let&amp;#39;s cut to the meat of it.
+
+&amp;gt; &amp;quot;There&amp;#39;s no real end-to-end management of the task state, unless you have a database. &amp;quot;
+
+The state tracking needs to be back, or messages will fall into the void. The message pump needs to be back, or work won&amp;#39;t get restarted after failure. We can add new pipeline-like steps to our improved system, without having to implement the all-in-one scheduler.
+
+&amp;gt; &amp;quot;We can add new logic to the message pump, and new states to the database table.&amp;quot;
+
+Fine. Keep your queues and your worker pool, but you tell the database when you&amp;#39;re done with your step, and the message pump will send off a new task. It&amp;#39;s still a little janky, each worker has to know the name of the worker after it to glue everything together, but it&amp;#39;ll work fine enough.
+
+The important part is to not be woken up at night because the queue&amp;#39;s exploded. Using a message pump keeps that queue length bounded.
+
+That&amp;#39;s the real problem with queues: There&amp;#39;s never any flow control, or a way for a queue to tell clients to slow down. There&amp;#39;s always persistence, so you can&amp;#39;t drop messages on the floor. There&amp;#39;s never bounds on the size of a queue, either. A queue is a machine for turning rpc calls into full disks.
+
+Look, to keep a distributed system running, you need to build a system that aims towards an equilibrium state, slowing things down when other parts can&amp;#39;t keep up. A message broker does the exact opposite, allowing parts to get wildly out of sync until you run out of disk space to keep up appearances.
+
+Once you have backpressure or load shedding atop of a queue, you can&amp;#39;t just fire a message away and hope for the best. You need to implement flow control, or error handling. You have to stop pretending the queue is a magic wand.
+
+It&amp;#39;s fine to glue things together with queues. You&amp;#39;ve just got to avoid persistence, and demand backpressure or load shedding, and you won&amp;#39;t end up in the same mess over and over and over again. That&amp;#39;s the important bit. That and &amp;quot;if you run things, you need to keep track of their states&amp;quot;
+
+Anyway, back to the coworker.
+
+&amp;gt; &amp;quot;That&amp;#39;s not the only route we can go. Your way is to have six worker pools, one for each part of the thumbnail task, shared across every task. Could we have one worker pool, for the whole thumbnail task, and just run the different steps inside the same worker?&amp;quot;
+
+It&amp;#39;s not much of a change from before. Now the worker updates the database, then runs the next step, then updates the database, and runs the next step, until it runs out of steps. Like before, it&amp;#39;s way, way easier to run task() 1,000 times, than it is to run six different pools and queues between them, but not every pipeline can benefit from task-level-parallelism.
+
+&amp;gt; &amp;quot;... but if we have to do stuff like aggregation, we might have to do something different&amp;quot;
+
+let&amp;#39;s stop thinking about the janky-ass setup we have so far. remember the all in one scheduler earlier? for task level parallelism, it&amp;#39;s pretty straight forwards, we just run all the thumbnail components in one worker, and use the same setup from before:
+
+ * we have one big worker pool
+ * each worker asks for a task, and which state it&amp;#39;s in
+ * the worker runs that one part of the code, and reports the output
+ * the scheduler decides if that worker runs the next step
+ * in other words: the scheduler can decide how to parition the work at runtime
+
+that&amp;#39;s a kinda nice thing to have, but it doesn&amp;#39;t clear up running things with task-level parallelism. in this case, the thumbnailer can run one step in parallel for each of the output files it generates.
+
+your coworker, now fully baptised in the church of state tracking, decides to step in. they&amp;#39;re saying stuff like &amp;quot;it&amp;#39;s not a background job system, it&amp;#39;s a series of persistent state machines executed in parallel across a shared worker pool&amp;quot;, so you know they&amp;#39;ve got this.
+
+&amp;gt; &amp;quot;We just run another task, right? There&amp;#39;s one table for thumbnail tasks, right, one per top level thumbnail job. Let&amp;#39;s add a second table for subtasks, and a given task can have lots of
+&amp;gt; active subtasks running.&amp;quot;
+
+In the all in one scheduler, it looks something like this
+
+ * The worker tells the scheduler to start a number of subtasks
+ * As the worker asks the scheduler to create a subtask, the scheduler can choose to assign it immediately
+ * The original worker polls the scheduler to find out when that subtask completes
+ * The original worker moves onto other work.
+ * If there&amp;#39;s an error, the worker restarts the subtask
+
+Applying it to the redis-and-message-pump prototype, we get:
+
+ * There&amp;#39;s a redis server providing a lock and a queue
+ * The database has a table for the thumbnail task and another table for subtasks
+ * There&amp;#39;s a message pump, which scans both tables and tops up the message queue with jobs
+ * Workers pull out a task or a subtask from the queue, and run it
+ * The top level tasks end up just starting other subtasks and waiting for most of the time.
+
+Congratulations: You are the proud author of a not-pipeline. Sure enough, there&amp;#39;s task level parallelism, and there&amp;#39;s even inter-task level parallelism too. There&amp;#39;s duplicate handling, end-to-end error handling with state tracking, and it&amp;#39;s easy to ask questions like &amp;quot;What process is running?&amp;quot; and &amp;quot;What error did this thing return with.&amp;quot; Throw on a web interface, and you can probably move a lot of the support burden to another team.
+
+It might still smell like a pipeline, but there&amp;#39;s those all important differences.
+
+ * The queue isn&amp;#39;t persistent. You can restart the broker at any time, or drop all messages to go back to a known state.
+ * There&amp;#39;s backpressure. The message pump can hold off on writing messages if the queue gets too big.
+ * There&amp;#39;s end-to-end error handling, it doesn&amp;#39;t matter if an individual part fails.
+ * There&amp;#39;s even process supervision. The top level task watches over the smaller ones. Errors in subprocesses can be handled and managed, too.
+ * There&amp;#39;s task level parallelism. One broken process in one thumbnail doesn&amp;#39;t affect other thumbnail tasks.
+ * There&amp;#39;s inter-task level parallelism. One broken substep doesn&amp;#39;t impeded other substeps from running to completetion.
+ * The system is always in recovery. Instead of assuming things work, it constantly looks out for overdue tasks, trying to push things back into equilibrium,
+ * It&amp;#39;s even pretty easy to adapt. Adding new states doesn&amp;#39;t require migrations, and the JSONB column gets used to smuggle variables into subtasks. Nice.
+
+Most importantly? This system is the winner of the &amp;quot;least likely to wake you up at night&amp;quot; award, handed out by a select set of judges. Not bad for &amp;quot;a lock and and a queue in redis to amortise an expensive postgres query&amp;quot;
+
+Not that anyone else notices. The problem with building robust systems is that it&amp;#39;s a thankless task that everyone eventually takes for granted. Give it a few months, the new hires will be exclaiming &amp;quot;Couldn&amp;#39;t we just use a message broker. It&amp;#39;s so much easier than this mess of queue and redis and database.&amp;quot;
+
+I blame unix, personally.
+
+
+FINALE: THE PRODUCT
+
+your coworker has been nerd sniped. they went off and finished the all-in-one scheduler for fun. it turned out to be a little less code than the redis duct tape sandwich in production. they&amp;#39;ve made some changes
+
+there&amp;#39;s a process table and a &amp;#39;procedure&amp;#39; table, some of the other names have changed too. they renamed the scheduler to &amp;quot;operator&amp;quot;. it&amp;#39;s a kubernetes term for a daemon that watches a database and runs set actions, very similarly to how an operator works. in some ways, your coworker has written a toolkit for writing a scheduler in.
+
+they&amp;#39;ve also started going on about &amp;quot;microsoft orleans&amp;quot; and &amp;quot;entity component systems&amp;quot; and &amp;quot;the blackboard pattern.&amp;quot; you even heard &amp;quot;tuplespace&amp;quot; once. they&amp;#39;re all &amp;quot;here&amp;#39;s a database that tracks state, persists objects, and here&amp;#39;s a series of workers that collaborative update this database to achieve tasks in a distributed or parallel or concurrent style&amp;quot; looking things, and your coworker really, really wants to keep talking about turning the rather fancy state machines they can build.
+
+well, at least it&amp;#39;s not a pipeline. you hate pipelines, remember?
+
+
+POSTSCRIPT
+
+you might wonder and ask me &amp;quot;is this software something you want to write&amp;quot;, and the answer is &amp;quot;i have already written this software ten times over, in slightly different forms, all in different jobs&amp;quot;
+
+in one job, we had a web api for all the little tasks associated with a background process, and we&amp;#39;d even coded a few buttons in. i suggested to coworker that it might be easier to just return a list of actions each thingy could do, over hardcoding each and every one. we even started doing things like returning human facing values in api. a &amp;quot;state_en&amp;quot; along with a &amp;quot;state&amp;quot; with things like &amp;quot;Process is running for N hours&amp;quot; inside.
+
+in another job, the big database of state got copied around from place to place. we ended up using version numbers instead of timestamps. yep, that&amp;#39;s right, there&amp;#39;s still more timestamp content. the problem with timestamps is that you can&amp;#39;t tell if you&amp;#39;ve missed a version, there&amp;#39;s no easy way to handle clock skew, and you don&amp;#39;t really know how many times a thing has changed, either. a version number handles all these things, but you&amp;#39;ll still need a timestamp to know when a version changed, and you won&amp;#39;t care so much about clock skew, then.
+
+i even got to write my own rpc toolkit one of the times. as much as i lament having to rebuild the same internal product in each and every job, i&amp;#39;m not sure i&amp;#39;d have learned so much about distributed systems without it. that, and i&amp;#39;d probably be out of a job if people could actually build batch processing systems as easily as they build websites.
+
+thankfully, this post will change nothing</description>
+      <author> (https://cohost.org/tef)</author>
+      <guid>https://cohost.org/tef/post/1764930-how-not-to-write-a</guid>
+      <pubDate>Thu, 29 Jun 2023 12:03:09 GMT</pubDate>
+    </item>
+    <item>
       <title>Test Data Generation With AutoFixture in .NET - Code Maze</title>
       <link>https://code-maze.com/csharp-test-data-generation-with-autofixture/</link>
       <description>In this article, we will explore how to automate test data generation and enhance productivity with a single library called AutoFixture.</description>
