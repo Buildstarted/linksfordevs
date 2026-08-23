@@ -7,6 +7,154 @@
     <description>Curated links for devs</description>
     <language>en</language>
     <item>
+      <title>The silence that reads as safety</title>
+      <link>https://zaferbalkan.com/silence/</link>
+      <description>Consider a representative detection team building a rule for suspicious LSASS access. On a modern Windows estate, Sysmon Event ID 10 (or an equivalent EDR process-access event) is the collection choice, because the standard Security log has no event for one process opening a handle into another; Microsoft’s own guidance notes it can be noisy and wants targeted filtering. The team binds the rule to that source, tunes it once against a red-team exercise, deploys it. It fires as expected for a while. Then it stops: not disabled, not erroring, not flagged anywhere as broken. The console shows it enabled, the source shows events still arriving, and the rule simply produces nothing for anyone to look at.  The console can’t say which condition caused that. Maybe the technique isn’t occurring, in which case the rule is doing its job. Maybe the rule is miscalibrated against a threshold nobody’s revisited. Or the evidence stopped arriving in usable form: a mapping change upstream, a parser failing on a subset of events, a field that went empty after a fleet update. Three conditions, one identical blank screen, because the rule stays enabled and connected to a live source while the specific evidence it needs is no longer valid, and nothing in front of the console flags the difference.  The evidence a rule depends on  The vocabulary used to describe detection usually stops at coverage: whether an endpoint runs an agent, whether a cloud service logs, whether a technique maps to any rule at all. That gets read, often, as “the agent’s there, so the logs are flowing.” Logs don’t work that way: a source generates them only when it’s configured to, the way the LSASS rule above needed Sysmon configured to actually filter and emit ProcessAccess for that target, not just installed. MITRE’s Sensor Mappings to ATT&amp;CK formalises this well, connecting ATT&amp;CK data sources to the concrete sensors and events that can provide them. Coverage answers one question: is the asset on the detection surface? Whether the telemetry crossing that surface still carries what a specific rule needs to discriminate is a separate question, and coverage never reaches it.  The LSASS rule was deployed on a covered endpoint with telemetry flowing. It passed every coverage check available. The endpoint stayed covered while the field the rule actually read stopped carrying what the rule needed. I’d put it this way: coverage is a property of the asset. What the rule needs is a property of the rule, and the two diverge exactly in cases like this one.  Sentinel and Google SecOps both document genuine depth on source-level health, but neither documents a facility that evaluates whether one rule’s full set of semantic prerequisites still holds. A source can pass every documented health check it has while the one field a rule reads has gone missing, been remapped, or arrived too late. The console tracks the source’s own health and nothing about this condition. A service outage, a failed sensor, and an attacker suppressing the signal all look identical there too.  The absence of alerts proves neither state on its own. A quiet source can still carry direct evidence of health (a recent config check, a canary, a successful scheduler run) just as easily as it can be silently broken. That’s where I’d add a third state: every declared dependency carries a status of VALID, INVALID, or UNKNOWN, and UNKNOWN is the honest answer when no direct validation has completed within its freshness window, not when volume merely happens to be low.  I split those signals into two kinds that current tooling tends to blur together, and the model needs to keep them apart to stay consistent. State evidence is a direct assertion (a configuration check, a parser-contract test, a canary, a scheduler run), and only state evidence sets VALID or INVALID. Diagnostic evidence is what’s arriving: event counts, field-population rates, distribution shifts. It flags a path worth examining, but it doesn’t set state on its own unless the dependency’s contract explicitly declares an expected cadence or rate. Kevin Branch’s flatline detection with Wazuh’s Alerting plugin is a working version of exactly this kind of signal: a query-based monitor that fires when a whole class of alerts stops arriving. It’s real, useful diagnostic evidence. What it watches is aggregate volume across a source or an agent, though, not one rule’s specific declared prerequisites. The LSASS rule above can still go quiet while a flatline monitor built this way stays green, because the rest of the pipeline is still talking.  The platforms show the same split at the vendor level. Sentinel’s connector health monitoring tracks connector status, volume, latency, and heartbeat. Google SecOps’s ingestion health hub tracks source and parser health, ingestion timestamps, latency, and silent hosts. Elastic’s ingest-pipeline error handling documents processor-level parsing failures and missing fields, nothing broader. None of the three describes a generic per-rule dependency check, and that join, from fragment to per-rule answer, is what stays undone.  What a mapping commits a rule to  Capability signals matter regardless of volume, because the loss this section is about (a field a mapping never carried) is a design choice, not an accident. A schema sets the ceiling on what can be represented: ECS distinguishes an event’s original timestamp from event.created (first read by an agent or pipeline) and event.ingested (arrival at central storage); UDM carries a process_ancestors field, though only once data is exported to BigQuery, not in live search. A mapping decides which source fields fill that schema for a given deployment. A pipeline policy decides whether the raw, unmapped event survives alongside it, recoverable if anyone thinks to look. When a rule lacks a field, the schema rarely did that. The mapping did, or the policy discarded what the mapping left behind.  graph LR     A["Source evidence&lt;br/&gt;PID + host + start_time&lt;br/&gt;multiple path records&lt;br/&gt;occurrence / parse / ingest time"] --&gt; B{"Lossy mapping"}     B --&gt; C["Mapped event&lt;br/&gt;process.pid&lt;br/&gt;single file field&lt;br/&gt;one @timestamp"]     B -.-&gt;|discarded unless pipeline policy retains raw| D["Durable process identity&lt;br/&gt;File multiplicity&lt;br/&gt;Latency and ordering"]   A PID identifies a process only for as long as it lives, because operating systems can reuse the number once it exits. Sysmon’s own answer is ProcessGuid, assigned when a process is created and carried through every later event that references it, including ProcessAccess. Windows’ own creation event for this, Security Event ID 4688, needs one policy just to fire and a second, separate policy (command-line auditing, off by default even when the first is on) just to capture the command line; even fully configured, it carries no file hash, no parent-process link, and nothing resembling a durable process GUID, all of which Sysmon Event ID 1 carries by default. Host, PID, and a reliable start time can serve as a composite identity where no process GUID exists; a mapping that keeps the PID alone, with nothing to anchor it, can’t safely correlate a process across a reuse boundary. The later process that inherits the number becomes indistinguishable from the one the rule was tracking.  Linux auditd draws the same boundary elsewhere. Multiple records share one identifier, and ausearch reconstructs the full trail from it, as long as the identifier survives downstream. Loss happens when a collector discards it, or treats a single record as the complete action; that’s a decision made at reconstruction, not a limit of the source format.  A mapping narrower than what a rule will eventually need is often the correct engineering trade-off at the time it’s written. What’s missing is a signal downstream: nothing registers when a rule comes to depend on evidence the trade-off already discarded.  Declaring what a rule needs  The mapping discussion above matters only because it explains why a dependency can be INVALID even while the source it comes from looks perfectly healthy. To make that checkable, I have the rule say, explicitly, what it needs: the required source, the event type, the mandatory fields, any semantic constraint on those fields, the acceptable latency, and the evaluation window. What follows isn’t any product’s actual schema; it’s pseudocode in YAML’s shape, chosen because that shape reads clearly without extra explanation. A minimal declaration for the LSASS rule looks like this:  rule: lsass-access-suspicious dependencies:   - source: sysmon     event_type: ProcessAccess     required_fields: [SourceImage, TargetImage, GrantedAccess]     semantic_constraint: "GrantedAccess includes PROCESS_VM_READ"     max_latency: 5m     evaluation_window: 15m   GrantedAccess here assumes the mapping already resolves the raw access mask to a bit-tested predicate; a pipeline that hands the rule an unresolved hex string needs that resolution declared as its own dependency, not assumed.  Each line defines a condition a corresponding check must test, not a general health score: source and event_type name what sensor configuration and parser compatibility a check has to confirm; required_fields and semantic_constraint name what the mapping’s output has to satisfy; max_latency and evaluation_window name what transport timing and the scheduler have to hold. What runs those checks looks less like a declaration and more like this:  checks:   - id: sysmon-processaccess-config     dependency: sysmon-processaccess     method: config-hash     expected: ProcessAccess filtering includes the required cohort     freshness: 24h    - id: processaccess-parser-contract     dependency: sysmon-processaccess     method: fixture-test     expected_fields: [SourceImage, TargetImage, GrantedAccess]     freshness: on-parser-deploy    - id: rule-scheduler     dependency: lsass-access-suspicious     method: execution-status     expected: successful-run     freshness: 30m   A dependency goes INVALID only when a check like these fails, and UNKNOWN only when none has completed within its freshness window, never from event count alone.  I roll a rule with several dependencies up the same way: INVALID if any hard dependency is invalid, VALID only if every hard dependency is valid, UNKNOWN when no dependency is invalid but one or more haven’t had a recent direct check.  Accumulated invalid time  Declaring dependencies this way lets me count one number: the total time a rule’s hard dependencies went unmet, summed across dependency-state intervals that open on INVALID and close on recovery. Criticality stays a separate weighting rather than folding into the duration: a low-priority rule broken for a month still shows a month, because the point of the number is to be checked, not softened before anyone reads it.  That number isn’t sufficient alone. A rule with low invalid time and high unknown time looks safe on the same dashboard this was supposed to fix, unless unknown time gets tracked next to it, next to how much of the rule’s intended scope was assessed. Skip that third figure and the metric just moves the blind spot one layer down.  I’d call this the most falsifiable proposal in this piece. It converts “the rule went silent” into “the rule was structurally unable to fire for this period,” a duration a team can track, alert on, and reduce. It requires retained state transitions instead of a point-in-time snapshot: a dashboard that only shows current status can’t compute it. Whether that retention cost is worth it scales with how many rules you’re tracking, but it’s a cost you can quantify, unlike the alternative: a console that keeps reading absence of alerts as absence of risk.  Suppression looks the same as drift  The previous sections focused on accidental invalidation: parser drift, schema changes, delayed feeds. Deliberate suppression produces the same structural failure through a different door. An attacker who disables Sysmon, clears an audit policy, or drops a log source invalidates a capability dependency directly; the fallout is activity going silent, stale, or anomalous downstream, not the activity signal itself flipping to INVALID. Either way, the rule meant to catch the technique is the one now silenced, and a model that only checks whether a dependency is satisfied doesn’t need to know why to flag it. I put drift and suppression in the same three-state model for that reason. They diverge only in what happens after detection, where triage needs a cause field the validity state itself doesn’t hold.  This equivalence has a specific limit. The capability signals this model uses (sensor states, loaded rule sets, configuration hashes) are telemetry collected by the same infrastructure an attacker could modify given enough access. Trust those signals and the model catches configuration changes, most accidental failures, and any suppression attempt that doesn’t also touch the reporting path; it won’t catch an adversary capable of falsifying the capability signal and the evidence at once. Closing that gap needs tamper-evident collection (signed heartbeats, attestation from a host outside the adversary’s reach), and even that only establishes platform state at last boot, not that every event since was generated, forwarded, parsed, and retained intact. That layer sits outside this model entirely, a harder, separate problem worth naming rather than quietly assuming solved.  Scope  Here’s what I’m explicitly claiming this covers, and what I’m just as explicitly leaving alone. Attacker attribution stays out of scope: the model determines that a dependency is invalid, not who or what made it so. Analyst throughput, dismissal behaviour, and staffing belong to people and process rather than the evidence path. A rule’s own evaluation window is a hard dependency, already covered above; how long raw events persist afterward in the store is a separate retention question, outside live dependency validity even though it still shapes long-window correlation and any retrospective hunt. Whether a rule correctly infers malicious intent when every declared dependency is satisfied is a question of efficacy, not validity, and answering it needs known-malicious and known-benign activity the pipeline cannot supply by itself.  A different, well-established check covers that same excluded question, and I’m not trying to replace it: detection regression testing, which runs a known attack technique against production and confirms the rule fires. That proves the rule caught something real, at least once, under test conditions. What I’m proposing here is narrower and more frequent: whether a rule’s declared inputs stay available and correctly shaped on the days between those tests, when nobody’s running an atomic. A rule can pass every regression test in March and still go structurally blind in June when a parser update ships unnoticed. I want both checks running. Neither one stands in for the other.  What this adds  I’d place this alongside a coverage matrix or a volume dashboard, answering a question neither is built to ask: given that a rule is deployed and its source is live, can it still fire? A rule that can’t state its own evidence conditions can’t be tested against them.  Whether this actually catches a broken detection faster than existing health and volume monitoring is an empirical question, and I haven’t run that comparison here. Until someone has (against real source outages, parser changes, schema drift), call this a proposal, not a replacement.  The cost is concrete: every rule author now names every hard dependency at write time, instead of discovering them the week a mapping quietly changes underneath a rule nobody’s watching. What it buys back is narrower and more honest. A quiet rule stops reading as evidence of anything. It becomes something you classify (valid, invalid, or genuinely unknown) instead of something you assume.    This piece exists because of Kevin Branch’s post on dark detection with Wazuh’s Alerting plugin. As another Wazuh Ambassador, I felt the urge to write on this too, but I couldn’t say it better than Kevin already had, so I went after the more general question sitting underneath it instead: not how to catch a flatline in one platform, but what a single rule’s own silence can and can’t tell you, regardless of which platform it’s running on.  What I want out of this is simple: a way to talk about a quiet rule that’s sharper than “is it enabled.” I don’t know yet whether this framing holds up outside my own environment, so if you run detection at scale and it either matches something you’ve already built, or falls apart on a case I haven’t considered, I’d like to hear about it.</description>
+      <author> (Zafer Balkan)</author>
+      <guid>https://zaferbalkan.com/silence/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:58 GMT</pubDate>
+    </item>
+    <item>
+      <title>Optimizing memory use in a Markdown parser</title>
+      <link>https://blog.kowalczyk.info/a-n8wf/optimizing-memory-use-in-markdown-parser.html</link>
+      <description>I ported a Markdown parser from Rust to C++ and then optimized the hell out of it.</description>
+      <category>javascript</category>
+      <category>ides</category>
+      <category>ai</category>
+      <category>rust</category>
+      <guid>https://blog.kowalczyk.info/a-n8wf/optimizing-memory-use-in-markdown-parser.html</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:54 GMT</pubDate>
+    </item>
+    <item>
+      <title>How To Report A Bug So It Actually Gets Fixed</title>
+      <link>https://blog.tymscar.com/posts/howtoreportabug/</link>
+      <description>A production ByteBuf leak took me from Netty logs to a fix shipped by Microsoft in a few weeks. Here is the step-by-step process I use to report bugs so they actually get fixed.</description>
+      <category>cloud</category>
+      <category>ai</category>
+      <category>git</category>
+      <guid>https://blog.tymscar.com/posts/howtoreportabug/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:50 GMT</pubDate>
+    </item>
+    <item>
+      <title>Cache-Control for LLMs</title>
+      <link>https://www.gojiberries.io/cache-control-for-llms/</link>
+      <description>Claude Sonnet 5 charges $2.00 per million fresh input tokens. Writing them into a five-minute cache costs $2.50, and every read after that costs $0.20 (see here). So two identical calls cost $2.70 with caching instead of $4.00. One reuse pays for the write.</description>
+      <category>git</category>
+      <category>ai</category>
+      <category>cloud</category>
+      <guid>https://www.gojiberries.io/cache-control-for-llms/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:42 GMT</pubDate>
+    </item>
+    <item>
+      <title>There's no substitute for real-world experience | MattCASmith</title>
+      <link>https://mattcasmith.net/2026/08/23/no-substitute-real-world-experience</link>
+      <description>From the CEO who once drove a forklift to game developers taking 250,000 photos of New York, real experience beats abstraction every time and can make the difference between good and groundbreaking.</description>
+      <category>gaming</category>
+      <category>git</category>
+      <guid>https://mattcasmith.net/2026/08/23/no-substitute-real-world-experience</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:38 GMT</pubDate>
+    </item>
+    <item>
+      <title>Risky Bulletin: Slovakia finds Russian backdoor in traffic speed cameras - Risky Business Media</title>
+      <link>https://risky.biz/risky-bulletin-slovakia-finds-russian-backdoor-in-traffic-speed-cameras/</link>
+      <description>Slovakia's national security service NBU has issued a security alert against the use of NERO R-ONE high-speed traffic cameras.The agency s [Read More]</description>
+      <category>ruby</category>
+      <category>android</category>
+      <category>ai</category>
+      <category>conference</category>
+      <category>apple</category>
+      <guid>https://risky.biz/risky-bulletin-slovakia-finds-russian-backdoor-in-traffic-speed-cameras/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:35 GMT</pubDate>
+    </item>
+    <item>
+      <title>Everything is Nix if you squint hard enough [Talk @ Nix Community DEFCON 34]</title>
+      <link>https://jrdsgl.com/everything-is-nix-if-you-squint-hard-enough/</link>
+      <description>Thanks to the Nix Vegas team for recording and releasing the talks from this year.
+
+Here are the slides from my talk on August 7th, 2026 at the Nix Comunity from DEFCON 34.</description>
+      <guid>https://jrdsgl.com/everything-is-nix-if-you-squint-hard-enough/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:30 GMT</pubDate>
+    </item>
+    <item>
+      <title>Eliminate GPU Waste by Cutting the Retry Tax — Rahmi Pruitt</title>
+      <link>https://rahmipruitt.me/content/gpu-retry-tax/</link>
+      <description>Retries aren't free. A look at how retry amplification wastes GPU capacity during inference, and why pacing demand instead of rejecting it can turn excess load into waiting time instead of wasted compute.</description>
+      <category>cloud</category>
+      <category>ai</category>
+      <guid>https://rahmipruitt.me/content/gpu-retry-tax/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:26 GMT</pubDate>
+    </item>
+    <item>
+      <title>The Vibe Tax | insufferable.dev</title>
+      <link>https://insufferable.dev/posts/vibe-tax/</link>
+      <description>Pol had 12 hours, a blank repo, and a fresh weekly quota. By morning, only one of those remained.</description>
+      <guid>https://insufferable.dev/posts/vibe-tax/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:23 GMT</pubDate>
+    </item>
+    <item>
+      <title>We Have the Model, Why do We Need You? — hank.bond</title>
+      <link>https://hank.bond/posts/we-have-the-model-why-do-we-need-you/</link>
+      <description>I already have Claude Code, so if all you bring to the table is 'I know how to use Clude Code' then I don't really need you.</description>
+      <category>ai</category>
+      <category>git</category>
+      <guid>https://hank.bond/posts/we-have-the-model-why-do-we-need-you/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:20 GMT</pubDate>
+    </item>
+    <item>
+      <title>Quantization Barely Mattered Until Two Bits — Rakuen Software</title>
+      <link>https://rakuensoftware.com/blog/which-quant-beats-how-many-bits</link>
+      <description>Thirty-seven runs, seven models, two tasks, one RTX 5080. Thirty of forty-five accuracy comparisons did not separate. The ones that did are almost all below four bits, where dense models pay roughly five times what mixtures pay and a quantization-aware build is the worst thing you can touch. Speed moved far more than accuracy, and it moved on whether the file fit.</description>
+      <category>ai</category>
+      <category>linux</category>
+      <guid>https://rakuensoftware.com/blog/which-quant-beats-how-many-bits</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:17 GMT</pubDate>
+    </item>
+    <item>
+      <title>My experience as a first time speaker</title>
+      <link>https://blog.guillheu.dev/articles/first-time-speaker/</link>
+      <description>and some pointers for those who come after</description>
+      <category>ai</category>
+      <guid>https://blog.guillheu.dev/articles/first-time-speaker/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:12 GMT</pubDate>
+    </item>
+    <item>
+      <title>Euge's blog - Engineerification</title>
+      <link>https://eug.github.io/posts/engineerification.html</link>
+      <description>Why more professions are becoming engineer-shaped just as engineering itself may be automated</description>
+      <category>ai</category>
+      <category>git</category>
+      <guid>https://eug.github.io/posts/engineerification.html</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:08 GMT</pubDate>
+    </item>
+    <item>
+      <title>Software design</title>
+      <link>https://misfra.me/2026/software-design/</link>
+      <description>Aug 22, 2026
+      ·
+      Programming</description>
+      <category>ai</category>
+      <category>youtube</category>
+      <guid>https://misfra.me/2026/software-design/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:05 GMT</pubDate>
+    </item>
+    <item>
+      <title>Building a Better Inner Loop — Bradley Gibbs</title>
+      <link>https://bradleygibbs.dev/posts/building-a-better-inner-loop/</link>
+      <description>Loop engineering as a systems problem: the same development work, reallocated across a new boundary — where each function should live, what changes when it moves, and what evidence would show the resulting system is better.</description>
+      <category>git</category>
+      <category>ai</category>
+      <guid>https://bradleygibbs.dev/posts/building-a-better-inner-loop/</guid>
+      <pubDate>Sun, 23 Aug 2026 23:02:01 GMT</pubDate>
+    </item>
+    <item>
+      <title>I Shouldn’t Need an LLM to Explain My LLM</title>
+      <link>https://daviesgeek.com/I-Shouldn%E2%80%99t-Need-an-LLM-to-Explain-My-LLM</link>
+      <description>I’ve been using Opus a lot at work lately for a project and have had serious issues with it reaching for bizarre analogies, obscure jargon, and strange phrases.</description>
+      <category>ai</category>
+      <guid>https://daviesgeek.com/I-Shouldn%E2%80%99t-Need-an-LLM-to-Explain-My-LLM</guid>
+      <pubDate>Sun, 23 Aug 2026 23:01:58 GMT</pubDate>
+    </item>
+    <item>
       <title>Amazon kept shutting down my tablet, so I spent $266 on four AI models to own it</title>
       <link>https://ericpardee.github.io/fire-hd-ownership/</link>
       <description>Owning a tablet Amazon kept shutting down: CVE-2022-38181, four AI models, five months</description>
@@ -33,105 +181,6 @@
       <category>ai</category>
       <guid>https://nappertime.com/the-golden-rule-of-becoming-a-better-writer/</guid>
       <pubDate>Sun, 23 Aug 2026 15:01:51 GMT</pubDate>
-    </item>
-    <item>
-      <title>Slop Debt</title>
-      <link>https://arpitbhayani.me/blogs/slop-debt/</link>
-      <description>Tech debt has rules. You cut a corner to ship on time, you write a comment that says TODO fix this, and six months later someone pays it down. It is annoying but it is bounded. A senior engineer can look at a codebase with tech debt and draw a map of where the bodies are buried.</description>
-      <category>git</category>
-      <guid>https://arpitbhayani.me/blogs/slop-debt/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:32 GMT</pubDate>
-    </item>
-    <item>
-      <title>Shotgun</title>
-      <link>https://bryanhu.com/shotgun/</link>
-      <description>Two specs in. One proxy out.</description>
-      <category>javascript</category>
-      <category>rust</category>
-      <category>git</category>
-      <guid>https://bryanhu.com/shotgun/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:27 GMT</pubDate>
-    </item>
-    <item>
-      <title>Single file apps with Gleam and Bun</title>
-      <link>https://alistair.sh/gleam-bun-apps</link>
-      <description>Build single file executables in Gleam, bundled and run with Bun</description>
-      <category>rust</category>
-      <category>javascript</category>
-      <category>linux</category>
-      <category>apple</category>
-      <guid>https://alistair.sh/gleam-bun-apps</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:24 GMT</pubDate>
-    </item>
-    <item>
-      <title>When Agents Call Agents</title>
-      <link>https://niyikiza.com/posts/agents-to-agents/</link>
-      <description>How ordinary tool calls create shadow delegation</description>
-      <category>ai</category>
-      <guid>https://niyikiza.com/posts/agents-to-agents/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:20 GMT</pubDate>
-    </item>
-    <item>
-      <title>How often should a zombie team win?</title>
-      <link>https://jordanlord.co.uk/blog/simple-elo-football-model/</link>
-      <description>['Programmer', 'Computer nerd', 'Unix enthusiast'];</description>
-      <category>gaming</category>
-      <guid>https://jordanlord.co.uk/blog/simple-elo-football-model/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:17 GMT</pubDate>
-    </item>
-    <item>
-      <title>gRPC-Web Should Have Fixed gRPC</title>
-      <link>https://kmcd.dev/posts/grpc-web-should-have-fixed-grpc/</link>
-      <description>gRPC-Web should have been the pressure that made gRPC simpler, more inspectable, and better suited for the web.</description>
-      <category>javascript</category>
-      <category>git</category>
-      <guid>https://kmcd.dev/posts/grpc-web-should-have-fixed-grpc/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:13 GMT</pubDate>
-    </item>
-    <item>
-      <title>When the room is in motion</title>
-      <link>https://michelangelogubinelli.com/essays-and-dissertations/when-the-room-is-in-motion/</link>
-      <description>On uncertainty, progress, and making choices while the world refuses to stand still.</description>
-      <category>gaming</category>
-      <guid>https://michelangelogubinelli.com/essays-and-dissertations/when-the-room-is-in-motion/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:10 GMT</pubDate>
-    </item>
-    <item>
-      <title>Treat your brain like a baby</title>
-      <link>https://gisbi.me/blog/treat-your-brain-like-a-baby</link>
-      <description>As an autistic person, I've been struggling my entire life to decode, process or understand my feelings and behaviors. For most of my teenage years I just let m…</description>
-      <guid>https://gisbi.me/blog/treat-your-brain-like-a-baby</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:07 GMT</pubDate>
-    </item>
-    <item>
-      <title>Code Doesn’t Speak for Itself</title>
-      <link>https://koenvangilst.nl/lab/code-doesnt-speak-for-itself</link>
-      <description>Hannah Arendt's challenge to the Stoic ideal of inner freedom, and what it means for engineers who want their code to speak for itself.</description>
-      <author> (Koen van Gilst)</author>
-      <guid>https://koenvangilst.nl/lab/code-doesnt-speak-for-itself</guid>
-      <pubDate>Sat, 22 Aug 2026 23:02:02 GMT</pubDate>
-    </item>
-    <item>
-      <title>The Great Convergence | Nicholas Charriere</title>
-      <link>https://nicholascharriere.com/blog/the-great-convergence/</link>
-      <description>Over the last year, a strange thing has happened in tech: very different companies have started moving towards the same product shape, and it feels like everyone is building the same thing.</description>
-      <category>cloud</category>
-      <category>ai</category>
-      <category>git</category>
-      <guid>https://nicholascharriere.com/blog/the-great-convergence/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:01:57 GMT</pubDate>
-    </item>
-    <item>
-      <title>Fast and Hard Code</title>
-      <link>https://lucumr.pocoo.org/2026/8/22/fast-hard-code/</link>
-      <description>People pick languages differently with LLMs.</description>
-      <author> (Armin Ronacher)</author>
-      <category>rust</category>
-      <category>web</category>
-      <category>git</category>
-      <category>ai</category>
-      <guid>https://lucumr.pocoo.org/2026/8/22/fast-hard-code/</guid>
-      <pubDate>Sat, 22 Aug 2026 23:01:54 GMT</pubDate>
     </item>
   </channel>
 </rss>
